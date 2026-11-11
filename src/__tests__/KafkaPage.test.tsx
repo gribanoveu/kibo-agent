@@ -217,7 +217,7 @@ describe("the Kafka page", () => {
     render(<KafkaPage />);
     await screen.findByRole("heading", { name: "prod" });
 
-    fireEvent.click(screen.getByText("Edit this connection"));
+    fireEvent.click(screen.getByTitle("Change this connection"));
     fireEvent.click(screen.getByLabelText("TLS"));
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(sent("kafka_connection_save")).toHaveLength(1));
@@ -230,7 +230,7 @@ describe("the Kafka page", () => {
     render(<KafkaPage />);
     await screen.findByRole("heading", { name: "prod" });
 
-    fireEvent.click(screen.getByText("Edit this connection"));
+    fireEvent.click(screen.getByTitle("Change this connection"));
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("prod");
     fireEvent.change(screen.getByLabelText("CA file"), { target: { value: "  " } });
     fireEvent.click(screen.getByText("Save"));

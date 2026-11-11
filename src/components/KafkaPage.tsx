@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Database, MoreHorizontal, Plus, RefreshCw, Search } from "lucide-react";
+import { ArrowLeft, Check, Database, Layers, MoreHorizontal, Pencil, Plus, Search } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
-import { Page } from "./Page";
+import { Page, PageEmpty } from "./Page";
 import { Switch } from "./Switch";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
@@ -77,91 +77,94 @@ export function KafkaPage() {
   const kafka = useKafka();
   const [editing, setEditing] = useState<Draft | null>(null);
   const [dropping, setDropping] = useState<ConnectionView | null>(null);
+  const open = kafka.open;
 
   return (
-    <Page title="Kafka">
-      <div className="kafka-page">
-      <nav className="kafka-side" aria-label="Connections">
-        <div className="kafka-side-head">
-          <span>Connections</span>
-          <button
-            type="button"
-            className="kafka-icon-button"
-            title="New connection"
-            aria-label="New connection"
-            onClick={() => setEditing(blank())}
-          >
-            <Plus size={14} />
-          </button>
-          <button type="button" className="kafka-icon-button" title="Read again" aria-label="Read the connections again" onClick={() => void kafka.reload()}>
-            <RefreshCw size={13} />
-          </button>
-        </div>
-        {kafka.connections.length === 0 && <p className="kafka-quiet kafka-side-empty">No connections yet.</p>}
-        <ul className="kafka-list">
-          {kafka.connections.map((connection) => {
-            const on = connection.id === kafka.selected;
-            return (
-              <li key={connection.id}>
-                <button
-                  type="button"
-                  className={`kafka-connection${on ? " on" : ""}`}
-                  aria-current={on ? "true" : undefined}
-                  onClick={() => kafka.select(connection.id)}
-                >
-                  <span className="kafka-connection-name">{connection.name}</span>
-                  <span className="kafka-connection-brokers">{connection.brokers}</span>
-                  <span className="kafka-tags">
-                    {connection.readOnly && <span className="kafka-tag">read-only</span>}
-                    {connection.tls && <span className="kafka-tag">TLS</span>}
-                    {connection.login && <span className="kafka-tag">{connection.login.mechanism === "plain" ? "PLAIN" : "SCRAM"}</span>}
-                    {connection.agent && <span className="kafka-tag kafka-tag-agent">agent</span>}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
-
-      <section className="kafka-main" aria-label={kafka.open ? kafka.open.name : "Kafka"}>
-        {kafka.error && <p className="kafka-error" role="alert">{kafka.error}</p>}
-        {!kafka.open && (
-          <p className="kafka-empty">
-            Add a connection: the brokers of a cluster, and a login if it wants one. This stage only reads — nothing is ever sent to a cluster.
+    <Page
+      title="Kafka"
+      bar={
+        kafka.connections.length > 0 && (
+          <>
+            <Dropdown
+              label={
+                <span className="kafka-connection-label">
+                  <Layers size={14} />
+                  {open?.name ?? "Connection"}
+                </span>
+              }
+              title={open?.brokers}
+              heading="Connection"
+              options={kafka.connections.map((connection) => ({ value: connection.id, label: connection.name, hint: connection.brokers }))}
+              value={kafka.selected ?? ""}
+              onPick={kafka.select}
+              below
+            />
+            {open && (
+              <button type="button" className="btn btn-ghost" title="Change this connection" onClick={() => setEditing(fromSaved(open))}>
+                <Pencil size={13} /> Edit
+              </button>
+            )}
+            <span className="kafka-spacer" />
+            <button type="button" className="btn btn-ghost" title="New connection" aria-label="New connection" onClick={() => setEditing(blank())}>
+              <Plus size={14} />
+            </button>
+            {open && (
+              <Dropdown
+                label={<MoreHorizontal size={14} aria-label="Connection actions" />}
+                title="Connection actions"
+                value=""
+                options={[{ value: "delete", label: "Delete connection…", hint: "Its saved password goes with it" }]}
+                onPick={(value) => value === "delete" && setDropping(open)}
+                below
+                right
+              />
+            )}
+          </>
+        )
+      }
+    >
+      <div className="kafka-body">
+        {kafka.error && (
+          <p className="kafka-error" role="alert">
+            {kafka.error}
           </p>
         )}
 
-        {kafka.open && (
+        {!open && (
+          <PageEmpty
+            icon={Layers}
+            action={
+              <button type="button" className="btn btn-primary" onClick={() => setEditing(blank())}>
+                <Plus size={14} /> Add connection
+              </button>
+            }
+          >
+            No connections yet. Add one with the brokers of a cluster, and a login if it wants one — the password is sealed on this computer as the API keys
+            are, and this window never sees it again.
+          </PageEmpty>
+        )}
+
+        {open && (
           <>
-            <header className="kafka-head">
-              <div>
-                <h2 className="kafka-title">{kafka.open.name}</h2>
-                <p className="kafka-sub kafka-mono">{kafka.open.brokers}</p>
-              </div>
-              <div className="kafka-head-actions">
-                <button type="button" className="btn btn-ghost" disabled={kafka.busy} onClick={() => void kafka.check()}>
-                  <Check size={13} /> Test
-                </button>
-                <Dropdown
-                  label={<MoreHorizontal size={14} aria-label="Connection actions" />}
-                  title="Connection actions"
-                  value=""
-                  options={[{ value: "delete", label: "Delete connection…", hint: "Its saved password goes with it" }]}
-                  onPick={(value) => value === "delete" && setDropping(kafka.open)}
-                  below
-                  right
-                />
-              </div>
+            <header className="kafka-main-head">
+              <h2 className="kafka-title">{open.name}</h2>
+              <span className="kafka-sub">{open.brokers}</span>
+              <span className="kafka-spacer" />
+              <span className="kafka-tags">
+                {open.readOnly && <span className="kafka-tag">read-only</span>}
+                {open.tls && <span className="kafka-tag">TLS</span>}
+                {open.login && <span className="kafka-tag">{open.login.mechanism === "plain" ? "PLAIN" : "SCRAM"}</span>}
+                {open.agent && <span className="kafka-tag kafka-tag-agent">agent</span>}
+              </span>
+              <button type="button" className="btn btn-ghost" disabled={kafka.busy} onClick={() => void kafka.check()}>
+                <Check size={13} /> Test
+              </button>
             </header>
-            <button type="button" className="kafka-edit-link" onClick={() => kafka.open && setEditing(fromSaved(kafka.open))}>
-              Edit this connection
-            </button>
 
             {kafka.note && <p className="kafka-ok">{kafka.note}</p>}
 
             {kafka.detail ? (
-              <Topic detail={kafka.detail} connection={kafka.open.id} onBack={kafka.closeTopic} />
+              <Topic detail={kafka.detail} connection={open.id} onBack={kafka.closeTopic} />
             ) : (
               <>
                 <div className="kafka-search">
@@ -173,7 +176,11 @@ export function KafkaPage() {
                     placeholder="Find a topic by part of its name"
                     onChange={(event) => kafka.setSearch(event.target.value)}
                   />
-                  {kafka.reading && <span className="kafka-quiet" role="status">Reading…</span>}
+                  {kafka.reading && (
+                    <span className="kafka-quiet" role="status">
+                      Reading…
+                    </span>
+                  )}
                 </div>
 
                 {kafka.topics.length === 0 && !kafka.reading && !kafka.error && (
@@ -206,16 +213,12 @@ export function KafkaPage() {
                   </table>
                 )}
 
-                {kafka.more > 0 && (
-                  <p className="kafka-quiet">
-                    {count(kafka.more, "more topic")} — search narrows the list.
-                  </p>
-                )}
+                {kafka.more > 0 && <p className="kafka-quiet">{count(kafka.more, "more topic")} — search narrows the list.</p>}
               </>
             )}
           </>
         )}
-      </section>
+      </div>
 
       <ConnectionForm draft={editing} onSave={kafka.save} onClose={() => setEditing(null)} />
 
@@ -241,11 +244,8 @@ export function KafkaPage() {
           </>
         }
       >
-        <p>
-          “{dropping?.name}” and the password saved with it go from this computer. The cluster itself is not touched.
-        </p>
+        <p>“{dropping?.name}” and the password saved with it go from this computer. The cluster itself is not touched.</p>
       </Modal>
-      </div>
     </Page>
   );
 }

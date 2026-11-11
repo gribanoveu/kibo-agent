@@ -1,3 +1,49 @@
+/* The Kafka page (KafkaPage.tsx): the connection in the bar, its topics under
+   it, and one topic's messages. Its own styles throughout — none borrowed. */
+
+/* The page's body, one column under its bar, scrolling on its own. */
+.kafka-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* As the MongoDB page's head: the name, its address beside it, then what the
+   connection is and the button that asks the broker. */
+.kafka-main-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.kafka-connection-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+/* The name as a head: one line, the address fading out after it. */
+.kafka-title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kafka-sub {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The Kafka page (KafkaPage.tsx): the connections on the left, the topics of
    the open one on the right. Its own styles throughout — none borrowed. */
 
@@ -46,37 +92,6 @@
 
 /* The MongoDB page's tree, to the pixel: the same panel, the same hugging of
    its content, and the pane itself scrolling rather than a list inside it. */
-.kafka-side {
-  align-self: start;
-  max-height: 100%;
-  min-width: 0;
-  max-width: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 8px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel-soft);
-}
-
-.kafka-side-head {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 2px 6px 6px;
-  color: var(--text-box-hint);
-  font-size: var(--fs-2xs);
-  font-weight: 500;
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-.kafka-side-head span {
-  flex: 1;
-}
-.kafka-side-empty {
-  padding: 2px 6px 6px;
-}
-
 .kafka-icon-button {
   display: grid;
   flex: none;
@@ -97,52 +112,6 @@
 .kafka-icon-button:disabled {
   opacity: 0.4;
   cursor: default;
-}
-
-.kafka-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.kafka-connection {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  width: 100%;
-  /* A flex item's min-width is its longest unbreakable line — a brokers string
-     with a dozen hosts — so the pane's width has to be said out loud. */
-  min-width: 0;
-  padding: 4px 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.kafka-connection:hover {
-  background: var(--bg-hover);
-}
-.kafka-connection.on {
-  background: var(--bg-active);
-}
-.kafka-connection-name {
-  max-width: 100%;
-  overflow: hidden;
-  font-size: var(--fs-md);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.kafka-connection-brokers {
-  max-width: 100%;
-  overflow: hidden;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .kafka-tags {
@@ -169,64 +138,6 @@
 
 /* Both axes: a partition table is wider than a narrow window, and it scrolls
    here rather than pushing the page wider. */
-.kafka-main {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-}
-
-.kafka-empty {
-  max-width: 460px;
-  margin: 40px auto 0;
-  color: var(--text-faint);
-  font-size: var(--fs-md);
-  line-height: 1.5;
-  text-align: center;
-}
-
-.kafka-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-.kafka-head > div:first-child {
-  flex: 1;
-  min-width: 0;
-}
-.kafka-title {
-  margin: 0;
-  font-size: var(--fs-lg);
-  font-weight: 600;
-}
-.kafka-sub {
-  margin: 2px 0 0;
-  font-size: var(--fs-sm);
-  color: var(--text-faint);
-  overflow-wrap: anywhere;
-}
-.kafka-head-actions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 6px;
-}
-.kafka-edit-link {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: var(--fs-sm);
-  text-decoration: underline;
-  cursor: pointer;
-}
-.kafka-edit-link:hover {
-  color: var(--text);
-}
-
 .kafka-search {
   display: flex;
   align-items: center;
@@ -471,12 +382,3 @@
 }
 
 /* A window too narrow for two panes: the connections go over the topics. */
-@media (max-width: 780px) {
-  .kafka-page {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  .kafka-side {
-    max-height: 220px;
-  }
-}
