@@ -6,9 +6,9 @@
    growing it, which is what a page looked like with the row left `auto`. */
 .kafka-page {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  gap: 12px;
+  gap: 16px;
   height: 100%;
   min-height: 0;
   min-width: 0;
@@ -44,16 +44,17 @@
 
 /* ---- connections */
 
+/* The MongoDB page's tree, to the pixel: the same panel, the same hugging of
+   its content, and the pane itself scrolling rather than a list inside it. */
 .kafka-side {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+  align-self: start;
+  max-height: 100%;
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
-  /* A panel, not a tinted patch: its own edge all the way round, and the
-     rounded corners cut what scrolls inside it. */
-  border: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
 }
@@ -61,32 +62,32 @@
 .kafka-side-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 10px 8px 12px;
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  gap: 2px;
+  padding: 0 2px 6px 6px;
+  color: var(--text-box-hint);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  color: var(--text-faint);
 }
 .kafka-side-head span {
   flex: 1;
 }
 .kafka-side-empty {
-  padding: 0 12px 10px;
+  padding: 2px 6px 6px;
 }
 
 .kafka-icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
   padding: 0;
-  border: 0;
+  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-faint);
+  background: none;
+  color: var(--text-dim);
   cursor: pointer;
 }
 .kafka-icon-button:hover:not(:disabled) {
@@ -94,35 +95,30 @@
   color: var(--text);
 }
 .kafka-icon-button:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: default;
 }
 
-/* Its own scroller, downwards only: a row that grew past the pane used to give
-   this a horizontal scroll as well, and the list slid off to the left. */
 .kafka-list {
-  flex: 1;
-  min-height: 0;
   margin: 0;
-  padding: 0 6px 10px;
+  padding: 0;
   list-style: none;
-  overflow-x: hidden;
-  overflow-y: auto;
 }
 
 .kafka-connection {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   width: 100%;
   /* A flex item's min-width is its longest unbreakable line — a brokers string
      with a dozen hosts — so the pane's width has to be said out loud. */
   min-width: 0;
-  padding: 7px 8px;
-  border: 0;
+  padding: 4px 6px;
+  border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: none;
   color: var(--text);
+  font-family: inherit;
   text-align: left;
   cursor: pointer;
 }
@@ -135,8 +131,7 @@
 .kafka-connection-name {
   max-width: 100%;
   overflow: hidden;
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  font-size: var(--fs-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -180,7 +175,6 @@
   gap: 10px;
   min-width: 0;
   min-height: 0;
-  padding: 2px 0 4px 0;
   overflow: auto;
 }
 
