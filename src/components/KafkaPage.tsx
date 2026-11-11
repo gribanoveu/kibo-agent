@@ -149,6 +149,8 @@ export function KafkaPage() {
                   value=""
                   options={[{ value: "delete", label: "Delete connection…", hint: "Its saved password goes with it" }]}
                   onPick={(value) => value === "delete" && setDropping(kafka.open)}
+                  below
+                  right
                 />
               </div>
             </header>
@@ -569,6 +571,7 @@ function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connectio
                 value={fields.mechanism}
                 options={MECHANISMS}
                 onPick={(value) => set("mechanism", value as SaslMechanism)}
+                below
               />
             </label>
             <label className="kafka-field kafka-indent">
