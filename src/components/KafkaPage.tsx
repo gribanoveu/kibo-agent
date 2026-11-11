@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Database, Pencil, Plus, Radio, Search, Send } from "lucide-react";
+import { ArrowLeft, Check, Database, Pencil, Plus, Radio, RefreshCw, Search, Send } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
 import { KafkaIcon } from "./KafkaIcon";
@@ -169,6 +169,16 @@ export function KafkaPage() {
                       Reading…
                     </span>
                   )}
+                  <button
+                    type="button"
+                    className="kafka-icon-button"
+                    title="Read the topics again — a new one appears now, not in two minutes"
+                    aria-label="Read the topics again"
+                    disabled={kafka.reading}
+                    onClick={() => kafka.refresh()}
+                  >
+                    <RefreshCw size={13} />
+                  </button>
                 </div>
 
                 <div className="kafka-topics">

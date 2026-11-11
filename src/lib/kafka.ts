@@ -108,8 +108,8 @@ export async function kafkaConnectionCheck(id: string): Promise<string> {
 }
 
 /** A page of topics; `name` searches part of one, any case. `page` counts from zero. */
-export async function kafkaTopics(connection: string, name?: string | null, page = 0): Promise<TopicList> {
-  return invoke<TopicList>("kafka_topics", { connection, name: name ?? null, page });
+export async function kafkaTopics(connection: string, name?: string | null, page = 0, refresh = false): Promise<TopicList> {
+  return invoke<TopicList>("kafka_topics", { connection, name: name ?? null, page, refresh });
 }
 
 export async function kafkaTopic(connection: string, topic: string): Promise<TopicDetail> {

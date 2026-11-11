@@ -32,6 +32,8 @@ export function useKafka() {
   const [selected, setSelected] = useState<string | null>(null);
   const [topics, setTopics] = useState<TopicView[]>([]);
   const [total, setTotal] = useState(0);
+  /** Bumped by the refresh button: the same question, asked again of the broker. */
+  const [again, setAgain] = useState(0);
   const [pageAt, setPageAt] = useState(0);
   const [search, setSearch] = useState("");
   const [detail, setDetail] = useState<TopicDetail | null>(null);
@@ -79,7 +81,7 @@ export function useKafka() {
     const timer = window.setTimeout(
       () => {
         setReading(true);
-        kafkaTopics(selected, search.trim() || null, pageAt)
+        kafkaTopics(selected, search.trim() || null, pageAt, again > 0)
           .then((list) => {
             if (mine !== asked.current) return;
             setTopics(list.topics);
@@ -92,7 +94,7 @@ export function useKafka() {
       search === "" ? 0 : SEARCH_PAUSE,
     );
     return () => window.clearTimeout(timer);
-  }, [selected, search, pageAt]);
+  }, [selected, search, pageAt, again]);
 
   /** Saves, and says whether it landed: the form closes only on a yes. */
   const save = useCallback(async (connection: Connection): Promise<boolean> => {
@@ -185,6 +187,7 @@ export function useKafka() {
       setPageAt(0);
     },
     setPage: setPageAt,
+    refresh: () => setAgain((asked) => asked + 1),
     save,
     remove,
     probe,

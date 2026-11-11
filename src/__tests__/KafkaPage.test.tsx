@@ -239,6 +239,15 @@ describe("the Kafka page", () => {
     await waitFor(() => expect(sent("kafka_topics").some((call) => call.args.page === 0 && call.args.name === "ord")).toBe(true));
   });
 
+  test("the refresh button asks the broker again, not the kept shape", async () => {
+    render(<KafkaPage />);
+    await screen.findByText("orders");
+    expect(sent("kafka_topics")[0].args.refresh).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Read the topics again" }));
+    await waitFor(() => expect(sent("kafka_topics").some((call) => call.args.refresh === true)).toBe(true));
+  });
+
   test("a message is sent from the page as the window's own keys, and it says where it landed", async () => {
     render(<KafkaPage />);
     fireEvent.click(await screen.findByText("orders"));

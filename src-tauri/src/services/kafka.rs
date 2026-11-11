@@ -40,8 +40,13 @@ pub fn check(clients: &KafkaClients, id: &str) -> Result<String, KafkaError> {
 
 /// Topic names, searched by part of a name, one page at a time — with their
 /// watermarks, and how many matched in all.
-pub fn topics(clients: &KafkaClients, id: &str, name_part: Option<&str>, wanted: usize) -> Result<TopicList, KafkaError> {
+pub fn topics(clients: &KafkaClients, id: &str, name_part: Option<&str>, wanted: usize, refresh: bool) -> Result<TopicList, KafkaError> {
     let connection = kafka_store::get(id)?;
+    if refresh {
+        // Asked for by hand: the shape kept from two minutes ago is not the
+        // answer wanted.
+        clients.forget_shapes();
+    }
     let names = kafka_client::names(clients, &connection)?;
     let (names, total) = page(names, name_part, wanted, PAGE_SIZE);
     let mut topics = kafka_client::topics(clients, &connection, &names)?;

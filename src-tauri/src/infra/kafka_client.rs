@@ -95,6 +95,13 @@ impl KafkaClients {
     /// Every pool let go: the feature is off, or its data was deleted. Each one
     /// holds a SASL password and open sockets to the user's cluster, so they go
     /// with the connections rather than at the end of the session.
+    /// What the broker said about topics is let go: the next read asks again.
+    /// The page's refresh button is the one caller — a topic made a moment ago
+    /// waits for nothing.
+    pub fn forget_shapes(&self) {
+        self.shapes.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
     pub fn forget_all(&self) {
         self.clients.lock().unwrap_or_else(PoisonError::into_inner).clear();
         self.shapes.lock().unwrap_or_else(PoisonError::into_inner).clear();
