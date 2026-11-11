@@ -104,8 +104,9 @@ export function KafkaPage() {
                 <Pencil size={13} /> Edit
               </button>
             )}
-            <button type="button" className="btn btn-ghost" title="New connection" aria-label="New connection" onClick={() => setEditing(blank())}>
+            <button type="button" className="btn btn-ghost" title="New connection" onClick={() => setEditing(blank())}>
               <Plus size={14} />
+              Connection
             </button>
             <span className="kafka-spacer" />
             {open && (

@@ -104,7 +104,7 @@ describe("the Kafka page", () => {
     render(<KafkaPage />);
     await screen.findByRole("heading", { name: "prod" });
 
-    fireEvent.click(screen.getByLabelText("New connection"));
+    fireEvent.click(screen.getByRole("button", { name: "Connection" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: " stage " } });
     fireEvent.change(screen.getByLabelText("Brokers"), { target: { value: " stage-1:9092 " } });
     fireEvent.click(screen.getByLabelText("Read-only"));
@@ -133,7 +133,7 @@ describe("the Kafka page", () => {
     render(<KafkaPage />);
     await screen.findByRole("heading", { name: "prod" });
 
-    fireEvent.click(screen.getByLabelText("New connection"));
+    fireEvent.click(screen.getByRole("button", { name: "Connection" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "stage" } });
     fireEvent.change(screen.getByLabelText("Brokers"), { target: { value: "stage-1:9092" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -147,7 +147,7 @@ describe("the Kafka page", () => {
     render(<KafkaPage />);
     await screen.findByRole("heading", { name: "prod" });
 
-    fireEvent.click(screen.getByLabelText("New connection"));
+    fireEvent.click(screen.getByRole("button", { name: "Connection" }));
     const save = () => screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(save().disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "stage" } });
