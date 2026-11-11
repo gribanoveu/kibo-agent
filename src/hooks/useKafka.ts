@@ -35,7 +35,6 @@ export function useKafka() {
   const [search, setSearch] = useState("");
   const [detail, setDetail] = useState<TopicDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
 
@@ -128,21 +127,17 @@ export function useKafka() {
     }
   }, []);
 
-  const check = useCallback(async () => {
-    const forConnection = selected;
-    if (!forConnection) return;
-    setBusy(true);
-    setNote(null);
+  /**
+   * Asks the broker about a saved connection and hands the answer back: it is
+   * the form that shows it, under the fields it belongs to.
+   */
+  const probe = useCallback(async (id: string): Promise<{ ok: boolean; text: string }> => {
     try {
-      const answer = await kafkaConnectionCheck(forConnection);
-      if (forConnection === looking.current) setNote(answer);
-      setError(null);
+      return { ok: true, text: await kafkaConnectionCheck(id) };
     } catch (failure) {
-      if (forConnection === looking.current) setError(said(failure));
-    } finally {
-      setBusy(false);
+      return { ok: false, text: said(failure) };
     }
-  }, [selected]);
+  }, []);
 
   const openTopic = useCallback(
     async (name: string) => {
@@ -173,20 +168,18 @@ export function useKafka() {
     search,
     detail,
     error,
-    note,
     busy,
     reading,
     select: (id: string) => {
       setSelected(id);
       setSearch("");
       setDetail(null);
-      setNote(null);
       setError(null);
     },
     setSearch,
     save,
     remove,
-    check,
+    probe,
     openTopic,
     closeTopic: () => {
       // Back means back: an answer still on its way must not reopen the panel.

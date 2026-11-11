@@ -409,3 +409,10 @@
 }
 
 /* A window too narrow for two panes: the connections go over the topics. */
+
+/* Deleting a connection sits in its settings, away from Save, in the colour of
+   what it does. */
+.kafka-delete {
+  margin-right: auto;
+  color: var(--red);
+}

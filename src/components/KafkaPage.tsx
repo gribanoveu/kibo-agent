@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Database, Layers, MoreHorizontal, Pencil, Plus, Search } from "lucide-react";
+import { ArrowLeft, Check, Database, Layers, Pencil, Plus, Search } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
 import { Page, PageEmpty } from "./Page";
@@ -108,18 +108,7 @@ export function KafkaPage() {
               <Plus size={14} />
               Connection
             </button>
-            <span className="kafka-spacer" />
-            {open && (
-              <Dropdown
-                label={<MoreHorizontal size={14} aria-label="Connection actions" />}
-                title="Connection actions"
-                value=""
-                options={[{ value: "delete", label: "Delete connection…", hint: "Its saved password goes with it" }]}
-                onPick={(value) => value === "delete" && setDropping(open)}
-                below
-                right
-              />
-            )}
+
           </>
         )
       }
@@ -158,12 +147,7 @@ export function KafkaPage() {
                 {open.login && <span className="kafka-tag">{open.login.mechanism === "plain" ? "PLAIN" : "SCRAM"}</span>}
                 {open.agent && <span className="kafka-tag kafka-tag-agent">agent</span>}
               </span>
-              <button type="button" className="btn btn-ghost" disabled={kafka.busy} onClick={() => void kafka.check()}>
-                <Check size={13} /> Test
-              </button>
             </header>
-
-            {kafka.note && <p className="kafka-ok">{kafka.note}</p>}
 
             {kafka.detail ? (
               <Topic detail={kafka.detail} connection={open.id} onBack={kafka.closeTopic} />
@@ -224,7 +208,19 @@ export function KafkaPage() {
         )}
       </div>
 
-      <ConnectionForm draft={editing} onSave={kafka.save} onClose={() => setEditing(null)} />
+      <ConnectionForm
+        draft={editing}
+        existing={editing !== null && kafka.connections.some((connection) => connection.id === editing.id)}
+        onSave={kafka.save}
+        onProbe={kafka.probe}
+        onDelete={() => {
+          const id = editing?.id;
+          setEditing(null);
+          const saving = kafka.connections.find((connection) => connection.id === id);
+          if (saving) setDropping(saving);
+        }}
+        onClose={() => setEditing(null)}
+      />
 
       <Modal
         title="Delete this connection?"
@@ -499,15 +495,44 @@ function MessageBody({ message }: { message: MessageView }) {
 }
 
 /** The form: brokers, TLS, a login, and the two switches the whole page obeys. */
-function ConnectionForm({ draft, onSave, onClose }: { draft: Draft | null; onSave: (connection: Connection) => Promise<boolean>; onClose: () => void }) {
+type FormProps = {
+  draft: Draft;
+  /** A connection already saved: it can be deleted from its settings. */
+  existing: boolean;
+  onSave: (connection: Connection) => Promise<boolean>;
+  onProbe: (id: string) => Promise<{ ok: boolean; text: string }>;
+  onDelete: () => void;
+  onClose: () => void;
+};
+
+function ConnectionForm({
+  draft,
+  existing,
+  onSave,
+  onProbe,
+  onDelete,
+  onClose,
+}: {
+  draft: Draft | null;
+  existing: boolean;
+  onSave: (connection: Connection) => Promise<boolean>;
+  onProbe: (id: string) => Promise<{ ok: boolean; text: string }>;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
   // Keyed by the connection: opening another one starts from its own fields,
   // and Save reads the fields that are on screen rather than the draft it was
   // opened with.
-  return draft ? <OpenForm key={draft.id} draft={draft} onSave={onSave} onClose={onClose} /> : null;
+  return draft ? (
+    <OpenForm key={draft.id} draft={draft} existing={existing} onSave={onSave} onProbe={onProbe} onDelete={onDelete} onClose={onClose} />
+  ) : null;
 }
 
-function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connection: Connection) => Promise<boolean>; onClose: () => void }) {
+function OpenForm({ draft, existing, onSave, onProbe, onDelete, onClose }: FormProps) {
   const [fields, setFields] = useState(draft);
+  // What the broker said, under the fields it was asked about — as the
+  // MongoDB page's connection form shows its test.
+  const [tested, setTested] = useState<{ ok: boolean; text: string } | null>(null);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setFields((current) => ({ ...current, [key]: value }));
 
   return (
@@ -517,6 +542,20 @@ function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connectio
       onClose={onClose}
       footer={
         <>
+          {existing && (
+            <button type="button" className="btn btn-ghost kafka-delete" onClick={onDelete}>
+              Delete…
+            </button>
+          )}
+          {existing && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void onProbe(fields.id).then(setTested)}
+            >
+              <Check size={13} /> Test
+            </button>
+          )}
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
@@ -598,7 +637,8 @@ function OpenForm({ draft, onSave, onClose }: { draft: Draft; onSave: (connectio
           <span>Open to the agent — kept on the connection, for the tool that comes with the messages stage</span>
         </div>
 
-        <p className="kafka-quiet">Save it, then Test — the broker is asked about itself once the connection is saved. Reading messages and sending them are the next stages, so the two flags are saved now and obeyed when they arrive.</p>
+        {tested && <p className={tested.ok ? "kafka-ok" : "kafka-error"}>{tested.text}</p>}
+        <p className="kafka-quiet">Test asks the saved connection — the broker answers about itself. Reading messages and sending them are the next stages, so the two flags are saved now and obeyed when they arrive.</p>
       </div>
     </Modal>
   );
