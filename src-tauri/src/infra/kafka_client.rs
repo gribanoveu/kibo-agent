@@ -19,8 +19,8 @@ use krafka::producer::Record;
 use krafka::Kafka;
 
 use crate::domain::kafka::{
-    fresh, quota, starting, ConfigView, Connection, KafkaError, Message, PartitionView, ProduceSpec, Produced, ReadPage, ReadSpec, SaslMechanism, TopicView,
-    MAX_READ_COUNT, MAX_READ_PARTITIONS,
+    fresh, quota, starting, ConfigView, Connection, KafkaError, LiveBatch, LiveSink, LiveSpec, Message, PartitionView, ProduceSpec, Produced, ReadPage, ReadSpec,
+    SaslMechanism, TopicView, LIVE_PER_TICK, LIVE_TICK, MAX_READ_COUNT, MAX_READ_PARTITIONS,
 };
 
 /// How long a broker may take to be found: a wrong host says so in seconds.
@@ -426,6 +426,64 @@ pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) ->
     // producer set.
     messages.sort_by_key(|message| (message.partition, message.offset));
     Ok(ReadPage { messages: messages.iter().map(Message::view).collect(), partitions, more })
+}
+
+/// Reads a topic live, without a group: `assign` on the chosen partitions,
+/// seeked to the end, and a batch per tick for as long as `stop` is false.
+///
+/// Returns once the stop flag is set, the read fails, or the tick budget is
+/// spent — the caller owns the flag and the reporting.
+pub fn live(clients: &KafkaClients, connection: &Connection, spec: &LiveSpec, stop: std::sync::Arc<std::sync::atomic::AtomicBool>, sink: LiveSink) -> Result<(), KafkaError> {
+    use std::sync::atomic::Ordering;
+    let kafka = clients.kafka(connection)?;
+    let topic = spec.topic.clone();
+
+    let mut partitions = spec.partitions.clone();
+    if partitions.is_empty() {
+        let shapes = clients.partitions_of(connection, &[topic.clone()])?;
+        partitions = shapes.get(&topic).map(|partitions| partitions.iter().map(|partition| partition.partition).collect()).unwrap_or_default();
+    }
+    partitions.truncate(MAX_READ_PARTITIONS);
+    if partitions.is_empty() {
+        return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
+    }
+
+    let broke = |e: krafka::error::KrafkaError| KafkaError::Broker(format!("the live read: {e}"));
+    tauri::async_runtime::block_on(async {
+        let consumer = kafka.consumer_without_group().build().await.map_err(broke)?;
+        consumer.assign(&topic, partitions.clone()).await.map_err(broke)?;
+        for partition in &partitions {
+            match spec.from {
+                Some(from) => consumer.seek(&topic, *partition, from).await.map_err(broke)?,
+                None => consumer.seek_to_end(&topic, *partition).await.map_err(broke)?,
+            }
+        }
+        // A tick reports as it happens: the window sees a message when it lands,
+        // not when the read ends. Each poll is bounded, so a stop is noticed
+        // within a tick.
+        while !stop.load(Ordering::Relaxed) {
+            let records = consumer.poll(LIVE_TICK).await.map_err(broke)?;
+            if records.is_empty() {
+                continue;
+            }
+            let mut messages: Vec<Message> = records
+                .into_iter()
+                .map(|record| Message {
+                    partition: record.partition,
+                    offset: record.offset,
+                    timestamp: record.timestamp,
+                    key: record.key.map(|key| key.to_vec()),
+                    value: record.value.map(|value| value.to_vec()),
+                    headers: record.headers.into_iter().map(|(name, value)| (name, value.map(|value| value.to_vec()))).collect(),
+                })
+                .collect();
+            messages.sort_by_key(|message| (message.partition, message.offset));
+            let cut = messages.len() > LIVE_PER_TICK;
+            messages.truncate(LIVE_PER_TICK);
+            sink(LiveBatch { messages: messages.iter().map(Message::view).collect(), cut });
+        }
+        Ok::<(), KafkaError>(())
+    })
 }
 
 /// Sends one record, and answers where it landed. The only write this module

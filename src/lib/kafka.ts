@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 // The Kafka page's IPC, one wrapper per command in `src-tauri/src/commands/kafka.rs`.
 
@@ -125,6 +125,24 @@ export type Produced = { partition: number; offset: number };
 /** Sends one record. A connection marked read-only refuses it. */
 export async function kafkaProduce(connection: string, spec: ProduceSpec): Promise<Produced> {
   return invoke<Produced>("kafka_produce", { connection, spec });
+}
+
+/** What a live read watches (mirrors `domain::kafka::LiveSpec`): from the end when `from` is null. */
+export type LiveSpec = { topic: string; partitions: number[]; from: number | null };
+
+/** One tick of a live read (mirrors `domain::kafka::LiveBatch`). */
+export type LiveBatch = { messages: MessageView[]; cut: boolean };
+
+/** Starts a live read; batches arrive at `onBatch`. Answers the id that stops it. */
+export async function kafkaLiveStart(connection: string, spec: LiveSpec, onBatch: (batch: LiveBatch) => void): Promise<string> {
+  const channel = new Channel<LiveBatch>();
+  channel.onmessage = onBatch;
+  return invoke<string>("kafka_live_start", { connection, spec, channel });
+}
+
+/** Ends a live read. One already ended is not an error. */
+export async function kafkaLiveStop(id: string): Promise<void> {
+  return invoke<void>("kafka_live_stop", { id });
 }
 
 /** A page of messages, read without a consumer group. */

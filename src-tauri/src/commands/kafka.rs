@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::domain::kafka::{Connection, ConnectionView, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList};
+use crate::domain::kafka::{Connection, ConnectionView, LiveBatch, LiveSpec, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList};
 use crate::infra::kafka_client::KafkaClients;
 use crate::services::kafka;
 
@@ -57,6 +57,32 @@ pub async fn kafka_messages(connection: String, spec: ReadSpec, clients: Clients
 
 /// Sends one record: `spec` carries the topic, the key, the headers and the
 /// text value. Answers the partition and the offset it landed at.
+/// Starts a live read of a topic and answers its id. Batches arrive on the
+/// channel as they happen; `kafka_live_stop` ends it.
+#[tauri::command]
+pub async fn kafka_live_start(
+    connection: String,
+    spec: LiveSpec,
+    channel: tauri::ipc::Channel<LiveBatch>,
+    clients: Clients<'_>,
+    live: tauri::State<'_, std::sync::Arc<kafka::KafkaLive>>,
+) -> Result<String, String> {
+    let clients = clients.inner().clone();
+    let live = live.inner().clone();
+    let sink: crate::domain::kafka::LiveSink = std::sync::Arc::new(move |batch| {
+        // The window reads its channel; a closed one is nothing to report.
+        let _ = channel.send(batch);
+    });
+    let id = kafka::live_start(&live, &clients, &connection, spec, sink).map_err(|failure| failure.to_string())?;
+    Ok(id)
+}
+
+/// Ends a live read. One already ended is not an error.
+#[tauri::command]
+pub fn kafka_live_stop(id: String, live: tauri::State<'_, std::sync::Arc<kafka::KafkaLive>>) {
+    live.inner().stop(&id);
+}
+
 #[tauri::command]
 pub async fn kafka_produce(connection: String, spec: ProduceSpec, clients: Clients<'_>) -> Result<Produced, String> {
     let clients = clients.inner().clone();

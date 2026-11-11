@@ -47,6 +47,10 @@ let holdMessages = false;
 const held: ((answer: unknown) => void)[] = [];
 
 mock.module("@tauri-apps/api/core", () => ({
+  /** The wrapper hands a channel to the command; a live test would push into it. */
+  Channel: class {
+    onmessage: ((batch: unknown) => void) | null = null;
+  },
   invoke: (command: string, args: Record<string, unknown>) => {
     calls.push({ command, args });
     switch (command) {
@@ -54,6 +58,10 @@ mock.module("@tauri-apps/api/core", () => ({
         return refuseList ? Promise.reject("could not read kafka_connections.enc") : Promise.resolve(connections);
       case "kafka_connection_save":
         return refuseSave ? Promise.reject("kafka_connections.enc could not be sealed") : Promise.resolve(connections);
+      case "kafka_live_start":
+        return Promise.resolve("live-1");
+      case "kafka_live_stop":
+        return Promise.resolve(null);
       case "kafka_connection_delete":
         return Promise.resolve([]);
       case "kafka_topics":
@@ -317,6 +325,20 @@ describe("the Kafka page", () => {
 
     expect(await screen.findByText(/a partition is a whole number/)).toBeTruthy();
     expect(sent("kafka_produce")).toHaveLength(0);
+  });
+
+  test("a live read is started for the chosen partitions and stopped by the toggle", async () => {
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Live" }));
+    await waitFor(() => expect(sent("kafka_live_start")).toHaveLength(1));
+    expect(sent("kafka_live_start")[0].args).toMatchObject({ connection: "c1", spec: { topic: "orders", partitions: [], from: null } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Live" }));
+    await waitFor(() => expect(sent("kafka_live_stop")).toHaveLength(1));
+    expect(sent("kafka_live_stop")[0].args.id).toBe("live-1");
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {

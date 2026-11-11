@@ -8,7 +8,7 @@ import { Switch } from "./Switch";
 import { Tabs } from "./Tabs";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
-import { kafkaMessages, kafkaProduce, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type MessageView, type ProduceSpec, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
+import { kafkaLiveStart, kafkaLiveStop, kafkaMessages, kafkaProduce, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type LiveBatch, type MessageView, type ProduceSpec, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
 
 /** A connection as the form edits it: the password apart, so an empty one can mean "keep". */
 type Draft = {
@@ -375,6 +375,8 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
   const [error, setError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
+  const [living, setLiving] = useState(false);
+  const liveId = useRef<string | null>(null);
 
   // Which read the answer belongs to: a chip clicked while a read is in flight
   // asks a new question, and the older answer must not become the page.
@@ -413,6 +415,40 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, topic.name, count, partitions]);
 
+  // A live read ends with the tab: nothing is left looking at a cluster the
+  // window no longer shows.
+  useEffect(
+    () => () => {
+      if (liveId.current) void kafkaLiveStop(liveId.current);
+    },
+    [],
+  );
+
+  const toggleLive = async () => {
+    if (living) {
+      const id = liveId.current;
+      liveId.current = null;
+      setLiving(false);
+      if (id) await kafkaLiveStop(id);
+      return;
+    }
+    setSent(null);
+    setError(null);
+    try {
+      liveId.current = await kafkaLiveStart(connection, { topic: topic.name, partitions, from: null }, (batch: LiveBatch) => {
+        // A tick appends to what is on screen: the window keeps the last 500.
+        setPage((current) => ({
+          messages: [...(current?.messages ?? []), ...batch.messages].slice(-500),
+          partitions: current?.partitions ?? partitions,
+          more: batch.cut,
+        }));
+      });
+      setLiving(true);
+    } catch (failure) {
+      setError(String(failure));
+    }
+  };
+
   const toggle = (partition: number) =>
     setPartitions((current) => (current.includes(partition) ? current.filter((p) => p !== partition) : [...current, partition].sort((a, b) => a - b)));
 
@@ -442,6 +478,15 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
           ))}
         </div>
         <span className="kafka-spacer" />
+        <button
+          type="button"
+          className={`kafka-chip${living ? " on" : ""}`}
+          aria-pressed={living}
+          title={living ? "Stop following this topic" : "Follow this topic as messages arrive"}
+          onClick={() => void toggleLive()}
+        >
+          Live
+        </button>
         {COUNTS.map((howMany) => (
           <button key={howMany} type="button" className={`kafka-chip${count === howMany ? " on" : ""}`} disabled={reading} onClick={() => setCount(howMany)}>
             Last {howMany}

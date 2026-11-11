@@ -3,7 +3,7 @@
 //! `infra::kafka_client`; the store is `infra::kafka_store`. What is decided
 //! here is how much one answer carries and in what order.
 
-use crate::domain::kafka::{page, Connection, ConnectionView, KafkaError, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
+use crate::domain::kafka::{page, Connection, LiveSink, LiveSpec, ConnectionView, KafkaError, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
 use crate::infra::kafka_client::{self, KafkaClients};
 use crate::infra::kafka_store;
 
@@ -81,9 +81,109 @@ pub fn send(clients: &KafkaClients, id: &str, spec: ProduceSpec) -> Result<Produ
     kafka_client::produce(clients, &connection, &spec.checked()?)
 }
 
+/// The live reads this app has started: a stop flag each. A read ends when its
+/// flag is set, when the connection is gone, or when the broker stops answering
+/// — the thread is a `spawn_blocking` task, so the window never waits for it.
+#[derive(Default)]
+pub struct KafkaLive {
+    running: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+}
+
+impl KafkaLive {
+    /// Starts one and answers its id: what stops it later, and nothing else.
+    pub fn start(&self, clients: std::sync::Arc<KafkaClients>, connection: Connection, spec: LiveSpec, sink: LiveSink) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(id.clone(), stop.clone());
+        let id_for_log = id.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Err(failure) = kafka_client::live(&clients, &connection, &spec, stop, sink) {
+                // Nobody is waiting for this thread's answer: it is a background
+                // read, and its end is the window's own business.
+                eprintln!("kafka live {id_for_log} ended: {failure}");
+            }
+        });
+        id
+    }
+
+    /// Stops one. The flag is what ends it; the entry goes so the map does not
+    /// grow with every toggle.
+    pub fn stop(&self, id: &str) {
+        if let Some(stop) = self.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(id) {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Everything goes quiet: a connection deleted, the feature turned off.
+    pub fn stop_all(&self) {
+        for (_, stop) in self.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// How many are running, and the flag of one — what a test can see without
+    /// a broker.
+    #[cfg(test)]
+    fn running(&self) -> usize {
+        self.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
+    }
+
+    #[cfg(test)]
+    fn flag(&self, id: &str) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        self.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(id).cloned()
+    }
+}
+
+/// A live read started from the window: the connection is read here, so the
+/// thread behind the read gets a whole one and the command only an id.
+pub fn live_start(live: &KafkaLive, clients: &std::sync::Arc<KafkaClients>, id: &str, spec: LiveSpec, sink: LiveSink) -> Result<String, KafkaError> {
+    let connection = kafka_store::get(id)?;
+    Ok(live.start(clients.clone(), connection, spec, sink))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_live_read_is_kept_until_it_is_stopped() {
+        let live = KafkaLive::default();
+        assert_eq!(live.running(), 0);
+        // A connection that never connects: the thread ends at once, but the
+        // entry is the handle's, not the thread's.
+        let clients = std::sync::Arc::new(KafkaClients::default());
+        let connection = || Connection { id: "c1".into(), name: "prod".into(), brokers: "127.0.0.1:1".into(), tls: false, ca_file: None, sasl: None, read_only: true, agent: false };
+        let spec = || LiveSpec { topic: "orders".into(), partitions: vec![0], from: None };
+        let id = live.start(clients, connection(), spec(), std::sync::Arc::new(|_| {}));
+        assert_eq!(live.running(), 1);
+        let flag = live.flag(&id).expect("a running read has a flag");
+        assert!(!flag.load(std::sync::atomic::Ordering::Relaxed), "a fresh read runs");
+
+        live.stop(&id);
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed), "the flag is what ends the thread");
+        assert_eq!(live.running(), 0, "a stopped read is not kept");
+        live.stop(&id);
+        assert_eq!(live.running(), 0, "stopping twice changes nothing");
+    }
+
+    #[test]
+    fn everything_goes_quiet_when_the_feature_does() {
+        let live = KafkaLive::default();
+        let clients = std::sync::Arc::new(KafkaClients::default());
+        let connection = || Connection { id: "c1".into(), name: "prod".into(), brokers: "127.0.0.1:1".into(), tls: false, ca_file: None, sasl: None, read_only: true, agent: false };
+        let spec = || LiveSpec { topic: "orders".into(), partitions: vec![0], from: None };
+        let first = live.start(clients.clone(), connection(), spec(), std::sync::Arc::new(|_| {}));
+        let second = live.start(clients, connection(), spec(), std::sync::Arc::new(|_| {}));
+        assert_eq!(live.running(), 2);
+
+        // Held outside the map: the entry is a handle, the flag is what ends
+        // the thread, and a test that looks only at the map cannot tell.
+        let flags: Vec<_> = [&first, &second].iter().filter_map(|id| live.flag(id)).collect();
+        assert_eq!(flags.len(), 2);
+        live.stop_all();
+        assert_eq!(live.running(), 0);
+        assert!(flags.iter().all(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)), "every read was told to stop");
+    }
 
     #[test]
     fn a_page_of_topics_is_a_hundred() {

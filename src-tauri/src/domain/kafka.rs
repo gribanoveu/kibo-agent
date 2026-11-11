@@ -385,6 +385,35 @@ impl ProduceSpec {
     }
 }
 
+/// One tick of a live read: what arrived since the last one. `cut` says the
+/// tick held more than a batch may carry — the rest is the next tick.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveBatch {
+    pub messages: Vec<MessageView>,
+    pub cut: bool,
+}
+
+/// Where a live read reports: the window's channel, adapted in `commands/`.
+pub type LiveSink = std::sync::Arc<dyn Fn(LiveBatch) + Send + Sync>;
+
+/// Where a live read starts: the partitions asked for (`None` is every one of
+/// them, up to [`MAX_READ_PARTITIONS`]) from their end, or from an offset.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveSpec {
+    pub topic: String,
+    #[serde(default)]
+    pub partitions: Vec<i32>,
+    /// `None` is "from now on": the log's end when the read starts.
+    #[serde(default)]
+    pub from: Option<i64>,
+}
+
+/// How many messages one tick carries, and how often a tick is.
+pub const LIVE_PER_TICK: usize = 200;
+pub const LIVE_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Where a sent record landed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
