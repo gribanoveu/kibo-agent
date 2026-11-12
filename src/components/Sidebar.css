@@ -42,6 +42,10 @@
 /* The chats' search: the mode's list, narrowed as it is typed. */
 .sidebar-search {
   flex: 0 0 100%;
+  /* The field's own content — its input's intrinsic width — is wider than a
+     narrow rail, and as a flex item's automatic minimum that would hold the
+     field past the panel's edge instead of letting it follow the 100%. */
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -135,16 +139,27 @@
   flex: 1;
   justify-content: center;
   height: var(--control-sm);
+  /* Narrow rail: the two share the panel, and a label too long for its half is
+     cut at the frame rather than pushing the pair past the edge. */
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-box-hint);
 }
-.mode-switch:not(.sidebar-pages) .mode-opt:hover {
-  background: none;
+/* A segment the pointer is over pays its way without pinching the pill: the
+   one in use is already saying what it is. */
+.mode-switch:not(.sidebar-pages) .mode-opt:not(.active):hover {
+  background: color-mix(in srgb, var(--bg-panel) 55%, transparent);
   color: var(--text);
 }
 .mode-switch:not(.sidebar-pages) .mode-opt.active {
   background: var(--bg-panel);
   box-shadow: var(--shadow-raised);
   color: var(--text);
+}
+/* The icon sits with the accent rather than in it: enough to belong to the
+   chosen mode, grey enough not to shout beside the word. */
+.mode-switch:not(.sidebar-pages) .mode-opt.active svg {
+  color: color-mix(in srgb, var(--accent) 50%, var(--text-dim));
 }
 .sidebar-pages .mode-opt {
   height: var(--control);
