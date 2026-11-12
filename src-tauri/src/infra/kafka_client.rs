@@ -568,14 +568,17 @@ pub fn live(clients: &KafkaClients, connection: &Connection, spec: &LiveSpec, st
             }
             let (batch, rest) = live_tick(std::mem::take(&mut waiting), LIVE_PER_TICK);
             waiting = rest;
-            sink(LiveBatch { messages: batch.iter().map(Message::view).collect(), more: waiting.len(), failed: None });
+            if !sink(LiveBatch { messages: batch.iter().map(Message::view).collect(), more: waiting.len(), failed: None }) {
+                // The window that was reading is gone: a reload, a closed tab.
+                break;
+            }
         }
         Ok::<(), KafkaError>(())
     });
     // The read ends for the window, not only for the log: it says so where it
     // has been reporting, since nobody is waiting on this thread.
     if let Err(failure) = answered {
-        sink(LiveBatch { messages: Vec::new(), more: 0, failed: Some(failure.to_string()) });
+        let _ = sink(LiveBatch { messages: Vec::new(), more: 0, failed: Some(failure.to_string()) });
     }
     Ok(())
 }

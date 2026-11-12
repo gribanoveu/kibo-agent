@@ -409,7 +409,9 @@ pub fn live_tick(mut waiting: Vec<Message>, per_tick: usize) -> (Vec<Message>, V
 }
 
 /// Where a live read reports: the window's channel, adapted in `commands/`.
-pub type LiveSink = std::sync::Arc<dyn Fn(LiveBatch) + Send + Sync>;
+/// `false` is "the window is gone" — the read ends there, since nothing is
+/// left to report to and a reloaded window has no way to stop it.
+pub type LiveSink = std::sync::Arc<dyn Fn(LiveBatch) -> bool + Send + Sync>;
 
 /// Where a live read starts: the partitions asked for (`None` is every one of
 /// them, up to [`MAX_READ_PARTITIONS`]) from their end, or from an offset.

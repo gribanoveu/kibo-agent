@@ -116,7 +116,9 @@ export function KafkaPage() {
       }
     >
       <div className="kafka-body">
-        {kafka.error && (
+        {/* A save's refusal belongs in the form that asked; the body says the
+            rest — a read, a list — and not under a modal's overlay. */}
+        {kafka.error && !editing && (
           <p className="kafka-error" role="alert">
             {kafka.error}
           </p>
@@ -244,6 +246,7 @@ export function KafkaPage() {
       <ConnectionForm
         draft={editing}
         existing={editing !== null && kafka.connections.some((connection) => connection.id === editing.id)}
+        fault={kafka.error}
         onSave={kafka.save}
         onProbe={kafka.probe}
         onDelete={() => {
@@ -431,6 +434,8 @@ function Topic({ detail, connection, readOnly, onBack }: { detail: TopicDetail; 
 
 /** How many messages one answer carries, as the buttons offer them. */
 const COUNTS = [20, 50, 100];
+/** `MAX_READ_PARTITIONS` in `domain::kafka`: what one live read follows. */
+const MAX_LIVE_PARTITIONS = 20;
 
 /**
  * The topic's messages: which partitions to read, from where and how many, and
@@ -623,6 +628,9 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
       {error && <p className="kafka-error" role="alert">{error}</p>}
       {sent && <p className="kafka-ok">{sent}</p>}
       {living && waiting > 0 && <p className="kafka-quiet">{waiting} more arrived and are on their way.</p>}
+      {living && partitions.length === 0 && topic.partitions.length > MAX_LIVE_PARTITIONS && (
+        <p className="kafka-quiet">{`Following the first ${MAX_LIVE_PARTITIONS} of ${topic.partitions.length} partitions — pick the ones to read.`}</p>
+      )}
       {readOnly && <p className="kafka-quiet">This connection is read-only — nothing is sent through it.</p>}
       {reading && <p className="kafka-quiet" role="status">Reading…</p>}
 
@@ -863,6 +871,8 @@ function SendForm({
 /** The form: brokers, TLS, a login, and the two switches the whole page obeys. */
 type FormProps = {
   draft: Draft;
+  /** Why the last save was refused: shown in the form, where Save was pressed. */
+  fault?: string | null;
   /** A connection already saved: it can be deleted from its settings. */
   existing: boolean;
   onSave: (connection: Connection) => Promise<boolean>;
@@ -873,6 +883,7 @@ type FormProps = {
 
 function ConnectionForm({
   draft,
+  fault,
   existing,
   onSave,
   onProbe,
@@ -880,6 +891,7 @@ function ConnectionForm({
   onClose,
 }: {
   draft: Draft | null;
+  fault: string | null;
   existing: boolean;
   onSave: (connection: Connection) => Promise<boolean>;
   onProbe: (id: string) => Promise<{ ok: boolean; text: string }>;
@@ -890,11 +902,11 @@ function ConnectionForm({
   // and Save reads the fields that are on screen rather than the draft it was
   // opened with.
   return draft ? (
-    <OpenForm key={draft.id} draft={draft} existing={existing} onSave={onSave} onProbe={onProbe} onDelete={onDelete} onClose={onClose} />
+    <OpenForm key={draft.id} draft={draft} existing={existing} fault={fault} onSave={onSave} onProbe={onProbe} onDelete={onDelete} onClose={onClose} />
   ) : null;
 }
 
-function OpenForm({ draft, existing, onSave, onProbe, onDelete, onClose }: FormProps) {
+function OpenForm({ draft, existing, fault, onSave, onProbe, onDelete, onClose }: FormProps) {
   const [fields, setFields] = useState(draft);
   // What the broker said, under the fields it was asked about — as the
   // MongoDB page's connection form shows its test.
@@ -1003,8 +1015,13 @@ function OpenForm({ draft, existing, onSave, onProbe, onDelete, onClose }: FormP
           <span>Open to the agent — kept on the connection, for the tool that comes with the messages stage</span>
         </div>
 
+        {fault && (
+          <p className="kafka-error" role="alert">
+            {fault}
+          </p>
+        )}
         {tested && <p className={tested.ok ? "kafka-ok" : "kafka-error"}>{tested.text}</p>}
-        <p className="kafka-quiet">Test asks the saved connection — the broker answers about itself. Reading messages and sending them are the next stages, so the two flags are saved now and obeyed when they arrive.</p>
+        <p className="kafka-quiet">Test asks the saved connection — the broker answers about itself. Read-only refuses every send that comes through this connection; open to the agent is obeyed by the tool that arrives with the agent stage.</p>
       </div>
     </Modal>
   );

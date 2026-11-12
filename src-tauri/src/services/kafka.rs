@@ -164,7 +164,7 @@ mod tests {
         let clients = std::sync::Arc::new(KafkaClients::default());
         let connection = || Connection { id: "c1".into(), name: "prod".into(), brokers: "127.0.0.1:1".into(), tls: false, ca_file: None, sasl: None, read_only: true, agent: false };
         let spec = || LiveSpec { topic: "orders".into(), partitions: vec![0], from: None };
-        let id = live.start(clients, connection(), spec(), std::sync::Arc::new(|_| {}));
+        let id = live.start(clients, connection(), spec(), std::sync::Arc::new(|_| true));
         assert_eq!(live.running(), 1);
         let flag = live.flag(&id).expect("a running read has a flag");
         assert!(!flag.load(std::sync::atomic::Ordering::Relaxed), "a fresh read runs");
@@ -182,8 +182,8 @@ mod tests {
         let clients = std::sync::Arc::new(KafkaClients::default());
         let connection = || Connection { id: "c1".into(), name: "prod".into(), brokers: "127.0.0.1:1".into(), tls: false, ca_file: None, sasl: None, read_only: true, agent: false };
         let spec = || LiveSpec { topic: "orders".into(), partitions: vec![0], from: None };
-        let first = live.start(clients.clone(), connection(), spec(), std::sync::Arc::new(|_| {}));
-        let second = live.start(clients, connection(), spec(), std::sync::Arc::new(|_| {}));
+        let first = live.start(clients.clone(), connection(), spec(), std::sync::Arc::new(|_| true));
+        let second = live.start(clients, connection(), spec(), std::sync::Arc::new(|_| true));
         assert_eq!(live.running(), 2);
 
         // Held outside the map: the entry is a handle, the flag is what ends

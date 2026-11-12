@@ -91,8 +91,9 @@ pub async fn kafka_live_start(
     let clients = clients.inner().clone();
     let live = live.inner().clone();
     let sink: crate::domain::kafka::LiveSink = std::sync::Arc::new(move |batch| {
-        // The window reads its channel; a closed one is nothing to report.
-        let _ = channel.send(batch);
+        // A closed channel is a window that reloaded or closed: the read ends,
+        // or it would poll a cluster forever with nowhere to put the answer.
+        channel.send(batch).is_ok()
     });
     // Reading the connection means the keychain and the sealed file: off the
     // async runtime, as every other command that touches them is.
