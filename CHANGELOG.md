@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-12 The plan opens in a sheet over the chat — ⌘3, or "Review the plan" — instead of taking the column's width, so the chat keeps its width and the plan is read on the room it needs
 - 2026-11-12 The sidebar's Agent and Chat switch keeps its white raised pill, with the icon inside it in a muted accent instead of the full one, and the segment under the pointer shows a faint pill where it used to give nothing
 - 2026-11-12 The sidebar's chat search follows the panel's width when it is dragged narrow, instead of running past its right edge
 - 2026-11-08 The Agent and Chat message boxes can notice Russian or English typed in the other keyboard layout, even a wrong fragment beside intentional words in mixed prose, and offer a Fix button or ⌘/Ctrl+F correction, with the caret and ordinary Undo kept; on macOS and Windows the feature's optional Catalog switch also selects the corrected text's dominant installed layout — turn Keyboard layout correction on in the Catalog
