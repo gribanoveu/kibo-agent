@@ -4,10 +4,12 @@ import {
   kafkaConnectionDelete,
   kafkaConnectionSave,
   kafkaConnections,
+  kafkaGroups,
   kafkaTopic,
   kafkaTopics,
   type Connection,
   type ConnectionView,
+  type GroupList,
   type TopicDetail,
   type TopicView,
 } from "../lib/kafka";
@@ -32,6 +34,8 @@ export function useKafka() {
   const [selected, setSelected] = useState<string | null>(null);
   const [topics, setTopics] = useState<TopicView[]>([]);
   const [total, setTotal] = useState(0);
+  const [groups, setGroups] = useState<GroupList | null>(null);
+  const [group, setGroup] = useState<string | null>(null);
   /** Bumped by the refresh button: the same question, asked again of the broker. */
   const [again, setAgain] = useState(0);
   const [pageAt, setPageAt] = useState(0);
@@ -64,6 +68,26 @@ export function useKafka() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The cluster's groups, read with the same refresh as the topics: they change
+  // with the consumers, and there is nothing to watch for it.
+  useEffect(() => {
+    if (!selected) {
+      setGroups(null);
+      return;
+    }
+    let mine = true;
+    kafkaGroups(selected)
+      .then((list) => {
+        if (!mine) return;
+        setGroups(list);
+        setGroup((current) => (current && list.groups.some((group) => group.name === current) ? current : null));
+      })
+      .catch(() => mine && setGroups(null));
+    return () => {
+      mine = false;
+    };
+  }, [selected, again]);
 
   // The topics of the open connection, searched — after the typing stops.
   const asked = useRef(0);
@@ -168,6 +192,9 @@ export function useKafka() {
     open,
     topics,
     total,
+    groups,
+    group,
+    openGroup: (name: string | null) => setGroup(name),
     pageAt,
     search,
     detail,

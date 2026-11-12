@@ -62,6 +62,18 @@ mock.module("@tauri-apps/api/core", () => ({
         return refuseList ? Promise.reject("could not read kafka_connections.enc") : Promise.resolve(connections);
       case "kafka_connection_save":
         return refuseSave ? Promise.reject("kafka_connections.enc could not be sealed") : Promise.resolve(connections);
+      case "kafka_groups":
+        return Promise.resolve({
+          total: 21,
+          unreadBrokers: 1,
+          groups: [
+            { name: "probe-group", state: "Stable", members: 2, lagsRead: true, totalLag: 12, lags: [
+              { group: "probe-group", topic: "orders", partition: 0, committed: 88, latest: 100, lag: 12, active: false },
+              { group: "probe-group", topic: "orders", partition: 1, committed: null, latest: 40, lag: null, active: false },
+            ] },
+            { name: "late-group", state: "Empty", members: 0, lagsRead: false, totalLag: null, lags: [] },
+          ],
+        });
       case "kafka_live_start":
         return Promise.resolve("live-1");
       case "kafka_live_stop":
@@ -365,6 +377,22 @@ describe("the Kafka page", () => {
     act(() => liveChannels[0].onmessage?.({ messages: [], more: 0, failed: "the live read: broker went quiet" }));
     expect(await screen.findByText(/broker went quiet/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "Live" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("a cluster's groups show their lag, and say when it was not read", async () => {
+    render(<KafkaPage />);
+    await screen.findByText("orders");
+
+    expect(await screen.findByText("probe-group")).toBeTruthy();
+    expect(sent("kafka_groups")[0].args.connection).toBe("c1");
+    expect(screen.getByText(/1 broker did not answer/)).toBeTruthy();
+    expect(screen.getByText("not read")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("probe-group"));
+    // The opened group: the committed end of a partition, and the one without
+    // a commit shown as such rather than as zero.
+    expect(await screen.findByText("88")).toBeTruthy();
+    expect(screen.getByText("no commit")).toBeTruthy();
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {

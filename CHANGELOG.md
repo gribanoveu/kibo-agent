@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-11 See a Kafka cluster's consumer groups with their lag, partition by partition, and what a group has not committed
 - 2026-11-11 Follow a Kafka topic live: the messages that arrive land in the table as they happen, without a consumer group
 - 2026-11-11 Refresh a Kafka cluster's topic list by hand, so a topic made a moment ago appears now instead of at the end of the cache's two minutes
 - 2026-11-11 Send a message to a Kafka topic from its page: a key, headers and a text value, at a partition of your choice or wherever the producer puts it, with the partition and offset it landed at

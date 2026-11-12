@@ -8,7 +8,7 @@ import { Switch } from "./Switch";
 import { Tabs } from "./Tabs";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
-import { kafkaLiveStart, kafkaLiveStop, kafkaMessages, kafkaProduce, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type LiveBatch, type MessageView, type ProduceSpec, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
+import { kafkaLiveStart, kafkaLiveStop, kafkaMessages, kafkaProduce, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type GroupList, type LiveBatch, type MessageView, type ProduceSpec, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
 
 /** A connection as the form edits it: the password apart, so an empty one can mean "keep". */
 type Draft = {
@@ -213,6 +213,8 @@ export function KafkaPage() {
                   )}
 
                   {kafka.topics.length === 0 && kafka.total > 0 && <p className="kafka-quiet">Nothing on this page — go back a page.</p>}
+
+                  {kafka.groups && <Groups list={kafka.groups} open={kafka.group} onOpen={kafka.openGroup} />}
                 </div>
 
                 {kafka.total > TOPIC_PAGE && (
@@ -278,6 +280,76 @@ export function KafkaPage() {
         <p>“{dropping?.name}” and the password saved with it go from this computer. The cluster itself is not touched.</p>
       </Modal>
     </Page>
+  );
+}
+
+/** The cluster's consumer groups, and the lag of the one opened. */
+function Groups({ list, open, onOpen }: { list: GroupList; open: string | null; onOpen: (name: string | null) => void }) {
+  const shown = list.groups.find((group) => group.name === open) ?? null;
+  return (
+    <section className="kafka-groups" aria-label="Consumer groups">
+      <span className="kafka-section-title">Consumer groups</span>
+      {list.groups.length === 0 && <p className="kafka-quiet">This cluster has no consumer groups.</p>}
+      {list.total > list.groups.length && <p className="kafka-quiet">{`Showing ${list.groups.length} of ${list.total} groups.`}</p>}
+      {list.unreadBrokers > 0 && (
+        <p className="kafka-warn">{`${list.unreadBrokers} ${list.unreadBrokers === 1 ? "broker did" : "brokers did"} not answer — their groups are missing from this list, not from the cluster.`}</p>
+      )}
+
+      {list.groups.length > 0 && (
+        <table className="kafka-table">
+          <thead>
+            <tr>
+              <th scope="col">Group</th>
+              <th scope="col">State</th>
+              <th scope="col">Members</th>
+              <th scope="col">Lag</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.groups.map((group) => (
+              <tr key={group.name} className={group.name === open ? "on" : undefined}>
+                <td>
+                  <button type="button" className="kafka-topic" onClick={() => onOpen(group.name === open ? null : group.name)}>
+                    {group.name}
+                  </button>
+                </td>
+                <td>{group.state}</td>
+                <td>{group.members}</td>
+                <td className={group.totalLag === null ? "kafka-quiet" : undefined}>
+                  {group.totalLag !== null ? group.totalLag : group.lagsRead ? "no commits" : "not read"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {shown && shown.lagsRead && shown.lags.length > 0 && (
+        <table className="kafka-table">
+          <thead>
+            <tr>
+              <th scope="col">Topic</th>
+              <th scope="col">Partition</th>
+              <th scope="col">Committed</th>
+              <th scope="col">End</th>
+              <th scope="col">Lag</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.lags.map((lag) => (
+              <tr key={`${lag.topic}/${lag.partition}`}>
+                <td className="kafka-mono">{lag.topic}</td>
+                <td>{lag.partition}</td>
+                <td>{lag.committed ?? "—"}</td>
+                <td>{lag.latest}</td>
+                <td className={lag.lag === null ? "kafka-quiet" : lag.lag > 0 ? "kafka-warn" : undefined}>{lag.lag ?? "no commit"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {shown && !shown.lagsRead && <p className="kafka-quiet">The lag of this group was not read — this page reads the first twenty groups' lag.</p>}
+    </section>
   );
 }
 
