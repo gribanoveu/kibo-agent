@@ -371,6 +371,112 @@
   color: var(--text-faint);
 }
 
+/* "New folder" beside the filter in the list's head. */
+.group-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.group-head-actions .iconbtn {
+  width: 24px;
+  height: 24px;
+}
+
+/* A folder's heading on the day's sticky line: the collapse toggle with the
+   name and count, and its own menu — always shown, a folder is not a hover. */
+.chat-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+}
+.chat-folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.chat-folder-toggle svg {
+  flex: none;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+.chat-folder-toggle svg.chat-folder-open {
+  transform: rotate(90deg);
+}
+.chat-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-folder-count {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.chat-folder-empty {
+  padding: 4px 12px 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+
+/* The move dialog: no folder, then each folder, then a new one — the pick
+   is the move, so a folder is never made without a chat going into it. */
+.chat-move-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 220px;
+}
+.chat-move-list button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-move-list button:hover {
+  background: var(--bg-hover);
+}
+.chat-move-list .chat-move-new {
+  color: var(--text-dim);
+}
+
+/* The folder-name field and the refusal, kept in the dialog. */
+.sidebar-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.sidebar-field input {
+  height: var(--control);
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-box);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-family: inherit;
+}
+.sidebar-field-error {
+  margin: 8px 0 0;
+  color: var(--red);
+  font-size: var(--fs-sm);
+}
+
 .sidebar-delete-text {
   margin: 0;
   color: var(--text-dim);

@@ -28,6 +28,7 @@ import { useAgentTurn } from "./hooks/useAgentTurn";
 import { usePlainChat } from "./hooks/usePlainChat";
 import { usePrototypePreview } from "./hooks/usePrototypePreview";
 import { useChatHistory } from "./hooks/useChatHistory";
+import { useChatGroups } from "./hooks/useChatGroups";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useLlmSettings } from "./hooks/useLlmSettings";
 import { useKubeconfigs } from "./hooks/useKubeconfigs";
@@ -246,6 +247,7 @@ export default function App() {
   const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
   const toolLog = useToolLog(logOpen);
   const history = useChatHistory(workspace.path);
+  const chatGroups = useChatGroups(agentMode ? workspace.path : null);
   const [movedChat, setMovedChat] = useState<{ id: string; path: string } | null>(null);
   const movedChatOpened = useCallback(() => setMovedChat(null), []);
   // The list is redrawn from disk after every save rather than guessed at
@@ -905,6 +907,8 @@ export default function App() {
             setPage(next);
           }}
           chats={agentMode ? history.chats : plain.chats}
+          groups={chatGroups.groups}
+          groupScope={workspace.path}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
@@ -913,6 +917,30 @@ export default function App() {
           }
           onPinChat={(id, pinned) =>
             agentMode ? history.pin(id, pinned).catch((e) => toast.show(String(e))) : void plain.pin(id, pinned)
+          }
+          onMoveChat={(id, group) =>
+            agentMode ? history.move(id, group).catch((e) => toast.show(String(e))) : void plain.move(id, group)
+          }
+          onCreateGroup={async (name) => {
+            try {
+              return { id: (await chatGroups.create(name)).id };
+            } catch (e) {
+              return { error: String(e) };
+            }
+          }}
+          onRenameGroup={async (id, name) => {
+            try {
+              await chatGroups.rename(id, name);
+              return {};
+            } catch (e) {
+              return { error: String(e) };
+            }
+          }}
+          onDeleteGroup={(id) =>
+            void chatGroups.remove(id).then(
+              () => (agentMode ? history.refresh() : plain.refresh()),
+              (e) => toast.show(String(e)),
+            )
           }
           onDeleteChat={(id) => {
             if (!agentMode)

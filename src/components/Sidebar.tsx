@@ -7,6 +7,8 @@ import {
   ChevronRight,
   CircleCheck,
   CodeXml,
+  FolderInput,
+  FolderPlus,
   GitBranch,
   Info,
   Keyboard,
@@ -15,6 +17,7 @@ import {
   MessageSquare,
   MessagesSquare,
   Moon,
+  Pencil,
   Pin,
   PinOff,
   Search,
@@ -30,8 +33,9 @@ import { GettingStarted } from "./GettingStarted";
 import { type PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
+import { useStoredState } from "../hooks/useStoredState";
 import { comboKeys, matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
-import type { ChatSummary } from "../lib/savedChats";
+import type { ChatGroup, ChatSummary } from "../lib/savedChats";
 import { APP_MODES, type AppMode, type AsideTab, type ChatActivity } from "../types";
 import type { Scheme } from "../hooks/useTheme";
 import "./Sidebar.css";
@@ -78,6 +82,9 @@ function byDay(chats: ChatSummary[]) {
   ].filter((group) => group.chats.length > 0);
 }
 
+/** `useStoredState`'s screen for the collapsed-folder list. */
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
 type Props = {
   mode: AppMode;
   onMode: (mode: AppMode) => void;
@@ -87,11 +94,21 @@ type Props = {
   page: PageId | null;
   onPage: (page: PageId) => void;
   chats: ChatSummary[];
+  /** The folders of the current list — the open folder's, or Chat mode's shared set. */
+  groups: ChatGroup[];
+  /** What the collapsed-folder memory is scoped by: the open folder's path, null for Chat mode. */
+  groupScope: string | null;
   activeChat: string | null;
   chatActivity?: Record<string, ChatActivity>;
   onSelectChat: (id: string) => void;
   onArchiveChat: (id: string, archived: boolean) => void;
   onPinChat: (id: string, pinned: boolean) => void;
+  onMoveChat: (id: string, groupId: string | null) => void;
+  /** Makes a folder; resolves to its id, or the refusal as `error` (the dialog stays open). */
+  onCreateGroup: (name: string) => Promise<{ id?: string; error?: string }>;
+  /** Renames a folder; a refusal comes back as `error` and keeps the dialog open. */
+  onRenameGroup: (id: string, name: string) => Promise<{ error?: string }>;
+  onDeleteGroup: (id: string) => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
   onOnboardingAction: (tab: AsideTab) => void;
@@ -107,11 +124,17 @@ export function Sidebar({
   page,
   onPage,
   chats,
+  groups,
+  groupScope,
   activeChat,
   chatActivity = {},
   onSelectChat,
   onArchiveChat,
   onPinChat,
+  onMoveChat,
+  onCreateGroup,
+  onRenameGroup,
+  onDeleteGroup,
   onDeleteChat,
   onOpenSettings,
   onOnboardingAction,
@@ -122,6 +145,14 @@ export function Sidebar({
   const [filter, setFilter] = useState<Filter>("active");
   const [query, setQuery] = useState("");
   const [deleting, setDeleting] = useState<ChatSummary | null>(null);
+  const [moving, setMoving] = useState<ChatSummary | null>(null);
+  /** A folder being named: `group` set is a rename, unset is a new one. */
+  const [naming, setNaming] = useState<{ group: ChatGroup | null; name: string } | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<ChatGroup | null>(null);
+  // A folder shut by id, remembered per list: collapse is about the view,
+  // not the chats, so it lives in window storage and not in the store.
+  const [collapsed, setCollapsed] = useStoredState<string[]>(`kibo-chat-groups-${groupScope ?? ""}`, [], isStringArray);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   useShortcuts({ shortcuts: () => setShortcutsOpen((v) => !v) });
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -133,10 +164,12 @@ export function Sidebar({
   const listed = chats.filter(
     (chat) => (filter === "all" || chat.archived === (filter === "archived")) && chat.title.toLowerCase().includes(wanted),
   );
-  // The pinned group holds the active filter's pinned rows ahead of the days,
-  // and a row shown twice reads as two chats — so the days never repeat one.
+  // Pinned first, then the folders, then the days — and a row shown twice
+  // reads as two chats, so each of the three takes a chat out of the rest.
+  // Folders are the working view: only the active filter draws them.
   const pinnedRows = filter === "active" ? listed.filter((chat) => chat.pinned) : [];
-  const dayRows = filter === "active" ? listed.filter((chat) => !chat.pinned) : listed;
+  const folderRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group != null) : [];
+  const dayRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group == null) : listed;
   const userWrap = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -185,6 +218,12 @@ export function Sidebar({
       </button>
       <ChatMenu
         items={[
+          {
+            id: "move",
+            label: "Move to folder…",
+            icon: <FolderInput size={14} />,
+            onSelect: () => setMoving(chat),
+          },
           chat.pinned
             ? {
                 id: "unpin",
@@ -222,6 +261,31 @@ export function Sidebar({
       />
     </div>
   );
+
+  const toggleFolder = (id: string) =>
+    setCollapsed((shut) => (shut.includes(id) ? shut.filter((one) => one !== id) : [...shut, id]));
+
+  const saveName = async () => {
+    if (!naming) return;
+    let error: string | undefined;
+    let id: string | undefined;
+    if (naming.group) {
+      ({ error } = await onRenameGroup(naming.group.id, naming.name));
+    } else {
+      ({ error, id } = await onCreateGroup(naming.name));
+    }
+    if (error) {
+      // The refusal names the fix; the dialog stays open with it.
+      setNameError(error);
+      return;
+    }
+    setNaming(null);
+    // A folder made from the move dialog is made for the chat being moved.
+    if (!naming.group && moving) {
+      onMoveChat(moving.id, id ?? null);
+      setMoving(null);
+    }
+  };
 
   return (
     <nav className="sidebar">
@@ -278,38 +342,92 @@ export function Sidebar({
       </div>
 
       <div className="group">
-        {chats.length > 0 && (
+        {(chats.length > 0 || groups.length > 0) && (
           <div className="group-head">
             <span>Chats</span>
-            <Dropdown
-              label={FILTERS.find((f) => f.value === filter)?.label}
-              title="Which chats to list"
-              options={FILTERS}
-              value={filter}
-              onPick={(value) => setFilter(value as Filter)}
-              below
-              right
-            />
+            <div className="group-head-actions">
+              <button
+                type="button"
+                className="iconbtn"
+                title="New folder"
+                aria-label="New folder"
+                onClick={() => {
+                  setNaming({ group: null, name: "" });
+                  setNameError(null);
+                }}
+              >
+                <FolderPlus size={14} />
+              </button>
+              <Dropdown
+                label={FILTERS.find((f) => f.value === filter)?.label}
+                title="Which chats to list"
+                options={FILTERS}
+                value={filter}
+                onPick={(value) => setFilter(value as Filter)}
+                below
+                right
+              />
+            </div>
           </div>
         )}
-        {listed.length === 0 ? (
+        {listed.length === 0 && (
           <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
-        ) : (
-          <>
-            {pinnedRows.length > 0 && (
-              <section>
-                <div className="chat-day">Pinned</div>
-                {pinnedRows.map(chatRow)}
-              </section>
-            )}
-            {byDay(dayRows).map(({ day, chats: rows }) => (
-              <section key={day}>
-                <div className="chat-day">{day}</div>
-                {rows.map(chatRow)}
-              </section>
-            ))}
-          </>
         )}
+        {pinnedRows.length > 0 && (
+          <section>
+            <div className="chat-day">Pinned</div>
+            {pinnedRows.map(chatRow)}
+          </section>
+        )}
+        {filter === "active" &&
+          groups.map((group) => {
+            const rows = folderRows.filter((chat) => chat.group === group.id);
+            const shut = collapsed.includes(group.id);
+            return (
+              <section key={group.id}>
+                <div className="chat-day chat-folder-head">
+                  <button
+                    type="button"
+                    className="chat-folder-toggle"
+                    aria-expanded={!shut}
+                    onClick={() => toggleFolder(group.id)}
+                  >
+                    <ChevronRight size={12} className={shut ? undefined : "chat-folder-open"} aria-hidden />
+                    <span className="chat-folder-name">{group.name}</span>
+                    <span className="chat-folder-count">{rows.length}</span>
+                  </button>
+                  <ChatMenu
+                    items={[
+                      {
+                        id: "rename",
+                        label: "Rename…",
+                        icon: <Pencil size={14} />,
+                        onSelect: () => {
+                          setNaming({ group, name: group.name });
+                          setNameError(null);
+                        },
+                      },
+                      {
+                        id: "delete",
+                        label: "Delete…",
+                        icon: <Trash2 size={14} />,
+                        divided: true,
+                        onSelect: () => setDeletingGroup(group),
+                      },
+                    ]}
+                  />
+                </div>
+                {!shut && (rows.length > 0 ? rows.map(chatRow) : <div className="chat-folder-empty">Empty</div>)}
+              </section>
+            );
+          })}
+        {listed.length > 0 &&
+          byDay(dayRows).map(({ day, chats: rows }) => (
+            <section key={day}>
+              <div className="chat-day">{day}</div>
+              {rows.map(chatRow)}
+            </section>
+          ))}
       </div>
 
       <Modal
@@ -337,6 +455,108 @@ export function Sidebar({
         <p className="sidebar-delete-text">
           <b>{deleting?.title}</b> and its whole transcript will be gone for good. Archive it instead to keep it out of
           the list.
+        </p>
+      </Modal>
+
+      <Modal title={`Move “${moving?.title ?? ""}” to`} open={moving !== null} onClose={() => setMoving(null)}>
+        <div className="chat-move-list">
+          <button
+            type="button"
+            onClick={() => {
+              if (moving) onMoveChat(moving.id, null);
+              setMoving(null);
+            }}
+          >
+            No folder
+          </button>
+          {groups.map((group) => (
+            <button
+              key={group.id}
+              type="button"
+              onClick={() => {
+                if (moving) onMoveChat(moving.id, group.id);
+                setMoving(null);
+              }}
+            >
+              {group.name}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="chat-move-new"
+            onClick={() => {
+              setNaming({ group: null, name: "" });
+              setNameError(null);
+            }}
+          >
+            New folder…
+          </button>
+        </div>
+      </Modal>
+
+      <Modal
+        title={naming?.group ? `Rename “${naming.group.name}”` : "New folder"}
+        open={naming !== null}
+        onClose={() => setNaming(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setNaming(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!naming?.name.trim()}
+              onClick={() => void saveName()}
+            >
+              {naming?.group ? "Save" : "Create"}
+            </button>
+          </>
+        }
+      >
+        <label className="sidebar-field">
+          <span>Name</span>
+          <input
+            type="text"
+            value={naming?.name ?? ""}
+            onChange={(e) => {
+              if (naming) setNaming({ ...naming, name: e.target.value });
+              setNameError(null);
+            }}
+            onKeyDown={(e) => {
+              if (!matches(e, "accept")) return;
+              e.preventDefault();
+              void saveName();
+            }}
+          />
+        </label>
+        {nameError && <p className="sidebar-field-error">{nameError}</p>}
+      </Modal>
+
+      <Modal
+        title={`Delete folder “${deletingGroup?.name ?? ""}”?`}
+        open={deletingGroup !== null}
+        onClose={() => setDeletingGroup(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setDeletingGroup(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                if (deletingGroup) onDeleteGroup(deletingGroup.id);
+                setDeletingGroup(null);
+              }}
+            >
+              Delete
+            </button>
+          </>
+        }
+      >
+        <p className="sidebar-delete-text">
+          Its chats stay in the list, filed under no folder.
         </p>
       </Modal>
 
