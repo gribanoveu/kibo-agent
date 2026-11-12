@@ -117,6 +117,10 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
     // The branch a chat works on, listed so the window can tell it from the
     // folder's without loading the transcript.
     add_column(&conn, "git_branch", "TEXT")?;
+    // The commit HEAD pointed at when the chat was first saved — what a
+    // review counts as "this chat's work". NULL for rows saved before the
+    // column and for chats begun before their folder's first commit.
+    add_column(&conn, "head_at_start", "TEXT")?;
     Ok(conn)
 }
 
@@ -223,6 +227,18 @@ pub fn title(id: &str) -> Result<Option<String>, ChatError> {
         .map_err(store)
 }
 
+/// The commit `HEAD` pointed at when the chat was first saved — one column,
+/// no transcript. `None` for a chat without a marker: one saved before the
+/// column existed, or begun before its folder's first commit.
+pub fn head_at_start(id: &str) -> Result<Option<String>, ChatError> {
+    chat_record::check_id(id)?;
+    open()?
+        .query_row("SELECT head_at_start FROM chats WHERE id = ?1", params![id], |row| row.get::<_, Option<String>>(0))
+        .optional()
+        .map(|found| found.flatten())
+        .map_err(store)
+}
+
 /// Writes the conversation whole, keeping the moment it started.
 ///
 /// Whole because a conversation is edited from both ends — a compaction
@@ -242,16 +258,23 @@ pub fn save(
     let _write = write_lock();
     // An existing chat keeps its checkout: a save already in flight when the
     // chat moved to a worktree must not write the old folder or its branch back.
-    let (workspace, worktree_base, git_branch) = match load(id) {
+    // It keeps its start marker the same way: the first save stamps it, later
+    // saves pass the stored one through, like `created_at`.
+    let (workspace, worktree_base, git_branch, head_at_start) = match load(id) {
         Ok(record) => {
             let branch = if record.workspace == workspace {
                 git_branch.map(str::to_string)
             } else {
                 crate::infra::git_head::current_branch(Path::new(&record.workspace)).or(record.git_branch)
             };
-            (record.workspace, record.worktree_base, branch)
+            (record.workspace, record.worktree_base, branch, record.head_at_start)
         }
-        Err(ChatError::NotFound(_)) => (workspace.to_string(), None, git_branch.map(str::to_string)),
+        Err(ChatError::NotFound(_)) => (
+            workspace.to_string(),
+            None,
+            git_branch.map(str::to_string),
+            crate::infra::git_head::current_commit(Path::new(workspace)),
+        ),
         Err(e) => return Err(e),
     };
     #[cfg(test)]
@@ -272,6 +295,7 @@ pub fn save(
         kube: None,
         worktree_base,
         git_branch,
+        head_at_start,
     })
 }
 
@@ -302,6 +326,7 @@ pub fn save_plain(
         kube,
         worktree_base: None,
         git_branch: None,
+        head_at_start: None,
     })
 }
 
@@ -338,11 +363,13 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
     let body = serde_json::to_string(&record).map_err(ChatError::Parse)?;
     // An upsert, not INSERT OR REPLACE: a replaced row would lose `archived`
     // and `generated_title`. A new branch starts with its original's name, as
-    // it starts with its first message.
+    // it starts with its first message. `head_at_start` is written only by the
+    // INSERT half — the conflict branch deliberately leaves it: a chat's start
+    // is its first save's, however often the chat is saved afterwards.
     conn.execute(
         "INSERT INTO chats
-           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, git_branch, generated_title)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, (SELECT generated_title FROM chats WHERE id = ?7))
+           (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, git_branch, generated_title, head_at_start)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, (SELECT generated_title FROM chats WHERE id = ?7), ?11)
          ON CONFLICT(id) DO UPDATE SET
            workspace = excluded.workspace,
            schema_version = excluded.schema_version,
@@ -364,6 +391,7 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
             body,
             record.role.and_then(|role| serde_json::to_value(role).ok()?.as_str().map(str::to_string)),
             record.git_branch,
+            record.head_at_start,
         ],
     )
     .map_err(store)?;
@@ -456,6 +484,20 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    /// A commit on top of `parent`'s, so a test can move the folder's HEAD
+    /// between saves.
+    fn commit_to(repo: &git2::Repository, parent: Option<&str>) -> String {
+        std::fs::write(repo.workdir().unwrap().join("f.txt"), parent.unwrap_or("root")).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("f.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let parent = parent.map(|sha| repo.find_commit(sha.parse().unwrap()).unwrap());
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, "commit", &tree, &parents).unwrap().to_string()
     }
 
     fn compacted() -> Vec<LlmMessage> {
@@ -899,6 +941,76 @@ mod tests {
                 save("../settings", "/repo", &[], &Value::Null, &[], None, None, None),
                 Err(ChatError::BadId(_))
             ));
+        });
+    }
+
+    /// The chat's start is measured once: the first save stamps HEAD's
+    /// commit — the record, the column, and the cheap reader all agree — and
+    /// no later save, not even one after the folder's HEAD has moved on,
+    /// rewrites it.
+    #[test]
+    fn a_chat_keeps_the_head_of_its_first_save() {
+        with_app_dir("chat-store-head-start", || {
+            let dir = crate::testing::temp_dir("chat-store-head-repo");
+            let repo = git2::Repository::init(&dir).unwrap();
+            let first = commit_to(&repo, None);
+            let root = dir.display().to_string();
+            save_one("one", &root, "first");
+
+            assert_eq!(head_at_start("one").unwrap().as_deref(), Some(first.as_str()));
+            assert_eq!(load("one").unwrap().head_at_start.as_deref(), Some(first.as_str()));
+
+            let second = commit_to(&repo, Some(&first));
+            assert_ne!(first, second);
+            save_one("one", &root, "saved again, HEAD has moved");
+
+            assert_eq!(head_at_start("one").unwrap().as_deref(), Some(first.as_str()), "written once");
+            assert_eq!(load("one").unwrap().head_at_start.as_deref(), Some(first.as_str()));
+        });
+    }
+
+    /// A chat begun before its folder's first commit has no marker, and keeps
+    /// having none: write-once means never, not "on the next save".
+    #[test]
+    fn a_chat_started_before_the_first_commit_never_gets_a_marker() {
+        with_app_dir("chat-store-head-unborn", || {
+            let dir = crate::testing::temp_dir("chat-store-head-unborn-repo");
+            let repo = git2::Repository::init(&dir).unwrap();
+            let root = dir.display().to_string();
+            save_one("one", &root, "before any commit");
+            assert_eq!(head_at_start("one").unwrap(), None);
+
+            commit_to(&repo, None);
+            save_one("one", &root, "after the folder's first commit");
+            assert_eq!(head_at_start("one").unwrap(), None, "still none: only the first save writes");
+        });
+    }
+
+    /// A row an older build wrote — no column value, no key in the body —
+    /// opens as a chat without a marker and is saved again without gaining
+    /// one.
+    #[test]
+    fn a_chat_saved_before_the_marker_keeps_having_none() {
+        with_app_dir("chat-store-head-old-row", || {
+            let dir = crate::testing::temp_dir("chat-store-head-old-repo");
+            let repo = git2::Repository::init(&dir).unwrap();
+            commit_to(&repo, None);
+            let root = dir.display().to_string();
+            save_one("old", &root, "written by an older build");
+            // Mimic that older build: the column did not exist and the body
+            // has no headAtStart key.
+            open().unwrap().execute("UPDATE chats SET head_at_start = NULL WHERE id = 'old'", []).unwrap();
+            let mut value: Value = serde_json::from_str(&body("old")).unwrap();
+            value.as_object_mut().unwrap().remove("headAtStart");
+            open()
+                .unwrap()
+                .execute("UPDATE chats SET body = ?1 WHERE id = 'old'", params![value.to_string()])
+                .unwrap();
+
+            save_one("old", &root, "saved again by this build");
+
+            assert_eq!(head_at_start("old").unwrap(), None);
+            assert!(!body("old").contains("headAtStart"), "the body stays without the key");
         });
     }
 }

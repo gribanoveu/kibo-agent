@@ -100,6 +100,12 @@ pub struct ChatRecord {
     /// another chat's switch moves the folder, never this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
+    /// The commit `HEAD` pointed at when the chat was first saved — what
+    /// "this chat's work" is measured from. Set once and never rewritten,
+    /// like `created_at`; absent in chats saved before the marker existed
+    /// and in those begun before their folder's first commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_at_start: Option<String>,
 }
 
 /// A row in the sidebar. Deliberately not the whole record: listing a folder
@@ -264,6 +270,7 @@ mod tests {
             kube: None,
             worktree_base: None,
             git_branch: None,
+            head_at_start: None,
         }
     }
 

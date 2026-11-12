@@ -223,6 +223,10 @@ pub struct Turn<'a> {
     /// The main working tree, when the open folder is a worktree of it —
     /// said in the prompt, so the model keeps out of the user's checkout.
     pub worktree_of: Option<&'a std::path::Path>,
+    /// The commit `HEAD` pointed at when this chat was first saved; `None`
+    /// for a chat without the marker. A review reads it as its base when
+    /// the working tree is clean (`domain::review`'s table, rule 3).
+    pub chat_head: Option<&'a str>,
     /// The connected MCP servers' tools. Read once per turn, like the
     /// skills: the tools a model was shown must not change between rounds.
     pub mcp: &'a McpTools,
@@ -1372,6 +1376,9 @@ fn run_helper(
         log_call: turn.log_call,
         plan: None,
         worktree_of: turn.worktree_of,
+        // A helper's base is its brief's, not its own: a review's marker is
+        // the calling turn's fact.
+        chat_head: None,
         mcp,
         hooks: turn.hooks,
         // The calling turn's to report when they end.
@@ -2701,6 +2708,7 @@ mod tests {
                 log_call: &log_call,
                 plan: self.plan.as_deref(),
                 worktree_of: self.worktree_of.as_deref(),
+                chat_head: None,
                 mcp: &self.mcp,
                 hooks: &self.hooks,
                 processes: self.processes.clone(),

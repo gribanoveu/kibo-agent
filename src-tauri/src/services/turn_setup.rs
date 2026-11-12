@@ -130,6 +130,10 @@ pub fn run_in_folder(
         })?;
     let mcp = mcp_for_turn(app.mcp_servers.as_deref(), folder.mode, workspace, folder.cancelled);
     let worktree_of = crate::infra::git_head::worktree_of(workspace);
+    // What this chat's first save saw — a review's base once the tree is
+    // clean. One column, and a chat without the marker is a fact, not an
+    // error: the review then reads the branch against its upstream.
+    let chat_head = crate::infra::chat_store::head_at_start(folder.chat_id).ok().flatten();
     // Read each turn, as the chat's is: a search turned on in Settings is
     // there for the next answer.
     let web = match app.embeddings.as_ref() {
@@ -170,6 +174,7 @@ pub fn run_in_folder(
         log_call: &log_call,
         plan: folder.plan,
         worktree_of: worktree_of.as_deref(),
+        chat_head: chat_head.as_deref(),
         mcp: &mcp,
         hooks: &hooks,
         processes: app.processes,
@@ -519,6 +524,80 @@ mod tests {
 
             assert_eq!(crate::testing::chat_tokens("folder-chat"), 12);
             assert_eq!(crate::testing::chat_tokens("plain-chat"), 24);
+        });
+    }
+
+    /// A folder turn carries its chat's start marker — the fact a review
+    /// diffs from once the tree is clean. A chat saved without one hands the
+    /// turn `None`, not an error.
+    #[test]
+    fn a_turn_learns_the_head_its_chat_started_at() {
+        crate::testing::with_app_dir("turn-setup-chat-head", || {
+            let mut settings = crate::infra::settings_store::load().unwrap();
+            settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
+                id: "local".into(),
+                base_url: "https://local.example/v1".into(),
+                model: Some("qwen".into()),
+                ..Default::default()
+            }];
+            crate::infra::settings_store::save(&settings).unwrap();
+            crate::infra::llm_credentials_store::save_api_key("local", "sk").unwrap();
+
+            let dir = temp_dir("turn-setup-chat-head-repo");
+            let repo = git2::Repository::init(&dir).unwrap();
+            std::fs::write(dir.join("f.txt"), "root").unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("f.txt")).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+            let head = repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap().to_string();
+
+            let root = dir.display().to_string();
+            let blocks = serde_json::json!([]);
+            for (chat, workspace) in [("marked", root.as_str()), ("unmarked", "/no/repo/here")] {
+                crate::infra::chat_store::save(
+                    chat,
+                    workspace,
+                    &[crate::domain::llm::LlmMessage::user("hi")],
+                    &blocks,
+                    &[],
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            }
+
+            let events: ChatEventSink = Arc::new(|_| {});
+            let (no, none, zero) = (|| false, Vec::new, || 0);
+            let mut seen = Vec::new();
+            for chat in ["marked", "unmarked"] {
+                let folder = FolderTurn {
+                    chat_id: chat,
+                    workspace: &dir,
+                    mode: ConversationMode::Agent,
+                    approval: ApprovalPolicy::default(),
+                    plan: None,
+                    events: &events,
+                    cancelled: &no,
+                    take_steering: &none,
+                    notes_typed: &zero,
+                    parallel: &Vec::<String>::new,
+                    worktree_base: None,
+                };
+                run_in_folder(folder, FolderHandles::default(), |turn| {
+                    seen.push(turn.chat_head.map(str::to_string));
+                    Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
+                        result: Default::default(),
+                        todos: Vec::new(),
+                        history: Vec::new(),
+                        limit_reached: None,
+                    }))
+                })
+                .unwrap();
+            }
+            assert_eq!(seen, vec![Some(head), None]);
         });
     }
 

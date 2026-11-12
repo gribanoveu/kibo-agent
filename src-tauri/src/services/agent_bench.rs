@@ -342,6 +342,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         log_call: &log_call,
         plan: None,
         worktree_of: None,
+        chat_head: None,
         mcp: &mcp,
         hooks: &hooks,
         processes: None,
