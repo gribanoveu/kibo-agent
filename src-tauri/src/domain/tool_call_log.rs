@@ -436,6 +436,11 @@ mod tests {
                 Some(ToolCall::Mongo(crate::domain::tools::MongoArgs { op: crate::domain::tools::MongoOp::Find, filter: Some("{ paid: true }".into()), ..Default::default() })),
                 ToolResult::Mongo { text: LEAK.into(), summary: "3 documents".into() },
             ),
+            // A topic, an offset, a key: the arguments stay, the records go as `text`.
+            ToolName::Kafka => (
+                Some(ToolCall::Kafka(crate::domain::tools::KafkaArgs { op: crate::domain::tools::KafkaOp::Read, key: Some("user-1".into()), ..Default::default() })),
+                ToolResult::Kafka { text: LEAK.into(), summary: "3 messages".into() },
+            ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),

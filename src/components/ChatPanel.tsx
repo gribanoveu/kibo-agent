@@ -23,6 +23,7 @@ import {
   ScrollText,
   SquareKanban,
   Database,
+  Layers,
   Telescope,
   Pencil,
   Download,
@@ -98,6 +99,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Explore: Telescope,
   Board: SquareKanban,
   MongoDB: Database,
+  Kafka: Layers,
   Prototype: AppWindow,
 };
 

@@ -133,7 +133,7 @@ impl Feature {
                     in-sync copies, watermarks and the configs that matter. Connection passwords are sealed on this \
                     computer as the API keys are, and the window never sees one.",
                 enabled_by_default: false,
-                tools: &[],
+                tools: &[ToolName::Kafka],
                 data: Some("kafka_connections.enc"),
             },
             Feature::VoiceInput => Manifest {

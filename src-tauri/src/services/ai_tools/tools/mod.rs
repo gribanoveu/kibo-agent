@@ -34,6 +34,7 @@ pub mod git;
 pub mod grep;
 pub mod knowledge;
 pub mod mongo;
+pub mod kafka;
 pub mod cluster;
 pub mod runbook;
 pub mod list_files;
@@ -123,6 +124,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::DeepseekFetch, deepseek::fetch_definition),
     (ToolName::Board, board::definition),
     (ToolName::Mongo, mongo::definition),
+    (ToolName::Kafka, kafka::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -191,6 +193,7 @@ pub fn dispatch(
         ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
         ToolCall::Board(args) => board::board(args, deps),
         ToolCall::Mongo(args) => mongo::mongo(args, deps),
+        ToolCall::Kafka(args) => kafka::kafka(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -636,6 +639,19 @@ mod definition_tests {
                 vec![ToolCall::Present(crate::domain::tools::PresentArgs {
                     path: "index.html".into(),
                     title: "Coffee shop".into(),
+                })],
+            ),
+            ToolName::Kafka => (
+                r#"{"op":"topic"}"#,
+                vec![ToolCall::Kafka(crate::domain::tools::KafkaArgs {
+                    op: crate::domain::tools::KafkaOp::Read,
+                    connection: Some("Local".into()),
+                    name: Some("ord".into()),
+                    topic: Some("orders".into()),
+                    partitions: Some(vec![0, 1]),
+                    from: Some(812),
+                    count: Some(20),
+                    key: Some("user-1".into()),
                 })],
             ),
             ToolName::ToolSearch => (

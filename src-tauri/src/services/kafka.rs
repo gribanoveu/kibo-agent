@@ -3,7 +3,7 @@
 //! `infra::kafka_client`; the store is `infra::kafka_store`. What is decided
 //! here is how much one answer carries and in what order.
 
-use crate::domain::kafka::{page, Connection, GroupList, LiveSink, LiveSpec, ConnectionView, KafkaError, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
+use crate::domain::kafka::{page, Connection, ConnectionView, GroupList, KafkaError, KafkaServers, LiveSink, LiveSpec, MessagePage, ProduceSpec, Produced, ReadPage, ReadSpec, ScanPage, ScanSpec, TopicDetail, TopicList, TopicView};
 use crate::infra::kafka_client::{self, KafkaClients};
 use crate::infra::kafka_store;
 
@@ -149,6 +149,34 @@ pub fn groups(clients: &KafkaClients, id: &str) -> Result<GroupList, KafkaError>
 pub fn live_start(live: &KafkaLive, clients: &std::sync::Arc<KafkaClients>, id: &str, spec: LiveSpec, sink: LiveSink) -> Result<String, KafkaError> {
     let connection = kafka_store::get(id)?;
     Ok(live.start(clients.clone(), connection, spec, sink))
+}
+
+/// The page's clients, as the agent's `kafka` tool reads through them. The
+/// scenarios are this module's own: the tool decides what to ask, not how.
+pub struct Servers(pub std::sync::Arc<KafkaClients>);
+
+impl KafkaServers for Servers {
+    fn connections(&self) -> Result<Vec<ConnectionView>, KafkaError> {
+        connections()
+    }
+
+    fn topics(&self, connection: &str, part: Option<&str>, page: usize) -> Result<TopicList, KafkaError> {
+        topics(&self.0, connection, part, page, false)
+    }
+
+    fn topic(&self, connection: &str, name: &str) -> Result<TopicDetail, KafkaError> {
+        topic(&self.0, connection, name)
+    }
+
+    fn messages(&self, connection: &str, spec: ReadSpec) -> Result<MessagePage, KafkaError> {
+        let saved = kafka_store::get(connection)?;
+        kafka_client::records(&self.0, &saved, &spec)
+    }
+
+    fn scan(&self, connection: &str, spec: ScanSpec) -> Result<ScanPage, KafkaError> {
+        let saved = kafka_store::get(connection)?;
+        kafka_client::scan(&self.0, &saved, &spec)
+    }
 }
 
 #[cfg(test)]

@@ -35,6 +35,8 @@ const ACCOUNTED = new Set([
   "board",
   // MongoDB, read.
   "mongo",
+  // Kafka, read: no group is made and nothing is committed.
+  "kafka",
   // A version kept beside a Prototype chat's folder: history, which stays.
   "present",
   "skill",

@@ -56,6 +56,39 @@ where
     opt_uint(deserializer, usize::MAX as u64).map(|v| v.map(|n| n as usize))
 }
 
+/// `Option<i64>` counterpart of [`opt_u32`], for an offset: the same
+/// spellings, and a sign in front is allowed — `-1` is Kafka's own "no
+/// offset", not a mistake — while a real fraction is refused as everywhere
+/// else.
+pub fn opt_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        // A JSON number goes through the same parser as a quoted one, its own
+        // text being what that parser reads.
+        Value::Number(ref number) => number_to_int(&number.to_string()).map(Some).map_err(|issue| match issue {
+            NumberIssue::NotANumber => D::Error::custom("expected a number"),
+            NumberIssue::Unusable(msg) => D::Error::custom(msg),
+        }),
+        Value::String(ref text) => {
+            let trimmed = text.trim();
+            if NULLISH.contains(&trimmed.to_ascii_lowercase().as_str()) {
+                return Ok(None);
+            }
+            number_to_int(trimmed).map(Some).map_err(|issue| match issue {
+                NumberIssue::NotANumber => D::Error::custom(format!("expected a number, got the string \"{text}\" — send it unquoted, e.g. 812")),
+                NumberIssue::Unusable(msg) => D::Error::custom(msg),
+            })
+        }
+        ref other => Err(D::Error::custom(format!("expected a number, got {}", describe(other)))),
+    }
+}
+
 /// `Option<bool>` that also accepts `"true"`/`"false"`/`"yes"`/`"no"`/`1`/`0`,
 /// in any case.
 pub fn opt_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
@@ -223,6 +256,24 @@ fn number_to_uint(text: &str) -> Result<u64, NumberIssue> {
     Ok(f as u64)
 }
 
+/// The signed half of [`number_to_uint`]: the same literals under the same
+/// fraction rule, with a sign allowed in front.
+fn number_to_int(text: &str) -> Result<i64, NumberIssue> {
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let magnitude = number_to_uint(digits)?;
+    match negative {
+        true if magnitude > i64::MAX as u64 + 1 => Err(NumberIssue::Unusable(format!("the number {text} is too small"))),
+        // One step below zero more than there is above it.
+        true if magnitude == i64::MAX as u64 + 1 => Ok(i64::MIN),
+        true => Ok(-(magnitude as i64)),
+        false if magnitude > i64::MAX as u64 => Err(NumberIssue::Unusable(format!("the number {text} is too large"))),
+        false => Ok(magnitude as i64),
+    }
+}
+
 /// The JSON kind of a value, worded for a model rather than for a Rust reader
 /// — serde spells these `map`/`seq`.
 fn describe(value: &Value) -> &'static str {
@@ -246,6 +297,8 @@ mod tests {
         n: Option<u32>,
         #[serde(default, deserialize_with = "super::opt_bool")]
         b: Option<bool>,
+        #[serde(default, deserialize_with = "super::opt_i64")]
+        i: Option<i64>,
     }
 
     fn n(json: &str) -> Result<Option<u32>, String> {
@@ -258,6 +311,27 @@ mod tests {
         serde_json::from_str::<Probe>(json)
             .map(|p| p.b)
             .map_err(|e| e.to_string())
+    }
+
+    fn i(json: &str) -> Result<Option<i64>, String> {
+        serde_json::from_str::<Probe>(json)
+            .map(|p| p.i)
+            .map_err(|e| e.to_string())
+    }
+
+    /// An offset takes the same spellings as a count — `812`, `"812"`, `812.0`
+    /// — and a negative one is an offset rather than a mistake: Kafka's own
+    /// "no offset" is `-1`. A real fraction is refused, as everywhere.
+    #[test]
+    fn an_offset_is_a_number_even_quoted_and_may_be_negative() {
+        assert_eq!(i(r#"{"i": 812}"#), Ok(Some(812)));
+        assert_eq!(i(r#"{"i": "812"}"#), Ok(Some(812)));
+        assert_eq!(i(r#"{"i": 812.0}"#), Ok(Some(812)));
+        assert_eq!(i(r#"{"i": " -1 "}"#), Ok(Some(-1)));
+        assert_eq!(i(r#"{"i": null}"#), Ok(None));
+        assert_eq!(i(r#"{"i": "none"}"#), Ok(None));
+        let err = i(r#"{"i": 812.5}"#).expect_err("a fraction is not an offset");
+        assert!(err.contains("whole number"), "{err}");
     }
 
     /// The exact call that motivated this module.

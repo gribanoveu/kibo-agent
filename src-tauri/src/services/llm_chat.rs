@@ -243,6 +243,8 @@ pub struct Turn<'a> {
     pub board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads; `None` while the feature is off.
     pub mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
+    /// The Kafka connections `kafka` reads; `None` while the feature is off.
+    pub kafka: Option<Arc<dyn crate::domain::kafka::KafkaServers>>,
     /// DeepSeek's search and page reader, for `deepseekSearch` and
     /// `deepseekFetch`; `None` while the feature is off or there is no key.
     pub deepseek: Option<Web>,
@@ -1072,6 +1074,7 @@ fn execute_call(
         history,
         board: turn.board.clone(),
         mongo: turn.mongo.clone(),
+        kafka: turn.kafka.clone(),
         parallel: match turn.place {
             Place::Folder { parallel, .. } => Some(parallel),
             Place::Chat { .. } => None,
@@ -1383,6 +1386,7 @@ fn run_helper(
         board: None,
         // A fork reads the databases the calling turn may; a helper has no feature on, and is not offered it.
         mongo: turn.mongo.clone(),
+        kafka: turn.kafka.clone(),
         deepseek: None,
         features,
         fork: fork.is_some(),
@@ -2708,6 +2712,7 @@ mod tests {
                 questions: self.questions.clone(),
                 board: None,
                 mongo: None,
+                kafka: None,
                 deepseek: None,
                 features: self.features.clone(),
                 fork: false,
@@ -4607,6 +4612,21 @@ mod tests {
         assert!(offered(Features::all()));
     }
 
+    /// Kafka's read waits for `toolSearch` too, and only while the feature is on.
+    #[test]
+    fn the_agent_is_offered_kafka_only_while_the_feature_is_on() {
+        let offered = |features: Features| {
+            let mut h = harness("loop-kafka", vec![text("hi")]);
+            h.features = features;
+            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+            let tools = &h.provider.requests()[0].tools;
+            assert!(tools.iter().all(|t| t.name != "kafka"), "not in every request");
+            tools.iter().any(|t| t.name == "toolSearch" && t.description.contains("`kafka`"))
+        };
+        assert!(!offered(Features::default()));
+        assert!(offered(Features::all()));
+    }
+
     #[test]
     fn every_request_carries_the_tool_schemas() {
         let h = harness("loop-tools", vec![text("hi")]);
@@ -4616,13 +4636,13 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two, the knowledge base's four, MongoDB's one — the Kubernetes role's and the
+        // DeepSeek's two, the knowledge base's four, MongoDB's and Kafka's — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
         // is connected. Those waiting for `toolSearch` are found with it.
         let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
         assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
         // And `toolSearch`, which is there for them.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 12 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+        assert_eq!(offered.len(), ToolName::ALL.len() - 13 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a

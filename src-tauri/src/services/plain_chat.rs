@@ -48,6 +48,8 @@ pub struct ChatTurn<'a> {
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads, while that feature is on.
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
+    /// The Kafka connections `kafka` reads, while that feature is on.
+    pub kafka: Option<std::sync::Arc<dyn crate::domain::kafka::KafkaServers>>,
     /// DeepSeek's search and page reader, while that feature is on.
     pub deepseek: Option<Web>,
     /// The knowledge base's search, for a role that reads it, while that feature is on.
@@ -151,6 +153,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         questions: None,
         board: chat.board.clone(),
         mongo: chat.mongo.clone(),
+        kafka: chat.kafka.clone(),
         deepseek: chat.deepseek.clone(),
         features: chat.features.clone(),
         fork: false,
@@ -225,6 +228,7 @@ mod tests {
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
         board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
         mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
+        kafka: Option<Arc<dyn crate::domain::kafka::KafkaServers>>,
         features: crate::domain::features::Features,
         knowledge: Option<crate::domain::tools::CodeSearchFn>,
     }
@@ -252,6 +256,7 @@ mod tests {
             seen: Arc::default(),
             board: None,
             mongo: None,
+            kafka: None,
             features: Default::default(),
             knowledge: None,
         }
@@ -278,6 +283,7 @@ mod tests {
                 log_call: &log,
                 board: self.board.clone(),
                 mongo: self.mongo.clone(),
+                kafka: self.kafka.clone(),
                 knowledge: self.knowledge.clone(),
                 deepseek: None,
                 features: self.features.clone(),

@@ -20,7 +20,10 @@ use thiserror::Error;
 /// values are cut and say so; a value past [`MAX_DECODE`] is measured and cut
 /// the same way, without being parsed at all.
 const TEXT_LIMIT: usize = 64 * 1024;
-const MAX_DECODE: usize = 1024 * 1024;
+/// What one value may be before nothing is parsed: a 5 MiB blob is not what
+/// anyone is looking at, and parsing it is the slowest thing on the page.
+/// Public so a reader of its own — the agent's tool — keeps the same limit.
+pub const MAX_DECODE: usize = 1024 * 1024;
 
 /// How many messages are followed below the first one: the level past it is
 /// left as bytes rather than parsed.
@@ -155,6 +158,13 @@ pub enum KafkaError {
     Store(String),
     #[error("{0}")]
     Broker(String),
+    /// The agent's tool, with no saved connection ticked "Open to the agent".
+    #[error("no Kafka connection is open to the agent — the user opens one on the Kafka page: edit it and turn on \"Open to the agent\"")]
+    NoneOpen,
+    #[error("no connection named \"{name}\" is open to the agent — open to it: {open}")]
+    NotOpen { name: String, open: String },
+    #[error("{count} connections open to the agent are named \"{name}\" — ask the user to rename one on the Kafka page")]
+    SameName { name: String, count: usize },
 }
 
 // -------------------------------------------------------------------- topics
@@ -642,10 +652,13 @@ pub fn view(bytes: &[u8]) -> ValueView {
     hex(bytes)
 }
 
-/// The last resort: the bytes, escaped, cut to what one view carries.
+/// The last resort: the bytes, escaped, cut to what one view carries. Bytes
+/// dropped before `dump_string` are truncated too — the dump of what is left
+/// fits, and would otherwise claim to be the whole value.
 fn hex(bytes: &[u8]) -> ValueView {
-    let (text, truncated) = cut(&dump_string(&bytes[..bytes.len().min(TEXT_LIMIT)]));
-    ValueView::Hex { text, size: bytes.len(), truncated }
+    let shown = bytes.len().min(TEXT_LIMIT);
+    let (text, cut_short) = cut(&dump_string(&bytes[..shown]));
+    ValueView::Hex { text, size: bytes.len(), truncated: cut_short || shown < bytes.len() }
 }
 
 /// A Confluent-framed payload: a zero byte and the schema id, then the message.
@@ -926,9 +939,136 @@ fn render_fields(fields: &[ProtoField], depth: usize, out: &mut String) {
     }
 }
 
+// --------------------------------------------------------------- the agent
+
+/// What the agent's `kafka` tool reads, through the same services the page
+/// uses (`docs/54-kafka.md`, K-9). A trait rather than the clients, so the
+/// tool is tested without a broker — and so the tool layer keeps no socket.
+///
+/// Records cross as bytes — [`Message`], not [`MessageView`] — because the
+/// tool chooses the view and redacts what it shows, as `mongo` redacts the
+/// documents it reads.
+pub trait KafkaServers: Send + Sync {
+    /// The saved connections, without their passwords.
+    fn connections(&self) -> Result<Vec<ConnectionView>, KafkaError>;
+    /// One page of the topics whose name has `part` in it, any case; `None`
+    /// asks for every topic. `total` is how many matched in all.
+    fn topics(&self, connection: &str, part: Option<&str>, page: usize) -> Result<TopicList, KafkaError>;
+    /// One topic, with its partitions' watermarks and the configs a reader cares about.
+    fn topic(&self, connection: &str, name: &str) -> Result<TopicDetail, KafkaError>;
+    /// A window of a topic's records, read without a group.
+    fn messages(&self, connection: &str, spec: ReadSpec) -> Result<MessagePage, KafkaError>;
+    /// A window looked through for one key — a scan, since Kafka indexes
+    /// nothing by key.
+    fn scan(&self, connection: &str, spec: ScanSpec) -> Result<ScanPage, KafkaError>;
+}
+
+/// A window of records as the tool reads them: bytes, and how many there were.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagePage {
+    pub messages: Vec<Message>,
+    pub partitions: Vec<i32>,
+    /// Records follow past the last one here.
+    pub more: bool,
+}
+
+/// A look through a topic's records for one key. Kafka has no index by key: a
+/// key is part of the record, and the broker hands out offsets only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanSpec {
+    pub topic: String,
+    /// Empty is every partition of the topic, up to [`MAX_READ_PARTITIONS`].
+    pub partitions: Vec<i32>,
+    /// Where it starts looking; `None` is the oldest offset still stored.
+    pub from: Option<i64>,
+    /// The key looked for, as text: a record's key is bytes, and the model
+    /// writes text.
+    pub key: String,
+}
+
+/// What a key scan found, and what it cost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanPage {
+    pub messages: Vec<Message>,
+    pub partitions: Vec<i32>,
+    /// Records looked at, found or not.
+    pub scanned: usize,
+    /// The scan stopped at a ceiling with the log unread — there may be more.
+    pub more: bool,
+}
+
+/// What one key scan may cost, so that a topic of a million records is not
+/// read on a model's guess: records looked at, bytes of values, and time per
+/// partition — whichever comes first.
+pub const MAX_SCAN: usize = 20_000;
+pub const SCAN_BYTES: usize = 8 * 1024 * 1024;
+pub const SCAN_TIME: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether a scan has spent what it may.
+pub fn scan_over(scanned: usize, bytes: usize, spent: std::time::Duration, partitions: usize) -> bool {
+    scanned >= MAX_SCAN || bytes >= SCAN_BYTES || spent >= SCAN_TIME * partitions.max(1) as u32
+}
+
+/// Whether a record's key is the one looked for. Compared as bytes: a key that
+/// is not UTF-8 cannot be the text the model sent.
+pub fn key_is(key: Option<&[u8]>, wanted: &str) -> bool {
+    key == Some(wanted.as_bytes())
+}
+
+/// Whether a scan looked at its partitions to the end of the log: `next` is one
+/// past the last record read on a partition, `latest` where that partition
+/// ends. A partition left short of its end has something unread, and then
+/// "nothing has that key" is a guess rather than a fact — the broker going
+/// quiet for two polls is not the end of a log.
+pub fn reached_end(next: &[(i32, i64)], latest: &[(i32, i64)]) -> bool {
+    latest.iter().all(|(partition, end)| next.iter().any(|(read, at)| read == partition && at >= end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scan stops at the first of its three ceilings, and the clock is per
+    /// partition: twenty of them are a hundred seconds of looking, not five.
+    #[test]
+    fn a_scan_stops_at_the_first_of_its_ceilings() {
+        let s = |scanned: usize, bytes: usize, seconds: u64, partitions: usize| {
+            scan_over(scanned, bytes, std::time::Duration::from_secs(seconds), partitions)
+        };
+        assert!(!s(MAX_SCAN - 1, 0, 0, 1), "a record short of the ceiling is still looking");
+        assert!(s(MAX_SCAN, 0, 0, 1));
+        assert!(!s(0, SCAN_BYTES - 1, 0, 1), "a byte short of the ceiling is still looking");
+        assert!(s(0, SCAN_BYTES, 0, 1));
+        assert!(!s(0, 0, 4, 1), "four seconds of one partition is not the five it may take");
+        assert!(s(0, 0, 5, 1));
+        assert!(!s(0, 0, 5, 2), "the time is each partition's own");
+        assert!(s(0, 0, 10, 2));
+        assert!(s(0, 0, 5, 0), "no partition still means one's worth");
+    }
+
+    /// A key is bytes and the model writes text: only the very same bytes
+    /// match, in the same case.
+    #[test]
+    fn a_key_is_the_same_bytes_or_nothing() {
+        assert!(key_is(Some(b"user-1"), "user-1"));
+        assert!(!key_is(Some(b"user-1"), "user-10"));
+        assert!(!key_is(Some(b"user-1"), "User-1"), "a key is not a topic's name: case matters");
+        assert!(!key_is(Some(&[0xff, 0x00]), "ÿ"), "bytes that are not UTF-8 are no text at all");
+        assert!(!key_is(None, ""), "a record with no key is not the empty key");
+    }
+
+    /// "Everything stored" is said only when every partition was read to its
+    /// own end: one record short, or a partition never looked at, leaves
+    /// something the key could be in.
+    #[test]
+    fn a_scan_is_at_the_end_of_the_log_only_when_every_partition_is() {
+        let next = [(0, 10), (1, 5)];
+        assert!(reached_end(&next, &[(0, 10), (1, 5)]));
+        assert!(reached_end(&next, &[(0, 9)]), "an empty partition is at its end as soon as it starts");
+        assert!(!reached_end(&next, &[(0, 10), (1, 6)]), "a record short is not the end");
+        assert!(!reached_end(&next, &[(0, 10), (2, 0)]), "a partition never looked at is not read");
+        assert!(reached_end(&[], &[]), "a scan of nothing is over");
+    }
 
     /// The bytes of a fixture, built rather than hand-written: a varint, a
     /// length-delimited field, and the fields of the example in the plan.
@@ -1210,11 +1350,17 @@ mod tests {
         }
     }
 
+    /// A value too big to parse is shown as hex, and the hex view is a cut of
+    /// it: what a reader sees is not the whole value, and it has to say so.
     #[test]
-    fn a_value_past_the_decode_limit_is_measured_and_not_parsed() {
+    fn a_value_past_the_decode_limit_is_measured_not_parsed_and_cut() {
         let bytes = vec![b'x'; MAX_DECODE + 1];
         match view(&bytes) {
-            ValueView::Hex { size, .. } => assert_eq!(size, MAX_DECODE + 1),
+            ValueView::Hex { size, text, truncated } => {
+                assert_eq!(size, MAX_DECODE + 1);
+                assert!(truncated, "a dump of the first {TEXT_LIMIT} bytes is not the value");
+                assert!(text.len() <= TEXT_LIMIT + '…'.len_utf8(), "{}", text.len());
+            }
             other => panic!("not hex: {other:?}"),
         }
     }

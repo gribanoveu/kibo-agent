@@ -78,6 +78,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "deepseekFetch" => ToolCall::DeepseekFetch(args(call)?),
         "board" => ToolCall::Board(args(call)?),
         "mongo" => ToolCall::Mongo(args(call)?),
+        "kafka" => ToolCall::Kafka(args(call)?),
         "present" => ToolCall::Present(args(call)?),
         "toolSearch" => ToolCall::ToolSearch(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to

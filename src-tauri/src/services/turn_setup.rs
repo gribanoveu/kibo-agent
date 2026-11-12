@@ -16,6 +16,7 @@ use crate::domain::agents::Agents;
 use crate::domain::background::BackgroundProcesses;
 use crate::domain::board::TaskBoard;
 use crate::domain::mongo::MongoServers;
+use crate::domain::kafka::KafkaServers;
 use crate::domain::chat_role::ChatRole;
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::embeddings::EmbeddingProvider;
@@ -79,6 +80,7 @@ pub struct FolderHandles {
     pub terminals: Option<Arc<dyn UserTerminals>>,
     pub board: Option<Arc<dyn TaskBoard>>,
     pub mongo: Option<Arc<dyn MongoServers>>,
+    pub kafka: Option<Arc<dyn KafkaServers>>,
 }
 
 /// What a turn in a folder is, from the window and the agent's state.
@@ -139,6 +141,7 @@ pub fn run_in_folder(
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
     let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
+    let kafka = app.kafka.filter(|_| features.is_on(Feature::Kafka));
     let knowledge_overview = crate::services::knowledge::overview_offered(&features, workspace);
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
     let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
@@ -179,6 +182,7 @@ pub fn run_in_folder(
         questions: app.questions,
         board,
         mongo,
+        kafka,
         deepseek,
         features,
         fork: false,
@@ -210,6 +214,8 @@ pub struct ChatTurnInput<'a> {
     pub board: Arc<dyn TaskBoard>,
     /// The MongoDB servers; `None` where the app has none.
     pub mongo: Option<Arc<dyn MongoServers>>,
+    /// The Kafka connections; `None` where the app has none.
+    pub kafka: Option<Arc<dyn KafkaServers>>,
     pub embeddings: Arc<dyn EmbeddingProvider>,
     /// The knowledge base's search; `None` where the app has none.
     pub knowledge: Option<CodeSearchFn>,
@@ -255,6 +261,7 @@ pub fn run_in_chat(
     let features = features::enabled();
     let board = Some(chat.board).filter(|_| features.is_on(Feature::Board));
     let mongo = chat.mongo.filter(|_| features.is_on(Feature::Mongodb));
+    let kafka = chat.kafka.filter(|_| features.is_on(Feature::Kafka));
     let deepseek = web_search::deepseek_for(&features, &chat.embeddings);
     let knowledge = chat.knowledge.filter(|_| features.is_on(Feature::Knowledge));
     let turn = plain_chat::ChatTurn {
@@ -272,6 +279,7 @@ pub fn run_in_chat(
         log_call: &log_call,
         board,
         mongo,
+        kafka,
         deepseek,
         knowledge,
         features,
@@ -314,10 +322,10 @@ mod tests {
     use crate::domain::tools::ToolName;
     use crate::testing::temp_dir;
 
-    /// A chat's turn is given the board, the knowledge base's search and
-    /// MongoDB only while their features are on, as the agent's is.
+    /// A chat's turn is given the board, the knowledge base's search,
+    /// MongoDB and Kafka only while their features are on, as the agent's is.
     #[test]
-    fn a_chat_turn_gets_the_board_the_knowledge_base_and_mongodb_only_while_they_are_on() {
+    fn a_chat_turn_gets_the_board_the_knowledge_base_and_the_databases_only_while_they_are_on() {
         crate::testing::with_app_dir("turn-setup-chat", || {
             let mut settings = crate::infra::settings_store::load().unwrap();
             settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
@@ -346,6 +354,7 @@ mod tests {
                     s.features.insert("board".into(), on);
                     s.features.insert("knowledge".into(), on);
                     s.features.insert("mongodb".into(), on);
+                    s.features.insert("kafka".into(), on);
                 })
                 .unwrap();
                 let chat = ChatTurnInput {
@@ -355,6 +364,7 @@ mod tests {
                     clusters: Arc::new(Clusters::default()),
                     board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
                     mongo: Some(Arc::new(crate::services::mongo::Servers(Arc::default()))),
+                    kafka: Some(Arc::new(crate::services::kafka::Servers(Arc::default()))),
                     embeddings: Arc::new(NoModel),
                     knowledge: Some(search.clone()),
                     approval: ApprovalPolicy::default(),
@@ -363,7 +373,7 @@ mod tests {
                 };
                 let mut seen = None;
                 run_in_chat(chat, |turn| {
-                    seen = Some((turn.board.is_some(), turn.knowledge.is_some(), turn.mongo.is_some()));
+                    seen = Some((turn.board.is_some(), turn.knowledge.is_some(), turn.mongo.is_some(), turn.kafka.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
                         todos: Vec::new(),
@@ -374,8 +384,8 @@ mod tests {
                 .unwrap();
                 seen.expect("run was called")
             };
-            assert_eq!(handed(false), (false, false, false));
-            assert_eq!(handed(true), (true, true, true));
+            assert_eq!(handed(false), (false, false, false, false));
+            assert_eq!(handed(true), (true, true, true, true));
         });
     }
 
@@ -415,6 +425,7 @@ mod tests {
                     clusters: Arc::new(Clusters::default()),
                     board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
                     mongo: None,
+                    kafka: None,
                     embeddings: Arc::new(NoModel),
                     knowledge: None,
                     approval: ApprovalPolicy::default(),
@@ -504,6 +515,7 @@ mod tests {
                 clusters: Arc::new(Clusters::default()),
                 board: Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {}))),
                 mongo: None,
+                kafka: None,
                 embeddings: Arc::new(NoModel),
                 knowledge: None,
                 approval: ApprovalPolicy::default(),
