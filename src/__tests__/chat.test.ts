@@ -199,6 +199,36 @@ describe("saved chats", () => {
     expect(calls).toEqual([{ command: "chat_list", args: undefined }]);
   });
 
+  test("pinning sends the id and the value it was given", async () => {
+    await savedChats.setChatPinned("c1", true);
+    await savedChats.setChatPinned("c1", false);
+    expect(calls).toEqual([
+      { command: "chat_set_pinned", args: { id: "c1", pinned: true } },
+      { command: "chat_set_pinned", args: { id: "c1", pinned: false } },
+    ]);
+  });
+
+  test("folders are listed for the workspace given, and moved by id", async () => {
+    invokeResult = [];
+    await savedChats.listChatGroups("/repo");
+    expect(calls).toEqual([{ command: "chat_group_list", args: { workspace: "/repo" } }]);
+
+    invokeResult = { id: "g1", name: "release", position: 1 };
+    const made = await savedChats.createChatGroup("/repo", "release");
+    expect(calls[1]).toEqual({ command: "chat_group_create", args: { workspace: "/repo", name: "release" } });
+    expect(made.name).toBe("release");
+
+    await savedChats.renameChatGroup("/repo", "g1", "launch");
+    expect(calls[2]).toEqual({ command: "chat_group_rename", args: { workspace: "/repo", id: "g1", name: "launch" } });
+    await savedChats.deleteChatGroup("/repo", "g1");
+    expect(calls[3]).toEqual({ command: "chat_group_delete", args: { workspace: "/repo", id: "g1" } });
+
+    await savedChats.setChatGroup("c1", "g1");
+    await savedChats.setChatGroup("c1", null);
+    expect(calls[4]).toEqual({ command: "chat_set_group", args: { id: "c1", group: "g1" } });
+    expect(calls[5]).toEqual({ command: "chat_set_group", args: { id: "c1", group: null } });
+  });
+
   /// The sidebar is drawn in a plain browser too (`bun run dev`), where there
   /// is no backend to ask. An empty list is the honest answer; a thrown error
   /// would be an empty sidebar with a broken page behind it.
