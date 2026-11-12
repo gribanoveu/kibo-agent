@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, Check, Database, Pencil, Plus, Radio, RefreshCw, Search, Send } from "lucide-react";
 import "./KafkaPage.css";
 import { Modal } from "./Modal";
@@ -8,7 +8,8 @@ import { Switch } from "./Switch";
 import { Tabs } from "./Tabs";
 import { Dropdown } from "./Dropdown";
 import { useKafka } from "../hooks/useKafka";
-import { kafkaLiveStart, kafkaLiveStop, kafkaMessages, kafkaProduce, valueText, TOPIC_PAGE, type Connection, type ConnectionView, type GroupList, type LiveBatch, type MessageView, type ProduceSpec, type ReadPage, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
+import { COUNTS, LIVE_PARTITIONS, useKafkaTopic } from "../hooks/useKafkaTopic";
+import { valueText, TOPIC_PAGE, type Connection, type ConnectionView, type GroupList, type MessageView, type ProduceSpec, type SaslMechanism, type TopicDetail, type TopicView } from "../lib/kafka";
 
 /** A connection as the form edits it: the password apart, so an empty one can mean "keep". */
 type Draft = {
@@ -432,125 +433,13 @@ function Topic({ detail, connection, readOnly, onBack }: { detail: TopicDetail; 
   );
 }
 
-/** How many messages one answer carries, as the buttons offer them. */
-const COUNTS = [20, 50, 100];
-/** `MAX_READ_PARTITIONS` in `domain::kafka`: what one live read follows. */
-const MAX_LIVE_PARTITIONS = 20;
-
 /**
  * The topic's messages: which partitions to read, from where and how many, and
  * one message opened — its key, headers and value in whichever view its bytes
- * turned out to be.
+ * turned out to be. What it does lives in `useKafkaTopic`.
  */
 function Messages({ connection, topic, readOnly }: { connection: string; topic: TopicView; readOnly: boolean }) {
-  const [partitions, setPartitions] = useState<number[]>([]);
-  const [count, setCount] = useState(20);
-  const [from, setFrom] = useState("");
-  const [page, setPage] = useState<ReadPage | null>(null);
-  const [opened, setOpened] = useState<MessageView | null>(null);
-  const [reading, setReading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [writing, setWriting] = useState(false);
-  const [sent, setSent] = useState<string | null>(null);
-  const [living, setLiving] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [waiting, setWaiting] = useState(0);
-  const liveId = useRef<string | null>(null);
-  const gone = useRef(false);
-
-  // Which read the answer belongs to: a chip clicked while a read is in flight
-  // asks a new question, and the older answer must not become the page.
-  const asking = useRef(0);
-  const read = useCallback(
-    async (at: string, howMany: number, chosen: number[]) => {
-      const mine = ++asking.current;
-      setReading(true);
-      setError(null);
-      // The old window goes with the old question: a refused read must not leave
-      // the last one's rows under its error.
-      setPage(null);
-      setOpened(null);
-      try {
-        const text = at.trim();
-        if (text !== "" && !/^\d+$/.test(text)) throw new Error("an offset is a whole number, or nothing");
-        const offset = text === "" ? null : Number(text);
-        const answer = await kafkaMessages(connection, { topic: topic.name, partitions: chosen, from: offset, count: howMany });
-        if (mine === asking.current) setPage(answer);
-      } catch (failure) {
-        if (mine === asking.current) setError(String(failure));
-      } finally {
-        if (mine === asking.current) setReading(false);
-      }
-    },
-    [connection, topic.name],
-  );
-
-  useEffect(() => {
-    // Another window is another answer: what the last send said was about the
-    // one being replaced.
-    setSent(null);
-    void read("", count, partitions);
-    // A partition picked or a count chosen is a new question; the offset box is
-    // read only when it is asked for.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection, topic.name, count, partitions]);
-
-  // A live read ends with the tab: nothing is left looking at a cluster the
-  // window no longer shows.
-  useEffect(
-    () => () => {
-      gone.current = true;
-      if (liveId.current) void kafkaLiveStop(liveId.current);
-    },
-    [],
-  );
-
-  const toggleLive = async () => {
-    if (living) {
-      const id = liveId.current;
-      liveId.current = null;
-      setLiving(false);
-      if (id) await kafkaLiveStop(id);
-      return;
-    }
-    setSent(null);
-    setError(null);
-    setStarting(true);
-    try {
-      const id = await kafkaLiveStart(connection, { topic: topic.name, partitions, from: null }, (batch: LiveBatch) => {
-        // The read says its own end, on the channel it has been reporting to.
-        if (batch.failed) {
-          liveId.current = null;
-          setLiving(false);
-          setError(batch.failed);
-          return;
-        }
-        // A tick appends to what is on screen: the window keeps the last 500,
-        // and says how much is still on its way.
-        setWaiting(batch.more);
-        setPage((current) => ({
-          messages: [...(current?.messages ?? []), ...batch.messages].slice(-500),
-          partitions: current?.partitions ?? partitions,
-          more: false,
-        }));
-      });
-      if (gone.current) {
-        // The tab went while the start was in flight: nothing may be left
-        // reading a cluster this window no longer shows.
-        void kafkaLiveStop(id);
-        return;
-      }
-      liveId.current = id;
-      setLiving(true);
-    } catch (failure) {
-      setError(String(failure));
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const toggle = (partition: number) =>
-    setPartitions((current) => (current.includes(partition) ? current.filter((p) => p !== partition) : [...current, partition].sort((a, b) => a - b)));
+  const messages = useKafkaTopic({ connection, topic });
 
   return (
     <section className="kafka-messages" aria-label={`Messages of ${topic.name}`}>
@@ -559,9 +448,9 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
         <div className="kafka-partitions" role="group" aria-label="Partitions to read">
           <button
             type="button"
-            className={`kafka-chip${partitions.length === 0 ? " on" : ""}`}
-            aria-pressed={partitions.length === 0}
-            onClick={() => setPartitions([])}
+            className={`kafka-chip${messages.partitions.length === 0 ? " on" : ""}`}
+            aria-pressed={messages.partitions.length === 0}
+            onClick={messages.allPartitions}
           >
             All
           </button>
@@ -569,9 +458,9 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
             <button
               key={partition.partition}
               type="button"
-              className={`kafka-chip${partitions.includes(partition.partition) ? " on" : ""}`}
-              aria-pressed={partitions.includes(partition.partition)}
-              onClick={() => toggle(partition.partition)}
+              className={`kafka-chip${messages.partitions.includes(partition.partition) ? " on" : ""}`}
+              aria-pressed={messages.partitions.includes(partition.partition)}
+              onClick={() => messages.togglePartition(partition.partition)}
             >
               {partition.partition}
             </button>
@@ -580,16 +469,22 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
         <span className="kafka-spacer" />
         <button
           type="button"
-          className={`kafka-chip${living ? " on" : ""}`}
-          aria-pressed={living}
-          disabled={starting}
-          title={living ? "Stop following this topic" : "Follow this topic as messages arrive"}
-          onClick={() => void toggleLive()}
+          className={`kafka-chip${messages.living ? " on" : ""}`}
+          aria-pressed={messages.living}
+          disabled={messages.starting}
+          title={messages.living ? "Stop following this topic" : "Follow this topic as messages arrive"}
+          onClick={() => void messages.toggleLive()}
         >
           Live
         </button>
         {COUNTS.map((howMany) => (
-          <button key={howMany} type="button" className={`kafka-chip${count === howMany ? " on" : ""}`} disabled={reading} onClick={() => setCount(howMany)}>
+          <button
+            key={howMany}
+            type="button"
+            className={`kafka-chip${messages.count === howMany ? " on" : ""}`}
+            disabled={messages.reading}
+            onClick={() => messages.setCount(howMany)}
+          >
             Last {howMany}
           </button>
         ))}
@@ -597,18 +492,10 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
           className="kafka-offset"
           aria-label="Read from offset"
           placeholder="from offset"
-          value={from}
-          onChange={(event) => setFrom(event.target.value)}
+          value={messages.from}
+          onChange={(event) => messages.setFrom(event.target.value)}
         />
-        <button
-          type="button"
-          className="btn btn-ghost"
-          disabled={reading}
-          onClick={() => {
-            setSent(null);
-            void read(from, count, partitions);
-          }}
-        >
+        <button type="button" className="btn btn-ghost" disabled={messages.reading} onClick={() => void messages.ask()}>
           Read
         </button>
         <button
@@ -616,27 +503,29 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
           className="btn btn-ghost"
           disabled={readOnly}
           title={readOnly ? "This connection is read-only — nothing is sent through it" : "Send a message to this topic"}
-          onClick={() => setWriting(true)}
+          onClick={messages.openSend}
         >
           <Send size={13} /> Send…
         </button>
       </div>
 
-      {topic.partitions.length > 20 && partitions.length === 0 && (
-        <p className="kafka-quiet">This topic has {topic.partitions.length} partitions and one answer spans 20 — pick the ones to read.</p>
+      {topic.partitions.length > LIVE_PARTITIONS && messages.partitions.length === 0 && (
+        <p className="kafka-quiet">This topic has {topic.partitions.length} partitions and one answer spans {LIVE_PARTITIONS} — pick the ones to read.</p>
       )}
-      {error && <p className="kafka-error" role="alert">{error}</p>}
-      {sent && <p className="kafka-ok">{sent}</p>}
-      {living && waiting > 0 && <p className="kafka-quiet">{waiting} more arrived and are on their way.</p>}
-      {living && partitions.length === 0 && topic.partitions.length > MAX_LIVE_PARTITIONS && (
-        <p className="kafka-quiet">{`Following the first ${MAX_LIVE_PARTITIONS} of ${topic.partitions.length} partitions — pick the ones to read.`}</p>
+      {messages.error && <p className="kafka-error" role="alert">{messages.error}</p>}
+      {messages.sent && <p className="kafka-ok">{messages.sent}</p>}
+      {messages.living && messages.waiting > 0 && <p className="kafka-quiet">{messages.waiting} more arrived and are on their way.</p>}
+      {messages.living && messages.partitions.length === 0 && topic.partitions.length > LIVE_PARTITIONS && (
+        <p className="kafka-quiet">{`Following the first ${LIVE_PARTITIONS} of ${topic.partitions.length} partitions — pick the ones to read.`}</p>
       )}
       {readOnly && <p className="kafka-quiet">This connection is read-only — nothing is sent through it.</p>}
-      {reading && <p className="kafka-quiet" role="status">Reading…</p>}
+      {messages.reading && <p className="kafka-quiet" role="status">Reading…</p>}
 
-      {page && !reading && !error && page.messages.length === 0 && <p className="kafka-quiet">Nothing at that offset in the chosen partitions.</p>}
+      {messages.page && !messages.reading && !messages.error && messages.page.messages.length === 0 && (
+        <p className="kafka-quiet">Nothing at that offset in the chosen partitions.</p>
+      )}
 
-      {page && page.messages.length > 0 && (
+      {messages.page && messages.page.messages.length > 0 && (
         <table className="kafka-table">
           <thead>
             <tr>
@@ -648,8 +537,8 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
             </tr>
           </thead>
           <tbody>
-            {page.messages.map((message) => {
-              const on = opened?.partition === message.partition && opened.offset === message.offset;
+            {messages.page.messages.map((message) => {
+              const on = messages.opened?.partition === message.partition && messages.opened.offset === message.offset;
               return (
                 <tr key={`${message.partition}/${message.offset}`} className={on ? "on" : undefined}>
                   <td>{message.partition}</td>
@@ -658,7 +547,7 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
                       type="button"
                       className="kafka-topic"
                       aria-label={`Message ${message.partition}/${message.offset}`}
-                      onClick={() => setOpened(on ? null : message)}
+                      onClick={() => messages.open(on ? null : message)}
                     >
                       {message.offset}
                     </button>
@@ -672,34 +561,16 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
           </tbody>
         </table>
       )}
-      {page?.more && <p className="kafka-quiet">The count ran out before the log did — read on from the last offset.</p>}
+      {messages.page?.more && <p className="kafka-quiet">The count ran out before the log did — read on from the last offset.</p>}
 
-      {opened && <MessageBody message={opened} />}
+      {messages.opened && <MessageBody message={messages.opened} />}
 
       <SendForm
-        open={writing}
+        open={messages.writing}
         topic={topic.name}
-        onClose={() => setWriting(false)}
+        onClose={messages.closeSend}
         partitionCount={topic.partitions.length}
-        onSend={async (spec) => {
-          try {
-            const written = await kafkaProduce(connection, spec);
-            setWriting(false);
-            // A record goes where it went: the window on screen may be another
-            // partition's, and saying "sent" over a list that cannot hold it
-            // reads as a lie.
-            const seen = partitions.length === 0 || partitions.includes(written.partition);
-            setSent(
-              seen
-                ? `Sent to partition ${written.partition} at offset ${written.offset}.`
-                : `Sent to partition ${written.partition} at offset ${written.offset} — not in this window; read that partition to see it.`,
-            );
-            void read("", count, partitions);
-            return null;
-          } catch (failure) {
-            return String(failure);
-          }
-        }}
+        onSend={messages.send}
       />
     </section>
   );

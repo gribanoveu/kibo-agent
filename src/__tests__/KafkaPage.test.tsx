@@ -43,6 +43,7 @@ let refuseTopics = false;
 let refuseSave = false;
 const liveChannels: { onmessage: ((batch: unknown) => void) | null }[] = [];
 let refuseProduce = false;
+let producePartition = 0;
 /** Answers held back, so two reads can come home out of order. */
 let holdMessages = false;
 const held: ((answer: unknown) => void)[] = [];
@@ -85,7 +86,8 @@ mock.module("@tauri-apps/api/core", () => ({
       case "kafka_topic":
         return Promise.resolve({ topic, configs: [{ name: "cleanup.policy", value: "delete" }] });
       case "kafka_produce":
-        return refuseProduce ? Promise.reject("the send: Topic orders not found") : Promise.resolve({ partition: 0, offset: 812 });
+        if (refuseProduce) return Promise.reject("the send: Topic orders not found");
+        return Promise.resolve({ partition: producePartition, offset: 812 });
       case "kafka_messages":
         if (holdMessages) return new Promise((resolve) => held.push(resolve));
         return Promise.resolve({
@@ -125,6 +127,7 @@ afterEach(() => {
   refuseTopics = false;
   refuseSave = false;
   refuseProduce = false;
+  producePartition = 0;
   liveChannels.length = 0;
   holdMessages = false;
   held.length = 0;
@@ -417,6 +420,67 @@ describe("the Kafka page", () => {
 
     // Other brokers are another cluster: the list on screen is not its.
     await waitFor(() => expect(sent("kafka_topics").length).toBeGreaterThan(before));
+  });
+
+  test("a record sent where this window cannot show it says so", async () => {
+    producePartition = 2;
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+    // Reading partition 0 only: a record that lands in another is not on screen.
+    fireEvent.click(await screen.findByRole("button", { name: "0", exact: true }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Send/ }));
+    fireEvent.change(screen.getByLabelText("Value"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send", exact: true }));
+
+    expect(await screen.findByText(/not in this window/)).toBeTruthy();
+  });
+
+  test("leaving the topic ends its live read", async () => {
+    const { unmount } = render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Live" }));
+    await waitFor(() => expect(sent("kafka_live_start")).toHaveLength(1));
+
+    unmount();
+    await waitFor(() => expect(sent("kafka_live_stop")).toHaveLength(1));
+    expect(sent("kafka_live_stop")[0].args.id).toBe("live-1");
+  });
+
+  test("a long live read keeps the newest, not the first", async () => {
+    render(<KafkaPage />);
+    fireEvent.click(await screen.findByText("orders"));
+    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Live" }));
+    await waitFor(() => expect(liveChannels).toHaveLength(1));
+
+    // Three ticks of 250: more than the window keeps, so what fell off the top
+    // is what a reader must not see.
+    for (const base of [0, 300]) {
+      act(() =>
+        liveChannels[0].onmessage?.({
+          more: 0,
+          failed: null,
+          messages: Array.from({ length: 300 }, (_, at) => ({
+            partition: 0,
+            offset: base + at,
+            timestamp: 1,
+            key: null,
+            value: { kind: "text", text: `t${base + at}`, truncated: false },
+            size: 4,
+            headers: [],
+          })),
+        }),
+      );
+    }
+
+    // The window keeps the newest: what a tick pushed out is gone, and the last
+    // one is on screen.
+    expect(screen.queryByLabelText("Message 0/0")).toBeNull();
+    expect(screen.getByLabelText("Message 0/599")).toBeTruthy();
+
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {
