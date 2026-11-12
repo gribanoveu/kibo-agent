@@ -52,8 +52,8 @@ export function FindingCard({ finding, onOpenFile, onFix }: Props) {
 
 /**
  * A review a subagent ran, as one card: what it found, each finding with
- * Fix when they are the user's — not when they went on to the agent, which
- * answers for them itself — and what the reviewer said.
+ * Fix — the findings are always the user's to act on, by the button or in
+ * the next message — and what the reviewer said.
  */
 export function ReviewReport({
   review,
@@ -76,7 +76,6 @@ export function ReviewReport({
         <span className="review-report-title">Review</span>
         <span className="review-report-meta">
           {count === 0 ? "no findings" : count === 1 ? "1 finding" : `${count} findings`}
-          {review.handed && " · handed to the agent"}
         </span>
         {onOpenAgent && (
           <button
@@ -84,13 +83,14 @@ export function ReviewReport({
             className="review-fix"
             title="Open the subagent's run"
             data-sheet-opener
-            onClick={() => onOpenAgent({ id: review.agent, task: "Review the uncommitted changes" })}
+            onClick={() => onOpenAgent({ id: review.agent, task: "Review the change in this repository" })}
           >
             <Bot size={12} />
             Subagent
           </button>
         )}
       </div>
+      {review.range && <div className="review-report-range">{review.range}</div>}
       {review.summary && (
         <div className="review-report-summary">
           <Markdown text={review.summary} streaming={false} />
@@ -101,7 +101,7 @@ export function ReviewReport({
           key={`${finding.path}:${finding.startLine}:${finding.title}`}
           finding={finding}
           onOpenFile={onOpenFile}
-          onFix={review.handed ? undefined : onFix}
+          onFix={onFix}
         />
       ))}
     </section>

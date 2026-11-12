@@ -90,7 +90,8 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "hookFeedback"; payload: { event: string; message: string; blocked: boolean } }
   | { type: "processesEnded"; payload: { processes: ProcessInfo[] } }
   | { type: "loopReminded"; payload: { tool: string; failing: boolean } }
-  | { type: "wrapUpReminded"; payload: { rounds: number; tokens: number } }
+  // Carries the budget note; it lands on the review card's own output, not here.
+  | { type: "wrapUpReminded"; payload: { rounds: number; tokens: number; text: string } }
   | { type: "roundStarted" }
   | { type: "roundCompleted"; payload: { text: string; reasoning?: string; truncated?: boolean } }
   | { type: "toolCallDelta"; payload: LlmToolCall }
@@ -406,26 +407,6 @@ export type ToolPreview =
 export async function previewCalls(chatId: string, calls: PendingToolCall[]): Promise<ToolPreview[]> {
   if (!inTauri()) return calls.map(() => ({ kind: "nothing" }) as ToolPreview);
   return invoke<ToolPreview[]>("chat_preview", { chatId, calls });
-}
-
-// ---------------------------------------------------------------- review
-
-/**
- * `/review`: the working tree against HEAD, read by a subagent with a context
- * of its own; its report is a card, and the outcome's history carries it.
- * `handed`: the findings go on to the agent in the same turn, to fix or
- * dismiss. Otherwise it is `startChat`.
- */
-export async function reviewStart(
-  turnId: string,
-  chatId: string,
-  messages: LlmMessage[],
-  todos: Task[] = [],
-  plan: string | null = null,
-  handed = false,
-): Promise<Outcome> {
-  requireBackend();
-  return invoke<Outcome>("review_start", { turnId, chatId, messages, todos, plan, handed });
 }
 
 // ---------------------------------------------------------------- rewind

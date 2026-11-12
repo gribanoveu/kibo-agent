@@ -398,6 +398,11 @@ mod tests {
                 Some(ToolCall::Explore(ExploreArgs { task: "where is X".into(), fork: false })),
                 ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },
             ),
+            // The range is the caller's own words; the report is the review's.
+            ToolName::Review => (
+                Some(ToolCall::Review(ReviewArgs { from: Some("main".into()), to: None, focus: None })),
+                ToolResult::Reviewed { findings: vec![], text: LEAK.into(), range: "main → working tree".into(), agent: 1, tokens: Default::default() },
+            ),
             ToolName::Skill => (
                 Some(ToolCall::Skill(SkillArgs { name: "release".into(), path: None })),
                 ToolResult::Skill { name: "release".into(), instructions: LEAK.into(), files: vec![], from: String::new() },

@@ -152,6 +152,8 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 // Where the MCP tools are, so is the way to the deferred ones.
                 ToolName::ToolSearch,
                 ToolName::Explore,
+                // A change reviewed inside the turn, transparent like explore.
+                ToolName::Review,
                 ToolName::Remember,
                 // While the user has the feature on (`domain::features`).
                 ToolName::Board,
@@ -164,7 +166,7 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
         // "remind me", which is the board's. No `knowledgeWrite`: the base is
         // what other repositories' agents read, not a place for an answer.
         ConversationMode::Analyst => {
-            tools.extend([ToolName::Explore, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
+            tools.extend([ToolName::Explore, ToolName::Review, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
         }
         // Reading, running what proves something — a build, the tests — and
         // saying what is wrong. Nothing that writes a file: a review that
@@ -205,11 +207,13 @@ mod tests {
         }
     }
 
-    /// What Analyst has beyond every mode's reading, and nothing else.
+    /// What Analyst has beyond every mode's reading, and nothing else: a
+    /// helper's hand-offs (research, a review) and its own memory, board and
+    /// servers.
     #[test]
-    fn an_analyst_gets_the_helper_memory_board_and_servers() {
+    fn an_analyst_gets_the_helper_handoffs_memory_board_and_servers() {
         let mut expected = base_tools();
-        expected.extend([ToolName::Explore, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
+        expected.extend([ToolName::Explore, ToolName::Review, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
         assert_eq!(tools(ConversationMode::Analyst), expected);
     }
 
@@ -229,6 +233,17 @@ mod tests {
             assert!(offers(mode, ToolName::Explore), "{mode:?}");
         }
         assert!(!offers(ConversationMode::Review, ToolName::Explore));
+    }
+
+    /// A review runs in the modes the user talks in — and not inside a
+    /// helper: no review of a review, none beside an explore.
+    #[test]
+    fn a_review_runs_in_picked_modes_and_not_inside_a_helper() {
+        for mode in picked() {
+            assert!(offers(mode, ToolName::Review), "{mode:?}");
+        }
+        assert!(!offers(ConversationMode::Explore, ToolName::Review));
+        assert!(!offers(ConversationMode::Review, ToolName::Review));
     }
 
     /// Looking at the user's terminal is reading; typing into it is not.

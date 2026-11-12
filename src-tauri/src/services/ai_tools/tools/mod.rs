@@ -30,6 +30,7 @@ pub mod delete;
 pub mod delete_directory;
 pub mod edit_file;
 pub mod explore;
+pub mod review;
 pub mod git;
 pub mod grep;
 pub mod knowledge;
@@ -89,6 +90,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::ReportFinding, report_finding::definition),
     (ToolName::Offer, offer::definition),
     (ToolName::Explore, explore::definition),
+    (ToolName::Review, review::definition),
     (ToolName::Remember, remember::definition),
     (ToolName::KnowledgeWrite, knowledge::definition),
     (ToolName::KnowledgeSearch, knowledge::search_definition),
@@ -176,6 +178,7 @@ pub fn dispatch(
         ToolCall::ReportFinding(args) => report_finding::report_finding(args, deps),
         ToolCall::Offer(args) => offer::offer(folder()?, args, deps),
         ToolCall::Explore(args) => explore::explore(args, deps),
+        ToolCall::Review(args) => review::review(args, deps),
         ToolCall::Remember(args) => remember::remember(folder()?, args, deps),
         ToolCall::KnowledgeWrite(args) => knowledge::knowledge_write(folder()?, args, deps),
         ToolCall::KnowledgeSearch(args) => knowledge::knowledge_search(args, deps),
@@ -407,6 +410,14 @@ mod definition_tests {
             ToolName::Explore => (
                 r#"{"task":"where is X"}"#,
                 vec![ToolCall::Explore(crate::domain::tools::ExploreArgs { task: "where is X".to_string(), fork: false })],
+            ),
+            ToolName::Review => (
+                r#"{"from":"main","focus":"the loader"}"#,
+                vec![ToolCall::Review(crate::domain::tools::ReviewArgs {
+                    from: Some("main".to_string()),
+                    to: Some("abc1234".to_string()),
+                    focus: Some("the loader".to_string()),
+                })],
             ),
             ToolName::Remember => (
                 r#"{"fact":"bench needs --release"}"#,

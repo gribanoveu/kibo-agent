@@ -211,8 +211,8 @@ describe("the agent sheet", () => {
   });
 
   test("the review card's run is found by how its brief begins", async () => {
-    listed[0] = { ...listed[0], task: "Review the uncommitted changes of this repository — the working tree against HEAD.\n\n<changes>" };
-    render(sheet({ id: 2, task: "Review the uncommitted changes" }));
+    listed[0] = { ...listed[0], task: "Review the change in this repository.\n\n<changes>" };
+    render(sheet({ id: 2, task: "Review the change in this repository" }));
     await settle();
     expect(screen.getByText("2 steps")).toBeTruthy();
     expect(screen.queryByText("This run is no longer listed.")).toBeNull();

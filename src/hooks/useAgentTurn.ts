@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { dropOpen, writtenChecklist, writtenPlan } from "../lib/plan";
-import { HAND_TO_AGENT, typedCommand } from "../lib/slashCommands";
 import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom, rewoundNotice } from "../lib/rewind";
 import {
@@ -15,7 +14,6 @@ import {
   type LlmMessage,
   onTurnEvent,
   resumeChat,
-  reviewStart,
   rewindApply,
   rewindPreview,
   startChat,
@@ -397,38 +395,6 @@ export function useAgentTurn({
     [setTurn, mint, listen, finish, changed, stop],
   );
 
-  const reviewSession = useCallback(
-    async (session: Session, handed = false) => {
-      const typed = handed ? typedCommand("review", HAND_TO_AGENT) : "/review";
-      if (session.turn.status === "running" || session.turn.status === "awaitingApproval") return;
-      session.error = null;
-      const answered = session.journaled;
-      session.journaled = null;
-      void answered?.then((row) => (row ? nextPromptSent(row, typed) : undefined)).catch(() => {});
-      session.unsaved = true;
-      session.turnStart = session.turn.blocks.length;
-      setTurn(session, (state) => appendUserMessage(state, typed, Date.now(), "/review"));
-      session.todos = dropOpen(session.todos);
-
-      const id = mint(session, "turn");
-      session.lastTurn = { id, user: typed };
-      try {
-        await listen(session, id);
-        finish(session, await reviewStart(id, session.key, session.history, session.todos, session.plan, handed));
-      } catch (e) {
-        session.error = String(e);
-        stop(session);
-        session.history = [
-          ...session.history,
-          { role: "user", content: "/review" },
-          { role: "assistant", content: `[The review failed: ${e}]` },
-        ];
-        setTurn(session, (state) => appendNotice(endTurn(state), `The review failed: ${e}`));
-      }
-    },
-    [setTurn, mint, listen, finish, stop],
-  );
-
   // A finished turn sends its queue. Text that has to come back waits while
   // its chat is in the background, rather than filling another chat's composer.
   useEffect(() => {
@@ -769,7 +735,6 @@ export function useAgentTurn({
     context: busy ? (current.turn.estimate ?? current.context) : current.context,
     send: (text: string, sent?: string, images: ImagePart[] = [], keepChecklist = false) =>
       sendSession(active.current, text, sent, images, keepChecklist),
-    review: (handed = false) => reviewSession(active.current, handed),
     queued: current.queued,
     queue,
     unqueue,

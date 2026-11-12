@@ -87,6 +87,34 @@ pub struct Excluded {
     pub reason: Exclusion,
 }
 
+/// The exact change a review read, named for its card and opening message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewRange {
+    pub root: String,
+    pub from: String,
+    pub to: String,
+    /// Files sent to the reviewer, before any diff-size limit.
+    pub files: usize,
+    pub excluded: Vec<Excluded>,
+}
+
+impl ReviewRange {
+    pub fn description(&self) -> String {
+        let noun = if self.files == 1 { "file" } else { "files" };
+        let mut out = format!("{} · {} → {} · {} {noun} reviewed", self.root, self.from, self.to, self.files);
+        if !self.excluded.is_empty() {
+            let mut reasons = Vec::new();
+            for reason in self.excluded.iter().map(|file| file.reason.reason()) {
+                if !reasons.contains(&reason) {
+                    reasons.push(reason);
+                }
+            }
+            out.push_str(&format!(" · {} left out ({})", self.excluded.len(), reasons.join(", ")));
+        }
+        out
+    }
+}
+
 /// The files worth reviewing, and every other one with its reason.
 pub fn select(files: Vec<FileDiff>) -> (Vec<FileDiff>, Vec<Excluded>) {
     let mut kept = Vec::new();
@@ -179,12 +207,142 @@ pub fn nothing_to_review(excluded: usize) -> String {
     }
 }
 
+/// A range the caller named turned out empty — its ends meet, so there is
+/// nothing between them to read.
+pub fn empty_range() -> String {
+    "nothing to review: the range is empty — its ends match. Name a wider range (HEAD~1, HEAD~3, …) or other commits".to_string()
+}
+
+/// What `plan` needs to know about the repository, read by the caller from
+/// git: the rule table itself stays pure. Every `Option` is pre-digested —
+/// `upstream` only when `HEAD` is strictly ahead of it, `marker` only when it
+/// is a strict ancestor of the range's far end, `merge_base` against the
+/// usual candidates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewFacts {
+    /// The commit `HEAD` points at; `None` before the first commit, when the
+    /// whole tree reads as new files.
+    pub head: Option<String>,
+    /// The working tree or index holds changes against `HEAD`; with no
+    /// commits yet this is unconditionally true.
+    pub uncommitted: bool,
+    /// The upstream's tip, and only when `HEAD` is strictly ahead of it.
+    pub upstream: Option<String>,
+    /// `merge-base` of the range's far end against `origin/HEAD`, `main`,
+    /// then `master` — the first candidate that resolves.
+    pub merge_base: Option<String>,
+    /// The chat's start marker, when it is a strict ancestor of the range's
+    /// far end; `None` everywhere else — a marker outside history is a fact,
+    /// not an error.
+    pub marker: Option<String>,
+}
+
+/// The range a review reads: `from` against `to`, where `None` stands for
+/// `HEAD` and the working tree — the two defaults a review has always had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewPlan {
+    /// Diff from this rev; `None` is `HEAD` — the uncommitted-only range.
+    pub from: Option<String>,
+    /// Diff to this rev; `None` is the working tree — commits plus
+    /// uncommitted changes, as reviews read them today.
+    pub to: Option<String>,
+    /// Which consideration chose the range; named in the result so "why this
+    /// range" is visible beside "what was read".
+    pub why: RangeWhy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeWhy {
+    /// The caller named the range — rules 1.
+    Given,
+    /// Exactly what will be committed — rule 2.
+    Uncommitted,
+    /// This chat's work, from its start marker — rules 3 and 4.
+    ChatWork,
+    /// The branch's unpushed commits — rule 5.
+    Branch,
+    /// From the branch's base up to the far end — rule 6.
+    Base,
+}
+
+#[derive(Debug, Error)]
+pub enum NothingToReview {
+    #[error("`from` is empty — name where the review starts: a branch, tag or commit (`main`, `HEAD~1`)")]
+    EmptyFrom,
+    #[error("`to` is empty — name where the review ends: a branch, tag or commit (`HEAD`), or leave it out for the working tree")]
+    EmptyTo,
+    #[error("nothing to review: no uncommitted changes and no base to compare against — name the last commits explicitly (`HEAD~1`, `HEAD~3`, …) as `from`")]
+    NoBase,
+}
+
+/// The "База ревью" table, pure: given what the caller asked for and the
+/// facts read from git, the range to diff — or a refusal the model can act
+/// on. Narrow first, wide second: uncommitted changes win because that is
+/// what "review before committing" asks for; the chat's marker speaks only
+/// on a clean tree, since a commit must not eat the next review.
+pub fn plan(requested_from: Option<&str>, requested_to: Option<&str>, facts: &ReviewFacts) -> Result<ReviewPlan, NothingToReview> {
+    if let Some(from) = requested_from {
+        if from.trim().is_empty() {
+            return Err(NothingToReview::EmptyFrom);
+        }
+        let to = requested_to.map(str::trim);
+        if to.is_some_and(str::is_empty) {
+            return Err(NothingToReview::EmptyTo);
+        }
+        return Ok(ReviewPlan {
+            from: Some(from.trim().to_string()),
+            to: to.filter(|to| !to.is_empty()).map(str::to_string),
+            why: RangeWhy::Given,
+        });
+    }
+    if let Some(to) = requested_to {
+        if to.trim().is_empty() {
+            return Err(NothingToReview::EmptyTo);
+        }
+        let to = to.trim().to_string();
+        if let Some(marker) = &facts.marker {
+            return Ok(ReviewPlan { from: Some(marker.clone()), to: Some(to), why: RangeWhy::ChatWork });
+        }
+        let base = facts.merge_base.clone().ok_or(NothingToReview::NoBase)?;
+        return Ok(ReviewPlan { from: Some(base), to: Some(to), why: RangeWhy::Base });
+    }
+    if facts.uncommitted {
+        return Ok(ReviewPlan { from: None, to: None, why: RangeWhy::Uncommitted });
+    }
+    if let Some(marker) = &facts.marker {
+        return Ok(ReviewPlan { from: Some(marker.clone()), to: None, why: RangeWhy::ChatWork });
+    }
+    if let Some(upstream) = &facts.upstream {
+        return Ok(ReviewPlan { from: Some(upstream.clone()), to: None, why: RangeWhy::Branch });
+    }
+    let base = facts.merge_base.clone().ok_or(NothingToReview::NoBase)?;
+    Ok(ReviewPlan { from: Some(base), to: None, why: RangeWhy::Base })
+}
+
+/// Longest `focus` kept. Past it the note is dropped, with one line saying
+/// so — a focus is an accent, not a place to write a second brief.
+pub const FOCUS_CHARS: usize = 200;
+
 /// The opening message of a review: the diffs that fit, in path order, the
-/// rest of the change by name, and what was left out and why — and the reply
-/// language, when the user chose one: nothing the user typed is in a review's
-/// conversation to say it for them.
-pub fn review_message(files: &[FileDiff], excluded: &[Excluded], language: Option<&str>) -> String {
-    let mut out = String::from("Review the uncommitted changes of this repository — the working tree against HEAD.\n\n<changes>\n");
+/// rest of the change by name, and what was left out and why — the reply
+/// language, when the user chose one, and the caller's `focus`, when there
+/// is one that fits: nothing the user typed is in a review's conversation
+/// to say it for them.
+pub fn review_message(files: &[FileDiff], range: &ReviewRange, language: Option<&str>, focus: Option<&str>) -> String {
+    // The first line names the kind of work, true for every range the plan
+    // can pick — what exactly is read is the Range line's job, and the
+    // window finds the helper's run by this line's prefix.
+    let mut out = format!("Review the change in this repository.\nRange: {}.\n", range.description());
+    match focus.map(str::trim) {
+        Some(focus) if !focus.is_empty() && focus.chars().count() <= FOCUS_CHARS => {
+            out.push_str(&format!("The one asking for this review asks to pay particular attention to: {focus}.\n"));
+        }
+        // An empty or overlong note is told from, not silently dropped: the
+        // reviewer must not wait for a focus that is not coming.
+        Some(_) => out.push_str("The `focus` note was empty or too long, and was left out; the review stands on the change alone.\n"),
+        None => {}
+    }
+    out.push_str("\n<changes>\n");
     let mut room = MESSAGE_DIFF_CHARS;
     let mut unshown = Vec::new();
     for file in files {
@@ -208,8 +366,8 @@ pub fn review_message(files: &[FileDiff], excluded: &[Excluded], language: Optio
             unshown.join("\n")
         ));
     }
-    if !excluded.is_empty() {
-        let lines: Vec<String> = excluded.iter().map(|e| format!("{} — {}", e.path, e.reason.reason())).collect();
+    if !range.excluded.is_empty() {
+        let lines: Vec<String> = range.excluded.iter().map(|e| format!("{} — {}", e.path, e.reason.reason())).collect();
         out.push_str(&format!("\nLeft out of the review:\n{}\n", lines.join("\n")));
     }
     crate::domain::prompt::with_language_reminder(out, language)
@@ -423,6 +581,10 @@ mod tests {
         FileDiff { patch: "x".repeat(chars), ..file(path, &[(1, true, "x")]) }
     }
 
+    fn review_range(files: usize, excluded: Vec<Excluded>) -> ReviewRange {
+        ReviewRange { root: "/tmp/review-worktree".into(), from: "HEAD".into(), to: "working tree".into(), files, excluded }
+    }
+
     #[test]
     fn what_is_left_out_and_why() {
         let mut deleted = sized("src/old.rs", 0);
@@ -461,6 +623,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_review_range_names_the_checkout_change_and_what_was_left_out() {
+        let range = review_range(
+            2,
+            vec![
+                Excluded { path: ".env".into(), reason: Exclusion::Secret },
+                Excluded { path: "README.md".into(), reason: Exclusion::Documentation },
+            ],
+        );
+        assert_eq!(
+            range.description(),
+            "/tmp/review-worktree · HEAD → working tree · 2 files reviewed · 2 left out (may hold secrets — do not read it, documentation)"
+        );
+        assert_eq!(review_range(1, vec![]).description(), "/tmp/review-worktree · HEAD → working tree · 1 file reviewed");
+    }
+
     /// The agent starts from the diffs, is told what else changed, and is
     /// told what it must not read.
     #[test]
@@ -469,12 +647,13 @@ mod tests {
         renamed.status = FileStatus::Renamed { from: "src/old.rs".into() };
         renamed.patch = "@@ -1 +1 @@\n-a\n+b\n".into();
         let big = sized("src/big.rs", MESSAGE_DIFF_CHARS);
-        let excluded = [Excluded { path: ".env".into(), reason: Exclusion::Secret }];
-        let text = review_message(&[renamed, big], &excluded, None);
+        let range = review_range(2, vec![Excluded { path: ".env".into(), reason: Exclusion::Secret }]);
+        let text = review_message(&[renamed, big], &range, None, None);
+        assert!(text.starts_with("Review the change in this repository.\nRange: /tmp/review-worktree · HEAD → working tree · 2 files reviewed · 1 left out (may hold secrets — do not read it).\n\n"), "{text}");
         assert!(text.contains("<changes>\n=== src/new.rs (renamed from src/old.rs) ===\n@@ -1 +1 @@\n-a\n+b\n</changes>"), "{text}");
         assert!(text.contains("diff not included for its size — read it with gitDiff or readFile where it matters:\nsrc/big.rs\n"), "{text}");
         assert!(text.contains("Left out of the review:\n.env — may hold secrets — do not read it\n"), "{text}");
-        let plain = review_message(&[sized("a.rs", 10)], &[], None);
+        let plain = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, None);
         assert!(!plain.contains("Also changed") && !plain.contains("Left out"), "{plain}");
         assert!(!plain.contains("[Reply in"), "{plain}");
     }
@@ -482,15 +661,29 @@ mod tests {
     /// The last thing the opening message says is the language to reply in.
     #[test]
     fn the_message_ends_with_the_chosen_reply_language() {
-        let text = review_message(&[sized("a.rs", 10)], &[], Some("Russian"));
+        let text = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), Some("Russian"), None);
         assert!(text.ends_with("</changes>\n\n\n[Reply in Russian.]"), "{text:?}");
+    }
+
+    /// A focus is the caller's accent, one line next to the range; an empty
+    /// or overlong one is told from, not silently dropped.
+    #[test]
+    fn a_focus_is_one_line_and_a_broken_one_is_said_so() {
+        let with_focus = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, Some("  error handling in the loader "));
+        assert!(with_focus.contains("Range: /tmp/review-worktree · HEAD → working tree · 1 file reviewed.\nThe one asking for this review asks to pay particular attention to: error handling in the loader.\n\n<changes>"), "{with_focus}");
+        let too_long = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, Some(&"look at this ".repeat(40)));
+        assert!(too_long.contains("The `focus` note was empty or too long, and was left out; the review stands on the change alone.\n\n<changes>"), "{too_long}");
+        let empty = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, Some("  "));
+        assert!(empty.contains("The `focus` note was empty or too long"), "{empty}");
+        let none = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, None);
+        assert!(!none.contains("focus") && !none.contains("attention"), "{none}");
     }
 
     /// The room is shared: a file that does not fit is named, and a smaller
     /// one after it still goes in.
     #[test]
     fn the_diffs_that_fit_go_in_whatever_their_order() {
-        let text = review_message(&[sized("a.rs", MESSAGE_DIFF_CHARS - 10), sized("b.rs", 20), sized("c.rs", 5)], &[], None);
+        let text = review_message(&[sized("a.rs", MESSAGE_DIFF_CHARS - 10), sized("b.rs", 20), sized("c.rs", 5)], &review_range(3, vec![]), None, None);
         assert!(text.contains("=== a.rs") && text.contains("=== c.rs"), "{text}");
         assert!(!text.contains("=== b.rs") && text.contains("where it matters:\nb.rs\n"), "{text}");
     }
@@ -583,5 +776,86 @@ mod tests {
         assert!(by_weight.contains("used 90% of its budget (5 of 60 rounds)") && by_weight.contains("reportFinding"), "{by_weight}");
         let asked = [LlmMessage::user("go"), LlmMessage::user(by_rounds)];
         assert_eq!(wrap_up(used(55, 240), limit, &asked), None, "once a turn");
+    }
+
+    /// The table of ranges: what the caller named wins, then narrow first —
+    /// uncommitted changes before the chat's marker, the marker before the
+    /// branch, the branch's base last.
+    mod plan {
+        use super::super::{plan, NothingToReview, RangeWhy, ReviewFacts, ReviewPlan};
+
+        fn facts(f: fn(&mut ReviewFacts)) -> ReviewFacts {
+            let mut facts = ReviewFacts::default();
+            f(&mut facts);
+            facts
+        }
+
+        #[test]
+        fn a_named_range_is_taken_as_given() {
+            let planned = plan(Some("main"), Some("abc1234"), &ReviewFacts::default()).unwrap();
+            assert_eq!(planned, ReviewPlan { from: Some("main".into()), to: Some("abc1234".into()), why: RangeWhy::Given });
+            let to_workdir = plan(Some("main"), None, &ReviewFacts::default()).unwrap();
+            assert_eq!(to_workdir, ReviewPlan { from: Some("main".into()), to: None, why: RangeWhy::Given });
+        }
+
+        #[test]
+        fn an_empty_end_is_refused_not_guessed() {
+            assert!(matches!(plan(Some(" "), None, &ReviewFacts::default()), Err(NothingToReview::EmptyFrom)));
+            assert!(matches!(plan(Some("main"), Some(""), &ReviewFacts::default()), Err(NothingToReview::EmptyTo)));
+            assert!(matches!(plan(None, Some("  "), &ReviewFacts::default()), Err(NothingToReview::EmptyTo)));
+        }
+
+        #[test]
+        fn uncommitted_changes_win_over_everything() {
+            let with_everything = facts(|f| {
+                f.uncommitted = true;
+                f.marker = Some("mark".into());
+                f.upstream = Some("up".into());
+            });
+            assert_eq!(plan(None, None, &with_everything).unwrap(), ReviewPlan { from: None, to: None, why: RangeWhy::Uncommitted });
+        }
+
+        /// On a clean tree the marker means "this chat's commits"; it must be
+        /// the marker, not HEAD — HEAD is what the review would diff *from*.
+        #[test]
+        fn a_clean_tree_reads_the_chat_marker() {
+            let with_upstream = facts(|f| {
+                f.marker = Some("mark".into());
+                f.upstream = Some("up".into());
+            });
+            assert_eq!(plan(None, None, &with_upstream).unwrap(), ReviewPlan { from: Some("mark".into()), to: None, why: RangeWhy::ChatWork });
+        }
+
+        #[test]
+        fn without_a_marker_the_unpushed_commits_then_the_base() {
+            let with_upstream = facts(|f| f.upstream = Some("up".into()));
+            assert_eq!(plan(None, None, &with_upstream).unwrap(), ReviewPlan { from: Some("up".into()), to: None, why: RangeWhy::Branch });
+            let at_base = facts(|f| f.merge_base = Some("base".into()));
+            assert_eq!(plan(None, None, &at_base).unwrap(), ReviewPlan { from: Some("base".into()), to: None, why: RangeWhy::Base });
+        }
+
+        /// A far end named without `from`: the chat's work up to it, or the
+        /// branch's base — never the uncommitted state, which a commit range
+        /// does not include.
+        #[test]
+        fn a_named_far_end_uses_the_marker_or_the_base() {
+            let with_marker = facts(|f| {
+                f.uncommitted = true;
+                f.marker = Some("mark".into());
+            });
+            assert_eq!(plan(None, Some("abc"), &with_marker).unwrap(), ReviewPlan { from: Some("mark".into()), to: Some("abc".into()), why: RangeWhy::ChatWork });
+            let no_marker = facts(|f| {
+                f.uncommitted = true;
+                f.merge_base = Some("base".into());
+            });
+            assert_eq!(plan(None, Some("abc"), &no_marker).unwrap(), ReviewPlan { from: Some("base".into()), to: Some("abc".into()), why: RangeWhy::Base });
+        }
+
+        #[test]
+        fn nothing_left_is_a_refusal_with_a_hint() {
+            let refused = plan(None, None, &ReviewFacts::default()).unwrap_err();
+            assert!(matches!(refused, NothingToReview::NoBase));
+            assert!(refused.to_string().contains("HEAD~1"), "{refused}");
+        }
     }
 }

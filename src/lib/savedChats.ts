@@ -50,6 +50,10 @@ export type ChatRecord = {
   kube?: KubePin | null;
   /** The branch this chat's worktree was created from. */
   worktreeBase?: string | null;
+  /** The commit HEAD pointed at when the chat was first saved — a review's
+   * "what this chat did" starts from it. Absent in older chats and in those
+   * begun before their folder's first commit. */
+  headAtStart?: string | null;
 };
 
 /** Chats of the open folder, newest first. No folder, no backend: no rows. */

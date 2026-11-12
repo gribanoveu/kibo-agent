@@ -142,6 +142,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         log_call: chat.log_call,
         plan: None,
         worktree_of: None,
+        chat_head: None,
         mcp: &mcp,
         hooks: &hooks,
         processes: None,

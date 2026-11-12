@@ -61,7 +61,7 @@ import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
-import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST } from "./lib/offer";
+import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
 import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedChats";
@@ -82,6 +82,7 @@ import { useRewind } from "./hooks/useRewind";
 import { builtInCommands, expandTemplate, fileCommands, mcpPromptCommands, typedCommand } from "./lib/slashCommands";
 import initPrompt from "./prompts/init.md?raw";
 import analyzePrompt from "./prompts/analyze.md?raw";
+import reviewPrompt from "./prompts/review.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
@@ -411,7 +412,7 @@ export default function App() {
     {
       compact: () => void compactNow(),
       fork: () => agent.branch(),
-      review: (handed) => void agent.review(handed),
+      review: (args) => void send(typedCommand("review", args), expandTemplate(reviewPrompt, args)),
       // `send` is declared further down; the arrow reaches it when a command runs.
       init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
       analyze: (args) => void send(typedCommand("analyze", args), expandTemplate(analyzePrompt, args)),
@@ -496,7 +497,7 @@ export default function App() {
   };
 
   const pickOffer = async (kind: OfferKind) => {
-    if (kind === "review") return agent.review(true);
+    if (kind === "review") return send(REVIEW_REQUEST);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
     // Not `send`: that would drop the checklist the plan came with.

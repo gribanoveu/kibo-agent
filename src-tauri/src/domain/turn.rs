@@ -342,10 +342,11 @@ pub enum ChatEventPayload {
     /// several rounds running. Said to the reader too, since the note is in
     /// the history the model reads. `failing` tells the two apart.
     LoopReminded { tool: String, failing: bool },
-    /// `/review` has gone on long enough and was asked to wrap up
-    /// (`domain::review::wrap_up`). Said to the reader too, since the note is
-    /// in the history the model reads.
-    WrapUpReminded { rounds: u32, tokens: u64 },
+    /// A review has gone on long enough and was asked to wrap up
+    /// (`domain::review::wrap_up`). `text` is the note the reviewer got; it
+    /// also goes to the review card's output, so the reader sees it where
+    /// the work is, not as a notice away from it.
+    WrapUpReminded { rounds: u32, tokens: u64, text: String },
     /// An MCP server asks the user something in the middle of call `call`
     /// (`docs/23-mcp-extension.md`, M-8). The call waits until
     /// `chat_answer_mcp_question` answers `id`, or Stop.

@@ -47,6 +47,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "reportFinding" => ToolCall::ReportFinding(args(call)?),
         "offer" => ToolCall::Offer(args(call)?),
         "explore" => ToolCall::Explore(args(call)?),
+        "review" => ToolCall::Review(args(call)?),
         "remember" => ToolCall::Remember(args(call)?),
         "knowledgeWrite" => ToolCall::KnowledgeWrite(args(call)?),
         "knowledgeSearch" => ToolCall::KnowledgeSearch(args(call)?),
