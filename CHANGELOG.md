@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-12 A review is an instrument of the agent, not a turn of its own: `/review` and the suggestion button send an ordinary message, the agent calls `review` itself — `from` and `to` naming the range, the chat's own commits found after a commit — and the review's card tells the whole story: the reviewer's steps, the budget note, the range it read and what it found, findings kept even when the review is stopped or runs out of rounds
 - 2026-11-08 The Agent and Chat message boxes can notice Russian or English typed in the other keyboard layout, even a wrong fragment beside intentional words in mixed prose, and offer a Fix button or ⌘/Ctrl+F correction, with the caret and ordinary Undo kept; on macOS and Windows the feature's optional Catalog switch also selects the corrected text's dominant installed layout — turn Keyboard layout correction on in the Catalog
 - 2026-11-08 A review says what it is doing while it runs — the file it reads, the command it runs — instead of standing as a bare icon, and a helper's steps in the Agents tab and its sheet carry the app's own tool names
 - 2026-11-08 The Catalog shows eight cards of each kind under All before "Show all", which opens that kind's tab with the whole list; MCP servers sit right under Skills

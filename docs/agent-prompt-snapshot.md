@@ -1,10 +1,10 @@
 # Kibo Agent: системный промпт и инструменты режима Agent
 
-Снимок того, что модель получает в каждом запросе режима **Agent**. Тексты взяты из работающего кода (`domain::prompt::system_messages` и `llm_chat::tool_definitions_for`), а не переписаны вручную. Состояние: 19 октября 2026 года, ветка `feature/prototype-role`; аргументы инструментов идут в том порядке, в каком написаны в коде (`serde_json` с `preserve_order`).
+Снимок того, что модель получает в каждом запросе режима **Agent**. Тексты взяты из работающего кода (`domain::prompt::system_messages` и `llm_chat::tool_definitions_for`), а не переписаны вручную. Состояние: 19 октября 2026 года, ветка `feature/prototype-role`; инструмент `review` добавлен 2026-11-12 (`docs/49-review-as-a-tool.md`, R-3–R-4) — остальные тексты того же снимка, некоторые описания с тех пор могли измениться; аргументы инструментов идут в том порядке, в каком написаны в коде (`serde_json` с `preserve_order`).
 
 Условия снимка: macOS, `/bin/sh`, язык ответа Russian (как в ваших настройках), открыта папка `/Users/eugene/project`, режим с подтверждениями, нет навыков, правил проекта (`AGENTS.md`), MCP-серверов и плана.
 
-Объём: системные сообщения ≈ 9 653 символов (≈ 2 413 токенов), описания инструментов ≈ 24 812 символов (≈ 6 203 токенов). Токены оценены грубо, как символы ÷ 4.
+Объём: системные сообщения ≈ 9 653 символов (≈ 2 413 токенов), описания инструментов ≈ 26 477 символов (≈ 6 619 токенов). Токены оценены грубо, как символы ÷ 4.
 
 ## Системный промпт
 
@@ -138,7 +138,7 @@ Think in English. Write everything you say in Russian — answers, plans, checkl
 - grep and sed are the BSD ones: grep has \b and -E but no -P, and with --include it skips a path that does not exist without a word; sed -i needs '' before the script.
 ````
 
-## Инструменты (21)
+## Инструменты (22)
 
 Каждый инструмент — ровно тот JSON, что уходит в поле `tools` запроса: имя, описание и JSON Schema аргументов. Обёртку конкретного провайдера (`{"type": "function", "function": …}` у OpenAI-совместимых, `input_schema` у Anthropic) добавляет адаптер провайдера, она здесь опущена.
 
@@ -166,6 +166,7 @@ Think in English. Write everything you say in Russian — answers, plans, checkl
 | [`move`](#move) | 655 |
 | [`writePlan`](#writeplan) | 999 |
 | [`explore`](#explore) | 1012 |
+| [`review`](#review) | 1665 |
 | [`remember`](#remember) | 910 |
 | [`todo`](#todo) | 2196 |
 | [`runCommand`](#runcommand) | 2152 |
@@ -711,6 +712,33 @@ Think in English. Write everything you say in Russian — answers, plans, checkl
     "required": [
       "task"
     ]
+  }
+}
+```
+
+### review
+
+```json
+{
+  "name": "review",
+  "description": "Hand the change in this folder to a review helper with a fresh context. It reads the change on its own, runs what proves a point, and reports findings with path:line, checked by the app; its report comes back to you in this conversation, so fix or dismiss each finding and say which. Call it before committing and after a non-trivial change — several files, logic, concurrency, security, error handling; not for typos, docs or renames — and when the user asks for a review. It reads and reports only: it never edits files, and any fixing is yours after it answers. from: where the change starts — a branch, tag or commit (`main`, `HEAD~2`). Without it the review takes what this chat changed: uncommitted work first, then this chat's commits, then the branch against its upstream. to: where it ends — by default the working tree (commits plus uncommitted); name a commit to review a commit range without uncommitted changes. focus: one or two phrases on what to look at first (\"error handling in the loader\") — an accent for the reviewer, not a topic; the review still stands on the diff.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "from": {
+        "type": "string",
+        "description": "Where the change starts: a branch, tag or commit. Leave out to review what this chat changed."
+      },
+      "to": {
+        "type": "string",
+        "description": "Where it ends: a commit for a commit range. Leave out for the working tree."
+      },
+      "focus": {
+        "type": "string",
+        "description": "One or two phrases on what to look at first."
+      }
+    },
+    "required": []
   }
 }
 ```
