@@ -207,6 +207,112 @@ pub fn nothing_to_review(excluded: usize) -> String {
     }
 }
 
+/// What `plan` needs to know about the repository, read by the caller from
+/// git: the rule table itself stays pure. Every `Option` is pre-digested —
+/// `upstream` only when `HEAD` is strictly ahead of it, `marker` only when it
+/// is a strict ancestor of the range's far end, `merge_base` against the
+/// usual candidates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewFacts {
+    /// The commit `HEAD` points at; `None` before the first commit, when the
+    /// whole tree reads as new files.
+    pub head: Option<String>,
+    /// The working tree or index holds changes against `HEAD`; with no
+    /// commits yet this is unconditionally true.
+    pub uncommitted: bool,
+    /// The upstream's tip, and only when `HEAD` is strictly ahead of it.
+    pub upstream: Option<String>,
+    /// `merge-base` of the range's far end against `origin/HEAD`, `main`,
+    /// then `master` — the first candidate that resolves.
+    pub merge_base: Option<String>,
+    /// The chat's start marker, when it is a strict ancestor of the range's
+    /// far end; `None` everywhere else — a marker outside history is a fact,
+    /// not an error.
+    pub marker: Option<String>,
+}
+
+/// The range a review reads: `from` against `to`, where `None` stands for
+/// `HEAD` and the working tree — the two defaults a review has always had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewPlan {
+    /// Diff from this rev; `None` is `HEAD` — the uncommitted-only range.
+    pub from: Option<String>,
+    /// Diff to this rev; `None` is the working tree — commits plus
+    /// uncommitted changes, as reviews read them today.
+    pub to: Option<String>,
+    /// Which consideration chose the range; named in the result so "why this
+    /// range" is visible beside "what was read".
+    pub why: RangeWhy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeWhy {
+    /// The caller named the range — rules 1.
+    Given,
+    /// Exactly what will be committed — rule 2.
+    Uncommitted,
+    /// This chat's work, from its start marker — rules 3 and 4.
+    ChatWork,
+    /// The branch's unpushed commits — rule 5.
+    Branch,
+    /// From the branch's base up to the far end — rule 6.
+    Base,
+}
+
+#[derive(Debug, Error)]
+pub enum NothingToReview {
+    #[error("`from` is empty — name where the review starts: a branch, tag or commit (`main`, `HEAD~1`)")]
+    EmptyFrom,
+    #[error("`to` is empty — name where the review ends: a branch, tag or commit (`HEAD`), or leave it out for the working tree")]
+    EmptyTo,
+    #[error("nothing to review: no uncommitted changes and no base to compare against — name the last commits explicitly (`HEAD~1`, `HEAD~3`, …) as `from`")]
+    NoBase,
+}
+
+/// The "База ревью" table, pure: given what the caller asked for and the
+/// facts read from git, the range to diff — or a refusal the model can act
+/// on. Narrow first, wide second: uncommitted changes win because that is
+/// what "review before committing" asks for; the chat's marker speaks only
+/// on a clean tree, since a commit must not eat the next review.
+pub fn plan(requested_from: Option<&str>, requested_to: Option<&str>, facts: &ReviewFacts) -> Result<ReviewPlan, NothingToReview> {
+    if let Some(from) = requested_from {
+        if from.trim().is_empty() {
+            return Err(NothingToReview::EmptyFrom);
+        }
+        let to = requested_to.map(str::trim);
+        if to.is_some_and(str::is_empty) {
+            return Err(NothingToReview::EmptyTo);
+        }
+        return Ok(ReviewPlan {
+            from: Some(from.trim().to_string()),
+            to: to.filter(|to| !to.is_empty()).map(str::to_string),
+            why: RangeWhy::Given,
+        });
+    }
+    if let Some(to) = requested_to {
+        if to.trim().is_empty() {
+            return Err(NothingToReview::EmptyTo);
+        }
+        let to = to.trim().to_string();
+        if let Some(marker) = &facts.marker {
+            return Ok(ReviewPlan { from: Some(marker.clone()), to: Some(to), why: RangeWhy::ChatWork });
+        }
+        let base = facts.merge_base.clone().ok_or(NothingToReview::NoBase)?;
+        return Ok(ReviewPlan { from: Some(base), to: Some(to), why: RangeWhy::Base });
+    }
+    if facts.uncommitted {
+        return Ok(ReviewPlan { from: None, to: None, why: RangeWhy::Uncommitted });
+    }
+    if let Some(marker) = &facts.marker {
+        return Ok(ReviewPlan { from: Some(marker.clone()), to: None, why: RangeWhy::ChatWork });
+    }
+    if let Some(upstream) = &facts.upstream {
+        return Ok(ReviewPlan { from: Some(upstream.clone()), to: None, why: RangeWhy::Branch });
+    }
+    let base = facts.merge_base.clone().ok_or(NothingToReview::NoBase)?;
+    Ok(ReviewPlan { from: Some(base), to: None, why: RangeWhy::Base })
+}
+
 /// The opening message of a review: the diffs that fit, in path order, the
 /// rest of the change by name, and what was left out and why — and the reply
 /// language, when the user chose one: nothing the user typed is in a review's
@@ -632,5 +738,86 @@ mod tests {
         assert!(by_weight.contains("used 90% of its budget (5 of 60 rounds)") && by_weight.contains("reportFinding"), "{by_weight}");
         let asked = [LlmMessage::user("go"), LlmMessage::user(by_rounds)];
         assert_eq!(wrap_up(used(55, 240), limit, &asked), None, "once a turn");
+    }
+
+    /// The table of ranges: what the caller named wins, then narrow first —
+    /// uncommitted changes before the chat's marker, the marker before the
+    /// branch, the branch's base last.
+    mod plan {
+        use super::super::{plan, NothingToReview, RangeWhy, ReviewFacts, ReviewPlan};
+
+        fn facts(f: fn(&mut ReviewFacts)) -> ReviewFacts {
+            let mut facts = ReviewFacts::default();
+            f(&mut facts);
+            facts
+        }
+
+        #[test]
+        fn a_named_range_is_taken_as_given() {
+            let planned = plan(Some("main"), Some("abc1234"), &ReviewFacts::default()).unwrap();
+            assert_eq!(planned, ReviewPlan { from: Some("main".into()), to: Some("abc1234".into()), why: RangeWhy::Given });
+            let to_workdir = plan(Some("main"), None, &ReviewFacts::default()).unwrap();
+            assert_eq!(to_workdir, ReviewPlan { from: Some("main".into()), to: None, why: RangeWhy::Given });
+        }
+
+        #[test]
+        fn an_empty_end_is_refused_not_guessed() {
+            assert!(matches!(plan(Some(" "), None, &ReviewFacts::default()), Err(NothingToReview::EmptyFrom)));
+            assert!(matches!(plan(Some("main"), Some(""), &ReviewFacts::default()), Err(NothingToReview::EmptyTo)));
+            assert!(matches!(plan(None, Some("  "), &ReviewFacts::default()), Err(NothingToReview::EmptyTo)));
+        }
+
+        #[test]
+        fn uncommitted_changes_win_over_everything() {
+            let with_everything = facts(|f| {
+                f.uncommitted = true;
+                f.marker = Some("mark".into());
+                f.upstream = Some("up".into());
+            });
+            assert_eq!(plan(None, None, &with_everything).unwrap(), ReviewPlan { from: None, to: None, why: RangeWhy::Uncommitted });
+        }
+
+        /// On a clean tree the marker means "this chat's commits"; it must be
+        /// the marker, not HEAD — HEAD is what the review would diff *from*.
+        #[test]
+        fn a_clean_tree_reads_the_chat_marker() {
+            let with_upstream = facts(|f| {
+                f.marker = Some("mark".into());
+                f.upstream = Some("up".into());
+            });
+            assert_eq!(plan(None, None, &with_upstream).unwrap(), ReviewPlan { from: Some("mark".into()), to: None, why: RangeWhy::ChatWork });
+        }
+
+        #[test]
+        fn without_a_marker_the_unpushed_commits_then_the_base() {
+            let with_upstream = facts(|f| f.upstream = Some("up".into()));
+            assert_eq!(plan(None, None, &with_upstream).unwrap(), ReviewPlan { from: Some("up".into()), to: None, why: RangeWhy::Branch });
+            let at_base = facts(|f| f.merge_base = Some("base".into()));
+            assert_eq!(plan(None, None, &at_base).unwrap(), ReviewPlan { from: Some("base".into()), to: None, why: RangeWhy::Base });
+        }
+
+        /// A far end named without `from`: the chat's work up to it, or the
+        /// branch's base — never the uncommitted state, which a commit range
+        /// does not include.
+        #[test]
+        fn a_named_far_end_uses_the_marker_or_the_base() {
+            let with_marker = facts(|f| {
+                f.uncommitted = true;
+                f.marker = Some("mark".into());
+            });
+            assert_eq!(plan(None, Some("abc"), &with_marker).unwrap(), ReviewPlan { from: Some("mark".into()), to: Some("abc".into()), why: RangeWhy::ChatWork });
+            let no_marker = facts(|f| {
+                f.uncommitted = true;
+                f.merge_base = Some("base".into());
+            });
+            assert_eq!(plan(None, Some("abc"), &no_marker).unwrap(), ReviewPlan { from: Some("base".into()), to: Some("abc".into()), why: RangeWhy::Base });
+        }
+
+        #[test]
+        fn nothing_left_is_a_refusal_with_a_hint() {
+            let refused = plan(None, None, &ReviewFacts::default()).unwrap_err();
+            assert!(matches!(refused, NothingToReview::NoBase));
+            assert!(refused.to_string().contains("HEAD~1"), "{refused}");
+        }
     }
 }

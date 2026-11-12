@@ -900,7 +900,7 @@ pub async fn review_start<R: Runtime>(
     let state = state.inner().clone();
     let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let diff_workspace = workspace.clone();
-    let files = tauri::async_runtime::spawn_blocking(move || crate::infra::git_changes::review_diffs(&diff_workspace))
+    let files = tauri::async_runtime::spawn_blocking(move || crate::infra::git_changes::review_diffs(&diff_workspace, None, None))
         .await
         .map_err(|e| format!("reading the change failed: {e}"))?
         .map_err(|e| e.to_string())?;
