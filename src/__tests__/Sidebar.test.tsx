@@ -18,6 +18,7 @@ const chats: ChatSummary[] = [
 const sidebar = (
   on: {
     archive?: (id: string, archived: boolean) => void;
+    pin?: (id: string, pinned: boolean) => void;
     remove?: (id: string) => void;
     select?: (id: string) => void;
     toggleTheme?: () => void;
@@ -38,6 +39,7 @@ const sidebar = (
       chatActivity={chatActivity}
       onSelectChat={on.select ?? (() => {})}
       onArchiveChat={on.archive ?? (() => {})}
+      onPinChat={on.pin ?? (() => {})}
       onDeleteChat={on.remove ?? (() => {})}
       onOpenSettings={() => {}}
       onOnboardingAction={() => {}}
@@ -148,6 +150,63 @@ describe("the chat list", () => {
     fireEvent.click(screen.getByText("done away"));
     expect(selected).toEqual(["c"]);
   });
+
+  describe("pinned chats", () => {
+    const rows = (): ChatSummary[] => [
+      { id: "a", title: "kept in view", updatedAt: 2, archived: false },
+      { id: "p", title: "kept on top", updatedAt: 1, archived: false, pinned: true },
+      { id: "b", title: "filed away", updatedAt: 3, archived: true },
+    ];
+
+    /// The pinned group holds the active filter's pinned rows ahead of the
+    /// days, and the days never repeat one: a row shown twice reads as two chats.
+    test("stands under Pinned, not under its day", () => {
+      sidebar({}, "dark", {}, rows());
+      const under = (heading: string) => screen.queryByText(heading)?.closest("section")?.textContent ?? "";
+      expect(under("Pinned")).toContain("kept on top");
+      expect(under("Today")).not.toContain("kept on top");
+      expect(under("Earlier")).not.toContain("kept on top");
+      expect(screen.getByLabelText("Pinned")).toBeTruthy();
+    });
+
+    test("a pinned row offers to sink back, an unpinned one to hold", () => {
+      const calls: [string, boolean][] = [];
+      sidebar({ pin: (id, pinned) => calls.push([id, pinned]) }, "dark", {}, rows());
+      pickFilter("All");
+
+      const [first, second] = screen.getAllByTitle("More");
+      fireEvent.click(first);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }));
+      fireEvent.click(second);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Unpin" }));
+
+      expect(calls).toEqual([
+        ["a", true],
+        ["p", false],
+      ]);
+    });
+
+    /// The pinned group is the working view; "All" is for finding, and
+    /// there a pinned chat stays a row of its day.
+    test("has no group in All: rows stay under their days", () => {
+      sidebar({}, "dark", {}, rows());
+      pickFilter("All");
+      expect(screen.queryByText("Pinned")).toBeNull();
+      const under = (day: string) => screen.getByText(day).closest("section")?.textContent ?? "";
+      expect(under("Earlier")).toContain("kept on top");
+    });
+
+    test("the search narrows the pinned group like the days", () => {
+      sidebar({}, "dark", {}, rows());
+      const box = screen.getByRole("textbox", { name: "Search chats" });
+      fireEvent.change(box, { target: { value: "on top" } });
+      expect(screen.getByText("kept on top")).toBeTruthy();
+      expect(screen.queryByText("kept in view")).toBeNull();
+
+      fireEvent.change(box, { target: { value: "nothing like it" } });
+      expect(screen.queryByText("Pinned")).toBeNull();
+    });
+  });
 });
 
 describe("the account menu", () => {
@@ -211,6 +270,7 @@ describe("pages", () => {
         activeChat={null}
         onSelectChat={() => {}}
         onArchiveChat={() => {}}
+        onPinChat={() => {}}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
         onOnboardingAction={() => {}}

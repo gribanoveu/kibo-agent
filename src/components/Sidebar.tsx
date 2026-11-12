@@ -15,6 +15,8 @@ import {
   MessageSquare,
   MessagesSquare,
   Moon,
+  Pin,
+  PinOff,
   Search,
   Settings,
   ShipWheel,
@@ -89,6 +91,7 @@ type Props = {
   chatActivity?: Record<string, ChatActivity>;
   onSelectChat: (id: string) => void;
   onArchiveChat: (id: string, archived: boolean) => void;
+  onPinChat: (id: string, pinned: boolean) => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
   onOnboardingAction: (tab: AsideTab) => void;
@@ -108,6 +111,7 @@ export function Sidebar({
   chatActivity = {},
   onSelectChat,
   onArchiveChat,
+  onPinChat,
   onDeleteChat,
   onOpenSettings,
   onOnboardingAction,
@@ -129,6 +133,10 @@ export function Sidebar({
   const listed = chats.filter(
     (chat) => (filter === "all" || chat.archived === (filter === "archived")) && chat.title.toLowerCase().includes(wanted),
   );
+  // The pinned group holds the active filter's pinned rows ahead of the days,
+  // and a row shown twice reads as two chats — so the days never repeat one.
+  const pinnedRows = filter === "active" ? listed.filter((chat) => chat.pinned) : [];
+  const dayRows = filter === "active" ? listed.filter((chat) => !chat.pinned) : listed;
   const userWrap = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -173,9 +181,23 @@ export function Sidebar({
           <MessageSquare size={14} />
         )}
         <ChangingText text={chat.title} />
+        {chat.pinned && <Pin size={12} className="chat-pin" aria-label="Pinned" />}
       </button>
       <ChatMenu
         items={[
+          chat.pinned
+            ? {
+                id: "unpin",
+                label: "Unpin",
+                icon: <PinOff size={14} />,
+                onSelect: () => onPinChat(chat.id, false),
+              }
+            : {
+                id: "pin",
+                label: "Pin",
+                icon: <Pin size={14} />,
+                onSelect: () => onPinChat(chat.id, true),
+              },
           chat.archived
             ? {
                 id: "unarchive",
@@ -273,12 +295,20 @@ export function Sidebar({
         {listed.length === 0 ? (
           <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
         ) : (
-          byDay(listed).map(({ day, chats: rows }) => (
-            <section key={day}>
-              <div className="chat-day">{day}</div>
-              {rows.map(chatRow)}
-            </section>
-          ))
+          <>
+            {pinnedRows.length > 0 && (
+              <section>
+                <div className="chat-day">Pinned</div>
+                {pinnedRows.map(chatRow)}
+              </section>
+            )}
+            {byDay(dayRows).map(({ day, chats: rows }) => (
+              <section key={day}>
+                <div className="chat-day">{day}</div>
+                {rows.map(chatRow)}
+              </section>
+            ))}
+          </>
         )}
       </div>
 

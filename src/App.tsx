@@ -911,6 +911,9 @@ export default function App() {
           onArchiveChat={(id, archived) =>
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
           }
+          onPinChat={(id, pinned) =>
+            agentMode ? history.pin(id, pinned).catch((e) => toast.show(String(e))) : void plain.pin(id, pinned)
+          }
           onDeleteChat={(id) => {
             if (!agentMode)
               return void plain.remove(id).then(
