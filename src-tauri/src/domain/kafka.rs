@@ -465,6 +465,26 @@ pub struct LagView {
     pub active: bool,
 }
 
+/// Whether a listed group is one this page shows: a consumer group, or one
+/// with no protocol of its own — an offset-only group looks like that, and its
+/// lag is real. A `connect` or a `transactional` group has no lag to speak of.
+pub fn is_consumer_group(protocol_type: &str) -> bool {
+    protocol_type.is_empty() || protocol_type == "consumer"
+}
+
+/// A cluster's groups as one answer carries them: what was read, how many
+/// there are in all, and how many brokers would not answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupList {
+    pub groups: Vec<GroupView>,
+    /// Groups the cluster listed, before the answer's ceiling.
+    pub total: usize,
+    /// Brokers that did not answer: their groups are missing from this list,
+    /// not absent from the cluster.
+    pub unread_brokers: usize,
+}
+
 /// A consumer group as one answer carries it: its state, how many members hold
 /// it, and the lag of every partition it committed on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -474,6 +494,9 @@ pub struct GroupView {
     /// `Stable`, `Empty`, `PreparingRebalance`, … as the broker words it.
     pub state: String,
     pub members: usize,
+    /// Whether the lag was read for this group: past the page's ceiling it is
+    /// not, and `total_lag: None` then means "not asked", not "no commits".
+    pub lags_read: bool,
     pub lags: Vec<LagView>,
     /// The lag over the partitions that have one; `None` when none does — a
     /// group that never committed has no lag to speak of, and a zero here would
@@ -482,12 +505,12 @@ pub struct GroupView {
 }
 
 impl GroupView {
-    pub fn new(name: String, state: String, members: usize, lags: Vec<LagView>) -> Self {
+    pub fn new(name: String, state: String, members: usize, lags_read: bool, lags: Vec<LagView>) -> Self {
         let total_lag = match lags.iter().filter_map(|lag| lag.lag) {
             total if total.clone().next().is_none() => None,
             total => Some(total.sum()),
         };
-        Self { name, state, members, lags, total_lag }
+        Self { name, state, members, lags_read, lags, total_lag }
     }
 }
 
@@ -1480,13 +1503,14 @@ mod tests {
 
     #[test]
     fn a_group_without_a_commit_has_no_lag_rather_than_none_at_all() {
-        let never = GroupView::new("g".into(), "Empty".into(), 0, vec![LagView::new("g", "t", 0, None, 500, false)]);
+        let never = GroupView::new("g".into(), "Empty".into(), 0, true, vec![LagView::new("g", "t", 0, None, 500, false)]);
         assert_eq!(never.total_lag, None, "no commit is no data, not caught up");
 
         let some = GroupView::new(
             "g".into(),
             "Stable".into(),
             2,
+            true,
             vec![
                 LagView::new("g", "t", 0, Some(90), 100, true),
                 LagView::new("g", "t", 1, Some(30), 100, true),
@@ -1496,6 +1520,13 @@ mod tests {
         assert_eq!(some.total_lag, Some(10 + 70), "a commit past the end is no negative lag");
         assert_eq!(some.lags[2].lag, Some(0));
         assert_eq!(some.members, 2);
+
+        // Not asked is not "no commits": the two say different things.
+        let unread = GroupView::new("g".into(), "Stable".into(), 2, false, vec![]);
+        assert_eq!((unread.lags_read, unread.total_lag), (false, None));
+
+        assert!(is_consumer_group("") && is_consumer_group("consumer"));
+        assert!(!is_consumer_group("connect") && !is_consumer_group("transactional"));
     }
 
     #[test]

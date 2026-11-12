@@ -430,7 +430,6 @@ pub fn run() {
             commands::kafka::kafka_topic,
             commands::kafka::kafka_messages,
             commands::kafka::kafka_groups,
-            commands::kafka::kafka_groups,
             commands::kafka::kafka_produce,
             commands::kafka::kafka_live_start,
             commands::kafka::kafka_live_stop,

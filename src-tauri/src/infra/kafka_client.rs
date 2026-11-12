@@ -19,7 +19,7 @@ use krafka::producer::Record;
 use krafka::Kafka;
 
 use crate::domain::kafka::{
-    fresh, live_tick, quota, starting, ConfigView, Connection, GroupView, KafkaError, LagView, LiveBatch, LiveSink, LiveSpec, Message, PartitionView, ProduceSpec,
+    fresh, is_consumer_group, live_tick, quota, starting, ConfigView, Connection, GroupList, GroupView, KafkaError, LagView, LiveBatch, LiveSink, LiveSpec, Message, PartitionView, ProduceSpec,
     Produced, ReadPage,
     ReadSpec,
     SaslMechanism, TopicView, LIVE_PER_TICK, LIVE_TICK, MAX_READ_COUNT, MAX_READ_PARTITIONS,
@@ -439,23 +439,28 @@ pub const MAX_LAG_GROUPS: usize = 20;
 /// The consumer groups of a cluster, with their state, members and lag. A group
 /// past [`MAX_LAG_GROUPS`] keeps its state and members and says nothing about
 /// lag — which is not the same as having none.
-pub fn groups(clients: &KafkaClients, connection: &Connection) -> Result<Vec<GroupView>, KafkaError> {
+pub fn groups(clients: &KafkaClients, connection: &Connection) -> Result<GroupList, KafkaError> {
     let kafka = clients.kafka(connection)?;
     let admin = kafka.admin();
     let listed = within("the groups", admin.list_consumer_groups(Default::default()))?;
 
-    // One answer per broker; a broker that did not answer contributes nothing.
-    let mut names: Vec<String> = listed
-        .into_iter()
-        .filter_map(|(_, listed)| listed.ok())
-        .flatten()
-        .filter(|group| group.protocol_type.is_empty() || group.protocol_type == "consumer")
-        .map(|group| group.group_id)
-        .collect();
+    // One answer per broker. A broker that did not answer takes its groups with
+    // it, so how many did is part of the answer rather than a silence.
+    let mut unread_brokers = 0usize;
+    let mut names: Vec<String> = Vec::new();
+    for (_, listed) in listed {
+        match listed {
+            Ok(listed) => names.extend(listed.into_iter().filter(|group| is_consumer_group(&group.protocol_type)).map(|group| group.group_id)),
+            Err(_) => unread_brokers += 1,
+        }
+    }
     names.sort();
     names.dedup();
-    let with_lag = names.len().min(MAX_LAG_GROUPS);
+    let total = names.len();
     names.truncate(MAX_GROUPS);
+    // The alphabet picks which groups get a lag: it is the only order a list
+    // read from several brokers has, and a page shows the first page of it.
+    let with_lag = names.len().min(MAX_LAG_GROUPS);
 
     let described = within("the groups", admin.describe_consumer_groups(names.clone(), Default::default()))?;
     let mut views: Vec<GroupView> = Vec::new();
@@ -464,26 +469,31 @@ pub fn groups(clients: &KafkaClients, connection: &Connection) -> Result<Vec<Gro
         let state = description.map(|description| description.state.clone()).unwrap_or_else(|| "Unknown".into());
         let members = description.map_or(0, |description| description.members.len());
 
-        let lags = if at >= with_lag {
-            Vec::new()
+        // A group whose lag the broker would not give keeps its state and
+        // members: one coordinator in a rebalance is not the other groups' fault.
+        let (lags_read, lags) = if at >= with_lag {
+            (false, Vec::new())
         } else {
-            let answered = within("the lag", admin.consumer_group_lag(name.clone(), Default::default()))?;
-            let mut lags: Vec<LagView> = answered
-                .into_iter()
-                .map(|(partition, answered)| match answered {
-                    Ok(lag) => LagView::new(name, &partition.topic, partition.partition, lag.committed_offset, lag.end_offset, lag.lag.is_some()),
-                    // A partition the broker would not answer for has no lag to
-                    // show, and saying zero would hide a stalled consumer.
-                    Err(_) => LagView::new(name, &partition.topic, partition.partition, None, 0, false),
-                })
-                .collect();
-            lags.sort_by(|a, b| (a.topic.as_str(), a.partition).cmp(&(b.topic.as_str(), b.partition)));
-            lags
+            match within("the lag", admin.consumer_group_lag(name.clone(), Default::default())) {
+                Ok(answered) => {
+                    let mut lags: Vec<LagView> = answered
+                        .into_iter()
+                        // A partition the broker would not answer for is left
+                        // out: `latest: 0` would read as an empty partition,
+                        // which is a different thing from no data.
+                        .filter_map(|(partition, answered)| {
+                            answered.ok().map(|lag| LagView::new(name, &partition.topic, partition.partition, lag.committed_offset, lag.end_offset, false))
+                        })
+                        .collect();
+                    lags.sort_by(|a, b| (a.topic.as_str(), a.partition).cmp(&(b.topic.as_str(), b.partition)));
+                    (true, lags)
+                }
+                Err(_) => (false, Vec::new()),
+            }
         };
-        views.push(GroupView::new(name.clone(), state, members, lags));
+        views.push(GroupView::new(name.clone(), state, members, lags_read, lags));
     }
-    views.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(views)
+    Ok(GroupList { groups: views, total, unread_brokers })
 }
 
 /// Reads a topic live, without a group: `assign` on the chosen partitions,
@@ -735,10 +745,9 @@ mod tests {
         let listed = names(&clients, &connection).unwrap();
         if listed.iter().any(|name| name == "orders") {
             let views = groups(&clients, &connection).unwrap();
-            if let Some(probe) = views.iter().find(|group| group.name == "probe-group") {
-                assert!(probe.lags.iter().any(|lag| lag.committed.is_some()), "the fixture's group committed: {probe:?}");
-                assert!(probe.lags.iter().all(|lag| lag.lag.is_none_or(|lag| lag >= 0)));
-            }
+            let probe = views.groups.iter().find(|group| group.name == "probe-group").expect("the fixture's group is listed");
+            assert!(probe.lags_read && probe.lags.iter().any(|lag| lag.committed.is_some()), "the fixture's group committed: {probe:?}");
+            assert_eq!(views.total, views.groups.len());
         }
         if !listed.iter().any(|name| name == "payments") {
             eprintln!("the live half of kafka_client is skipped: no payments topic to write to");
