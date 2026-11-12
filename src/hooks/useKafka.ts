@@ -38,6 +38,8 @@ export function useKafka() {
   const [group, setGroup] = useState<string | null>(null);
   /** Bumped by the refresh button: the same question, asked again of the broker. */
   const [again, setAgain] = useState(0);
+  /** The one read the refresh button asked for to go past the shape cache. */
+  const fresh = useRef(false);
   const [pageAt, setPageAt] = useState(0);
   const [search, setSearch] = useState("");
   const [detail, setDetail] = useState<TopicDetail | null>(null);
@@ -105,7 +107,10 @@ export function useKafka() {
     const timer = window.setTimeout(
       () => {
         setReading(true);
-        kafkaTopics(selected, search.trim() || null, pageAt, again > 0)
+        kafkaTopics(selected, search.trim() || null, pageAt, fresh.current)
+          .finally(() => {
+            fresh.current = false;
+          })
           .then((list) => {
             if (mine !== asked.current) return;
             setTopics(list.topics);
@@ -129,6 +134,9 @@ export function useKafka() {
       setSelected(connection.id);
       setDetail(null);
       setError(null);
+      // Saved settings under the same id are another cluster: the topics and
+      // the groups of the old one are not this connection's any more.
+      setAgain((asked) => asked + 1);
       return true;
     } catch (failure) {
       setError(said(failure));
@@ -214,7 +222,10 @@ export function useKafka() {
       setPageAt(0);
     },
     setPage: setPageAt,
-    refresh: () => setAgain((asked) => asked + 1),
+    refresh: () => {
+      fresh.current = true;
+      setAgain((asked) => asked + 1);
+    },
     save,
     remove,
     probe,

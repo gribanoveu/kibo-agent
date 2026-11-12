@@ -22,8 +22,16 @@ pub async fn kafka_connections() -> Result<Vec<ConnectionView>, String> {
 }
 
 #[tauri::command]
-pub async fn kafka_connection_save(connection: Connection, clients: Clients<'_>) -> Result<Vec<ConnectionView>, String> {
+pub async fn kafka_connection_save(
+    connection: Connection,
+    clients: Clients<'_>,
+    live: tauri::State<'_, std::sync::Arc<KafkaLive>>,
+) -> Result<Vec<ConnectionView>, String> {
     let clients = clients.inner().clone();
+    let live = live.inner().clone();
+    // Reads of the old settings would keep reporting the old cluster under the
+    // new ones: they end with the change.
+    live.stop_all();
     blocking(move || kafka::save(&clients, connection)).await
 }
 

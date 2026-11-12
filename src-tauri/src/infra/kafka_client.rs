@@ -503,21 +503,23 @@ pub fn groups(clients: &KafkaClients, connection: &Connection) -> Result<GroupLi
 /// spent — the caller owns the flag and the reporting.
 pub fn live(clients: &KafkaClients, connection: &Connection, spec: &LiveSpec, stop: std::sync::Arc<std::sync::atomic::AtomicBool>, sink: LiveSink) -> Result<(), KafkaError> {
     use std::sync::atomic::Ordering;
-    let kafka = clients.kafka(connection)?;
     let topic = spec.topic.clone();
-
-    let mut partitions = spec.partitions.clone();
-    if partitions.is_empty() {
-        let shapes = clients.partitions_of(connection, &[topic.clone()])?;
-        partitions = shapes.get(&topic).map(|partitions| partitions.iter().map(|partition| partition.partition).collect()).unwrap_or_default();
-    }
-    partitions.truncate(MAX_READ_PARTITIONS);
-    if partitions.is_empty() {
-        return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
-    }
-
     let broke = |e: krafka::error::KrafkaError| KafkaError::Broker(format!("the live read: {e}"));
     let answered = tauri::async_runtime::block_on(async {
+        // Everything a read needs — the connection, the topic's partitions — is
+        // asked inside, so a broker that will not open is said on the sink like
+        // any other end of a read.
+        let kafka = clients.kafka(connection)?;
+        let mut partitions = spec.partitions.clone();
+        if partitions.is_empty() {
+            let shapes = clients.partitions_of(connection, &[topic.clone()])?;
+            partitions = shapes.get(&topic).map(|partitions| partitions.iter().map(|partition| partition.partition).collect()).unwrap_or_default();
+        }
+        partitions.sort();
+        partitions.truncate(MAX_READ_PARTITIONS);
+        if partitions.is_empty() {
+            return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
+        }
         // Every step before the loop is bounded: a broker that takes the socket
         // and says nothing must not hold the thread where a stop is not read.
         let consumer = tokio::time::timeout(REQUEST_TIMEOUT, kafka.consumer_without_group().build())

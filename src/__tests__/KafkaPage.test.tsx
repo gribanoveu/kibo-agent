@@ -395,6 +395,30 @@ describe("the Kafka page", () => {
     expect(screen.getByText("no commit")).toBeTruthy();
   });
 
+  test("the refresh asks the broker once, and the next read keeps the cache", async () => {
+    render(<KafkaPage />);
+    await screen.findByText("orders");
+
+    fireEvent.click(screen.getByRole("button", { name: "Read the topics again" }));
+    await waitFor(() => expect(sent("kafka_topics").some((call) => call.args.refresh === true)).toBe(true));
+
+    fireEvent.change(screen.getByLabelText("Find a topic"), { target: { value: "or" } });
+    await waitFor(() => expect(sent("kafka_topics").some((call) => call.args.name === "or" && call.args.refresh === false)).toBe(true));
+  });
+
+  test("saving an edited connection asks the cluster again", async () => {
+    render(<KafkaPage />);
+    await screen.findByRole("heading", { name: "prod" });
+    const before = sent("kafka_topics").length;
+
+    fireEvent.click(screen.getByTitle("Change this connection"));
+    fireEvent.change(screen.getByLabelText("Brokers"), { target: { value: "broker-9:9092" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Other brokers are another cluster: the list on screen is not its.
+    await waitFor(() => expect(sent("kafka_topics").length).toBeGreaterThan(before));
+  });
+
   test("a broker that answers nothing is an error, not an empty cluster", async () => {
     refuseTopics = true;
     render(<KafkaPage />);
