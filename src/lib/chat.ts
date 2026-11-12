@@ -90,7 +90,8 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "hookFeedback"; payload: { event: string; message: string; blocked: boolean } }
   | { type: "processesEnded"; payload: { processes: ProcessInfo[] } }
   | { type: "loopReminded"; payload: { tool: string; failing: boolean } }
-  | { type: "wrapUpReminded"; payload: { rounds: number; tokens: number } }
+  // Carries the budget note; it lands on the review card's own output, not here.
+  | { type: "wrapUpReminded"; payload: { rounds: number; tokens: number; text: string } }
   | { type: "roundStarted" }
   | { type: "roundCompleted"; payload: { text: string; reasoning?: string; truncated?: boolean } }
   | { type: "toolCallDelta"; payload: LlmToolCall }

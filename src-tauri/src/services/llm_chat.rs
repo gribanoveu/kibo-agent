@@ -662,11 +662,11 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
         let used = crate::domain::review::Budget { rounds: round - 1, weight: state.budget_used };
         let limit = crate::domain::review::Budget { rounds: limits.rounds, weight: limits.budget };
         if let Some(said) = crate::domain::review::wrap_up(used, limit, &state.history) {
-            state.history.push(note(turn, said));
+            state.history.push(note(turn, said.clone()));
             events.emit(
                 round,
                 Some(format!("wrap-up:{round}")),
-                ChatEventPayload::WrapUpReminded { rounds: round - 1, tokens: pass.spent },
+                ChatEventPayload::WrapUpReminded { rounds: round - 1, tokens: pass.spent, text: said },
             );
         }
     }
@@ -1328,6 +1328,14 @@ fn run_helper(
                 });
                 agents.step(id, step);
             }
+            // The budget note is the card's own line, not a notice in the
+            // chat: it belongs where the review's steps are.
+            ChatEventPayload::WrapUpReminded { text, .. } => {
+                progress(CommandEvent {
+                    stream: crate::domain::command_exec::OutputStream::Stdout,
+                    chunk: format!("{text}\n"),
+                });
+            }
             ChatEventPayload::ContextUsage(usage) => agents.spent(id, &usage),
             _ => {}
         })
@@ -1521,6 +1529,7 @@ fn run_review(
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
     let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress)?;
+    let ran_out = matches!(&outcome, Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some());
     let (state, text) = match outcome {
         Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => {
             (AgentState::Done, Ok(format!("{}\n\n(The review ran out of rounds before it finished.)", done.result.text.trim())))
@@ -1535,7 +1544,20 @@ fn run_review(
     };
     agents.finish(id, state, text.as_ref().ok().cloned());
     let tokens = agents.get(id).map(|run| run.tokens).unwrap_or_default();
-    text.map(|text| ToolResult::Reviewed { findings: desk.findings(), text: text.trim().to_string(), range: range.description(), agent: id, tokens })
+    // The card's last line says what was read and what came of it, rounds
+    // included — the reader should not have to open the result to know.
+    let findings = desk.findings();
+    let verdict = match findings.len() {
+        0 => "no findings".to_string(),
+        1 => "1 finding".to_string(),
+        n => format!("{n} findings"),
+    };
+    let mut line = format!("{} — {verdict}", range.description());
+    if ran_out {
+        line.push_str(" — ran out of rounds before it finished");
+    }
+    progress(CommandEvent { stream: crate::domain::command_exec::OutputStream::Stdout, chunk: format!("{line}\n") });
+    text.map(|text| ToolResult::Reviewed { findings, text: text.trim().to_string(), range: range.description(), agent: id, tokens })
         .map_err(crate::domain::tools::ToolError::Command)
 }
 
@@ -6399,6 +6421,36 @@ mod tests {
         one.mode = ConversationMode::Review;
         one.run(|turn| stream(turn, vec![LlmMessage::user("review")], vec![])).expect("turn");
         assert!(wrap_ups(&one).is_empty(), "102 of 250 is not yet");
+    }
+
+    /// The review card's output carries the whole story: the reviewer's
+    /// steps, the budget note when one was given, and a closing line saying
+    /// what was read and what came of it — no chat notice needed.
+    #[test]
+    fn the_review_card_output_tells_what_it_read_and_spent() {
+        let heavy = |n: u32| asks((0..34).map(|i| wants(&format!("g{n}-{i}"), "grep", &format!(r#"{{"pattern":"p{n}x{i}"}}"#))).collect());
+        let mut h = harness(
+            "card-wrap-up",
+            vec![asks(vec![wants("r1", "review", "{}")]), found("f1"), heavy(1), heavy(2), text("One real problem."), text("Will fix it.")],
+        );
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 250, parallel: 3 };
+        h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+
+        let chunks: Vec<String> = h
+            .events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                ChatEventPayload::CommandOutput { id, chunk, .. } if id == "r1" => Some(chunk),
+                _ => None,
+            })
+            .collect();
+        let output = chunks.join("");
+        assert!(output.contains("reportFinding a.rs\n"), "the reviewer's steps are the card's lines: {output}");
+        assert!(output.contains("[Review budget] This review has used 82% of its budget"), "the budget note is a line of the card: {output}");
+        assert!(output.contains("· HEAD → working tree · 1 file reviewed — 1 finding"), "and a closing line says what was read: {output}");
+        assert!(!output.contains("ran out of rounds"), "the review finished inside its budget: {output}");
     }
 
     // -------------------------------------------------------------- explore

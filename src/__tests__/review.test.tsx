@@ -93,18 +93,16 @@ describe("the finding card", () => {
 });
 
 describe("the review in the transcript", () => {
-  test("a review asked to wrap up says so, with what it had spent", () => {
+  test("a review asked to wrap up says so on its card, not as a chat notice", () => {
     const state = acceptEvent(appendUserMessage(emptyTurn(), "/review", 1000), {
       turnId: "t",
       seq: 1,
       round: 11,
       type: "wrapUpReminded",
-      payload: { rounds: 10, tokens: 312_400 },
+      payload: { rounds: 10, tokens: 312_400, text: "[Review budget] This review has used 80% of its budget (10 of 60 rounds)" },
     });
-    expect(state.blocks[state.blocks.length - 1]).toMatchObject({
-      kind: "notice",
-      text: "The review had spent 10 rounds and ~312k tokens — the agent was asked to wrap up",
-    });
+    expect(state.blocks).toHaveLength(1);
+    expect(state.blocks[0]).toMatchObject({ kind: "user", text: "/review" });
   });
 });
 
