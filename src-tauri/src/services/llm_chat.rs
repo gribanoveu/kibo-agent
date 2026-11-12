@@ -1086,6 +1086,7 @@ fn execute_call(
             Place::Folder { worktree_base, .. } => worktree_base,
             Place::Chat { .. } => None,
         },
+        chat_head: turn.chat_head,
         waiting: match turn.place {
             Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),
             Place::Chat { .. } => Vec::new(),
@@ -1601,7 +1602,15 @@ fn run_review_tool(
         .map_err(|e| crate::domain::tools::ToolError::Git(e.to_string()))?;
     let (kept, excluded) = crate::domain::review::select(files);
     if kept.is_empty() {
-        return Err(crate::domain::tools::ToolError::Command(crate::domain::review::nothing_to_review(excluded.len())));
+        // An empty answer to a range the caller named is a different refusal
+        // from "the tree is clean": the ends met, and only the caller can
+        // widen them.
+        let why = if args.from.is_some() || args.to.is_some() {
+            crate::domain::review::empty_range()
+        } else {
+            crate::domain::review::nothing_to_review(excluded.len())
+        };
+        return Err(crate::domain::tools::ToolError::Command(why));
     }
     let range = crate::domain::review::ReviewRange {
         root: scope.root().display().to_string(),
@@ -6489,6 +6498,33 @@ mod tests {
         (brief, Arc::new(crate::domain::review::ReviewDesk::new(kept)), range)
     }
 
+    /// A range the caller named with nothing between its ends is told apart
+    /// from a clean tree: the ends met, and only the caller can widen them.
+    #[test]
+    fn a_named_empty_range_says_so() {
+        let h = harness("tool-review-empty-range", vec![]);
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "one\n").unwrap();
+        let repo = git2::Repository::open(&h.root).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.rs")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "first", &tree, &[]).unwrap();
+        let err = h.run(|turn| {
+            let progress = command_output_sink(turn.events, 0, "r1");
+            run_review_tool(
+                turn,
+                &crate::domain::tools::ReviewArgs { from: Some("HEAD".into()), to: Some("HEAD".into()), focus: None },
+                &progress,
+            )
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("the range is empty — its ends match"), "{err}");
+        assert!(!err.to_string().contains("working tree matches HEAD"), "{err}");
+    }
+
     /// Stopped mid-run, a review still reports what it had marked: the
     /// findings are the result, the result says why there is no closing
     /// answer, and the card's line says it was cut short. The cancel lands
@@ -6830,7 +6866,7 @@ mod tests {
             // No helper ran: no request carries the reviewer's brief, which
             // always opens with the same line.
             let has_brief = |request: &crate::domain::llm::ChatRequest| {
-                request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Review the uncommitted changes of this repository")))
+                request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Review the change in this repository")))
             };
             assert!(!h.provider.requests().iter().any(has_brief), "{label}: no helper request");
         }
@@ -6843,7 +6879,7 @@ mod tests {
         let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
         assert_eq!(done.result.text, "Reported.");
         let has_brief = |request: &crate::domain::llm::ChatRequest| {
-            request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Review the uncommitted changes of this repository")))
+            request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Review the change in this repository")))
         };
         assert!(h.provider.requests().iter().any(has_brief), "the analyst's review helper ran");
     }

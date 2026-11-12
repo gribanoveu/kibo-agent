@@ -1273,6 +1273,11 @@ pub struct ToolDeps<'a> {
     pub parallel: Option<&'a dyn Fn() -> Vec<String>>,
     /// The base recorded when this chat moved to its worktree.
     pub worktree_base: Option<&'a str>,
+    /// The commit `HEAD` pointed at when this chat was first saved — what a
+    /// review counts as this chat's work. `None` for a chat without the
+    /// marker; the offer of a review reads it so the button and the tool
+    /// plan on the same facts.
+    pub chat_head: Option<&'a str>,
     /// Whether the chat has a plan to implement: written this turn, or in the
     /// window with something in it.
     pub has_plan: bool,

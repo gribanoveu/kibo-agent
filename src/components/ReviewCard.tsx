@@ -83,7 +83,7 @@ export function ReviewReport({
             className="review-fix"
             title="Open the subagent's run"
             data-sheet-opener
-            onClick={() => onOpenAgent({ id: review.agent, task: "Review the uncommitted changes" })}
+            onClick={() => onOpenAgent({ id: review.agent, task: "Review the change in this repository" })}
           >
             <Bot size={12} />
             Subagent

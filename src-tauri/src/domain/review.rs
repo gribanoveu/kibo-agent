@@ -207,6 +207,12 @@ pub fn nothing_to_review(excluded: usize) -> String {
     }
 }
 
+/// A range the caller named turned out empty — its ends meet, so there is
+/// nothing between them to read.
+pub fn empty_range() -> String {
+    "nothing to review: the range is empty — its ends match. Name a wider range (HEAD~1, HEAD~3, …) or other commits".to_string()
+}
+
 /// What `plan` needs to know about the repository, read by the caller from
 /// git: the rule table itself stays pure. Every `Option` is pre-digested —
 /// `upstream` only when `HEAD` is strictly ahead of it, `marker` only when it
@@ -323,7 +329,10 @@ pub const FOCUS_CHARS: usize = 200;
 /// is one that fits: nothing the user typed is in a review's conversation
 /// to say it for them.
 pub fn review_message(files: &[FileDiff], range: &ReviewRange, language: Option<&str>, focus: Option<&str>) -> String {
-    let mut out = format!("Review the uncommitted changes of this repository — the working tree against HEAD.\nRange: {}.\n", range.description());
+    // The first line names the kind of work, true for every range the plan
+    // can pick — what exactly is read is the Range line's job, and the
+    // window finds the helper's run by this line's prefix.
+    let mut out = format!("Review the change in this repository.\nRange: {}.\n", range.description());
     match focus.map(str::trim) {
         Some(focus) if !focus.is_empty() && focus.chars().count() <= FOCUS_CHARS => {
             out.push_str(&format!("The one asking for this review asks to pay particular attention to: {focus}.\n"));
@@ -640,7 +649,7 @@ mod tests {
         let big = sized("src/big.rs", MESSAGE_DIFF_CHARS);
         let range = review_range(2, vec![Excluded { path: ".env".into(), reason: Exclusion::Secret }]);
         let text = review_message(&[renamed, big], &range, None, None);
-        assert!(text.starts_with("Review the uncommitted changes of this repository — the working tree against HEAD.\nRange: /tmp/review-worktree · HEAD → working tree · 2 files reviewed · 1 left out (may hold secrets — do not read it).\n\n"), "{text}");
+        assert!(text.starts_with("Review the change in this repository.\nRange: /tmp/review-worktree · HEAD → working tree · 2 files reviewed · 1 left out (may hold secrets — do not read it).\n\n"), "{text}");
         assert!(text.contains("<changes>\n=== src/new.rs (renamed from src/old.rs) ===\n@@ -1 +1 @@\n-a\n+b\n</changes>"), "{text}");
         assert!(text.contains("diff not included for its size — read it with gitDiff or readFile where it matters:\nsrc/big.rs\n"), "{text}");
         assert!(text.contains("Left out of the review:\n.env — may hold secrets — do not read it\n"), "{text}");
