@@ -401,7 +401,7 @@ mod tests {
             // The range is the caller's own words; the report is the review's.
             ToolName::Review => (
                 Some(ToolCall::Review(ReviewArgs { from: Some("main".into()), to: None, focus: None })),
-                ToolResult::Reviewed { findings: vec![], text: LEAK.into(), range: "main → working tree".into(), agent: 1, tokens: Default::default(), handed: false },
+                ToolResult::Reviewed { findings: vec![], text: LEAK.into(), range: "main → working tree".into(), agent: 1, tokens: Default::default() },
             ),
             ToolName::Skill => (
                 Some(ToolCall::Skill(SkillArgs { name: "release".into(), path: None })),

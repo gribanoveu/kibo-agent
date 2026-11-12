@@ -1919,15 +1919,14 @@ pub enum ToolResult {
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
     },
-    /// A review run as a helper over the uncommitted change: what it kept,
-    /// and its closing answer. `handed` when the findings went on to the
-    /// agent to go through, rather than to the user.
+    /// A review run as a helper over a change: what it kept and its closing
+    /// answer. The findings always come back in the conversation; what is
+    /// done about them is the calling turn's or the user's next message.
     Reviewed {
         findings: Vec<crate::domain::review::Finding>,
         text: String,
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
-        handed: bool,
         /// Folder, refs and file selection; empty in results saved before R-0.
         #[serde(default)]
         range: String,

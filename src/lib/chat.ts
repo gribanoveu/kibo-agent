@@ -408,26 +408,6 @@ export async function previewCalls(chatId: string, calls: PendingToolCall[]): Pr
   return invoke<ToolPreview[]>("chat_preview", { chatId, calls });
 }
 
-// ---------------------------------------------------------------- review
-
-/**
- * `/review`: the working tree against HEAD, read by a subagent with a context
- * of its own; its report is a card, and the outcome's history carries it.
- * `handed`: the findings go on to the agent in the same turn, to fix or
- * dismiss. Otherwise it is `startChat`.
- */
-export async function reviewStart(
-  turnId: string,
-  chatId: string,
-  messages: LlmMessage[],
-  todos: Task[] = [],
-  plan: string | null = null,
-  handed = false,
-): Promise<Outcome> {
-  requireBackend();
-  return invoke<Outcome>("review_start", { turnId, chatId, messages, todos, plan, handed });
-}
-
 // ---------------------------------------------------------------- rewind
 
 /** Mirrors `domain::rewind::FileState`: a file's content at one moment, by hash. */

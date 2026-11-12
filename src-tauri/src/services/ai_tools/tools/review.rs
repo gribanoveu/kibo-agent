@@ -52,7 +52,6 @@ mod tests {
             range: range.to_string(),
             agent: 1,
             tokens: Default::default(),
-            handed: false,
         }
     }
 
