@@ -250,6 +250,14 @@ describe("the chat list", () => {
       expect(launch?.textContent).toContain("Empty");
     });
 
+    /// Alive folders below make a "No chats yet." above them a contradiction
+    /// — their Empty lines are the state.
+    test("no chats and live folders: no contradictory empty line", () => {
+      sidebar({}, "dark", {}, [], groupList);
+      expect(screen.queryByText("No chats yet.")).toBeNull();
+      expect(screen.getByText("release")).toBeTruthy();
+    });
+
     /// Folders are the working view: All and Archived stay plain lists.
     test("has no folders outside Active: a foldered chat is a row of its day", () => {
       sidebar({}, "dark", {}, rows(), groupList);

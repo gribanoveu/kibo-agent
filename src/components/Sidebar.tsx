@@ -380,7 +380,9 @@ export function Sidebar({
             </div>
           </div>
         )}
-        {listed.length === 0 && (
+        {/* With folders alive below, their Empty lines are the state — a
+            "No chats yet." above them contradicts what is on screen. */}
+        {listed.length === 0 && !(chats.length === 0 && groups.length > 0) && (
           <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
         )}
         {pinnedRows.length > 0 && (
