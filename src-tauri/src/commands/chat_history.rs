@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::State;
 
-use crate::domain::chat_record::{ChatRecord, ChatSummary};
+use crate::domain::chat_record::{ChatGroup, ChatRecord, ChatSummary, NO_FOLDER};
 use crate::domain::llm::LlmMessage;
 use crate::domain::tools::Task;
 use crate::infra::chat_store;
@@ -126,6 +126,65 @@ pub async fn chat_export(id: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn chat_set_archived(id: String, archived: bool) -> Result<(), String> {
     blocking(move || chat_store::set_archived(&id, archived)).await
+}
+
+#[tauri::command]
+pub async fn chat_set_pinned(id: String, pinned: bool) -> Result<(), String> {
+    blocking(move || chat_store::set_pinned(&id, pinned)).await
+}
+
+/// Which workspace a folder command works on: `None` is Chat mode's shared
+/// set, filed under no folder; `Some` is the open folder — and the open
+/// folder is read from the state, not taken from the window on faith.
+fn group_workspace(state: &AgentState, workspace: &Option<String>) -> Option<String> {
+    match workspace {
+        None => Some(NO_FOLDER.to_string()),
+        Some(_) => state.workspace().ok().map(|root| root.display().to_string()),
+    }
+}
+
+/// The chat folders of a list, in the user's order. No folder open and Chat
+/// mode was not asked for: an empty list, as `chat_list` has it.
+#[tauri::command]
+pub async fn chat_group_list(state: State<'_, Arc<AgentState>>, workspace: Option<String>) -> Result<Vec<ChatGroup>, String> {
+    let Some(workspace) = group_workspace(&state, &workspace) else {
+        return Ok(Vec::new());
+    };
+    blocking(move || chat_store::groups(&workspace)).await
+}
+
+#[tauri::command]
+pub async fn chat_group_create(
+    state: State<'_, Arc<AgentState>>,
+    workspace: Option<String>,
+    name: String,
+) -> Result<ChatGroup, String> {
+    let workspace = group_workspace(&state, &workspace).ok_or_else(|| "no folder is open".to_string())?;
+    blocking(move || chat_store::create_group(&workspace, &name)).await
+}
+
+#[tauri::command]
+pub async fn chat_group_rename(
+    state: State<'_, Arc<AgentState>>,
+    workspace: Option<String>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    let workspace = group_workspace(&state, &workspace).ok_or_else(|| "no folder is open".to_string())?;
+    blocking(move || chat_store::rename_group(&workspace, &id, &name)).await
+}
+
+/// Removing the folder files its chats under no folder — the chats stay.
+#[tauri::command]
+pub async fn chat_group_delete(state: State<'_, Arc<AgentState>>, workspace: Option<String>, id: String) -> Result<(), String> {
+    let workspace = group_workspace(&state, &workspace).ok_or_else(|| "no folder is open".to_string())?;
+    blocking(move || chat_store::delete_group(&workspace, &id)).await
+}
+
+/// Moves a chat into a folder, or out to no folder with `None`.
+#[tauri::command]
+pub async fn chat_set_group(id: String, group: Option<String>) -> Result<(), String> {
+    blocking(move || chat_store::set_group(&id, group.as_deref())).await
 }
 
 #[tauri::command]
