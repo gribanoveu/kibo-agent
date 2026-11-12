@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-11 Kafka: an edited connection asks the cluster again, a refresh asks the broker once, and a failed save says why where you pressed Save
 - 2026-11-11 See a Kafka cluster's consumer groups with their lag, partition by partition, and what a group has not committed
 - 2026-11-11 Follow a Kafka topic live: the messages that arrive land in the table as they happen, without a consumer group
 - 2026-11-11 Refresh a Kafka cluster's topic list by hand, so a topic made a moment ago appears now instead of at the end of the cache's two minutes
