@@ -336,8 +336,37 @@ describe("the chat list", () => {
       expect(screen.getByRole("dialog")).toBeTruthy();
     });
 
-    test("a folder is renamed and deleted from its own menu", async () => {
-      const renamed: [string, string][] = [];
+    /// A chat pointing at a folder the window does not know — deleted
+    /// mid-move, folders list staler than the chats — is never lost: it
+    /// falls into the days rather than vanish from the working view.
+    test("a chat whose folder is unknown falls into the days", () => {
+      sidebar({}, "dark", {}, [{ id: "x", title: "orphan", updatedAt: 2, archived: false, group: "gone" }], groupList);
+      const under = (heading: string) => screen.queryByText(heading)?.closest("section")?.textContent ?? "";
+      expect(under("Earlier")).toContain("orphan");
+      expect(under("release")).not.toContain("orphan");
+    });
+
+    /// Searching hides a folder with nothing matching, as it does a day —
+    /// an "Empty" that means "didn't match" reads as a lost folder.
+    test("searching hides a folder with no matches instead of calling it Empty", () => {
+      sidebar({}, "dark", {}, rows(), groupList);
+      fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), { target: { value: "loose" } });
+      expect(screen.queryByText("launch")).toBeNull();
+      expect(screen.getByText("loose")).toBeTruthy();
+    });
+
+    /// Pinning an archived chat changes a state no list shows until it is
+    /// back from the archive — the row's menu keeps to what works there.
+    test("an archived row offers no Pin", () => {
+      sidebar({}, "dark", {}, rows(), groupList);
+      pickFilter("Archived");
+      const row = screen.getByText("filed away").closest(".chat-row") as HTMLElement;
+      fireEvent.click(within(row).getByTitle("More"));
+      expect(within(row).queryByRole("menuitem", { name: "Pin" })).toBeNull();
+      expect(within(row).getByRole("menuitem", { name: "Unarchive" })).toBeTruthy();
+    });
+
+    test("a folder is renamed and deleted from its own menu", async () => {      const renamed: [string, string][] = [];
       const deleted: string[] = [];
       sidebar(
         {

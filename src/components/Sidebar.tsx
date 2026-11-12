@@ -166,10 +166,14 @@ export function Sidebar({
   );
   // Pinned first, then the folders, then the days — and a row shown twice
   // reads as two chats, so each of the three takes a chat out of the rest.
-  // Folders are the working view: only the active filter draws them.
+  // Folders are the working view: only the active filter draws them. A chat
+  // whose folder is not among the known ones (a folder deleted mid-move, a
+  // list fresher than the folders) is never lost: it falls into the days.
+  const groupIds = new Set(groups.map((group) => group.id));
   const pinnedRows = filter === "active" ? listed.filter((chat) => chat.pinned) : [];
-  const folderRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group != null) : [];
-  const dayRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group == null) : listed;
+  const folderRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group != null && groupIds.has(chat.group)) : [];
+  const dayRows =
+    filter === "active" ? listed.filter((chat) => !chat.pinned && (chat.group == null || !groupIds.has(chat.group))) : listed;
   const userWrap = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -224,19 +228,25 @@ export function Sidebar({
             icon: <FolderInput size={14} />,
             onSelect: () => setMoving(chat),
           },
-          chat.pinned
-            ? {
-                id: "unpin",
-                label: "Unpin",
-                icon: <PinOff size={14} />,
-                onSelect: () => onPinChat(chat.id, false),
-              }
-            : {
-                id: "pin",
-                label: "Pin",
-                icon: <Pin size={14} />,
-                onSelect: () => onPinChat(chat.id, true),
-              },
+          // Pin is the working view's action; on an archived row it would
+          // change a state no list shows until the chat is back.
+          ...(!chat.archived
+            ? [
+                chat.pinned
+                  ? {
+                      id: "unpin",
+                      label: "Unpin",
+                      icon: <PinOff size={14} />,
+                      onSelect: () => onPinChat(chat.id, false),
+                    }
+                  : {
+                      id: "pin",
+                      label: "Pin",
+                      icon: <Pin size={14} />,
+                      onSelect: () => onPinChat(chat.id, true),
+                    },
+              ]
+            : []),
           chat.archived
             ? {
                 id: "unarchive",
@@ -266,7 +276,7 @@ export function Sidebar({
     setCollapsed((shut) => (shut.includes(id) ? shut.filter((one) => one !== id) : [...shut, id]));
 
   const saveName = async () => {
-    if (!naming) return;
+    if (!naming?.name.trim()) return;
     let error: string | undefined;
     let id: string | undefined;
     if (naming.group) {
@@ -382,6 +392,9 @@ export function Sidebar({
         {filter === "active" &&
           groups.map((group) => {
             const rows = folderRows.filter((chat) => chat.group === group.id);
+            // Searching, a folder with nothing matching is noise — the days
+            // disappear whole the same way; "Empty" is for a folder at rest.
+            if (wanted && rows.length === 0) return null;
             const shut = collapsed.includes(group.id);
             return (
               <section key={group.id}>
@@ -417,7 +430,7 @@ export function Sidebar({
                     ]}
                   />
                 </div>
-                {!shut && (rows.length > 0 ? rows.map(chatRow) : <div className="chat-folder-empty">Empty</div>)}
+                {!shut && (rows.length > 0 ? rows.map(chatRow) : !wanted && <div className="chat-folder-empty">Empty</div>)}
               </section>
             );
           })}

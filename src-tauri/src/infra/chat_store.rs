@@ -563,8 +563,11 @@ pub fn delete_group(workspace: &str, id: &str) -> Result<(), ChatError> {
 
 /// Moves a chat into a folder of its own workspace, or out to no folder with
 /// `None`. The folder has to belong to the same workspace: a chat about one
-/// project never lands in another's list.
+/// project never lands in another's list. The write lock is taken because the
+/// check and the write are two statements: without it, a folder deleted in
+/// between would leave the chat pointing at a group that is gone.
 pub fn set_group(id: &str, group: Option<&str>) -> Result<(), ChatError> {
+    let _write = write_lock();
     chat_record::check_id(id)?;
     let conn = open()?;
     let workspace: Option<String> = conn

@@ -268,6 +268,12 @@
 .chat .chat-activity {
   color: var(--text-faint);
 }
+/* The pin is a filing mark like the archive icon, standing at the row's
+   right edge — the title flexes, the pin stays put. */
+.chat .chat-pin {
+  margin-left: auto;
+  color: var(--text-faint);
+}
 .chat .chat-activity-running {
   color: var(--accent);
   animation: chat-activity-spin 0.9s linear infinite;
