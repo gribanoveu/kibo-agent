@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::domain::kafka::{Connection, ConnectionView, LiveBatch, LiveSpec, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList};
+use crate::domain::kafka::{Connection, ConnectionView, GroupView, LiveBatch, LiveSpec, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList};
 use crate::infra::kafka_client::KafkaClients;
 use crate::services::kafka;
 use crate::services::kafka::KafkaLive;
@@ -57,6 +57,13 @@ pub async fn kafka_topics(connection: String, name: Option<String>, page: Option
 
 /// A page of a topic's messages — `spec` names the partitions, the offset and
 /// how many; its ceilings are the domain's.
+/// The cluster's consumer groups: state, members and lag per partition.
+#[tauri::command]
+pub async fn kafka_groups(connection: String, clients: Clients<'_>) -> Result<Vec<GroupView>, String> {
+    let clients = clients.inner().clone();
+    blocking(move || kafka::groups(&clients, &connection)).await
+}
+
 #[tauri::command]
 pub async fn kafka_messages(connection: String, spec: ReadSpec, clients: Clients<'_>) -> Result<ReadPage, String> {
     let clients = clients.inner().clone();

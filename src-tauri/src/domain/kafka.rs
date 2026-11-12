@@ -465,6 +465,32 @@ pub struct LagView {
     pub active: bool,
 }
 
+/// A consumer group as one answer carries it: its state, how many members hold
+/// it, and the lag of every partition it committed on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupView {
+    pub name: String,
+    /// `Stable`, `Empty`, `PreparingRebalance`, … as the broker words it.
+    pub state: String,
+    pub members: usize,
+    pub lags: Vec<LagView>,
+    /// The lag over the partitions that have one; `None` when none does — a
+    /// group that never committed has no lag to speak of, and a zero here would
+    /// read as "caught up".
+    pub total_lag: Option<i64>,
+}
+
+impl GroupView {
+    pub fn new(name: String, state: String, members: usize, lags: Vec<LagView>) -> Self {
+        let total_lag = match lags.iter().filter_map(|lag| lag.lag) {
+            total if total.clone().next().is_none() => None,
+            total => Some(total.sum()),
+        };
+        Self { name, state, members, lags, total_lag }
+    }
+}
+
 impl LagView {
     pub fn new(group: &str, topic: &str, partition: i32, committed: Option<i64>, latest: i64, active: bool) -> Self {
         Self {
@@ -1450,6 +1476,26 @@ mod tests {
         assert_eq!(quota(20, 20), 1);
         assert_eq!(quota(20, 0), 20, "no partition named means no one to share with");
         assert_eq!(quota(1, 20), 1, "never zero: a read asks for at least one message");
+    }
+
+    #[test]
+    fn a_group_without_a_commit_has_no_lag_rather_than_none_at_all() {
+        let never = GroupView::new("g".into(), "Empty".into(), 0, vec![LagView::new("g", "t", 0, None, 500, false)]);
+        assert_eq!(never.total_lag, None, "no commit is no data, not caught up");
+
+        let some = GroupView::new(
+            "g".into(),
+            "Stable".into(),
+            2,
+            vec![
+                LagView::new("g", "t", 0, Some(90), 100, true),
+                LagView::new("g", "t", 1, Some(30), 100, true),
+                LagView::new("g", "t", 2, Some(900), 100, true),
+            ],
+        );
+        assert_eq!(some.total_lag, Some(10 + 70), "a commit past the end is no negative lag");
+        assert_eq!(some.lags[2].lag, Some(0));
+        assert_eq!(some.members, 2);
     }
 
     #[test]

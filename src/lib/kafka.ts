@@ -127,6 +127,17 @@ export async function kafkaProduce(connection: string, spec: ProduceSpec): Promi
   return invoke<Produced>("kafka_produce", { connection, spec });
 }
 
+/** Mirrors `domain::kafka::LagView`; `committed`/`lag` are null when the group never committed here. */
+export type LagView = { group: string; topic: string; partition: number; committed: number | null; latest: number; lag: number | null; active: boolean };
+
+/** Mirrors `domain::kafka::GroupView`: a group's lag over the partitions it committed on. */
+export type GroupView = { name: string; state: string; members: number; lags: LagView[]; totalLag: number | null };
+
+/** The cluster's consumer groups, with their lag. */
+export async function kafkaGroups(connection: string): Promise<GroupView[]> {
+  return invoke<GroupView[]>("kafka_groups", { connection });
+}
+
 /** What a live read watches (mirrors `domain::kafka::LiveSpec`): from the end when `from` is null. */
 export type LiveSpec = { topic: string; partitions: number[]; from: number | null };
 

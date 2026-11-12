@@ -3,7 +3,7 @@
 //! `infra::kafka_client`; the store is `infra::kafka_store`. What is decided
 //! here is how much one answer carries and in what order.
 
-use crate::domain::kafka::{page, Connection, LiveSink, LiveSpec, ConnectionView, KafkaError, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
+use crate::domain::kafka::{page, Connection, GroupView, LiveSink, LiveSpec, ConnectionView, KafkaError, ProduceSpec, Produced, ReadPage, ReadSpec, TopicDetail, TopicList, TopicView};
 use crate::infra::kafka_client::{self, KafkaClients};
 use crate::infra::kafka_store;
 
@@ -136,6 +136,12 @@ impl KafkaLive {
     fn flag(&self, id: &str) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
         self.running.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(id).cloned()
     }
+}
+
+/// The cluster's consumer groups, with their lag.
+pub fn groups(clients: &KafkaClients, id: &str) -> Result<Vec<GroupView>, KafkaError> {
+    let connection = kafka_store::get(id)?;
+    kafka_client::groups(clients, &connection)
 }
 
 /// A live read started from the window: the connection is read here, so the
