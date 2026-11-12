@@ -6820,9 +6820,11 @@ mod tests {
         let brief = helper.messages.last().and_then(|m| m.content.as_deref()).unwrap_or_default();
         assert!(brief.contains("=== a.rs") && brief.contains("let x = y / 0;"), "{brief}");
         assert!(brief.contains("pay particular attention to: the division"), "the focus is one line of the brief: {brief}");
-        // The scope's own spelling: canonicalize() differs between platforms
-        // (a \\?\ UNC prefix on Windows), and the brief carries the scope's.
-        assert!(brief.contains(&format!("Range: {} · HEAD → working tree · 1 file reviewed", h.scope.root().display())), "{brief}");
+        // As the scope has it, canonical: on Windows a temp folder's short
+        // name (`RUNNER~1`) is not part of its long one, and a bare
+        // `canonicalize()` carries a `\\?\` prefix the scope's root does not.
+        let root = crate::infra::paths::canonicalize_plain(&h.root).unwrap();
+        assert!(brief.contains(&format!("Range: {} · HEAD → working tree · 1 file reviewed", root.display())), "{brief}");
         // The findings are the result; the turn answers after them.
         let reported: Vec<String> = done.history.iter().filter(|m| m.role == LlmRole::Tool).map(|m| m.content.clone().unwrap_or_default()).collect();
         assert!(reported.iter().any(|text| text.contains("[high] a.rs:1") && text.contains("One real problem.")), "{reported:?}");
