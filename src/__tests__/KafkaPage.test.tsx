@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { useKafkaTopic } from "../hooks/useKafkaTopic";
 import { KafkaPage } from "../components/KafkaPage";
 
 // What the page sends is what the sealed store reads: camelCase keys — a
@@ -450,14 +451,18 @@ describe("the Kafka page", () => {
   });
 
   test("a long live read keeps the newest, not the first", async () => {
-    render(<KafkaPage />);
-    fireEvent.click(await screen.findByText("orders"));
-    fireEvent.click(await screen.findByRole("tab", { name: /Messages/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Live" }));
+    // The rule is the hook's, so the hook is asked: drawing five hundred rows to
+    // find out what it kept is what made this test crawl.
+    const topic = { name: "orders", partitions: [{ partition: 0 }], replicas: 1, isr: 1 } as never;
+    const { result } = renderHook(() => useKafkaTopic({ connection: "c1", topic }));
+    await waitFor(() => expect(sent("kafka_messages")).toHaveLength(1));
+
+    act(() => {
+      void result.current.toggleLive();
+    });
     await waitFor(() => expect(liveChannels).toHaveLength(1));
 
-    // Three ticks of 250: more than the window keeps, so what fell off the top
-    // is what a reader must not see.
+    // Two ticks of three hundred: more than the window keeps.
     for (const base of [0, 300]) {
       act(() =>
         liveChannels[0].onmessage?.({
@@ -476,11 +481,9 @@ describe("the Kafka page", () => {
       );
     }
 
-    // The window keeps the newest: what a tick pushed out is gone, and the last
-    // one is on screen.
-    expect(screen.queryByLabelText("Message 0/0")).toBeNull();
-    expect(screen.getByLabelText("Message 0/599")).toBeTruthy();
-
+    const kept = result.current.page?.messages ?? [];
+    expect(kept.some((message) => message.offset === 0)).toBe(false);
+    expect(kept[kept.length - 1].offset).toBe(599);
   });
 
   test("a broker that answers nothing is an error, not an empty cluster", async () => {
