@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { AgentSheet } from "./components/AgentSheet";
+import { PlanSheet } from "./components/PlanSheet";
 import { Composer } from "./components/Composer";
 import { ProviderBalance } from "./components/ProviderBalance";
 import { PlainChat } from "./components/PlainChat";
@@ -233,7 +234,12 @@ export default function App() {
   // The terminal is not in the column: it opens under the message box, as wide
   // as the chat, so it needs no width of the window's own.
   const bottomShown = agentMode ? bottomTab : null;
-  const dockShown = !topHidden;
+  // The plan is read in a sheet over the chat (PlanSheet, in the chat below)
+  // rather than in the column: it asks the window for none of the width the
+  // column needs, so it opens wherever it fits, a narrow window included.
+  const planSheet = agentMode && !onPage && !asideHidden && tab === "plan";
+  // The column, and its handle: away while the plan's sheet has the corner.
+  const dockShown = !topHidden && !planSheet;
   const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame, ide })}px)`);
   const rail = collapsed || !sidebarFits;
   // On screen in either dock: what decides whether a pane's data is read.
@@ -300,7 +306,9 @@ export default function App() {
   });
 
   // Where each pane goes is `lib/docks.ts`'s rule; this only stores the answer.
-  const docks: Docks = { top: tab, topHidden, bottom: bottomShown, swap: ide };
+  // The plan's sheet asks for no room, so a narrow window is no reason for its
+  // key to think it is away: what the key toggles is the user's wish.
+  const docks: Docks = { top: tab, topHidden: planSheet ? false : topHidden, bottom: bottomShown, swap: ide };
   const putDocks = (next: Docks) => {
     setTab(next.top);
     setAsideHidden(next.topHidden);
@@ -308,8 +316,9 @@ export default function App() {
   };
   const setDocks = (next: Docks) => {
     // A pane asked for where the viewer leaves the column no room: the viewer
-    // gives way, or the pane would open out of sight.
-    if (!dockFits && !next.topHidden) viewer.closeAll();
+    // gives way, or the pane would open out of sight. The plan opens in a sheet
+    // over the chat, so it asks for none of that room.
+    if (!dockFits && !next.topHidden && next.top !== "plan") viewer.closeAll();
     putDocks(next);
   };
   // The tree is what the layout is for: it opens with it, in the dock now on the
@@ -744,6 +753,7 @@ export default function App() {
           {agentShown && agentShown.chatId === agent.chatId && (
             <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} onOpenFile={workspace.path ? openFileLink : undefined} />
           )}
+          {planSheet && <PlanSheet plan={panes.plan} onClose={() => setAsideHidden(true)} />}
         </>
       ) : (
         <PlainChat
@@ -842,7 +852,7 @@ export default function App() {
 
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${dockShown ? "" : " aside-hidden"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
@@ -946,7 +956,7 @@ export default function App() {
           }
           viewer={fileViewer}
           top={topPane}
-          topShown={!topHidden}
+          topShown={dockShown}
           panels={panels}
         />
       </div>
