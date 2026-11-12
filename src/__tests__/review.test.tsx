@@ -109,6 +109,7 @@ describe("the review in the transcript", () => {
 });
 
 describe("a review a subagent ran", () => {
+  const range = "/repo/.claude/worktrees/review-task · HEAD → working tree · 1 file reviewed · 1 left out (documentation)";
   const card = (handed: boolean): Block => ({
     kind: "tool",
     id: "review",
@@ -125,25 +126,28 @@ describe("a review a subagent ran", () => {
       agent: 4,
       tokens: { prompt: 0, cached: 0, completion: 0 },
       handed,
+      range,
     },
     output: "",
   });
 
-  test("its report: the findings, what the reviewer said, whose they are", () => {
+  test("its report: the findings, what the reviewer said, whose they are and what it compared", () => {
     expect(reviewOf(card(false))).toEqual({
       findings: [{ path: "src/pay.rs", startLine: 11, endLine: 11, severity: "high", category: "bug", title: "Divides by zero", body: "Panics.", suggestion: undefined } as Finding],
       summary: "One real problem.",
       agent: 4,
       handed: false,
+      range,
     });
     expect(reviewOf({ ...(card(false) as Tool), status: "failed", result: undefined, error: "nothing to review" })).toBeNull();
     expect(reviewOf(call())).toBeNull();
   });
 
   /// The report is what the work was for: it stands in the turn, not folded into the line of work.
-  test("stands on its own in the transcript", () => {
+  test("stands on its own in the transcript and names the worktree it read", () => {
     render(<Transcript turn={{ ...emptyTurn(), status: "done", blocks: [{ kind: "user", id: "u", text: "/review" }, card(false)] }} onDecide={() => {}} />);
     expect(screen.getByText("Divides by zero")).toBeTruthy();
+    expect(screen.getByText(range)).toBeTruthy();
   });
 
   /// A review that failed is still the turn's one piece of work: its row stands alone, not folded away.

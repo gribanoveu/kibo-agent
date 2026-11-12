@@ -130,7 +130,7 @@ pub fn for_model(result: &ToolResult) -> String {
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
-        ToolResult::Reviewed { findings, text, .. } => reviewed(findings, text),
+        ToolResult::Reviewed { findings, text, range, .. } => reviewed(findings, text, range),
         ToolResult::Kube { text, .. } | ToolResult::Mongo { text, .. } => text.clone(),
         ToolResult::WebResults { hits } => web_results(hits),
         ToolResult::WebPage { page } => web_page(page),
@@ -643,14 +643,15 @@ fn skill(name: &str, instructions: &str, files: &[String], from: &str) -> String
     out
 }
 
-/// A review's report as the conversation keeps it: each finding where it
-/// is, then what the reviewer said.
-fn reviewed(findings: &[crate::domain::review::Finding], answer: &str) -> String {
-    let mut out = match findings.len() {
+/// A review's report as the conversation keeps it: what it read, each finding
+/// where it is, then what the reviewer said.
+fn reviewed(findings: &[crate::domain::review::Finding], answer: &str, range: &str) -> String {
+    let mut out = if range.is_empty() { String::new() } else { format!("Reviewed {range}.\n") };
+    out.push_str(&match findings.len() {
         0 => "The review reported no findings.\n".to_string(),
         1 => "The review reported 1 finding:\n".to_string(),
         n => format!("The review reported {n} findings:\n"),
-    };
+    });
     for (at, f) in findings.iter().enumerate() {
         let lines = if f.start_line == f.end_line { f.start_line.to_string() } else { format!("{}-{}", f.start_line, f.end_line) };
         let severity = serde_json::to_value(f.severity).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default();

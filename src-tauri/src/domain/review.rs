@@ -87,6 +87,34 @@ pub struct Excluded {
     pub reason: Exclusion,
 }
 
+/// The exact change a review read, named for its card and opening message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewRange {
+    pub root: String,
+    pub from: String,
+    pub to: String,
+    /// Files sent to the reviewer, before any diff-size limit.
+    pub files: usize,
+    pub excluded: Vec<Excluded>,
+}
+
+impl ReviewRange {
+    pub fn description(&self) -> String {
+        let noun = if self.files == 1 { "file" } else { "files" };
+        let mut out = format!("{} · {} → {} · {} {noun} reviewed", self.root, self.from, self.to, self.files);
+        if !self.excluded.is_empty() {
+            let mut reasons = Vec::new();
+            for reason in self.excluded.iter().map(|file| file.reason.reason()) {
+                if !reasons.contains(&reason) {
+                    reasons.push(reason);
+                }
+            }
+            out.push_str(&format!(" · {} left out ({})", self.excluded.len(), reasons.join(", ")));
+        }
+        out
+    }
+}
+
 /// The files worth reviewing, and every other one with its reason.
 pub fn select(files: Vec<FileDiff>) -> (Vec<FileDiff>, Vec<Excluded>) {
     let mut kept = Vec::new();
@@ -183,8 +211,8 @@ pub fn nothing_to_review(excluded: usize) -> String {
 /// rest of the change by name, and what was left out and why — and the reply
 /// language, when the user chose one: nothing the user typed is in a review's
 /// conversation to say it for them.
-pub fn review_message(files: &[FileDiff], excluded: &[Excluded], language: Option<&str>) -> String {
-    let mut out = String::from("Review the uncommitted changes of this repository — the working tree against HEAD.\n\n<changes>\n");
+pub fn review_message(files: &[FileDiff], range: &ReviewRange, language: Option<&str>) -> String {
+    let mut out = format!("Review the uncommitted changes of this repository — the working tree against HEAD.\nRange: {}.\n\n<changes>\n", range.description());
     let mut room = MESSAGE_DIFF_CHARS;
     let mut unshown = Vec::new();
     for file in files {
@@ -208,8 +236,8 @@ pub fn review_message(files: &[FileDiff], excluded: &[Excluded], language: Optio
             unshown.join("\n")
         ));
     }
-    if !excluded.is_empty() {
-        let lines: Vec<String> = excluded.iter().map(|e| format!("{} — {}", e.path, e.reason.reason())).collect();
+    if !range.excluded.is_empty() {
+        let lines: Vec<String> = range.excluded.iter().map(|e| format!("{} — {}", e.path, e.reason.reason())).collect();
         out.push_str(&format!("\nLeft out of the review:\n{}\n", lines.join("\n")));
     }
     crate::domain::prompt::with_language_reminder(out, language)
@@ -423,6 +451,10 @@ mod tests {
         FileDiff { patch: "x".repeat(chars), ..file(path, &[(1, true, "x")]) }
     }
 
+    fn review_range(files: usize, excluded: Vec<Excluded>) -> ReviewRange {
+        ReviewRange { root: "/tmp/review-worktree".into(), from: "HEAD".into(), to: "working tree".into(), files, excluded }
+    }
+
     #[test]
     fn what_is_left_out_and_why() {
         let mut deleted = sized("src/old.rs", 0);
@@ -461,6 +493,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_review_range_names_the_checkout_change_and_what_was_left_out() {
+        let range = review_range(
+            2,
+            vec![
+                Excluded { path: ".env".into(), reason: Exclusion::Secret },
+                Excluded { path: "README.md".into(), reason: Exclusion::Documentation },
+            ],
+        );
+        assert_eq!(
+            range.description(),
+            "/tmp/review-worktree · HEAD → working tree · 2 files reviewed · 2 left out (may hold secrets — do not read it, documentation)"
+        );
+        assert_eq!(review_range(1, vec![]).description(), "/tmp/review-worktree · HEAD → working tree · 1 file reviewed");
+    }
+
     /// The agent starts from the diffs, is told what else changed, and is
     /// told what it must not read.
     #[test]
@@ -469,12 +517,13 @@ mod tests {
         renamed.status = FileStatus::Renamed { from: "src/old.rs".into() };
         renamed.patch = "@@ -1 +1 @@\n-a\n+b\n".into();
         let big = sized("src/big.rs", MESSAGE_DIFF_CHARS);
-        let excluded = [Excluded { path: ".env".into(), reason: Exclusion::Secret }];
-        let text = review_message(&[renamed, big], &excluded, None);
+        let range = review_range(2, vec![Excluded { path: ".env".into(), reason: Exclusion::Secret }]);
+        let text = review_message(&[renamed, big], &range, None);
+        assert!(text.starts_with("Review the uncommitted changes of this repository — the working tree against HEAD.\nRange: /tmp/review-worktree · HEAD → working tree · 2 files reviewed · 1 left out (may hold secrets — do not read it).\n\n"), "{text}");
         assert!(text.contains("<changes>\n=== src/new.rs (renamed from src/old.rs) ===\n@@ -1 +1 @@\n-a\n+b\n</changes>"), "{text}");
         assert!(text.contains("diff not included for its size — read it with gitDiff or readFile where it matters:\nsrc/big.rs\n"), "{text}");
         assert!(text.contains("Left out of the review:\n.env — may hold secrets — do not read it\n"), "{text}");
-        let plain = review_message(&[sized("a.rs", 10)], &[], None);
+        let plain = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None);
         assert!(!plain.contains("Also changed") && !plain.contains("Left out"), "{plain}");
         assert!(!plain.contains("[Reply in"), "{plain}");
     }
@@ -482,7 +531,7 @@ mod tests {
     /// The last thing the opening message says is the language to reply in.
     #[test]
     fn the_message_ends_with_the_chosen_reply_language() {
-        let text = review_message(&[sized("a.rs", 10)], &[], Some("Russian"));
+        let text = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), Some("Russian"));
         assert!(text.ends_with("</changes>\n\n\n[Reply in Russian.]"), "{text:?}");
     }
 
@@ -490,7 +539,7 @@ mod tests {
     /// one after it still goes in.
     #[test]
     fn the_diffs_that_fit_go_in_whatever_their_order() {
-        let text = review_message(&[sized("a.rs", MESSAGE_DIFF_CHARS - 10), sized("b.rs", 20), sized("c.rs", 5)], &[], None);
+        let text = review_message(&[sized("a.rs", MESSAGE_DIFF_CHARS - 10), sized("b.rs", 20), sized("c.rs", 5)], &review_range(3, vec![]), None);
         assert!(text.contains("=== a.rs") && text.contains("=== c.rs"), "{text}");
         assert!(!text.contains("=== b.rs") && text.contains("where it matters:\nb.rs\n"), "{text}");
     }

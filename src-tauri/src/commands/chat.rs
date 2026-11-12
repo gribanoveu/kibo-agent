@@ -908,14 +908,21 @@ pub async fn review_start<R: Runtime>(
     if kept.is_empty() {
         return Err(crate::domain::review::nothing_to_review(excluded.len()));
     }
-    let brief = crate::domain::review::review_message(&kept, &excluded, llm_session::reply_language());
+    let range = crate::domain::review::ReviewRange {
+        root: workspace.display().to_string(),
+        from: "HEAD".to_string(),
+        to: "working tree".to_string(),
+        files: kept.len(),
+        excluded,
+    };
+    let brief = crate::domain::review::review_message(&kept, &range, llm_session::reply_language());
     let desk = Arc::new(ReviewDesk::new(kept));
     let session = state.session(&chat_id);
     let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
     session.cancel.store(false, Ordering::SeqCst);
     session.begin_turn(state.mode());
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
-        llm_chat::review(turn, messages, todos, &brief, desk, handed)
+        llm_chat::review(turn, messages, todos, &brief, desk, range, handed)
     })
     .await
 }

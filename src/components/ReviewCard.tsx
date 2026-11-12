@@ -91,6 +91,7 @@ export function ReviewReport({
           </button>
         )}
       </div>
+      {review.range && <div className="review-report-range">{review.range}</div>}
       {review.summary && (
         <div className="review-report-summary">
           <Markdown text={review.summary} streaming={false} />

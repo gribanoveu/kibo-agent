@@ -1517,6 +1517,7 @@ pub fn review(
     todos: Vec<Task>,
     brief: &str,
     desk: Arc<crate::domain::review::ReviewDesk>,
+    range: crate::domain::review::ReviewRange,
     handed: bool,
 ) -> Result<ChatStreamOutcome, TurnError> {
     // As at any turn's start: a note queued after the last one is not this one's.
@@ -1528,7 +1529,7 @@ pub fn review(
     let call = LlmToolCall { id: id.clone(), name: "review".to_string(), arguments: "{}".to_string() };
     report_call(&events, 0, &call);
     let progress = command_output_sink(turn.events, 0, &id);
-    let reviewed = run_review(turn, brief, desk, handed, &progress);
+    let reviewed = run_review(turn, brief, desk, range, handed, &progress);
     match &reviewed {
         Ok(result) => report_result(&events, 0, &id, Some(result), None, Vec::new()),
         Err(e) => report_result(&events, 0, &id, None, Some(&e.to_string()), Vec::new()),
@@ -1565,6 +1566,7 @@ fn run_review(
     turn: &Turn,
     brief: &str,
     desk: Arc<crate::domain::review::ReviewDesk>,
+    range: crate::domain::review::ReviewRange,
     handed: bool,
     progress: &CommandSink,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
@@ -1584,7 +1586,7 @@ fn run_review(
     };
     agents.finish(id, state, text.as_ref().ok().cloned());
     let tokens = agents.get(id).map(|run| run.tokens).unwrap_or_default();
-    text.map(|text| ToolResult::Reviewed { findings: desk.findings(), text: text.trim().to_string(), agent: id, tokens, handed })
+    text.map(|text| ToolResult::Reviewed { findings: desk.findings(), text: text.trim().to_string(), range: range.description(), agent: id, tokens, handed })
         .map_err(crate::domain::tools::ToolError::Command)
 }
 
@@ -6550,8 +6552,8 @@ mod tests {
     }
 
     /// The change `/review` reads: `a.rs`, its line 7 added.
-    fn review_desk() -> (String, Arc<crate::domain::review::ReviewDesk>) {
-        use crate::domain::review::{FileDiff, FileStatus, NewLine, ReviewDesk};
+    fn review_desk() -> (String, Arc<crate::domain::review::ReviewDesk>, crate::domain::review::ReviewRange) {
+        use crate::domain::review::{FileDiff, FileStatus, NewLine, ReviewDesk, ReviewRange};
         let file = FileDiff {
             path: "a.rs".into(),
             status: FileStatus::Modified,
@@ -6559,8 +6561,9 @@ mod tests {
             patch: "@@ -6,0 +7 @@\n+let x = y / 0;".into(),
             lines: vec![NewLine { hunk: 0, number: 7, added: true, text: "let x = y / 0;".into() }],
         };
-        let brief = crate::domain::review::review_message(std::slice::from_ref(&file), &[], None);
-        (brief, Arc::new(ReviewDesk::new(vec![file])))
+        let range = ReviewRange { root: "/tmp/review-worktree".into(), from: "HEAD".into(), to: "working tree".into(), files: 1, excluded: vec![] };
+        let brief = crate::domain::review::review_message(std::slice::from_ref(&file), &range, None);
+        (brief, Arc::new(ReviewDesk::new(vec![file])), range)
     }
 
     fn found(id: &str) -> Step {
@@ -6581,11 +6584,11 @@ mod tests {
         h.plan = Some("# Plan\n\n1. it is safe".into());
         let agents = Arc::new(crate::domain::agents::Agents::default());
         h.agents = Some(Arc::clone(&agents));
-        let (brief, desk) = review_desk();
+        let (brief, desk, range) = review_desk();
         let todos = vec![Task { id: "1".into(), title: "make it race-free".into(), status: crate::domain::tools::TodoStatus::InProgress, note: None }];
         let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done, it is safe")];
 
-        let outcome = h.run(|turn| review(turn, chat.clone(), todos.clone(), &brief, desk, false)).expect("turn");
+        let outcome = h.run(|turn| review(turn, chat.clone(), todos.clone(), &brief, desk, range, false)).expect("turn");
 
         let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
         let requests = h.provider.requests();
@@ -6594,19 +6597,22 @@ mod tests {
             let said = |needle: &str| request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains(needle)));
             assert!(!said("write the counter") && !said("it is safe") && !said("race-free"), "nothing of the chat");
             assert!(said("This conversation: Review"));
+            assert!(said("Range: /tmp/review-worktree · HEAD → working tree · 1 file reviewed."), "{request:?}");
         }
         assert_eq!(done.history[..2], chat[..]);
         assert_eq!(done.todos, todos);
         let kept = done.history[2..].iter().map(|m| (m.role, m.content.clone().unwrap_or_default())).collect::<Vec<_>>();
         assert_eq!(kept[0], (LlmRole::User, "/review".to_string()));
         assert!(kept[1].0 == LlmRole::Assistant && kept[1].1.contains("a.rs:7 — Divides by zero") && kept[1].1.contains("One real problem."), "{kept:?}");
+        assert!(kept[1].1.starts_with("Reviewed /tmp/review-worktree · HEAD → working tree · 1 file reviewed.\n"), "{kept:?}");
 
         let card = h.events().into_iter().find_map(|e| match e.event {
             ChatEventPayload::ToolResult(r) if r.id.starts_with("review-") => r.result,
             _ => None,
         });
-        let Some(ToolResult::Reviewed { findings, text, agent, handed, .. }) = card else { panic!("expected a review card") };
+        let Some(ToolResult::Reviewed { findings, text, range, agent, handed, .. }) = card else { panic!("expected a review card") };
         assert_eq!((findings.len(), findings[0].start_line, text.as_str(), handed), (1, 7, "One real problem.", false));
+        assert_eq!(range, "/tmp/review-worktree · HEAD → working tree · 1 file reviewed");
         assert_eq!(findings[0].severity, crate::domain::review::Severity::High);
         assert!(kept[1].1.contains("[high] a.rs:7"), "{kept:?}");
         assert_eq!(agents.list()[0].id, agent);
@@ -6618,10 +6624,10 @@ mod tests {
     #[test]
     fn a_handed_review_goes_on_to_the_agent_with_its_findings() {
         let h = harness("review-handed", vec![found("f1"), text("One real problem."), text("Fixed the division.")]);
-        let (brief, desk) = review_desk();
+        let (brief, desk, range) = review_desk();
         let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done")];
 
-        let outcome = h.run(|turn| review(turn, chat.clone(), vec![], &brief, desk, true)).expect("turn");
+        let outcome = h.run(|turn| review(turn, chat.clone(), vec![], &brief, desk, range, true)).expect("turn");
 
         let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
         assert_eq!(done.result.text, "Fixed the division.");
@@ -6640,9 +6646,9 @@ mod tests {
     #[test]
     fn each_review_has_its_own_card_and_leaves_its_message() {
         let h = harness("review-twice", vec![text("Nothing."), text("Nothing again.")]);
-        let (brief, desk) = review_desk();
-        h.run(|turn| review(turn, vec![], vec![], &brief, Arc::clone(&desk), false)).expect("turn");
-        h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+        let (brief, desk, range) = review_desk();
+        h.run(|turn| review(turn, vec![], vec![], &brief, Arc::clone(&desk), range.clone(), false)).expect("turn");
+        h.run(|turn| review(turn, vec![], vec![], &brief, desk, range, false)).expect("turn");
         let ids: Vec<String> = h.events().into_iter().filter_map(|e| match e.event {
             ChatEventPayload::ToolCall(call) if call.name == "review" => Some(call.id),
             _ => None,
@@ -6652,8 +6658,8 @@ mod tests {
 
         let h = harness("review-stopped", vec![]);
         h.cancel_at_poll(1);
-        let (brief, desk) = review_desk();
-        let outcome = h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+        let (brief, desk, range) = review_desk();
+        let outcome = h.run(|turn| review(turn, vec![], vec![], &brief, desk, range, false)).expect("turn");
         let ChatStreamOutcome::Cancelled(done) = outcome else { panic!("expected cancelled") };
         assert_eq!(done.history.last().and_then(|m| m.content.as_deref()), Some("/review"));
     }
@@ -6662,8 +6668,8 @@ mod tests {
     #[test]
     fn a_review_finishing_does_not_run_the_stop_hooks() {
         let (h, inputs) = hooked(harness("review-stop", vec![text("Nothing.")]), hook("Stop", "", "check"), |_, _| (0, ""));
-        let (brief, desk) = review_desk();
-        h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+        let (brief, desk, range) = review_desk();
+        h.run(|turn| review(turn, vec![], vec![], &brief, desk, range, false)).expect("turn");
         assert!(inputs.lock().unwrap().is_empty());
     }
 
@@ -6676,9 +6682,9 @@ mod tests {
             vec![asks(vec![wants("c1", "runCommand", r#"{"command":"touch built"}"#)]), text("Could not build.")],
         );
         h.approval = asking();
-        let (brief, desk) = review_desk();
+        let (brief, desk, range) = review_desk();
 
-        let outcome = h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+        let outcome = h.run(|turn| review(turn, vec![], vec![], &brief, desk, range, false)).expect("turn");
 
         assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
         let back = tool_contents(&h.provider.requests()[1]);

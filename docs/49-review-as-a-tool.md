@@ -1,25 +1,26 @@
 # Ревью как инструмент агента: прозрачно, как `explore`
 
-План, предложен 2026-11-02. Повод — два замеченных в приложении поведения: ревью
-падает, если работа уже закоммичена, и ревью читает не ту папку, когда работа идёт
-в worktree. Оба — следствие одного: ревью живёт **отдельным ходом со своей командой**,
-а не вызовом инструмента в ходе агента. Здесь не код, а решение, места в коде, этапы и
-чем каждый проверяется.
+План, предложен 2026-11-02; пересмотрен по коду `83c01ea` 2026-11-12. Повод — два
+замеченных в приложении поведения: ревью падает, если работа уже закоммичена, и ревью
+читало не ту папку, когда работа шла в worktree. Второе уже исправлено выбором папки
+чата; первое воспроизводится. Общая цель остаётся: ревью должно жить не **отдельным
+ходом со своей командой**, а вызовом инструмента в ходе агента. Здесь не код, а решение,
+места в коде, этапы и чем каждый проверяется.
 
 Опорные документы: [19-minimax-code-ideas.md](19-minimax-code-ideas.md) § 6 (откуда
 взялось ревью), [43-single-loop.md](43-single-loop.md) Ш5–Ш7 (ревью в чистом контексте,
-`offer`), [10-multi-workspace.md](10-multi-workspace.md) (папка хода вместо глобальной —
-ещё не сделано, и это важно для R-3).
+`offer`), [10-multi-workspace.md](10-multi-workspace.md) (папка хода вместо глобальной;
+для `review_start` это уже сделано в `fedcf61`).
 
-## Что не так сегодня (проверено по коду 2026-11-02)
+## Что не так сегодня (перепроверено 2026-11-12)
 
 | Симптом | Причина в коде |
 |---|---|
-| «Ревью работает не там», когда чат работает в worktree | Ревью берёт **глобальную** папку приложения (`state.workspace()`, [commands/chat.rs:680](../src-tauri/src/commands/chat.rs#L680)), а ход — свою (`FolderTurn.workspace`, [services/turn_setup.rs](../src-tauri/src/services/turn_setup.rs)). Кнопка предложения проверяет **папку хода** (`scope.root()`, [tools/offer.rs:21](../src-tauri/src/services/ai_tools/tools/offer.rs#L21)). Как только эти папки разные — worktree, созданный пикером (`git_worktree_add` открывает его как отдельную папку и новый чат), — предложение видит изменение, а ревью читает другой репозиторий, а если там дерево чистое, отвечает «nothing to review» |
-| «Модель закоммитила — и ревью не проходит» | Единственная база — дерево против `HEAD` ([infra/git_changes.rs:60](../src-tauri/src/infra/git_changes.rs#L60), `review_diffs`). Коммит делает дерево чистым → `nothing_to_review` ([domain/review.rs:175](../src-tauri/src/domain/review.rs#L175)) → `review_start` возвращает ошибку, в чат ложится «The review failed: …». Проверка у кнопки та же ([tools/offer.rs:26](../src-tauri/src/services/ai_tools/tools/offer.rs#L26)), поэтому кнопка, показанная до коммита и нажатая после, тоже падает |
-| Ревью не прозрачно | Это не вызов инструмента, а отдельный ход: команда `review_start`, пузырь `REVIEW_MESSAGE = "/review"` ([llm_chat.rs:1456](../src-tauri/src/services/llm_chat.rs#L1456)), флаг `handed`, обёртки `reviewStart` ([lib/chat.ts:401](../src/lib/chat.ts#L401)), `agent.review` ([useAgentTurn.ts:308](../src/hooks/useAgentTurn.ts#L308)), `BuiltInActions.review`, `HAND_TO_AGENT` ([slashCommands.ts:216](../src/lib/slashCommands.ts#L216)). Агент **не может** позвать ревью сам — только предложить кнопку, — и в его ходе ревью не видно шагом: шаги идут на синтетической карточке `review-<uuid>` |
-| Провал ревью теряет найденное | `run_review` отдаёт `Err` или `PendingApproval` — и уже отмеченные в `ReviewDesk` находки никуда не попадают ([llm_chat.rs:1516](../src-tauri/src/services/llm_chat.rs#L1516)) |
-| Записка о бюджете — мимо карточки | `wrapUpReminded` рисуется notice в чате ([chatTurnReducer.ts:435](../src/lib/chatTurnReducer.ts#L435)), хотя относится к ревью-хелперу |
+| «Ревью работает не там», когда чат работает в worktree — **исправлено до R-0** | Раньше ревью брал **глобальную** папку приложения. Теперь `review_start` вызывает `state.chat_workspace(&chat_id)` и передаёт её и в `review_diffs`, и в ход ([commands/chat.rs](../src-tauri/src/commands/chat.rs)); предложение по-прежнему проверяет `scope.root()` ([tools/offer.rs](../src-tauri/src/services/ai_tools/tools/offer.rs)). Пути уже не расходятся, но карточка не называет фактическую папку — это закрывает R-0 |
+| «Модель закоммитила — и ревью не проходит» | Единственная база — дерево против текущего `HEAD` ([infra/git_changes.rs](../src-tauri/src/infra/git_changes.rs), `review_diffs`). Коммит делает дерево чистым → `nothing_to_review` ([domain/review.rs](../src-tauri/src/domain/review.rs)) → `review_start` возвращает ошибку, в чат ложится «The review failed: …». Проверка у кнопки та же, поэтому кнопка, показанная до коммита и нажатая после, тоже падает |
+| Ревью не прозрачно | Это не вызов инструмента, а отдельный ход: команда `review_start`, пузырь `REVIEW_MESSAGE = "/review"`, флаг `handed`, обёртки `reviewStart`, `agent.review`, `BuiltInActions.review`, `HAND_TO_AGENT`. Агент **не может** позвать ревью сам — только предложить кнопку, — и в его ходе ревью не видно шагом: шаги идут на синтетической карточке `review-<uuid>` |
+| Провал ревью теряет найденное | `run_review` отдаёт `Err` или `PendingApproval` — и уже отмеченные в `ReviewDesk` находки никуда не попадают ([llm_chat.rs](../src-tauri/src/services/llm_chat.rs)) |
+| Записка о бюджете — мимо карточки | `wrapUpReminded` рисуется notice в чате ([chatTurnReducer.ts](../src/lib/chatTurnReducer.ts)), хотя относится к ревью-хелперу |
 
 Маркера `HEAD` у чата нет: `infra::git_head` знает только текущую ветку и
 `worktree_of`, а колонки с коммитом в `chats` нет — поэтому «что сделал этот чат»
@@ -31,6 +32,19 @@
 [AgentSheet.tsx](../src/components/AgentSheet.tsx)), то есть первая строка сообщения
 ревью — часть контракта с окном; `reportFinding` умеет жить только в режиме `Review`, и
 это единственное, что даёт находкам адрес.
+
+### Журнал воспроизведения R-0 (2026-11-12)
+
+- **Две папки.** Основное дерево — `/Users/eugene/IdeaSnapshots/kibo-agent`, `HEAD`
+  `44d4197c2745ad0c238a111246171da93e559988`; дерево чата —
+  `/Users/eugene/IdeaSnapshots/kibo-agent/.claude/worktrees/new-task-20261112-1031`,
+  `HEAD` `83c01eaa3eb97a1f55458aad92d22e6af9d0c30d`. Старый путь читал бы первую
+  папку; текущий `review_start` читает вторую. Осталось показать её в результате.
+- **Уже закоммичено.** Во временном репозитории `HEAD` до работы —
+  `f8d1bd818dabc48082f90a7f1a5cac1e752ef299`, после коммита —
+  `c8ad492b330857d7c820e9dec6f678c68ad6d79c`. После коммита `git diff --name-only HEAD`
+  пуст, статус чист; тест `a_clean_tree_has_nothing_to_offer` подтверждает текущий
+  `nothing to review`. Этот симптом не трогаем в R-0: базу дадут R-1 и R-2.
 
 ## Решение
 
@@ -193,7 +207,7 @@
 | `runs_alongside` | false | в отличие от `explore`: два ревью в одном ответе — это два хелпера и две `cargo test` одновременно, пользы нет |
 | `rewind_sees` | false | хелперу можно `runCommand` (`cargo test` пишет `target/`), и откат должен считать этот вызов, а не пропускать |
 | `loads_up_front` | true | приложение само называет инструмент в `/review`; ожидание `toolSearch` сделало бы команду двухшаговой |
-| Режимы | Agent, Plan, Ask | ревью ничего не меняет, поэтому обещание Plan/Ask не нарушает; в Review и Explore — нет (вложенных ревью не бывает) |
+| Режимы | Agent, Analyst | ревью ничего не меняет, поэтому обещание Analyst не нарушает; в Review и Explore — нет (вложенных ревью не бывает) |
 
 Механика — та же, что у `explore`: `ToolDeps::review_run` (`Option<&dyn Fn(&ReviewArgs)
 -> Result<ToolResult, ToolError>>`), построенный в `execute_call` и вызывающий
@@ -241,7 +255,7 @@
 | строка в `DEFINITIONS` | тесты над `ToolName::ALL` |
 | ветка в `parse.rs` | `every_tool_in_all_reaches_its_variant` |
 | редакция в `domain/tool_call_log.rs` | `every_tool_is_redacted` |
-| наборы `ConversationMode` (Agent, Plan, Ask) | `nothing_that_changes_the_tree_is_offered_outside_agent_mode`, `a_review_reads_runs_and_reports_but_writes_nothing` расширяется |
+| наборы `ConversationMode` (Agent, Analyst) | `nothing_that_changes_the_tree_is_offered_outside_agent_mode`, `a_review_reads_runs_and_reports_but_writes_nothing` расширяется |
 | `ACCOUNTED` в `src/lib/rewind.ts` | `every_tools_rewind_flag_matches_the_window` |
 | `describeTool.ts` (строка уже есть), иконка в `ChatPanel.tsx` | никто — проверить глазами |
 | `ToolDeps::review_run` | компилятор (поле с значением по умолчанию — тест «review без порта даёт читаемый отказ», как у `explore`) |
@@ -253,6 +267,8 @@
 
 ### R-0. Наблюдаемость: назвать папку и диапазон
 
+**Статус: сделано 2026-11-12, без проверки в окне.**
+
 Сначала воспроизвести оба симптома и записать в отчёте, какие именно папки разошлись
 (worktree против глобальной) и что было в `HEAD` в момент отказа. Затем — минимум, без
 которого остальное не проверить: ревью сообщает, что и где сравнивало.
@@ -261,8 +277,11 @@
   сколько отсеяно и почему); строка карточки показывает его.
 - Сообщение ревью начинает называть диапазон внутри (первая строка — по-прежнему вид).
 
-**Готово:** тест на описание диапазона; в приложении на worktree-чате карточка называет
-папку worktree, а не основную.
+**Итог:** `ReviewRange` собирается из фактической папки чата и попадает в opening message,
+результат, историю агента и карточку. Старые записи без диапазона читаются. Проверки:
+`cargo check`, `cargo test review` (43 теста), `bun run tsc --noEmit`, тест карточки
+(10 тестов); 6 целевых мутаций, все пойманы. В приложении на worktree-чате ещё проверить
+глазами, что карточка называет папку worktree, а не основную.
 
 ### R-1. Маркер `HEAD` у чата
 
@@ -311,12 +330,12 @@ worktree-фикстура (`git worktree add`, как в тестах `offer.rs`
 - `llm_chat::run_review` переезжает в этот порт почти без изменений (текст ошибок — тот
   же); `llm_chat::review` (вход в отдельный ход) ещё живёт, чтобы не ломать `/review`
   до R-4.
-- Наборы режимов: `review` в Agent, Plan, Ask; `ReportFinding` остаётся только в Review.
+- Наборы режимов: `review` в Agent, Analyst; `ReportFinding` остаётся только в Review.
 
 **Готово:** тест «в запросах хелпера нет истории чата, плана и чеклиста; находки —
 в результате инструмента; прогон записан в Agents»; тест «ревью читает папку хода, когда
 глобальная папка другая» (это тот самый симптом); тест «вызов в режиме, где инструмента
-нет, отказан» (Plan/Ask — есть, Review/Explore — нет).
+нет, отказан» (Analyst — есть, Review/Explore — нет).
 
 ### R-4. `/review` и кнопка становятся сообщениями
 

@@ -1899,6 +1899,9 @@ pub enum ToolResult {
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
         handed: bool,
+        /// Folder, refs and file selection; empty in results saved before R-0.
+        #[serde(default)]
+        range: String,
     },
     /// What a Kubernetes tool read, already shaped for the model — a table,
     /// YAML, a log — and a few words for the row in the transcript.
