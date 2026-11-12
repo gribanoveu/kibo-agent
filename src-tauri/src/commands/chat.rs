@@ -915,7 +915,7 @@ pub async fn review_start<R: Runtime>(
         files: kept.len(),
         excluded,
     };
-    let brief = crate::domain::review::review_message(&kept, &range, llm_session::reply_language());
+    let brief = crate::domain::review::review_message(&kept, &range, llm_session::reply_language(), None);
     let desk = Arc::new(ReviewDesk::new(kept));
     let session = state.session(&chat_id);
     let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;

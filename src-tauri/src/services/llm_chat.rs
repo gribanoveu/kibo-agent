@@ -1046,6 +1046,7 @@ fn execute_call(
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
     let explore = |args: &crate::domain::tools::ExploreArgs| run_explore(turn, args, history, &output);
+    let review_run = |args: &crate::domain::tools::ReviewArgs| run_review_tool(turn, args, &output);
     let check = |prompt: &str, text: &str| check_with(turn.session, prompt, text);
     let ask = |server: &str, question: &crate::domain::mcp::McpQuestion| ask_user(turn, round, &call.id, server, question);
     let deps = ToolDeps {
@@ -1063,6 +1064,7 @@ fn execute_call(
         terminals: turn.terminals.clone(),
         review: turn.review.clone(),
         explore: Some(&explore),
+        review_run: Some(&review_run),
         check: Some(&check),
         kube: pinned_cluster(turn),
         runbooks: match turn.place {
@@ -1595,6 +1597,40 @@ fn run_review(
     let tokens = agents.get(id).map(|run| run.tokens).unwrap_or_default();
     text.map(|text| ToolResult::Reviewed { findings: desk.findings(), text: text.trim().to_string(), range: range.description(), agent: id, tokens, handed })
         .map_err(crate::domain::tools::ToolError::Command)
+}
+
+/// `review` (the tool): the range `from`..`to` — planned against this turn's
+/// folder and its chat's start marker — read by a helper in Review mode.
+/// The helper's findings are the call's result; the calling turn goes on
+/// with them in the same round, nothing handed sideways.
+fn run_review_tool(
+    turn: &Turn,
+    args: &crate::domain::tools::ReviewArgs,
+    progress: &CommandSink,
+) -> Result<ToolResult, crate::domain::tools::ToolError> {
+    // The turn's folder, never the app's global one: a chat working in a
+    // worktree reviews the worktree (`docs/49-review-as-a-tool.md`).
+    let scope = turn.place.scope().ok_or_else(|| crate::domain::tools::ToolError::NoFolder("review".to_string()))?;
+    let facts = crate::infra::git_changes::review_facts(scope.root(), args.to.as_deref(), turn.chat_head)
+        .map_err(|e| crate::domain::tools::ToolError::Git(e.to_string()))?;
+    let planned = crate::domain::review::plan(args.from.as_deref(), args.to.as_deref(), &facts)
+        .map_err(|e| crate::domain::tools::ToolError::Command(e.to_string()))?;
+    let files = crate::infra::git_changes::review_diffs(scope.root(), planned.from.as_deref(), planned.to.as_deref())
+        .map_err(|e| crate::domain::tools::ToolError::Git(e.to_string()))?;
+    let (kept, excluded) = crate::domain::review::select(files);
+    if kept.is_empty() {
+        return Err(crate::domain::tools::ToolError::Command(crate::domain::review::nothing_to_review(excluded.len())));
+    }
+    let range = crate::domain::review::ReviewRange {
+        root: scope.root().display().to_string(),
+        from: planned.from.clone().unwrap_or_else(|| "HEAD".to_string()),
+        to: planned.to.clone().unwrap_or_else(|| "working tree".to_string()),
+        files: kept.len(),
+        excluded,
+    };
+    let brief = crate::domain::review::review_message(&kept, &range, crate::services::llm_session::reply_language(), args.focus.as_deref());
+    let desk = Arc::new(crate::domain::review::ReviewDesk::new(kept));
+    run_review(turn, &brief, desk, range, false, progress)
 }
 
 /// One line of a helper's progress: the tool, and what it was pointed at.
@@ -6570,7 +6606,7 @@ mod tests {
             lines: vec![NewLine { hunk: 0, number: 7, added: true, text: "let x = y / 0;".into() }],
         };
         let range = ReviewRange { root: "/tmp/review-worktree".into(), from: "HEAD".into(), to: "working tree".into(), files: 1, excluded: vec![] };
-        let brief = crate::domain::review::review_message(std::slice::from_ref(&file), &range, None);
+        let brief = crate::domain::review::review_message(std::slice::from_ref(&file), &range, None, None);
         (brief, Arc::new(ReviewDesk::new(vec![file])), range)
     }
 
@@ -6698,6 +6734,102 @@ mod tests {
         let back = tool_contents(&h.provider.requests()[1]);
         assert!(back[0].contains("nobody to ask"), "{back:?}");
         assert!(!h.root.join("built").exists());
+    }
+
+    /// The `review` tool: the change in the turn's own folder, read by a
+    /// helper that saw none of the conversation — no history, plan or
+    /// checklist — and the findings are the call's result in the turn's
+    /// history, with the run recorded like an explore helper's.
+    #[test]
+    fn the_review_tool_reads_the_turns_change_and_reports_in_turn() {
+        let mut h = harness(
+            "tool-review",
+            vec![asks(vec![wants("r1", "review", r#"{"focus":"the division"}"#)]), found("f1"), text("One real problem."), text("Will fix it.")],
+        );
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        h.plan = Some("# Plan\n\n1. it is safe".into());
+        let agents = Arc::new(crate::domain::agents::Agents::default());
+        h.agents = Some(Arc::clone(&agents));
+        let todos = vec![Task { id: "1".into(), title: "make it race-free".into(), status: crate::domain::tools::TodoStatus::InProgress, note: None }];
+        let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done, it is safe")];
+
+        let outcome = h.run(|turn| stream(turn, chat, todos)).expect("turn");
+
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.result.text, "Will fix it.");
+        // The helper's request is the brief alone: nothing of the chat.
+        let requests = h.provider.requests();
+        let helper = &requests[1];
+        for message in &helper.messages {
+            let content = message.content.as_deref().unwrap_or_default();
+            assert!(!content.contains("write the counter") && !content.contains("make it race-free") && !content.contains("1. it is safe"), "nothing of the chat: {content}");
+        }
+        let brief = helper.messages.last().and_then(|m| m.content.as_deref()).unwrap_or_default();
+        assert!(brief.contains("=== a.rs") && brief.contains("let x = y / 0;"), "{brief}");
+        assert!(brief.contains("pay particular attention to: the division"), "the focus is one line of the brief: {brief}");
+        let root = h.root.canonicalize().unwrap();
+        assert!(brief.contains(&format!("Range: {} · HEAD → working tree · 1 file reviewed", root.display())), "{brief}");
+        // The findings are the result; the turn answers after them.
+        let reported: Vec<String> = done.history.iter().filter(|m| m.role == LlmRole::Tool).map(|m| m.content.clone().unwrap_or_default()).collect();
+        assert!(reported.iter().any(|text| text.contains("[high] a.rs:1") && text.contains("One real problem.")), "{reported:?}");
+        assert_eq!(agents.list().len(), 1);
+        assert_eq!(agents.list()[0].state, crate::domain::agents::AgentState::Done);
+    }
+
+    /// The symptom "the review works somewhere else": the tool reads the
+    /// turn's folder even when a neighbouring folder holds changes of its own.
+    #[test]
+    fn the_review_tool_reads_the_turns_folder_not_the_neighbours() {
+        let neighbour = temp_dir("tool-review-neighbour");
+        git2::Repository::init(&neighbour).unwrap();
+        std::fs::write(neighbour.join("theirs.rs"), "let theirs = 1;\n").unwrap();
+        let h = harness("tool-review-own-folder", vec![asks(vec![wants("r1", "review", "{}")]), text("Nothing wrong."), text("Noted.")]);
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("ours.rs"), "let ours = 2;\n").unwrap();
+
+        let outcome = h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.result.text, "Noted.");
+        let requests = h.provider.requests();
+        let brief = requests[1].messages.last().and_then(|m| m.content.as_deref()).unwrap_or_default();
+        assert!(brief.contains("=== ours.rs"), "{brief}");
+        assert!(!brief.contains("theirs.rs"), "the neighbour's change is not read: {brief}");
+    }
+
+    /// Where the tool is not offered, calling it is refused — a helper
+    /// cannot review, none inside a review either. Analyst, which promises
+    /// to change nothing, can: the review keeps that promise itself.
+    #[test]
+    fn the_review_tool_is_refused_where_it_is_not_offered() {
+        for (label, mode) in [("tool-review-in-explore", ConversationMode::Explore), ("tool-review-in-review", ConversationMode::Review)] {
+            let mut h = harness(label, vec![asks(vec![wants("r1", "review", "{}")]), text("Understood.")]);
+            git2::Repository::init(&h.root).unwrap();
+            std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
+            h.mode = mode;
+            let outcome = h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+            let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+            assert!(done.history.iter().any(|m| m.role == LlmRole::Tool), "{label}: the refusal is the call's result");
+            // No helper ran: no request carries the reviewer's brief, which
+            // always opens with the same line.
+            let has_brief = |request: &crate::domain::llm::ChatRequest| {
+                request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Review the uncommitted changes of this repository")))
+            };
+            assert!(!h.provider.requests().iter().any(has_brief), "{label}: no helper request");
+        }
+
+        let mut h = harness("tool-review-in-analyst", vec![asks(vec![wants("r1", "review", "{}")]), text("Nothing wrong."), text("Reported.")]);
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
+        h.mode = ConversationMode::Analyst;
+        let outcome = h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.result.text, "Reported.");
+        let has_brief = |request: &crate::domain::llm::ChatRequest| {
+            request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Review the uncommitted changes of this repository")))
+        };
+        assert!(h.provider.requests().iter().any(has_brief), "the analyst's review helper ran");
     }
 
     /// The agent may search the web; its helpers may not — several run side

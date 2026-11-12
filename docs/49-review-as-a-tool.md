@@ -353,6 +353,8 @@ upstream предлагает. Мутации из списка выше (пра
 
 ### R-3. Инструмент `review`
 
+**Статус: сделано 2026-11-12.**
+
 - Модуль `tools/review.rs` (схема, отказы, вызов порта), `ToolCall::Review`, ветка в
   `dispatch`, строка в `DEFINITIONS`, ветка в `parse.rs`, редакция в `tool_call_log.rs`.
 - `ToolDeps::review_run`; в `execute_call` — замыкание, которое строит `plan` по
@@ -363,10 +365,18 @@ upstream предлагает. Мутации из списка выше (пра
   до R-4.
 - Наборы режимов: `review` в Agent, Analyst; `ReportFinding` остаётся только в Review.
 
-**Готово:** тест «в запросах хелпера нет истории чата, плана и чеклиста; находки —
-в результате инструмента; прогон записан в Agents»; тест «ревью читает папку хода, когда
-глобальная папка другая» (это тот самый симптом); тест «вызов в режиме, где инструмента
-нет, отказан» (Analyst — есть, Review/Explore — нет).
+**Итог:** `ToolName::Review` (`loop_weight` 5, не мутирует, не параллелится, `rewind_sees`
+false, `loads_up_front`), `ReviewArgs { from?, to?, focus? }`, модуль
+`tools/review.rs`, ветки в `dispatch`/`parse.rs`/`DEFINITIONS`, редакция в
+`tool_call_log.rs`, режимы — Agent и Analyst. `ToolDeps::review_run`; в `execute_call`
+замыкание строит `plan` по `turn.place.scope()` и `turn.chat_head`, собирает
+`ReviewDesk` и зовёт `run_helper` в режиме Review через существующий `run_review`;
+`focus` дописывается `review_message` одной строкой (пустой/длинный — с объяснением
+модели). `llm_chat::review` (вход `/review`) жив до R-4. `cargo check`, полный
+`cargo test` (2433), `bun run tsc --noEmit`. Тесты: хелпер не видит истории, план и
+чеклист; находки — в результате инструмента; прогон в Agents; ревью читает папку
+хода, а не соседнюю; вызов в Explore/Review отказан, в Analyst — работает; фронт
+(`describeTool`, `rewind.ts ACCOUNTED`) менять не пришлось — строка и имя уже были.
 
 ### R-4. `/review` и кнопка становятся сообщениями
 

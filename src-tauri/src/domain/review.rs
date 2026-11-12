@@ -313,12 +313,27 @@ pub fn plan(requested_from: Option<&str>, requested_to: Option<&str>, facts: &Re
     Ok(ReviewPlan { from: Some(base), to: None, why: RangeWhy::Base })
 }
 
+/// Longest `focus` kept. Past it the note is dropped, with one line saying
+/// so — a focus is an accent, not a place to write a second brief.
+pub const FOCUS_CHARS: usize = 200;
+
 /// The opening message of a review: the diffs that fit, in path order, the
-/// rest of the change by name, and what was left out and why — and the reply
-/// language, when the user chose one: nothing the user typed is in a review's
-/// conversation to say it for them.
-pub fn review_message(files: &[FileDiff], range: &ReviewRange, language: Option<&str>) -> String {
-    let mut out = format!("Review the uncommitted changes of this repository — the working tree against HEAD.\nRange: {}.\n\n<changes>\n", range.description());
+/// rest of the change by name, and what was left out and why — the reply
+/// language, when the user chose one, and the caller's `focus`, when there
+/// is one that fits: nothing the user typed is in a review's conversation
+/// to say it for them.
+pub fn review_message(files: &[FileDiff], range: &ReviewRange, language: Option<&str>, focus: Option<&str>) -> String {
+    let mut out = format!("Review the uncommitted changes of this repository — the working tree against HEAD.\nRange: {}.\n", range.description());
+    match focus.map(str::trim) {
+        Some(focus) if !focus.is_empty() && focus.chars().count() <= FOCUS_CHARS => {
+            out.push_str(&format!("The one asking for this review asks to pay particular attention to: {focus}.\n"));
+        }
+        // An empty or overlong note is told from, not silently dropped: the
+        // reviewer must not wait for a focus that is not coming.
+        Some(_) => out.push_str("The `focus` note was empty or too long, and was left out; the review stands on the change alone.\n"),
+        None => {}
+    }
+    out.push_str("\n<changes>\n");
     let mut room = MESSAGE_DIFF_CHARS;
     let mut unshown = Vec::new();
     for file in files {
@@ -624,12 +639,12 @@ mod tests {
         renamed.patch = "@@ -1 +1 @@\n-a\n+b\n".into();
         let big = sized("src/big.rs", MESSAGE_DIFF_CHARS);
         let range = review_range(2, vec![Excluded { path: ".env".into(), reason: Exclusion::Secret }]);
-        let text = review_message(&[renamed, big], &range, None);
+        let text = review_message(&[renamed, big], &range, None, None);
         assert!(text.starts_with("Review the uncommitted changes of this repository — the working tree against HEAD.\nRange: /tmp/review-worktree · HEAD → working tree · 2 files reviewed · 1 left out (may hold secrets — do not read it).\n\n"), "{text}");
         assert!(text.contains("<changes>\n=== src/new.rs (renamed from src/old.rs) ===\n@@ -1 +1 @@\n-a\n+b\n</changes>"), "{text}");
         assert!(text.contains("diff not included for its size — read it with gitDiff or readFile where it matters:\nsrc/big.rs\n"), "{text}");
         assert!(text.contains("Left out of the review:\n.env — may hold secrets — do not read it\n"), "{text}");
-        let plain = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None);
+        let plain = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, None);
         assert!(!plain.contains("Also changed") && !plain.contains("Left out"), "{plain}");
         assert!(!plain.contains("[Reply in"), "{plain}");
     }
@@ -637,15 +652,29 @@ mod tests {
     /// The last thing the opening message says is the language to reply in.
     #[test]
     fn the_message_ends_with_the_chosen_reply_language() {
-        let text = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), Some("Russian"));
+        let text = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), Some("Russian"), None);
         assert!(text.ends_with("</changes>\n\n\n[Reply in Russian.]"), "{text:?}");
+    }
+
+    /// A focus is the caller's accent, one line next to the range; an empty
+    /// or overlong one is told from, not silently dropped.
+    #[test]
+    fn a_focus_is_one_line_and_a_broken_one_is_said_so() {
+        let with_focus = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, Some("  error handling in the loader "));
+        assert!(with_focus.contains("Range: /tmp/review-worktree · HEAD → working tree · 1 file reviewed.\nThe one asking for this review asks to pay particular attention to: error handling in the loader.\n\n<changes>"), "{with_focus}");
+        let too_long = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, Some(&"look at this ".repeat(40)));
+        assert!(too_long.contains("The `focus` note was empty or too long, and was left out; the review stands on the change alone.\n\n<changes>"), "{too_long}");
+        let empty = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, Some("  "));
+        assert!(empty.contains("The `focus` note was empty or too long"), "{empty}");
+        let none = review_message(&[sized("a.rs", 10)], &review_range(1, vec![]), None, None);
+        assert!(!none.contains("focus") && !none.contains("attention"), "{none}");
     }
 
     /// The room is shared: a file that does not fit is named, and a smaller
     /// one after it still goes in.
     #[test]
     fn the_diffs_that_fit_go_in_whatever_their_order() {
-        let text = review_message(&[sized("a.rs", MESSAGE_DIFF_CHARS - 10), sized("b.rs", 20), sized("c.rs", 5)], &review_range(3, vec![]), None);
+        let text = review_message(&[sized("a.rs", MESSAGE_DIFF_CHARS - 10), sized("b.rs", 20), sized("c.rs", 5)], &review_range(3, vec![]), None, None);
         assert!(text.contains("=== a.rs") && text.contains("=== c.rs"), "{text}");
         assert!(!text.contains("=== b.rs") && text.contains("where it matters:\nb.rs\n"), "{text}");
     }

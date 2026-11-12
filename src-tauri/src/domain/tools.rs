@@ -54,6 +54,10 @@ pub enum ToolName {
     /// A research task handed to a read-only helper turn with a context of
     /// its own; only its answer comes back.
     Explore,
+    /// A change read by a helper turn in Review mode; its findings come back
+    /// in the result (`docs/49-review-as-a-tool.md`). Reads and reports —
+    /// it writes nothing itself.
+    Review,
     /// A note for later conversations in this folder, checked by the model
     /// before it is kept.
     Remember,
@@ -147,6 +151,7 @@ impl ToolName {
         ToolName::ReportFinding,
         ToolName::Offer,
         ToolName::Explore,
+        ToolName::Review,
         ToolName::Remember,
         ToolName::KnowledgeWrite,
         ToolName::KnowledgeSearch,
@@ -206,6 +211,7 @@ impl ToolName {
             ToolName::ReportFinding => "reportFinding",
             ToolName::Offer => "offer",
             ToolName::Explore => "explore",
+            ToolName::Review => "review",
             ToolName::Remember => "remember",
             ToolName::KnowledgeWrite => "knowledgeWrite",
             ToolName::KnowledgeSearch => "knowledgeSearch",
@@ -285,6 +291,8 @@ impl ToolName {
                 | ToolName::ReportFinding
                 | ToolName::Offer
                 | ToolName::Explore
+                // `/review` names the tool in the command's message.
+                | ToolName::Review
                 | ToolName::Remember
                 | ToolName::KnowledgeWrite
                 | ToolName::KnowledgeSearch
@@ -369,6 +377,9 @@ impl ToolName {
             | ToolName::ReportFinding
             | ToolName::Offer
             | ToolName::Explore
+            // Reads a change and reports; the helper's own commands are
+            // accounted by the rewind window, not a write here.
+            | ToolName::Review
             | ToolName::Remember
             // The app's own folder, as `remember`; the tree is not touched.
             | ToolName::KnowledgeWrite
@@ -431,6 +442,9 @@ impl ToolName {
             | ToolName::WritePlan
             | ToolName::ReportFinding
             | ToolName::Offer
+            // One reviewer at a time: two in one reply are two helpers and
+            // two proving builds at once, which gains nothing.
+            | ToolName::Review
             // Change what the model sees or is told next.
             | ToolName::Skill
             | ToolName::ToolSearch
@@ -513,6 +527,9 @@ impl ToolName {
             ToolName::Remember | ToolName::KnowledgeWrite => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
+            // Its helper may run commands to prove a finding (a build writes
+            // `target/`) — the rewind window counts the call, not skips it.
+            ToolName::Review => false,
             // A button under the answer; nothing outside the chat.
             ToolName::Offer => true,
             // The cluster, in a chat — no folder to rewind.
@@ -595,6 +612,8 @@ impl ToolName {
             // A whole turn of its own. That turn has its own ceiling, so this
             // only keeps a turn from delegating without end.
             ToolName::Explore => 5,
+            // A whole review helper turn, the same shape and ceiling.
+            ToolName::Review => 5,
             // A short request to the model, and a line appended.
             ToolName::Remember => 2,
             // A short request to the model and a few files written, each
@@ -823,7 +842,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            53,
+            54,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1221,6 +1240,10 @@ pub struct ToolDeps<'a> {
     /// Runs `explore`'s task as a helper turn; `None` where there is no model
     /// to run it with.
     pub explore: Option<&'a dyn Fn(&ExploreArgs) -> Result<ToolResult, ToolError>>,
+    /// Runs `review`'s range as a helper turn in Review mode; `None` where
+    /// there is no model to run it with. The default is the readable refusal
+    /// a test wants, as with `explore`.
+    pub review_run: Option<&'a dyn Fn(&ReviewArgs) -> Result<ToolResult, ToolError>>,
     /// Asks the model whether text may be kept — a `remember` note, a
     /// `knowledgeWrite`'s documents — under the tool's guard prompt, which
     /// is answered SAVE or REFUSE; `Err` says why not, or why it could not be
@@ -1436,6 +1459,10 @@ pub enum ToolError {
     /// The helper turn ended without an answer.
     #[error("explore: {0}")]
     Explore(String),
+    /// The review could not be set up or run; the reason is the model's to
+    /// read and carry back to the user.
+    #[error("review: {0}")]
+    Review(String),
     /// A `remember` note that was not kept, and why.
     #[error("remember: {0}")]
     Memory(String),
@@ -1530,6 +1557,7 @@ pub enum ToolCall {
     ReportFinding(crate::domain::review::FindingArgs),
     Offer(OfferArgs),
     Explore(ExploreArgs),
+    Review(ReviewArgs),
     Remember(RememberArgs),
     KnowledgeWrite(KnowledgeWriteArgs),
     KnowledgeSearch(KnowledgeSearchArgs),
@@ -1588,6 +1616,7 @@ impl ToolCall {
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
             ToolCall::Offer(_) => ToolName::Offer,
             ToolCall::Explore(_) => ToolName::Explore,
+            ToolCall::Review(_) => ToolName::Review,
             ToolCall::Remember(_) => ToolName::Remember,
             ToolCall::KnowledgeWrite(_) => ToolName::KnowledgeWrite,
             ToolCall::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
@@ -2293,6 +2322,21 @@ pub struct ExploreArgs {
     pub task: String,
     #[serde(default)]
     pub fork: bool,
+}
+
+/// `review`: what to review. `from` and `to` name the range's ends; left out,
+/// the app picks — uncommitted changes first, then this chat's work, then
+/// the branch against its upstream or base. `focus` is the caller's accent,
+/// one or two phrases, appended to the reviewer's brief as one line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewArgs {
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub focus: Option<String>,
 }
 
 /// `remember`: one fact for later conversations in this folder.
