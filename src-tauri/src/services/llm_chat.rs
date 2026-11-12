@@ -1518,8 +1518,13 @@ fn helper_reads(steps: &[String]) -> Vec<String> {
 }
 
 /// The review helper: Review mode over `desk`, under the chat's approval —
-/// what would ask is refused (`preflight`), since a helper has no card. Its
-/// findings are what `reportFinding` kept, whatever became of its answer.
+/// what would ask is refused (`preflight`), since a helper has no card.
+///
+/// Whatever becomes of the run, its findings are the result: the round
+/// ceiling, a stop, a call that would have asked, a provider failure — each
+/// ends with what `reportFinding` had kept, marked with why the review did
+/// not finish (`docs/49-review-as-a-tool.md`, R-6). Nothing a review found
+/// is thrown away with the run.
 fn run_review(
     turn: &Turn,
     brief: &str,
@@ -1528,24 +1533,27 @@ fn run_review(
     progress: &CommandSink,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
+    enum Close {
+        Clean,
+        Rounds,
+        Stopped,
+        Failed(String),
+    }
     let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress)?;
-    let ran_out = matches!(&outcome, Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some());
-    let (state, text) = match outcome {
-        Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => {
-            (AgentState::Done, Ok(format!("{}\n\n(The review ran out of rounds before it finished.)", done.result.text.trim())))
-        }
-        Ok(ChatStreamOutcome::Done(done)) => (AgentState::Done, Ok(done.result.text)),
-        Ok(ChatStreamOutcome::Cancelled(_)) => (AgentState::Stopped, Err("the review was stopped before it finished".to_string())),
+    let (state, answer, close) = match outcome {
+        Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => (AgentState::Done, Some(done.result.text), Close::Rounds),
+        Ok(ChatStreamOutcome::Done(done)) => (AgentState::Done, Some(done.result.text), Close::Clean),
+        Ok(ChatStreamOutcome::Cancelled(_)) => (AgentState::Stopped, None, Close::Stopped),
         Ok(ChatStreamOutcome::PendingApproval(_)) => {
-            let reason = "the review asked for a call that needs approval".to_string();
-            (AgentState::Failed { reason: reason.clone() }, Err(reason))
+            let reason = "it asked for a call that needs approval, and a review runs on its own with nobody to ask".to_string();
+            (AgentState::Failed { reason: reason.clone() }, None, Close::Failed(reason))
         }
-        Err(e) => (AgentState::Failed { reason: e.to_string() }, Err(e.to_string())),
+        Err(e) => (AgentState::Failed { reason: e.to_string() }, None, Close::Failed(e.to_string())),
     };
-    agents.finish(id, state, text.as_ref().ok().cloned());
+    agents.finish(id, state, answer.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string));
     let tokens = agents.get(id).map(|run| run.tokens).unwrap_or_default();
-    // The card's last line says what was read and what came of it, rounds
-    // included — the reader should not have to open the result to know.
+    // The card's last line says what was read and what came of it, a cut
+    // short included — the reader should not have to open the result to know.
     let findings = desk.findings();
     let verdict = match findings.len() {
         0 => "no findings".to_string(),
@@ -1553,12 +1561,24 @@ fn run_review(
         n => format!("{n} findings"),
     };
     let mut line = format!("{} — {verdict}", range.description());
-    if ran_out {
-        line.push_str(" — ran out of rounds before it finished");
-    }
+    let note = |what: &str| format!("(The review {what}.)");
+    let text = match close {
+        Close::Clean => answer.unwrap_or_default().trim().to_string(),
+        Close::Rounds => {
+            line.push_str(" — ran out of rounds before it finished");
+            format!("{}\n\n{}", answer.unwrap_or_default().trim(), note("ran out of rounds before it finished"))
+        }
+        Close::Stopped => {
+            line.push_str(" — stopped before it finished");
+            note("was stopped before it finished")
+        }
+        Close::Failed(reason) => {
+            line.push_str(&format!(" — failed: {reason}"));
+            note(&format!("failed: {reason}"))
+        }
+    };
     progress(CommandEvent { stream: crate::domain::command_exec::OutputStream::Stdout, chunk: format!("{line}\n") });
-    text.map(|text| ToolResult::Reviewed { findings, text: text.trim().to_string(), range: range.description(), agent: id, tokens })
-        .map_err(crate::domain::tools::ToolError::Command)
+    Ok(ToolResult::Reviewed { findings, text: text.trim().to_string(), range: range.description(), agent: id, tokens })
 }
 
 /// `review` (the tool): the range `from`..`to` — planned against this turn's
@@ -6451,6 +6471,86 @@ mod tests {
         assert!(output.contains("[Review budget] This review has used 82% of its budget"), "the budget note is a line of the card: {output}");
         assert!(output.contains("· HEAD → working tree · 1 file reviewed — 1 finding"), "and a closing line says what was read: {output}");
         assert!(!output.contains("ran out of rounds"), "the review finished inside its budget: {output}");
+    }
+
+    /// What a review runs with: the brief, the desk and the range, built from
+    /// a real change in `root` the way `run_review_tool` builds them.
+    fn review_parts(root: &std::path::Path) -> (String, Arc<crate::domain::review::ReviewDesk>, crate::domain::review::ReviewRange) {
+        let files = crate::infra::git_changes::review_diffs(root, None, None).unwrap();
+        let (kept, excluded) = crate::domain::review::select(files);
+        let range = crate::domain::review::ReviewRange {
+            root: root.display().to_string(),
+            from: "HEAD".into(),
+            to: "working tree".into(),
+            files: kept.len(),
+            excluded,
+        };
+        let brief = crate::domain::review::review_message(&kept, &range, None, None);
+        (brief, Arc::new(crate::domain::review::ReviewDesk::new(kept)), range)
+    }
+
+    /// Stopped mid-run, a review still reports what it had marked: the
+    /// findings are the result, the result says why there is no closing
+    /// answer, and the card's line says it was cut short. The cancel lands
+    /// at the second round's checkpoint: the first round's `reportFinding`
+    /// has run, the second has not.
+    #[test]
+    fn a_stopped_review_keeps_its_findings() {
+        let h = harness("review-partial-stop", vec![found("f1"), text("Never mind.")]);
+        h.cancel_at_poll(4);
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        let (brief, desk, range) = review_parts(&h.root);
+
+        let result = h.run(|turn| {
+            let progress = command_output_sink(turn.events, 0, "r1");
+            run_review(turn, &brief, desk, range, &progress)
+        });
+
+        let result = result.expect("a review result, never an error now");
+        let ToolResult::Reviewed { findings, text, .. } = result else { panic!("expected a review result") };
+        assert_eq!(findings.len(), 1, "what was marked before the stop is kept: {findings:?}");
+        assert_eq!(text, "(The review was stopped before it finished.)");
+        let line: String = h
+            .events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                ChatEventPayload::CommandOutput { id, chunk, .. } if id == "r1" => Some(chunk),
+                _ => None,
+            })
+            .collect();
+        assert!(line.contains("— 1 finding — stopped before it finished"), "{line}");
+    }
+
+    /// The round ceiling cuts a review off the same way: the findings are
+    /// the result, marked with the reason — the cap only bites while the
+    /// review still has calls to make.
+    #[test]
+    fn a_review_out_of_rounds_keeps_its_findings() {
+        let mut h = harness("review-partial-rounds", vec![found("f1"), text("Never answered.")]);
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 1, budget: 250, parallel: 3 };
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        let (brief, desk, range) = review_parts(&h.root);
+
+        let result = h.run(|turn| {
+            let progress = command_output_sink(turn.events, 0, "r1");
+            run_review(turn, &brief, desk, range, &progress)
+        });
+
+        let result = result.expect("a review result, never an error now");
+        let ToolResult::Reviewed { findings, text, .. } = result else { panic!("expected a review result") };
+        assert_eq!(findings.len(), 1, "the finding reported before the ceiling is kept: {findings:?}");
+        assert_eq!(text, "(The review ran out of rounds before it finished.)");
+        let line: String = h
+            .events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                ChatEventPayload::CommandOutput { id, chunk, .. } if id == "r1" => Some(chunk),
+                _ => None,
+            })
+            .collect();
+        assert!(line.contains("— 1 finding — ran out of rounds before it finished"), "{line}");
     }
 
     // -------------------------------------------------------------- explore
