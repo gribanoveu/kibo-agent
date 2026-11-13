@@ -151,9 +151,12 @@ export function useKafka() {
     try {
       const list = await kafkaConnectionDelete(id);
       setConnections(list);
-      setSelected((current) => (current === id ? (list[0]?.id ?? null) : current));
-      // A topic of the connection that went is not the next one's.
-      setDetail((shown) => (id && list.some((c) => c.id === id) ? shown : null));
+      // A topic of the connection that went is not the next one's; another
+      // connection deleted leaves the open one as it was.
+      if (looking.current === id) {
+        setSelected(list[0]?.id ?? null);
+        setDetail(null);
+      }
       setError(null);
     } catch (failure) {
       setError(said(failure));

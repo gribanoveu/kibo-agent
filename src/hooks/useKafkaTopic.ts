@@ -135,7 +135,9 @@ export function useKafkaTopic({ connection, topic }: { connection: string; topic
           ? `Sent to partition ${written.partition} at offset ${written.offset}.`
           : `Sent to partition ${written.partition} at offset ${written.offset} — not in this window; read that partition to see it.`,
       );
-      void read("", count, partitions);
+      // A live read shows the record when it lands; a read here would replace
+      // what it has gathered.
+      if (!liveId.current) void read("", count, partitions);
       return null;
     } catch (failure) {
       return String(failure);

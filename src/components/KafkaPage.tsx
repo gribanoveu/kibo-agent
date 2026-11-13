@@ -440,6 +440,9 @@ function Topic({ detail, connection, readOnly, onBack }: { detail: TopicDetail; 
  */
 function Messages({ connection, topic, readOnly }: { connection: string; topic: TopicView; readOnly: boolean }) {
   const messages = useKafkaTopic({ connection, topic });
+  // A live read follows the partitions it started with: another window chosen
+  // under it would be overwritten by its next tick.
+  const held = messages.living || messages.starting;
 
   return (
     <section className="kafka-messages" aria-label={`Messages of ${topic.name}`}>
@@ -450,6 +453,7 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
             type="button"
             className={`kafka-chip${messages.partitions.length === 0 ? " on" : ""}`}
             aria-pressed={messages.partitions.length === 0}
+            disabled={held}
             onClick={messages.allPartitions}
           >
             All
@@ -460,6 +464,7 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
               type="button"
               className={`kafka-chip${messages.partitions.includes(partition.partition) ? " on" : ""}`}
               aria-pressed={messages.partitions.includes(partition.partition)}
+              disabled={held}
               onClick={() => messages.togglePartition(partition.partition)}
             >
               {partition.partition}
@@ -482,7 +487,7 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
             key={howMany}
             type="button"
             className={`kafka-chip${messages.count === howMany ? " on" : ""}`}
-            disabled={messages.reading}
+            disabled={messages.reading || held}
             onClick={() => messages.setCount(howMany)}
           >
             Last {howMany}
@@ -495,7 +500,7 @@ function Messages({ connection, topic, readOnly }: { connection: string; topic: 
           value={messages.from}
           onChange={(event) => messages.setFrom(event.target.value)}
         />
-        <button type="button" className="btn btn-ghost" disabled={messages.reading} onClick={() => void messages.ask()}>
+        <button type="button" className="btn btn-ghost" disabled={messages.reading || held} onClick={() => void messages.ask()}>
           Read
         </button>
         <button
@@ -728,11 +733,7 @@ function SendForm({
           <textarea aria-label="Value" rows={6} value={value} onChange={(event) => setValue(event.target.value)} />
         </label>
 
-        {fault && (
-          <p className="kafka-error" role="alert">
-            {fault}
-          </p>
-        )}
+        {fault && <p className="kafka-error" role="alert">{fault}</p>}
         <p className="kafka-quiet">An empty value is a record with nothing in it — not a tombstone, which this cannot write.</p>
       </div>
     </Modal>
@@ -752,29 +753,11 @@ type FormProps = {
   onClose: () => void;
 };
 
-function ConnectionForm({
-  draft,
-  fault,
-  existing,
-  onSave,
-  onProbe,
-  onDelete,
-  onClose,
-}: {
-  draft: Draft | null;
-  fault: string | null;
-  existing: boolean;
-  onSave: (connection: Connection) => Promise<boolean>;
-  onProbe: (id: string) => Promise<{ ok: boolean; text: string }>;
-  onDelete: () => void;
-  onClose: () => void;
-}) {
+function ConnectionForm({ draft, ...rest }: Omit<FormProps, "draft"> & { draft: Draft | null }) {
   // Keyed by the connection: opening another one starts from its own fields,
   // and Save reads the fields that are on screen rather than the draft it was
   // opened with.
-  return draft ? (
-    <OpenForm key={draft.id} draft={draft} existing={existing} fault={fault} onSave={onSave} onProbe={onProbe} onDelete={onDelete} onClose={onClose} />
-  ) : null;
+  return draft ? <OpenForm key={draft.id} draft={draft} {...rest} /> : null;
 }
 
 function OpenForm({ draft, existing, fault, onSave, onProbe, onDelete, onClose }: FormProps) {
@@ -792,18 +775,14 @@ function OpenForm({ draft, existing, fault, onSave, onProbe, onDelete, onClose }
       footer={
         <>
           {existing && (
-            <button type="button" className="btn btn-ghost kafka-delete" onClick={onDelete}>
-              Delete…
-            </button>
-          )}
-          {existing && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => void onProbe(fields.id).then(setTested)}
-            >
-              <Check size={13} /> Test
-            </button>
+            <>
+              <button type="button" className="btn btn-ghost kafka-delete" onClick={onDelete}>
+                Delete…
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => void onProbe(fields.id).then(setTested)}>
+                <Check size={13} /> Test
+              </button>
+            </>
           )}
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
@@ -879,23 +858,18 @@ function OpenForm({ draft, existing, fault, onSave, onProbe, onDelete, onClose }
 
         <div className="kafka-check">
           <Switch label="Read-only" on={fields.readOnly} onChange={(on) => set("readOnly", on)} />
-          <span>Read-only — kept on the connection; whatever writes later refuses one marked so</span>
+          <span>Read-only — nothing is sent through it</span>
         </div>
         <div className="kafka-check">
           <Switch label="Open to the agent" on={fields.agent} onChange={(on) => set("agent", on)} />
-          <span>Open to the agent — kept on the connection, for the tool that comes with the messages stage</span>
+          <span>Open to the agent — its `kafka` tool reads this cluster by the name above</span>
         </div>
 
-        {fault && (
-          <p className="kafka-error" role="alert">
-            {fault}
-          </p>
-        )}
+        {fault && <p className="kafka-error" role="alert">{fault}</p>}
         {tested && <p className={tested.ok ? "kafka-ok" : "kafka-error"}>{tested.text}</p>}
-        <p className="kafka-quiet">Test asks the saved connection — the broker answers about itself. Read-only refuses every send that comes through this connection; open to the agent is obeyed by the tool that arrives with the agent stage.</p>
+        <p className="kafka-quiet">Test asks the saved connection — the broker answers about itself.</p>
       </div>
     </Modal>
   );
 }
 
-export default KafkaPage;

@@ -128,7 +128,7 @@ export async function kafkaProduce(connection: string, spec: ProduceSpec): Promi
 }
 
 /** Mirrors `domain::kafka::LagView`; `committed`/`lag` are null when the group never committed here. */
-export type LagView = { group: string; topic: string; partition: number; committed: number | null; latest: number; lag: number | null; active: boolean };
+export type LagView = { group: string; topic: string; partition: number; committed: number | null; latest: number; lag: number | null };
 
 /** Mirrors `domain::kafka::GroupView`; `lagsRead: false` is "not asked", not "no commits". */
 export type GroupView = { name: string; state: string; members: number; lagsRead: boolean; lags: LagView[]; totalLag: number | null };

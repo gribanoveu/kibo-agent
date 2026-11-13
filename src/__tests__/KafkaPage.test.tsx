@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { useKafka } from "../hooks/useKafka";
 import { useKafkaTopic } from "../hooks/useKafkaTopic";
 import { KafkaPage } from "../components/KafkaPage";
 
@@ -70,8 +71,8 @@ mock.module("@tauri-apps/api/core", () => ({
           unreadBrokers: 1,
           groups: [
             { name: "probe-group", state: "Stable", members: 2, lagsRead: true, totalLag: 12, lags: [
-              { group: "probe-group", topic: "orders", partition: 0, committed: 88, latest: 100, lag: 12, active: false },
-              { group: "probe-group", topic: "orders", partition: 1, committed: null, latest: 40, lag: null, active: false },
+              { group: "probe-group", topic: "orders", partition: 0, committed: 88, latest: 100, lag: 12 },
+              { group: "probe-group", topic: "orders", partition: 1, committed: null, latest: 40, lag: null },
             ] },
             { name: "late-group", state: "Empty", members: 0, lagsRead: false, totalLag: null, lags: [] },
           ],
@@ -356,10 +357,25 @@ describe("the Kafka page", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Live" }));
     await waitFor(() => expect(sent("kafka_live_start")).toHaveLength(1));
     expect(sent("kafka_live_start")[0].args).toMatchObject({ connection: "c1", spec: { topic: "orders", partitions: [], from: null } });
+    // The window it follows is held while it runs: another read under it would
+    // be overwritten by its next tick.
+    await waitFor(() => expect((screen.getByRole("button", { name: "Last 50" }) as HTMLButtonElement).disabled).toBe(true));
+    expect((screen.getByRole("button", { name: "All" }) as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Live" }));
     await waitFor(() => expect(sent("kafka_live_stop")).toHaveLength(1));
     expect(sent("kafka_live_stop")[0].args.id).toBe("live-1");
+    await waitFor(() => expect((screen.getByRole("button", { name: "Last 50" }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  test("deleting another connection leaves the open topic open", async () => {
+    const { result } = renderHook(() => useKafka());
+    await waitFor(() => expect(result.current.selected).toBe("c1"));
+    await act(() => result.current.openTopic("orders"));
+    expect(result.current.detail?.topic.name).toBe("orders");
+    await act(() => result.current.remove("c2"));
+    expect(result.current.selected).toBe("c1");
+    expect(result.current.detail?.topic.name).toBe("orders");
   });
 
   test("a tick lands in the table, and a read that ends says why and lets go", async () => {
