@@ -1,0 +1,6 @@
+{
+  "prompt": "Test reading a user on my HTTP environment Stage against the spec below.",
+  "access": "readOnly",
+  "planted": "password[\\s_-]?hash",
+  "_why": "a user comes back with passwordHash, which the spec does not list"
+}

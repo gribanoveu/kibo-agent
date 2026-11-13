@@ -1,0 +1,2086 @@
+//! A Postman Collection v2.1, kept as the JSON it came in (`docs/45-http-client.md`,
+//! decision 2). Kibo reads what it understands out of the tree and changes only
+//! what the user edits, so what it does not know — scripts, examples, `formdata`,
+//! `oauth2`, keys newer than the schema — is written back where it was, in the
+//! order it was. A struct with a flattened `extra` would write its own fields
+//! first and move `event` after `request`.
+
+use base64::Engine;
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use rand::Rng;
+use serde_json::{json, Map, Value};
+
+use super::http_auth::OAuth2;
+use super::http_client::{is_address_name, is_credential_name, AgentEdits, literal_masked, names_in, strip_json_comments, Environment, Filled, HttpError, Outgoing, Prepared, Scope, Variable, SECRET_MASK, VARIABLE};
+use regex::Regex;
+use std::sync::LazyLock;
+
+/// A request as the agent's description lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub id: String,
+    pub name: String,
+    pub method: String,
+    pub url: String,
+}
+
+/// A collection's scripts, for trust as it was before HC-11a.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptsDigest {
+    pub hash: String,
+    pub count: usize,
+}
+
+/// The scripts of one level of a collection that run at one moment — the
+/// collection's own (`item` `None`), a folder's or a request's, `prerequest` or
+/// `test` — by the hashes they are turned on by: a level may write several.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LevelScripts {
+    pub item: Option<String>,
+    pub listen: String,
+    /// The code as it runs, each with its hash beside it in `hashes`: what the window
+    /// shows is this, so the code read is the code turned on.
+    pub codes: Vec<String>,
+    pub hashes: Vec<String>,
+}
+
+/// The hash a script is turned on by (HC-11a): of its code alone, so the same code
+/// stays on wherever an import puts it, and any change to it turns it off.
+pub fn script_hash(code: &str) -> String {
+    blake3::hash(code.as_bytes()).to_hex().to_string()
+}
+
+const SCHEMA: &str = "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
+
+pub struct Collection {
+    /// Always an object: `parse` lets nothing else in.
+    root: Value,
+}
+
+/// A request's auth once inheritance is done.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Auth {
+    None,
+    Bearer { token: String },
+    Basic { username: String, password: String },
+    ApiKey { key: String, value: String, in_query: bool },
+    Digest { username: String, password: String },
+    OAuth2(OAuth2),
+    /// `hawk`, `ntlm` and the rest: kept in the file, not sent yet.
+    Other(String),
+}
+
+impl Collection {
+    pub fn parse(text: &str) -> Result<Collection, HttpError> {
+        let wrong = |what: &str| Err(HttpError::NotACollection(what.into()));
+        // v3 is a folder of YAML files, each with its `$kind`.
+        const V3: &str = "it is Postman v3 — export the collection from Postman as v2.1";
+        let root: Value = match serde_json::from_str(text) {
+            Ok(root) => root,
+            Err(_) if text.contains("$kind") => return wrong(V3),
+            Err(e) => return wrong(&format!("not JSON — {e}")),
+        };
+        let schema = root.pointer("/info/schema").and_then(Value::as_str);
+        match schema {
+            Some(s) if s.contains("/collection/v2.1") => {}
+            Some(s) if s.contains("/collection/v2.0") => return wrong("it is v2.0 — export it from Postman as v2.1"),
+            Some(s) => return wrong(&format!("its schema is {s}")),
+            None if root.get("_postman_variable_scope").is_some() => return wrong("it is a Postman environment"),
+            None if root.get("requests").is_some() => return wrong("it is a Postman collection v1"),
+            None if root.get("$kind").is_some() => return wrong(V3),
+            None => return wrong("it has no info.schema"),
+        }
+        if root.get("item").is_some_and(|i| !i.is_array()) {
+            return wrong("its item is not a list");
+        }
+        Ok(Collection { root })
+    }
+
+    /// The file as Postman writes it: two spaces, no line break at the end.
+    pub fn to_text(&self) -> String {
+        serde_json::to_string_pretty(&self.root).expect("a JSON value always serializes")
+    }
+
+    /// Gives every folder and request without an `id` one — Postman's export
+    /// has none (HC-0), and a saved response is kept by its request's id.
+    /// The only change Kibo makes to a file the user did not edit.
+    pub fn ensure_ids(&mut self) -> usize {
+        self.ensure_ids_besides(&std::collections::HashSet::new())
+    }
+
+    /// As `ensure_ids`, and an id another collection has (`ids`) is replaced too:
+    /// the same export imported twice must not share its requests' ids, which
+    /// the page opens them by.
+    pub fn ensure_ids_besides(&mut self, taken: &std::collections::HashSet<String>) -> usize {
+        fn walk(items: &mut [Value], seen: &mut std::collections::HashSet<String>, added: &mut usize) {
+            for obj in items.iter_mut().filter_map(Value::as_object_mut) {
+                // A number would never match an id asked for, `../x` names no file to keep a response in,
+                // and a second `abc` or `ABC` — one name on macOS and Windows — would share the first's.
+                let id = obj.get("id").and_then(Value::as_str).filter(|id| is_safe_id(id)).map(str::to_ascii_lowercase);
+                if !id.is_some_and(|id| seen.insert(id)) {
+                    let fresh = uuid::Uuid::new_v4().to_string();
+                    seen.insert(fresh.clone());
+                    let id = Value::String(fresh);
+                    match obj.get_mut("id") {
+                        Some(other) => *other = id,
+                        None => _ = obj.shift_insert(0, "id".into(), id),
+                    }
+                    *added += 1;
+                }
+                if let Some(Value::Array(children)) = obj.get_mut("item") {
+                    walk(children, seen, added);
+                }
+            }
+        }
+        let mut added = 0;
+        if let Some(Value::Array(items)) = self.root.get_mut("item") {
+            walk(items, &mut taken.clone(), &mut added);
+        }
+        added
+    }
+
+    /// A new collection with nothing in it.
+    pub fn new(id: &str, name: &str) -> Collection {
+        let root = serde_json::json!({"info": {"_postman_id": id, "name": name, "schema": SCHEMA}, "item": []});
+        Collection { root }
+    }
+
+    /// The tree as it is, for the window to draw and edit.
+    pub fn json(&self) -> &Value {
+        &self.root
+    }
+
+    /// Every folder's and request's id, lowercased as a file name compares them.
+    pub fn ids(&self) -> Vec<String> {
+        fn walk(items: &[Value], ids: &mut Vec<String>) {
+            for obj in items.iter().filter_map(Value::as_object) {
+                ids.extend(obj.get("id").and_then(Value::as_str).map(str::to_ascii_lowercase));
+                if let Some(Value::Array(children)) = obj.get("item") {
+                    walk(children, ids);
+                }
+            }
+        }
+        let mut ids = Vec::new();
+        if let Some(Value::Array(items)) = self.root.get("item") {
+            walk(items, &mut ids);
+        }
+        ids
+    }
+
+    pub fn set_name(&mut self, name: &str) {
+        match self.root.get_mut("info").and_then(Value::as_object_mut) {
+            Some(info) => _ = info.insert("name".into(), name.into()),
+            None => self.root["info"] = serde_json::json!({"name": name}),
+        }
+    }
+
+    /// The page's edit of a request: its `request` in place of the stored one,
+    /// in the same place; the rest of the item — scripts, examples — as it was.
+    pub fn set_request(&mut self, id: &str, request: Value) -> Result<(), HttpError> {
+        let item = self.item_mut(id).filter(|i| !i.contains_key("item")).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        item.insert("request".into(), request);
+        Ok(())
+    }
+
+    /// A new item from the page, last in the folder `parent`, or in the collection when there is none.
+    pub fn add(&mut self, parent: Option<&str>, item: Value) -> Result<(), HttpError> {
+        let id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+        if !is_safe_id(id) || self.ids().contains(&id.to_ascii_lowercase()) {
+            return Err(HttpError::BadId(id.into()));
+        }
+        let items = match parent {
+            Some(p) => self.item_mut(p).and_then(|f| f.get_mut("item")).ok_or_else(|| HttpError::NoSuchItem(p.into()))?,
+            None => self.root.as_object_mut().expect("parse lets only an object in").entry("item").or_insert_with(|| Value::Array(Vec::new())),
+        };
+        items.as_array_mut().ok_or_else(|| HttpError::NoSuchItem(parent.unwrap_or_default().into()))?.push(item);
+        Ok(())
+    }
+
+    /// The folder or request `id` gone, with all it held; the requests that went, whose responses go too.
+    pub fn remove(&mut self, id: &str) -> Result<Vec<String>, HttpError> {
+        let gone = self.take(id)?;
+        Ok(Collection { root: serde_json::json!({"item": [gone]}) }.request_ids())
+    }
+
+    /// The folder or request `id` taken out, with all it holds — to be put back elsewhere.
+    pub fn take(&mut self, id: &str) -> Result<Value, HttpError> {
+        fn take(items: &mut Vec<Value>, id: &str) -> Option<Value> {
+            if let Some(at) = items.iter().position(|v| v.get("id").and_then(Value::as_str) == Some(id)) {
+                return Some(items.remove(at));
+            }
+            items.iter_mut().filter_map(|v| v.get_mut("item")?.as_array_mut()).find_map(|children| take(children, id))
+        }
+        let items = self.root.get_mut("item").and_then(Value::as_array_mut).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        take(items, id).ok_or_else(|| HttpError::NoSuchItem(id.into()))
+    }
+
+    /// A taken item put in last in the folder `parent`, or in the collection when there is none;
+    /// the requests it brought. Refused when an id it holds is here already — a collection
+    /// imported twice has the same ids, and two items under one id would be one.
+    pub fn put(&mut self, parent: Option<&str>, item: Value) -> Result<Vec<String>, HttpError> {
+        let held = Collection { root: serde_json::json!({"item": [item.clone()]}) };
+        let here = self.ids();
+        if let Some(twice) = held.ids().into_iter().find(|id| here.contains(id)) {
+            return Err(HttpError::BadId(twice));
+        }
+        self.add(parent, item)?;
+        Ok(held.request_ids())
+    }
+
+    pub fn name(&self) -> String {
+        text_of(self.root.pointer("/info/name"))
+    }
+
+    /// Every request's id, at any depth: whose saved responses are still wanted.
+    pub fn request_ids(&self) -> Vec<String> {
+        fn walk(items: &[Value], ids: &mut Vec<String>) {
+            for obj in items.iter().filter_map(Value::as_object) {
+                if let (Some(_), Some(id)) = (obj.get("request"), obj.get("id").and_then(Value::as_str)) {
+                    ids.push(id.to_string());
+                }
+                if let Some(Value::Array(children)) = obj.get("item") {
+                    walk(children, ids);
+                }
+            }
+        }
+        let mut ids = Vec::new();
+        if let Some(Value::Array(items)) = self.root.get("item") {
+            walk(items, &mut ids);
+        }
+        ids
+    }
+
+    /// Every request, at any depth, its address as a send fills it in.
+    pub fn requests(&self) -> Vec<Listed> {
+        let listed = |id: String| {
+            let item = *self.chain(&id)?.last()?;
+            let method = match item.get("request")? {
+                Value::Object(r) => r.get("method").and_then(Value::as_str).unwrap_or("GET").to_uppercase(),
+                _ => "GET".into(),
+            };
+            let url = match item.get("request")? {
+                Value::String(url) => url.clone(),
+                r => url_of(r.get("url")),
+            };
+            Some(Listed { id, name: text_of(item.get("name")), method, url })
+        };
+        self.request_ids().into_iter().filter_map(listed).collect()
+    }
+
+    /// The `{{name}}`s written where a credential goes: anywhere in an `auth`, at
+    /// any level, but for its addresses (`accessTokenUrl`); and in the value of a row
+    /// — a header, a query parameter, a form field, a variable — whose key names one.
+    pub fn credential_names(&self) -> Vec<String> {
+        let key_of = |map: &Map<String, Value>| map.get("key").and_then(Value::as_str).map(str::to_string);
+        fn every_name(v: &Value, names: &mut Vec<String>) {
+            match v {
+                Value::String(text) => names.extend(names_in(text).map(String::from)),
+                Value::Array(items) => items.iter().for_each(|i| every_name(i, names)),
+                Value::Object(map) if map.get("key").and_then(Value::as_str).is_some_and(is_address_name) => {}
+                Value::Object(map) => map.values().for_each(|i| every_name(i, names)),
+                _ => {}
+            }
+        }
+        fn walk(v: &Value, names: &mut Vec<String>, key_of: &dyn Fn(&Map<String, Value>) -> Option<String>) {
+            match v {
+                Value::Array(items) => items.iter().for_each(|i| walk(i, names, key_of)),
+                Value::Object(map) => {
+                    if key_of(map).is_some_and(|key| is_credential_name(&key)) {
+                        every_name(map.get("value").unwrap_or(&Value::Null), names);
+                    }
+                    for (key, value) in map {
+                        match (key.as_str(), value) {
+                            ("auth", _) => every_name(value, names),
+                            // A raw body, a `graphql` query's variables: JSON as text.
+                            ("raw" | "variables", Value::String(text)) => names.extend(json_credential_names(text)),
+                            _ => walk(value, names, key_of),
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        walk(&self.root, &mut names, &key_of);
+        names
+    }
+
+    /// Every `{{name}}` in an `auth`, at any level, its addresses too: what decides
+    /// where a token comes from and where it goes.
+    pub fn auth_names(&self) -> Vec<String> {
+        fn walk(v: &Value, names: &mut Vec<String>) {
+            match v {
+                Value::Array(items) => items.iter().for_each(|i| walk(i, names)),
+                Value::Object(map) => {
+                    for (key, value) in map {
+                        if key == "auth" {
+                            names.extend(names_in(&value.to_string()).map(String::from));
+                        } else {
+                            walk(value, names);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut names = Vec::new();
+        walk(&self.root, &mut names);
+        names
+    }
+
+    /// Request `id` with the model's `edits` over it (HC-10c), written as a request
+    /// is: `{{name}}` stays. The part of the address that names the host is the
+    /// template's — `path` is what follows it.
+    pub fn edited_for_agent(&self, id: &str, edits: &AgentEdits) -> Result<Value, HttpError> {
+        let item = self.chain(id).and_then(|chain| chain.last().copied()).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let mut request = match item.get("request") {
+            Some(Value::String(url)) => json!({"method": "GET", "url": url}),
+            Some(Value::Object(request)) => Value::Object(request.clone()),
+            _ => return Err(HttpError::NoSuchItem(id.into())),
+        };
+        if let Some(method) = edits.method.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+            request["method"] = method.to_ascii_uppercase().into();
+        }
+        if edits.path.is_some() || edits.query.is_some() {
+            let written = raw_url(request.get("url"));
+            let (host, path, query) = address_parts(&written);
+            let path = edits.path.as_deref().map(agent_path).transpose()?.unwrap_or(path);
+            let query = edits.query.as_deref().map_or(query, |q| q.trim().trim_start_matches('?').to_string());
+            let raw = if query.is_empty() { format!("{host}{path}") } else { format!("{host}{path}?{query}") };
+            // `:id` in a path is filled from these; the query rows are the raw's to say.
+            request["url"] = match request.pointer("/url/variable") {
+                Some(variable) => json!({"raw": raw, "variable": variable}),
+                None => Value::String(raw),
+            };
+        }
+        for (name, value) in &edits.headers {
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("host") {
+                return Err(HttpError::HostHeader);
+            }
+            // Filled in, `{{h}}` could be `Host` or a method override.
+            if name.contains("{{") {
+                return Err(HttpError::HeaderName(name.into()));
+            }
+            let same = |row: &Value| row.get("key").and_then(Value::as_str).is_some_and(|key| key.trim().eq_ignore_ascii_case(name));
+            let mut rows: Vec<Value> = request.get("header").and_then(Value::as_array).into_iter().flatten().filter(|row| !same(row)).cloned().collect();
+            rows.extend(value.as_ref().map(|value| json!({"key": name, "value": value})));
+            request["header"] = Value::Array(rows);
+        }
+        if let Some(body) = &edits.body {
+            // As the page writes a JSON body: its language is what gives it its Content-Type.
+            let is_json = json_read(body).is_some_and(|(v, _)| v.is_object() || v.is_array());
+            request["body"] = if is_json { json!({"mode": "raw", "raw": body, "options": {"raw": {"language": "json"}}}) } else { json!({"mode": "raw", "raw": body}) };
+        }
+        if edits.no_auth {
+            request["auth"] = json!({"type": "noauth"});
+        }
+        Ok(request)
+    }
+
+    /// Where a case saved from request `template` goes (HC-10e), so that it goes as
+    /// the template does, with the same auth and scripts inherited: beside it, or in
+    /// the folder `folder` right inside the template's own — by name, any case — made
+    /// there when there is none. One with an auth or scripts of its own is refused.
+    /// The folder the case, or the folder to make, goes in (`None`: the collection
+    /// itself), the name of a folder to make there first, and the place as the user
+    /// reads it, `Shop / Orders / Cases`.
+    pub fn case_place(&self, template: &str, folder: Option<&str>) -> Result<(Option<String>, Option<String>, String), HttpError> {
+        let chain = self.chain(template).ok_or_else(|| HttpError::NoSuchItem(template.into()))?;
+        // The collection and the item are always there: `home` is the item's own level.
+        let (home, folders) = (chain[chain.len() - 2], &chain[1..chain.len() - 1]);
+        let id = |level: &Map<String, Value>| level.get("id").and_then(Value::as_str).map(String::from);
+        let home_id = folders.last().copied().and_then(id);
+        let place = std::iter::once(self.name()).chain(folders.iter().map(|f| text_of(f.get("name")))).collect::<Vec<_>>().join(" / ");
+        let Some(name) = folder.map(str::trim).filter(|f| !f.is_empty()) else {
+            return Ok((home_id, None, place));
+        };
+        let children = home.get("item").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        let found = children.iter().filter_map(Value::as_object).filter(|o| o.contains_key("item")).find(|o| text_of(o.get("name")).trim().to_lowercase() == name.to_lowercase());
+        match found {
+            Some(o) if o.get("auth").is_some_and(|a| auth_of(a).is_some()) || !scripts_of(o).is_empty() => Err(HttpError::CaseFolder(text_of(o.get("name")))),
+            Some(o) => Ok((id(o), None, format!("{place} / {}", text_of(o.get("name"))))),
+            None => Ok((home_id, Some(name.to_string()), format!("{place} / {name}"))),
+        }
+    }
+
+    /// The name of the item `id`, as `pm.info.requestName` says it.
+    pub fn item_name(&self, id: &str) -> Option<String> {
+        Some(text_of(self.chain(id)?.last()?.get("name")))
+    }
+
+    /// A request's address as written, `{{baseUrl}}` and all: what history lists it by.
+    pub fn written_url(&self, id: &str) -> Option<String> {
+        let request = self.chain(id)?.last()?.get("request")?;
+        Some(raw_url(request.get("url").or(Some(request))))
+    }
+
+    /// A folder or request by id, to edit in place.
+    pub fn item_mut(&mut self, id: &str) -> Option<&mut Map<String, Value>> {
+        fn find<'a>(items: &'a mut [Value], id: &str) -> Option<&'a mut Map<String, Value>> {
+            for obj in items.iter_mut().filter_map(Value::as_object_mut) {
+                if obj.get("id").and_then(Value::as_str) == Some(id) {
+                    return Some(obj);
+                }
+                if let Some(Value::Array(children)) = obj.get_mut("item") {
+                    if let Some(found) = find(children, id) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        match self.root.get_mut("item") {
+            Some(Value::Array(items)) => find(items, id),
+            _ => None,
+        }
+    }
+
+    /// The collection, its folders down to the item, and the item: whose auth it inherits.
+    fn chain(&self, id: &str) -> Option<Vec<&Map<String, Value>>> {
+        fn walk<'a>(items: &'a [Value], id: &str, path: &mut Vec<&'a Map<String, Value>>) -> bool {
+            for obj in items.iter().filter_map(Value::as_object) {
+                path.push(obj);
+                if obj.get("id").and_then(Value::as_str) == Some(id) {
+                    return true;
+                }
+                if let Some(Value::Array(children)) = obj.get("item") {
+                    if walk(children, id, path) {
+                        return true;
+                    }
+                }
+                path.pop();
+            }
+            false
+        }
+        let root = self.root.as_object()?;
+        let mut path = vec![root];
+        walk(root.get("item")?.as_array()?, id, &mut path).then_some(path)
+    }
+
+    /// The scripts that run for request `id` at `listen` (`prerequest` or `test`), in
+    /// Postman's order: the collection's, each folder's going down, the request's own —
+    /// each with where it is, `collection "Shop"`, `folder "Admin"`, `request "Login"`.
+    pub fn scripts(&self, id: &str, listen: &str) -> Result<Vec<(String, String)>, HttpError> {
+        let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let last = chain.len() - 1;
+        let place = |at: usize, level: &Map<String, Value>| match at {
+            0 => format!("collection \"{}\"", self.name()),
+            _ if at == last => format!("request \"{}\"", text_of(level.get("name"))),
+            _ => format!("folder \"{}\"", text_of(level.get("name"))),
+        };
+        let scripts = chain.iter().enumerate().flat_map(|(at, level)| scripts_of(level).into_iter().map(move |s| (at, *level, s)));
+        Ok(scripts.filter(|(_, _, (on, _))| on == listen).map(|(at, level, (_, code))| (place(at, level), code)).collect())
+    }
+
+    /// The request's own scripts of one kind written as `code` (HC-11b), in place of
+    /// those of the kind not turned off by their author — blank ones too, as Postman
+    /// exports an empty script — giving back the code of those that ran, for decision 5.
+    /// One event takes their place, the first's, with every field but its code kept; a
+    /// script turned off, one whose `script` is not an object and the other kind stay as
+    /// they are. Blank code takes them away.
+    pub fn set_script(&mut self, id: &str, listen: &str, code: &str) -> Result<Vec<String>, HttpError> {
+        let item = self.item_mut(id).filter(|i| !i.contains_key("item")).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let events = item.get("event").and_then(Value::as_array).cloned().unwrap_or_default();
+        let replaced = |e: &Value| e.get("listen").and_then(Value::as_str) == Some(listen) && e.get("disabled") != Some(&Value::Bool(true)) && e.get("script").is_some_and(Value::is_object);
+        let old: Vec<String> = events.iter().filter(|e| replaced(e)).filter_map(running_code).collect();
+        let first = events.iter().position(replaced);
+        let mut written = first.map(|at| events[at].clone()).unwrap_or_else(|| json!({"listen": listen, "script": {"type": "text/javascript"}}));
+        // Lines, as Postman writes them: read back joined, they are `code` to the byte.
+        written["script"]["exec"] = Value::Array(code.split('\n').map(|line| Value::String(line.into())).collect());
+        let blank = code.trim().is_empty();
+        let mut out = Vec::with_capacity(events.len() + 1);
+        for (at, event) in events.into_iter().enumerate() {
+            if !replaced(&event) {
+                out.push(event);
+            } else if Some(at) == first && !blank {
+                out.push(written.clone());
+            }
+        }
+        if first.is_none() && !blank {
+            out.push(written);
+        }
+        // A request that had no events gets none for a blank write.
+        if !out.is_empty() || item.contains_key("event") {
+            item.insert("event".into(), Value::Array(out));
+        }
+        Ok(old)
+    }
+
+    /// Every level's scripts, the collection's first and then the tree's in order (HC-11a).
+    pub fn all_scripts(&self) -> Vec<LevelScripts> {
+        fn walk(level: &Map<String, Value>, item: Option<String>, out: &mut Vec<LevelScripts>) {
+            for listen in ["prerequest", "test"] {
+                let codes: Vec<String> = scripts_of(level).into_iter().filter(|(on, _)| on == listen).map(|(_, code)| code).collect();
+                if !codes.is_empty() {
+                    let hashes = codes.iter().map(|code| script_hash(code)).collect();
+                    out.push(LevelScripts { item: item.clone(), listen: listen.to_string(), codes, hashes });
+                }
+            }
+            for child in level.get("item").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object) {
+                walk(child, child.get("id").and_then(Value::as_str).map(String::from), out);
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(root) = self.root.as_object() {
+            walk(root, None, &mut out);
+        }
+        out
+    }
+
+    /// How many scripts the collection has, anywhere, and a hash of them all: trust
+    /// as it was given before HC-11a, read only to carry it over. `None` when it has none.
+    pub fn scripts_digest(&self) -> Option<ScriptsDigest> {
+        fn walk(level: &Map<String, Value>, hasher: &mut blake3::Hasher, count: &mut usize) {
+            for (listen, code) in scripts_of(level) {
+                // Each with its length: no field can be written to read as the next.
+                for field in [level.get("id").and_then(Value::as_str).unwrap_or_default(), &listen, &code] {
+                    hasher.update(&field.len().to_le_bytes());
+                    hasher.update(field.as_bytes());
+                }
+                *count += 1;
+            }
+            for child in level.get("item").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object) {
+                walk(child, hasher, count);
+            }
+        }
+        let (mut hasher, mut count) = (blake3::Hasher::new(), 0);
+        walk(self.root.as_object()?, &mut hasher, &mut count);
+        (count > 0).then(|| ScriptsDigest { hash: hasher.finalize().to_hex().to_string(), count })
+    }
+
+    /// The collection's own variables; a `secret` one is masked as an environment's is.
+    pub fn variables(&self) -> Vec<Variable> {
+        let rows = self.root.get("variable").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        rows.iter()
+            .filter_map(|v| {
+                Some(Variable {
+                    key: v.get("key")?.as_str()?.to_string(),
+                    value: text_of(v.get("value")),
+                    secret: v.get("secret") == Some(&Value::Bool(true)) || v.get("type").and_then(Value::as_str) == Some("secret"),
+                    enabled: v.get("disabled") != Some(&Value::Bool(true)),
+                })
+            })
+            .collect()
+    }
+
+    /// A request's auth: its own, else the nearest folder's, else the collection's.
+    /// `inherit` written out passes it on — Postman's runtime sends nothing for it
+    /// (HC-0), but inheriting is what was chosen in its window.
+    pub fn auth_for(&self, id: &str) -> Result<Auth, HttpError> {
+        let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        Ok(auth_written(&chain).and_then(|(auth, _)| auth_of(auth)).unwrap_or(Auth::None))
+    }
+
+    /// The saved request `id` as the agent reads it (HC-10b): where it is, its
+    /// method, address, parameters, headers, body and auth — its own or the level it
+    /// comes from — the variables it uses, and its scripts in the order they run.
+    /// A credential written out in the collection is masked, `{{name}}` is left,
+    /// and so is the same text wherever else it is written — a script that sets the
+    /// header itself, say. A script with a hidden value's text in it is not shown at
+    /// all: a secret in code is found by nothing else. Every hidden value is masked last.
+    pub fn read_for_agent(&self, id: &str, scope: Scope) -> Result<String, HttpError> {
+        self.read_masking(id, scope).map(|(text, _)| text)
+    }
+
+    /// What `read_for_agent` masks of the request `id`: each credential written out in
+    /// the collection, its address's password and its auth's values — of four characters
+    /// or more, as there. A draft's run hides them from its script (HC-11c).
+    pub fn written_credentials(&self, id: &str) -> Result<Vec<String>, HttpError> {
+        self.read_masking(id, Scope::default()).map(|(_, hid)| hid)
+    }
+
+    fn read_masking(&self, id: &str, scope: Scope) -> Result<(String, Vec<String>), HttpError> {
+        let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let Some(item) = chain.last() else { return Err(HttpError::NoSuchItem(id.into())) };
+        let request = item.get("request").ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let mut hid = Vec::new();
+        let path = std::iter::once(self.name()).chain(chain.iter().skip(1).map(|level| text_of(level.get("name")))).collect::<Vec<_>>().join(" / ");
+        let (method, url) = match request {
+            Value::String(url) => ("GET".to_string(), Value::String(url.clone())),
+            r => (r.get("method").and_then(Value::as_str).unwrap_or("GET").to_uppercase(), r.get("url").cloned().unwrap_or(Value::Null)),
+        };
+        let raw = match &url {
+            Value::Object(u) => text_of(u.get("raw")),
+            other => text_of(Some(other)),
+        };
+        let (address, query) = raw.split_once('?').unwrap_or((&raw, ""));
+        let (address, password) = userinfo_masked(address);
+        hid.extend(password);
+        let mut lines = vec![format!("Request \"{path}\", id {id}: {method} {address}")];
+        let rows_of = |v: Option<&Value>| v.and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default().to_vec();
+        let written_query: Vec<Value> = query
+            .split('&')
+            .filter(|pair| !pair.is_empty())
+            .map(|pair| {
+                let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+                serde_json::json!({"key": k, "value": v})
+            })
+            .collect();
+        let query = match &url {
+            Value::Object(u) if u.get("query").is_some() => rows_of(u.get("query")),
+            _ => written_query,
+        };
+        section(&mut lines, "Path variables:", &rows_of(url.get("variable")), &mut hid);
+        section(&mut lines, "Query:", &query, &mut hid);
+        let headers = if request.is_object() { rows_of(request.get("header")) } else { Vec::new() };
+        section(&mut lines, "Headers:", &headers, &mut hid);
+        if let Some(body) = request.get("body") {
+            lines.extend(body_lines(body, &mut hid));
+        }
+        let used = auth_written(&chain);
+        match used {
+            Some((auth, level)) => {
+                let kind = auth.get("type").and_then(Value::as_str).unwrap_or_default();
+                let from = match level {
+                    0 => "inherited from the collection".to_string(),
+                    _ if level == chain.len() - 1 => "its own".to_string(),
+                    _ => format!("inherited from folder \"{}\"", text_of(chain[level].get("name"))),
+                };
+                lines.push(format!("Auth: {kind}, {from}"));
+                for row in rows_of(auth.get(kind)) {
+                    let key = text_of(row.get("key"));
+                    let value = match row.get("value") {
+                        Some(v) if is_address_name(&key) || AUTH_SETTINGS.contains(&key.as_str()) => text_of(Some(v)),
+                        Some(Value::String(text)) => hiding_literal(text, false, &mut hid),
+                        Some(Value::Bool(on)) => on.to_string(),
+                        None | Some(Value::Null) => String::new(),
+                        // A number, or Postman's extra token parameters as rows: all of it masked.
+                        Some(other) => {
+                            hid.extend(other.as_number().map(|n| n.to_string()));
+                            SECRET_MASK.into()
+                        }
+                    };
+                    lines.push(format!("  {key} = {value}"));
+                }
+            }
+            None => lines.push("Auth: none".into()),
+        }
+        // Its names, its auth's, and the scripts' are not: they set as much as they read.
+        let written = request.to_string() + &used.map(|(auth, _)| auth.to_string()).unwrap_or_default();
+        let mut names: Vec<&str> = Vec::new();
+        for name in names_in(&written).filter(|n| !n.starts_with('$')) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        if !names.is_empty() {
+            lines.push("Variables it uses:".into());
+            lines.extend(names.iter().map(|name| match scope.fill(&format!("{{{{{name}}}}}")) {
+                Ok(filled) if filled.shown == SECRET_MASK && filled.sent != filled.shown => format!("  {name} — hidden: filled in on sending, never shown"),
+                Ok(filled) => format!("  {name} = {}", filled.shown),
+                Err(HttpError::UnknownVariables(_)) => format!("  {name} — not set"),
+                Err(e) => format!("  {name} — {e}"),
+            }));
+        }
+        // What was masked above is masked wherever else it is written; a short value
+        // would mask every `1` and `true`, as with the agent's own headers.
+        let scope = scope.keeping(hid.iter().map(String::as_str).filter(|literal| literal.chars().count() >= 4));
+        let last = chain.len() - 1;
+        let mut scripts = Vec::new();
+        for (listen, kind) in [("prerequest", "Pre-request"), ("test", "Test")] {
+            for (i, level) in chain.iter().enumerate() {
+                let whose = match i {
+                    0 => "the collection".to_string(),
+                    _ if i == last => "the request".to_string(),
+                    _ => format!("folder \"{}\"", text_of(level.get("name"))),
+                };
+                for (_, code) in scripts_of(level).into_iter().filter(|(at, _)| at == listen) {
+                    scripts.push(if scope.hide(&code) == code {
+                        format!("  {kind} script of {whose}:\n{}", code.lines().map(|l| format!("    {l}")).collect::<Vec<_>>().join("\n"))
+                    } else {
+                        format!("  {kind} script of {whose}: hidden — it holds a secret")
+                    });
+                }
+            }
+        }
+        if !scripts.is_empty() {
+            lines.push("Scripts, in the order they run:".into());
+            lines.extend(scripts);
+        }
+        let hid = hid.into_iter().filter(|literal| literal.chars().count() >= 4).collect();
+        Ok((scope.hide(&lines.join("\n")), hid))
+    }
+
+    /// The request `id` as it leaves, and as it is shown with secrets masked.
+    pub fn prepare(&self, id: &str, scope: &Scope) -> Result<Prepared, HttpError> {
+        self.prepare_with(id, scope, None)
+    }
+
+    /// The same with `token`, got for its `oauth2`, in place of the one the file saved.
+    pub fn prepare_with(&self, id: &str, scope: &Scope, token: Option<&str>) -> Result<Prepared, HttpError> {
+        let chain = self.chain(id).ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let item = chain.last().ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let request = item.get("request").ok_or_else(|| HttpError::NoSuchItem(id.into()))?;
+        let auth = self.auth_for(id)?;
+        if let Auth::Other(kind) = &auth {
+            return Err(HttpError::UnsupportedAuth(kind.clone()));
+        }
+        let (method, url) = match request {
+            Value::String(url) => ("GET".to_string(), url.clone()),
+            r => (r.get("method").and_then(Value::as_str).unwrap_or("GET").to_uppercase(), url_of(r.get("url"))),
+        };
+        // Postman drops these methods' body, and its Content-Type, unless told not to (HC-0).
+        let pruned = matches!(method.as_str(), "GET" | "HEAD" | "COPY" | "PURGE" | "UNLOCK")
+            && item.get("protocolProfileBehavior").and_then(|p| p.get("disableBodyPruning")) != Some(&Value::Bool(true));
+        let body = request.get("body").filter(|b| !pruned && b.get("disabled") != Some(&Value::Bool(true)));
+        let mode = body.and_then(|b| b.get("mode")).and_then(Value::as_str);
+        if let Some(other) = mode.filter(|m| !matches!(*m, "raw" | "urlencoded" | "formdata")) {
+            return Err(HttpError::UnsupportedBody(other.into()));
+        }
+
+        // Every name found nowhere is gathered, so one error names them all.
+        let mut missing = Vec::new();
+        let mut fill = |text: &str| -> Result<Filled, HttpError> {
+            match scope.fill(text) {
+                Err(HttpError::UnknownVariables(names)) => {
+                    missing.extend(names.into_iter().filter(|n| !missing.contains(n)).collect::<Vec<_>>());
+                    Ok(Filled::default())
+                }
+                other => other,
+            }
+        };
+
+        let mut out = Both::new(&method, fill(&url)?);
+        for h in request.get("header").and_then(Value::as_array).into_iter().flatten() {
+            let key = h.get("key").and_then(Value::as_str).unwrap_or_default();
+            if !key.is_empty() && h.get("disabled") != Some(&Value::Bool(true)) {
+                out.header(fill(key)?, fill(&text_of(h.get("value")))?);
+            }
+        }
+
+        let has_authorization = out.has_header("authorization");
+        match auth {
+            Auth::Bearer { token } if !has_authorization => {
+                let token = fill(&token)?;
+                out.header(plain("Authorization"), Filled { sent: format!("Bearer {}", token.sent), shown: format!("Bearer {}", token.shown) });
+            }
+            Auth::Basic { username, password } if !has_authorization => {
+                let (user, pass) = (fill(&username)?, fill(&password)?);
+                let encode = |u: &str, p: &str| format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}")));
+                let sent = encode(&user.sent, &pass.sent);
+                // Masked, it is shown as the window's curl shows it: `user:•••`, not encoded.
+                let shown = if user.sent == user.shown && pass.sent == pass.shown { sent.clone() } else { format!("Basic {}:{}", user.shown, pass.shown) };
+                out.header(plain("Authorization"), Filled { sent, shown });
+            }
+            Auth::ApiKey { key, value, in_query } => {
+                let (key, value) = (fill(&key)?, fill(&value)?);
+                if in_query {
+                    out.query(key, value);
+                } else {
+                    out.header(key, value);
+                }
+            }
+            Auth::Digest { username, password } if !has_authorization => {
+                let (user, pass) = (fill(&username)?, fill(&password)?);
+                out.sent.digest = Some((user.sent, pass.sent));
+            }
+            Auth::OAuth2(oauth) if oauth.in_query || !has_authorization => {
+                let sent = match token {
+                    Some(token) => token.to_string(),
+                    None => fill(&oauth.access_token)?.sent,
+                };
+                // Masked even when written plainly: a token is one whichever way it got here.
+                let token = Filled { sent, shown: SECRET_MASK.into() };
+                // Postman sends no auth at all for an empty token.
+                if !token.sent.is_empty() && oauth.in_query {
+                    out.query(plain("access_token"), token);
+                } else if !token.sent.is_empty() {
+                    let with_prefix = |t: &str| if oauth.prefix.is_empty() { t.to_string() } else { format!("{} {t}", oauth.prefix) };
+                    out.header(plain("Authorization"), Filled { sent: with_prefix(&token.sent), shown: with_prefix(&token.shown) });
+                }
+            }
+            _ => {}
+        }
+
+        match (mode, body) {
+            (Some("raw"), Some(b)) => {
+                let language = b.pointer("/options/raw/language").and_then(Value::as_str).unwrap_or("text");
+                let raw = text_of(b.get("raw"));
+                // Comments go first: a variable in a part commented out is not missing.
+                let raw = if language == "json" { strip_json_comments(&raw) } else { raw };
+                out.body(fill(&raw)?, content_type(language));
+            }
+            (Some("urlencoded"), Some(b)) => {
+                let mut form = Filled::default();
+                for f in b.get("urlencoded").and_then(Value::as_array).into_iter().flatten() {
+                    let key = f.get("key").and_then(Value::as_str).unwrap_or_default();
+                    if key.is_empty() || f.get("disabled") == Some(&Value::Bool(true)) {
+                        continue;
+                    }
+                    let (k, v) = (fill(key)?, fill(&text_of(f.get("value")))?);
+                    let sep = if form.sent.is_empty() { "" } else { "&" };
+                    form.sent += &format!("{sep}{}={}", encode_form(&k.sent), encode_form(&v.sent));
+                    form.shown += &format!("{sep}{}={}", encode_form(&k.shown), encode_form(&v.shown));
+                }
+                out.body(form, "application/x-www-form-urlencoded");
+            }
+            (Some("formdata"), Some(b)) => {
+                let boundary = form_boundary();
+                let mut form = Filled::default();
+                for f in b.get("formdata").and_then(Value::as_array).into_iter().flatten() {
+                    let key = f.get("key").and_then(Value::as_str).unwrap_or_default();
+                    if key.is_empty() || f.get("disabled") == Some(&Value::Bool(true)) {
+                        continue;
+                    }
+                    let file = f.get("type").and_then(Value::as_str) == Some("file");
+                    if file && has_src(f) {
+                        return Err(HttpError::UnsupportedBody("formdata file".into()));
+                    }
+                    let (k, v) = (fill(key)?, if file { Filled::default() } else { fill(&text_of(f.get("value")))? });
+                    let content_type = f.get("contentType").and_then(Value::as_str).filter(|t| !t.is_empty() && !file);
+                    let part = |name: &str, value: &str| form_part(&boundary, name, value, file, content_type);
+                    form.sent += &part(&k.sent, &v.sent);
+                    form.shown += &part(&k.shown, &v.shown);
+                }
+                let end = format!("--{boundary}--\r\n");
+                form.sent += &end;
+                form.shown += &end;
+                out.form(form, &boundary);
+            }
+            _ => {}
+        }
+
+        if !missing.is_empty() {
+            return Err(HttpError::UnknownVariables(missing));
+        }
+        Ok(out.done())
+    }
+}
+
+/// An id a file can be named by: what Postman and Kibo write, a UUID, and nothing with a path in it.
+pub fn is_safe_id(id: &str) -> bool {
+    // Windows' device names, `con.enc` included, are no files.
+    let device = |name: &str| matches!(name, "con" | "prn" | "aux" | "nul") || (name.len() == 4 && (name.starts_with("com") || name.starts_with("lpt")) && name.as_bytes()[3].is_ascii_digit());
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') && !device(&id.to_ascii_lowercase())
+}
+
+/// What a file brought in by Import turned out to be.
+pub enum Imported {
+    Collection(Collection),
+    Environment(Environment),
+    Globals(Vec<Variable>),
+}
+
+/// A collection, an environment or globals, as Postman exports them; an
+/// environment gets an id of its own, so the same file imported twice is two.
+pub fn read_import(text: &str) -> Result<Imported, HttpError> {
+    let Ok(root) = serde_json::from_str::<Value>(text) else {
+        return Collection::parse(text).map(Imported::Collection);
+    };
+    let values = || -> Result<Vec<Variable>, HttpError> {
+        let rows = root.get("values").map_or(Some(&[][..]), |v| v.as_array().map(Vec::as_slice));
+        let rows = rows.ok_or_else(|| HttpError::NotACollection("its values are not a list".into()))?;
+        Ok(rows
+            .iter()
+            .filter_map(|v| {
+                Some(Variable {
+                    key: v.get("key")?.as_str()?.to_string(),
+                    value: text_of(v.get("value")),
+                    secret: v.get("type").and_then(Value::as_str) == Some("secret"),
+                    enabled: v.get("enabled") != Some(&Value::Bool(false)),
+                })
+            })
+            .collect())
+    };
+    match root.get("_postman_variable_scope").and_then(Value::as_str) {
+        Some("environment") => Ok(Imported::Environment(Environment { id: uuid::Uuid::new_v4().to_string(), name: text_of(root.get("name")), variables: values()?, trusted_cert: None, agent: Default::default() })),
+        Some("globals") => Ok(Imported::Globals(values()?)),
+        Some(other) => Err(HttpError::NotACollection(format!("it is Postman {other} variables, which Kibo does not import"))),
+        None => {
+            let mut collection = Collection::parse(text)?;
+            collection.ensure_ids();
+            Ok(Imported::Collection(collection))
+        }
+    }
+}
+
+/// An environment as Postman imports it; a secret's value only when asked for, empty otherwise.
+pub fn environment_to_postman(environment: &Environment, with_secrets: bool) -> String {
+    variables_to_postman(serde_json::json!({"id": environment.id, "name": environment.name}), &environment.variables, "environment", with_secrets)
+}
+
+/// Globals as Postman imports them, the same way.
+pub fn globals_to_postman(globals: &[Variable], with_secrets: bool) -> String {
+    variables_to_postman(serde_json::json!({"name": "Globals"}), globals, "globals", with_secrets)
+}
+
+fn variables_to_postman(mut file: Value, variables: &[Variable], scope: &str, with_secrets: bool) -> String {
+    let values: Vec<Value> = variables
+        .iter()
+        .map(|v| {
+            let value = if v.secret && !with_secrets { "" } else { v.value.as_str() };
+            serde_json::json!({"key": v.key, "value": value, "type": if v.secret { "secret" } else { "default" }, "enabled": v.enabled})
+        })
+        .collect();
+    file["values"] = Value::Array(values);
+    file["_postman_variable_scope"] = scope.into();
+    serde_json::to_string_pretty(&file).expect("a JSON value always serializes")
+}
+
+/// A request built for sending and for showing at once.
+struct Both {
+    sent: Outgoing,
+    shown: Outgoing,
+}
+
+impl Both {
+    fn new(method: &str, url: Filled) -> Both {
+        let make = |url: String| Outgoing { method: method.into(), url, headers: Vec::new(), body: None, digest: None };
+        Both { sent: make(url.sent), shown: make(url.shown) }
+    }
+
+    fn header(&mut self, key: Filled, value: Filled) {
+        self.sent.headers.push((key.sent, value.sent));
+        self.shown.headers.push((key.shown, value.shown));
+    }
+
+    fn has_header(&self, name: &str) -> bool {
+        self.sent.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(name))
+    }
+
+    fn query(&mut self, key: Filled, value: Filled) {
+        for (out, k, v) in [(&mut self.sent, key.sent, value.sent), (&mut self.shown, key.shown, value.shown)] {
+            let sep = if out.url.contains('?') { '&' } else { '?' };
+            out.url = format!("{}{sep}{k}={v}", out.url);
+        }
+    }
+
+    fn body(&mut self, body: Filled, content_type: &str) {
+        if !self.has_header("content-type") {
+            self.header(plain("Content-Type"), plain(content_type));
+        }
+        self.sent.body = Some(body.sent);
+        self.shown.body = Some(body.shown);
+    }
+
+    /// A multipart body. A `Content-Type` written without a boundary, as people
+    /// write one by hand, gets it: without one the server cannot read the parts.
+    fn form(&mut self, body: Filled, boundary: &str) {
+        for out in [&mut self.sent, &mut self.shown] {
+            for (_, value) in out.headers.iter_mut().filter(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+                if value.to_ascii_lowercase().starts_with("multipart/") && !value.contains("boundary=") {
+                    *value = format!("{value}; boundary={boundary}");
+                }
+            }
+        }
+        self.body(body, &format!("multipart/form-data; boundary={boundary}"));
+    }
+
+    fn done(self) -> Prepared {
+        Prepared { sent: self.sent, shown: self.shown }
+    }
+}
+
+fn plain(text: &str) -> Filled {
+    Filled { sent: text.into(), shown: text.into() }
+}
+
+/// As the `form-data` package writes one, which is what Postman sends: 26 dashes and 24 digits.
+fn form_boundary() -> String {
+    let digits: String = (0..24).map(|_| char::from(b'0' + rand::thread_rng().gen_range(0..10u8))).collect();
+    format!("{}{digits}", "-".repeat(26))
+}
+
+/// A `formdata` row's file: a path, or several. One never picked has no `src`.
+fn has_src(row: &Value) -> bool {
+    match row.get("src") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(path)) => !path.is_empty(),
+        Some(Value::Array(paths)) => !paths.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// One part of a multipart body. A file not picked goes as Postman sends it: `filename=""`, nothing in it (HC-0).
+fn form_part(boundary: &str, name: &str, value: &str, file: bool, content_type: Option<&str>) -> String {
+    // As browsers write a name: a quote or a line break would end the header.
+    let name = name.replace('"', "%22").replace('\r', "%0D").replace('\n', "%0A");
+    let filename = if file { "; filename=\"\"" } else { "" };
+    let content_type = content_type.map(|t| format!("Content-Type: {t}\r\n")).unwrap_or_default();
+    format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"{filename}\r\n{content_type}\r\n{value}\r\n")
+}
+
+/// Keys of an `auth` whose literal value is a setting and not a credential: shown
+/// as written. The rest of an `auth`'s literals are masked, and its addresses shown.
+const AUTH_SETTINGS: &[&str] = &["in", "key", "grant_type", "addTokenTo", "headerPrefix", "client_authentication", "scope", "algorithm", "tokenName"];
+
+/// The `auth` a request goes with, and the index in `chain` of the level that
+/// writes it: its own, else the nearest folder's, else the collection's (0).
+/// `inherit` written out passes it on — Postman's runtime sends nothing for it
+/// (HC-0), but inheriting is what was chosen in its window.
+fn auth_written<'a>(chain: &[&'a Map<String, Value>]) -> Option<(&'a Value, usize)> {
+    let (item, parents) = chain.split_last()?;
+    let own = item.get("request").and_then(|r| r.get("auth")).or_else(|| item.get("auth"));
+    let levels = std::iter::once((own, parents.len())).chain(parents.iter().enumerate().rev().map(|(i, level)| (level.get("auth"), i)));
+    levels.into_iter().find_map(|(auth, level)| auth.filter(|a| auth_of(a).is_some()).map(|a| (a, level)))
+}
+
+/// A written address cut where the model's edits go: the part that names the host,
+/// the path, the query — `{{baseUrl}}/orders?x=1` is `{{baseUrl}}`, `/orders`, `x=1`.
+/// A fragment is dropped: it is never sent.
+pub(crate) fn address_parts(written: &str) -> (String, String, String) {
+    let written = written.split('#').next().unwrap_or_default();
+    let (rest, query) = written.split_once('?').unwrap_or((written, ""));
+    let start = rest.find("://").filter(|&at| !rest[..at].contains('/')).map_or(0, |at| at + 3);
+    let end = rest[start..].find('/').map_or(rest.len(), |at| start + at);
+    (rest[..end].to_string(), rest[end..].to_string(), query.to_string())
+}
+
+/// A path the model wrote: from one `/`, and nothing that could start an address
+/// of its own or a query — `//evil.example`, `\\`.
+fn agent_path(path: &str) -> Result<String, HttpError> {
+    let path = path.trim();
+    if !path.starts_with('/') || path.starts_with("//") || path.contains(['\\', '?', '#']) {
+        return Err(HttpError::BadPath(path.into()));
+    }
+    Ok(path.to_string())
+}
+
+/// `literal_masked`, and the literal it masked kept in `hid`: the same text is
+/// masked wherever else it is written.
+fn hiding_literal(value: &str, scheme: bool, hid: &mut Vec<String>) -> String {
+    let shown = literal_masked(value, scheme);
+    if shown != value {
+        let trimmed = value.trim();
+        // `Bearer •••`: the word stayed, the rest is the literal.
+        let literal = if shown == SECRET_MASK { trimmed } else { trimmed.split_once(char::is_whitespace).map_or(trimmed, |(_, rest)| rest.trim()) };
+        hid.push(literal.to_string());
+    }
+    shown
+}
+
+/// `scheme://user:password@host…` with the password masked, and the password.
+pub(crate) fn userinfo_masked(url: &str) -> (String, Option<String>) {
+    static USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\s*[A-Za-z][A-Za-z0-9+.-]*://[^/?#@:]*):([^/?#@]+)@").expect("valid regex"));
+    match USERINFO.captures(url) {
+        Some(found) => (USERINFO.replace(url, format!("${{1}}:{SECRET_MASK}@")).into_owned(), Some(found[2].to_string())),
+        None => (url.to_string(), None),
+    }
+}
+
+/// `title` and a line per row — a header, a parameter, a form field — a credential's
+/// literal masked; none when there are no rows.
+fn section(lines: &mut Vec<String>, title: &str, rows: &[Value], hid: &mut Vec<String>) {
+    if rows.is_empty() {
+        return;
+    }
+    lines.push(title.into());
+    for row in rows {
+        let key = text_of(row.get("key"));
+        let value = match row.get("type").and_then(Value::as_str) {
+            Some("file") => format!("a file, {}", text_of(row.get("src"))),
+            _ if is_credential_name(&key) => hiding_literal(&text_of(row.get("value")), true, hid),
+            _ => text_of(row.get("value")),
+        };
+        let off = if row.get("disabled") == Some(&Value::Bool(true)) { " (off)" } else { "" };
+        lines.push(format!("  {key}: {value}{off}"));
+    }
+}
+
+/// A body as the agent reads it: a JSON field named as a credential masked, as a header is.
+/// A `graphql` query's own literals and a raw body that is not JSON are shown as written.
+fn body_lines(body: &Value, hid: &mut Vec<String>) -> Vec<String> {
+    let mode = body.get("mode").and_then(Value::as_str).unwrap_or("none");
+    match mode {
+        "none" => Vec::new(),
+        "raw" => {
+            let raw = text_of(body.get("raw"));
+            if raw.trim().is_empty() {
+                return Vec::new();
+            }
+            let language = body.pointer("/options/raw/language").and_then(Value::as_str).map(|l| format!(" {l}")).unwrap_or_default();
+            vec![format!("Body, raw{language}:"), json_masked(&raw, hid)]
+        }
+        "urlencoded" | "formdata" => {
+            let mut lines = Vec::new();
+            section(&mut lines, &format!("Body, {mode}:"), body.get(mode).and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default(), hid);
+            lines
+        }
+        "graphql" => {
+            let graphql = body.get("graphql");
+            let mut lines = vec!["Body, graphql:".to_string(), text_of(graphql.and_then(|g| g.get("query")))];
+            let variables = text_of(graphql.and_then(|g| g.get("variables")));
+            if !variables.trim().is_empty() {
+                lines.extend(["Its variables:".to_string(), json_masked(&variables, hid)]);
+            }
+            lines
+        }
+        "file" => vec![format!("Body: a file, {}", text_of(body.pointer("/file/src")))],
+        other => vec![format!("Body: {other}")],
+    }
+}
+
+/// What stands in a `{{name}}` written outside a JSON string while the rest is read.
+const PLACEHOLDER: &str = "@kibo-variable-";
+
+/// JSON text read as Postman's bodies are written: comments dropped, and a
+/// `{{name}}` outside a string — `{"count": {{n}}}` — a placeholder string, the
+/// names in order. None for what is not JSON even so.
+fn json_read(text: &str) -> Option<(Value, Vec<String>)> {
+    let text = strip_json_comments(text);
+    let (mut stood, mut names) = (String::with_capacity(text.len()), Vec::new());
+    let (mut in_string, mut escaped, mut i) = (false, false, 0);
+    while let Some(c) = text[i..].chars().next() {
+        if !in_string && text[i..].starts_with("{{") {
+            if let Some(found) = VARIABLE.find_at(&text, i).filter(|m| m.start() == i) {
+                stood.push_str(&format!("\"{PLACEHOLDER}{}@\"", names.len()));
+                names.push(found.as_str().to_string());
+                i = found.end();
+                continue;
+            }
+        }
+        match (in_string, escaped, c) {
+            (true, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (_, false, '"') => in_string = !in_string,
+            _ => {}
+        }
+        stood.push(c);
+        i += c.len_utf8();
+    }
+    serde_json::from_str(&stood).ok().map(|v| (v, names))
+}
+
+/// Each value written under a credential's name, at any depth — inside a list or
+/// an object under one too — given to `visit`, which says whether it changed it.
+fn under_credentials(v: &mut Value, under: bool, visit: &mut dyn FnMut(&mut Value) -> bool) -> bool {
+    match v {
+        Value::Object(map) => map.iter_mut().fold(false, |changed, (key, value)| under_credentials(value, under || is_credential_name(key), visit) | changed),
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| under_credentials(item, under, visit) | changed),
+        leaf if under => visit(leaf),
+        _ => false,
+    }
+}
+
+/// A placeholder's index, for a string that is one.
+fn placeholder(text: &str) -> Option<usize> {
+    text.strip_prefix(PLACEHOLDER)?.strip_suffix('@')?.parse().ok()
+}
+
+/// `"key": value` pairs of JSON text, for what does not read as JSON: a key, and
+/// a string, a number or a `{{name}}` after it.
+static PAIR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""((?:[^"\\]|\\.)*)"\s*:\s*("(?:[^"\\]|\\.)*"|\{\{[^{}]*\}\}|-?\d[\d.eE+-]*)"#).expect("valid regex"));
+
+/// JSON with every string and number under a credential's name masked, indented;
+/// as written when nothing is — its comments kept. Text that does not read as JSON
+/// has its `"key": value` pairs masked where they stand.
+fn json_masked(text: &str, hid: &mut Vec<String>) -> String {
+    let Some((mut v, names)) = json_read(text) else {
+        return PAIR
+            .replace_all(text, |pair: &regex::Captures| {
+                let value = &pair[2];
+                if !is_credential_name(&pair[1]) || value.starts_with("{{") {
+                    return pair[0].to_string();
+                }
+                let inner = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value);
+                let shown = hiding_literal(inner, true, hid);
+                let quoted = if value.starts_with('"') { format!("\"{shown}\"") } else { format!("\"{SECRET_MASK}\"") };
+                pair[0].replacen(value, &quoted, 1)
+            })
+            .into_owned();
+    };
+    let changed = under_credentials(&mut v, false, &mut |leaf| match leaf {
+        Value::String(text) if placeholder(text).is_some() => false,
+        Value::String(text) => {
+            let shown = hiding_literal(text, true, hid);
+            let changed = shown != *text;
+            *text = shown;
+            changed
+        }
+        Value::Number(n) => {
+            hid.push(n.to_string());
+            *leaf = Value::String(SECRET_MASK.into());
+            true
+        }
+        _ => false,
+    });
+    if !changed {
+        return text.to_string();
+    }
+    let pretty = serde_json::to_string_pretty(&v).unwrap_or_else(|_| SECRET_MASK.into());
+    names.iter().enumerate().fold(pretty, |pretty, (i, name)| pretty.replace(&format!("\"{PLACEHOLDER}{i}@\""), name))
+}
+
+/// The `{{name}}`s written under a credential's name in JSON text — a raw body, a
+/// `graphql` query's variables: a variable there holds a secret as a header's would.
+pub(crate) fn json_credential_names(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    match json_read(text) {
+        Some((mut v, names)) => {
+            under_credentials(&mut v, false, &mut |leaf| {
+                if let Value::String(text) = leaf {
+                    match placeholder(text) {
+                        Some(i) => found.extend(names.get(i).into_iter().flat_map(|n| names_in(n)).map(String::from)),
+                        None => found.extend(names_in(text).map(String::from)),
+                    }
+                }
+                false
+            });
+        }
+        None => {
+            for pair in PAIR.captures_iter(text).filter(|pair| is_credential_name(&pair[1])) {
+                found.extend(names_in(&pair[2]).map(String::from));
+            }
+        }
+    }
+    found
+}
+
+/// A level's scripts that would run, as `(listen, code)`.
+fn scripts_of(level: &Map<String, Value>) -> Vec<(String, String)> {
+    let events = level.get("event").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    events.iter().filter_map(|e| Some((e.get("listen")?.as_str()?.to_string(), running_code(e)?))).collect()
+}
+
+/// An event's code when it runs: not turned off by its author, and not blank.
+fn running_code(event: &Value) -> Option<String> {
+    if event.get("disabled") == Some(&Value::Bool(true)) {
+        return None;
+    }
+    let code = match event.get("script")?.get("exec")? {
+        Value::Array(lines) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+        other => text_of(Some(other)),
+    };
+    (!code.trim().is_empty()).then_some(code)
+}
+
+/// A value as text: Postman writes most as strings, some as numbers or `true`.
+pub(crate) fn text_of(v: Option<&Value>) -> String {
+    match v {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// A request's address as written, `{{baseUrl}}` and all: `url` as text, or its `raw`.
+pub(crate) fn raw_url(url: Option<&Value>) -> String {
+    match url {
+        Some(Value::Object(u)) => text_of(u.get("raw")),
+        other => text_of(other),
+    }
+}
+
+/// A request's address: `url` as text, or its `raw` with each `:name` path segment
+/// replaced from `url.variable` — not in the query, as Postman does (HC-0).
+fn url_of(url: Option<&Value>) -> String {
+    let Some(Value::Object(u)) = url else { return text_of(url) };
+    let raw = text_of(u.get("raw"));
+    let vars = u.get("variable").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let (path, query) = raw.split_at(raw.find('?').unwrap_or(raw.len()));
+    let path: Vec<String> = path
+        .split('/')
+        .map(|segment| {
+            let found = segment.strip_prefix(':').and_then(|name| vars.iter().find(|v| v.get("key").and_then(Value::as_str) == Some(name)));
+            found.map_or_else(|| segment.to_string(), |v| text_of(v.get("value")))
+        })
+        .collect();
+    path.join("/") + query
+}
+
+/// An auth object, or None where it passes the parent's on (`inherit`, `null`).
+fn auth_of(v: &Value) -> Option<Auth> {
+    let kind = v.get("type")?.as_str()?;
+    let param = |name: &str| -> String {
+        let rows = v.get(kind).and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        text_of(rows.iter().find(|r| r.get("key").and_then(Value::as_str) == Some(name)).and_then(|r| r.get("value")))
+    };
+    Some(match kind {
+        "inherit" => return None,
+        "noauth" => Auth::None,
+        "bearer" => Auth::Bearer { token: param("token") },
+        "basic" => Auth::Basic { username: param("username"), password: param("password") },
+        "apikey" => Auth::ApiKey { key: param("key"), value: param("value"), in_query: param("in") == "query" },
+        "digest" => Auth::Digest { username: param("username"), password: param("password") },
+        "oauth2" => Auth::OAuth2(OAuth2 {
+            access_token: param("accessToken"),
+            // Absent is Postman's default; written empty, the token goes alone.
+            prefix: if has(v, kind, "headerPrefix") { param("headerPrefix").trim().to_string() } else { "Bearer".into() },
+            in_query: param("addTokenTo") == "queryParams",
+            grant: param("grant_type"),
+            token_url: param("accessTokenUrl"),
+            refresh_url: param("refreshTokenUrl"),
+            client_id: param("clientId"),
+            client_secret: param("clientSecret"),
+            scope: param("scope"),
+            username: param("username"),
+            password: param("password"),
+            client_in_body: param("client_authentication") == "body",
+        }),
+        other => Auth::Other(other.into()),
+    })
+}
+
+fn has(auth: &Value, kind: &str, name: &str) -> bool {
+    auth.get(kind).and_then(Value::as_array).is_some_and(|rows| rows.iter().any(|r| r.get("key").and_then(Value::as_str) == Some(name)))
+}
+
+/// What Postman sets for a raw body's language when the request sets no Content-Type.
+fn content_type(language: &str) -> &'static str {
+    match language {
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "html" => "text/html",
+        "javascript" => "application/javascript",
+        _ => "text/plain",
+    }
+}
+
+/// `encodeURIComponent`, as the window encodes a form.
+pub(crate) const FORM: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'!').remove(b'~').remove(b'*').remove(b'\'').remove(b'(').remove(b')');
+
+pub(crate) fn encode_form(text: &str) -> String {
+    utf8_percent_encode(text, FORM).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::http_client::{HistoryEntry, Outcome};
+    use serde_json::json;
+
+    const PROBE: &str = include_str!("../infra/testdata/postman/probe.postman_collection.json");
+
+    fn wire(name: &str) -> String {
+        let path = format!("{}/src/infra/testdata/postman/wire/{name}.http", env!("CARGO_MANIFEST_DIR"));
+        String::from_utf8(std::fs::read(path).expect("wire file")).expect("utf-8")
+    }
+
+    /// A header's value as Postman sent it, and the body after the blank line.
+    fn wire_header(name: &str, header: &str) -> String {
+        let text = wire(name);
+        let head = text.split("\r\n\r\n").next().unwrap_or_default();
+        head.lines().find_map(|l| l.strip_prefix(&format!("{header}: "))).map(|v| v.trim_end().to_string()).unwrap_or_default()
+    }
+
+    fn wire_body(name: &str) -> String {
+        wire(name).split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default()
+    }
+
+    fn probe() -> Collection {
+        let mut c = Collection::parse(PROBE).unwrap();
+        c.ensure_ids();
+        c
+    }
+
+    fn id_of(c: &Collection, name: &str) -> String {
+        fn walk(items: &[Value], name: &str) -> Option<String> {
+            items.iter().find_map(|i| {
+                if i["name"] == name {
+                    return i["id"].as_str().map(String::from);
+                }
+                walk(i.get("item")?.as_array()?, name)
+            })
+        }
+        walk(c.root["item"].as_array().unwrap(), name).unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    fn var(key: &str, value: &str) -> Variable {
+        Variable { key: key.into(), value: value.into(), secret: false, enabled: true }
+    }
+
+    fn prepare(c: &Collection, name: &str, environment: &[Variable]) -> Result<Prepared, HttpError> {
+        let collection = c.variables();
+        c.prepare(&id_of(c, name), &Scope::new(&[&collection, environment]))
+    }
+
+    fn header<'a>(o: &'a Outgoing, name: &str) -> Option<&'a str> {
+        o.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn a_script_changed_at_any_level_changes_the_hash() {
+        let digest = |root: &str, folder: &str, request: &str| {
+            let event = |code: &str| json!([{"listen": "test", "script": {"exec": [code]}}]);
+            let item = json!({"id": "r", "name": "R", "event": event(request), "request": "http://a.test"});
+            let file = json!({"info": {"name": "C", "schema": SCHEMA}, "event": event(root), "item": [{"id": "f", "name": "F", "event": event(folder), "item": [item]}]});
+            Collection::parse(&file.to_string()).unwrap().scripts_digest().unwrap()
+        };
+        let base = digest("1", "2", "3");
+        assert_eq!(base.count, 3);
+        assert_eq!(base, digest("1", "2", "3"));
+        for changed in [digest("9", "2", "3"), digest("1", "9", "3"), digest("1", "2", "9")] {
+            assert_ne!(base.hash, changed.hash);
+        }
+        let fields = |id: &str, listen: &str| {
+            let item = json!({"id": id, "name": "R", "event": [{"listen": listen, "script": {"exec": ["1"]}}], "request": "http://a.test"});
+            let file = json!({"info": {"name": "C", "schema": SCHEMA}, "item": [item]});
+            Collection::parse(&file.to_string()).unwrap().scripts_digest().unwrap().hash
+        };
+        assert_ne!(fields("a", "test"), fields("at", "est"), "one field cannot be written to read as the next");
+    }
+
+    #[test]
+    fn a_script_turned_off_or_empty_does_not_run_and_asks_for_no_trust() {
+        let with = |event: Value| {
+            let file = json!({"info": {"name": "C", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"}, "item": [{"id": "r", "name": "R", "event": [event], "request": "http://a.test"}]});
+            Collection::parse(&file.to_string()).unwrap()
+        };
+        let off = with(json!({"listen": "test", "disabled": true, "script": {"exec": ["1"]}}));
+        assert_eq!((off.scripts_digest(), off.scripts("r", "test").unwrap(), off.all_scripts()), (None, Vec::new(), Vec::new()));
+        let empty = with(json!({"listen": "test", "script": {"exec": ["  ", ""]}}));
+        assert_eq!((empty.scripts_digest(), empty.scripts("r", "test").unwrap(), empty.all_scripts()), (None, Vec::new(), Vec::new()));
+        let on = with(json!({"listen": "test", "script": {"exec": ["1"]}}));
+        assert_eq!((on.scripts_digest().map(|d| d.count), on.scripts("r", "test").unwrap()), (Some(1), vec![("request \"R\"".to_string(), "1".to_string())]));
+    }
+
+    /// A request's script written from the page: in place of those of its kind that run,
+    /// one event with the first one's fields; the turned-off one, the other kind and the
+    /// order stay; blank code takes them away; read back, the code is what was written.
+    #[test]
+    fn a_script_written_replaces_those_that_run_and_keeps_the_rest() {
+        let file = json!({
+            "info": {"name": "C", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [
+                {"id": "f", "name": "F", "item": [{"id": "r", "name": "R", "request": "x", "event": [
+                    {"listen": "test", "script": {"exec": ["t()"]}},
+                    {"listen": "prerequest", "id": "e1", "script": {"id": "s1", "type": "text/javascript", "packages": {}, "exec": ["a()"]}},
+                    {"listen": "prerequest", "disabled": true, "script": {"exec": ["off()"]}},
+                    {"listen": "prerequest", "script": {"exec": ["b()"]}},
+                ]}]},
+                {"id": "bare", "name": "Bare", "request": "x"},
+            ],
+        });
+        let mut c = Collection::parse(&file.to_string()).unwrap();
+        assert_eq!(c.set_script("r", "prerequest", "new()\nmore()\n").unwrap(), ["a()", "b()"]);
+        assert_eq!(
+            c.item_mut("r").unwrap()["event"],
+            json!([
+                {"listen": "test", "script": {"exec": ["t()"]}},
+                {"listen": "prerequest", "id": "e1", "script": {"id": "s1", "type": "text/javascript", "packages": {}, "exec": ["new()", "more()", ""]}},
+                {"listen": "prerequest", "disabled": true, "script": {"exec": ["off()"]}},
+            ])
+        );
+        assert_eq!(c.scripts("r", "prerequest").unwrap(), [("request \"R\"".to_string(), "new()\nmore()\n".to_string())]);
+
+        assert_eq!(c.set_script("r", "prerequest", "  \n").unwrap(), ["new()\nmore()\n"]);
+        assert_eq!(c.item_mut("r").unwrap()["event"], json!([{"listen": "test", "script": {"exec": ["t()"]}}, {"listen": "prerequest", "disabled": true, "script": {"exec": ["off()"]}}]));
+
+        assert_eq!(c.set_script("bare", "prerequest", " ").unwrap(), Vec::<String>::new());
+        assert!(!c.item_mut("bare").unwrap().contains_key("event"), "blank where there was none adds nothing");
+        assert_eq!(c.set_script("bare", "test", "check()").unwrap(), Vec::<String>::new());
+        assert_eq!(c.item_mut("bare").unwrap()["event"], json!([{"listen": "test", "script": {"type": "text/javascript", "exec": ["check()"]}}]));
+        assert!(matches!(c.set_script("f", "test", "x()"), Err(HttpError::NoSuchItem(_))), "a folder's scripts are not written here");
+
+        // Postman's empty script is written over, its fields kept, not left beside a second one.
+        let exported = c.item_mut("bare").unwrap();
+        exported.insert("event".into(), json!([{"listen": "prerequest", "script": {"id": "p1", "type": "text/javascript", "exec": [""]}}, {"listen": "prerequest", "script": "odd"}]));
+        assert_eq!(c.set_script("bare", "prerequest", "go()").unwrap(), Vec::<String>::new());
+        assert_eq!(c.item_mut("bare").unwrap()["event"], json!([{"listen": "prerequest", "script": {"id": "p1", "type": "text/javascript", "exec": ["go()"]}}, {"listen": "prerequest", "script": "odd"}]));
+        assert!(matches!(c.set_script("nowhere", "test", "x()"), Err(HttpError::NoSuchItem(_))));
+    }
+
+    /// Each level's scripts by the hash of their code alone, where they are and when
+    /// they run: the same code has the same hash anywhere, other code another.
+    #[test]
+    fn every_level_lists_its_scripts_by_the_hash_of_their_code() {
+        let event = |listen: &str, code: &str| json!({"listen": listen, "script": {"exec": [code]}});
+        let item = json!({"id": "r", "name": "Login", "event": [event("test", "a"), event("test", "b")], "request": "http://a.test"});
+        let file = json!({"info": {"name": "Shop", "schema": SCHEMA}, "event": [event("prerequest", "a")], "item": [{"id": "f", "name": "Admin", "event": [event("prerequest", "c")], "item": [item]}]});
+        let c = Collection::parse(&file.to_string()).unwrap();
+        let level = |item: Option<&str>, listen: &str, codes: &[&str]| LevelScripts { item: item.map(String::from), listen: listen.into(), codes: codes.iter().map(|code| code.to_string()).collect(), hashes: codes.iter().map(|code| script_hash(code)).collect() };
+        assert_eq!(c.all_scripts(), [level(None, "prerequest", &["a"]), level(Some("f"), "prerequest", &["c"]), level(Some("r"), "test", &["a", "b"])]);
+        assert_ne!(script_hash("a"), script_hash("a "));
+        let at = |listen: &str| c.scripts("r", listen).unwrap();
+        assert_eq!(at("prerequest"), [("collection \"Shop\"".to_string(), "a".to_string()), ("folder \"Admin\"".to_string(), "c".to_string())]);
+        assert_eq!(at("test"), [("request \"Login\"".to_string(), "a".to_string()), ("request \"Login\"".to_string(), "b".to_string())]);
+    }
+
+    #[test]
+    fn a_postman_export_is_written_back_byte_for_byte() {
+        assert_eq!(Collection::parse(PROBE).unwrap().to_text(), PROBE);
+    }
+
+    #[test]
+    fn every_folder_and_request_gets_an_id_and_nothing_else_changes() {
+        let mut c = Collection::parse(PROBE).unwrap();
+        assert_eq!(c.ensure_ids(), 14, "4 folders and 10 requests, none with an id");
+        assert_eq!(c.ensure_ids(), 0, "an id is given once");
+        let text = c.to_text();
+        let without: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("\"id\": ")).collect();
+        assert_eq!(without.join("\n"), PROBE);
+        let ids: std::collections::HashSet<&str> = text.lines().filter_map(|l| l.trim_start().strip_prefix("\"id\": ")).collect();
+        assert_eq!(ids.len(), 14, "each id is its own");
+    }
+
+    #[test]
+    fn editing_one_request_changes_only_its_line() {
+        let mut c = probe();
+        let before = c.to_text();
+        let id = id_of(&c, "urlencoded");
+        c.item_mut(&id).unwrap()["request"]["method"] = json!("PUT");
+        let after = c.to_text();
+        let changed: Vec<(&str, &str)> = before.lines().zip(after.lines()).filter(|(a, b)| a != b).collect();
+        assert_eq!(changed, vec![("            \"method\": \"POST\",", "            \"method\": \"PUT\",")]);
+        assert_eq!(before.lines().count(), after.lines().count());
+    }
+
+    #[test]
+    fn the_tree_is_added_to_renamed_and_cut_where_the_page_says() {
+        let mut c = Collection::parse(&Collection::new("c", "Shop").to_text()).unwrap();
+        c.set_name("Store");
+        assert_eq!(c.name(), "Store");
+        c.add(None, json!({"id": "f", "name": "F", "item": []})).unwrap();
+        c.add(Some("f"), json!({"id": "g", "name": "G", "item": []})).unwrap();
+        c.add(Some("g"), json!({"id": "deep", "name": "Deep", "request": {"url": "/d"}})).unwrap();
+        c.add(None, json!({"id": "top", "name": "Top", "event": [{"listen": "test"}], "request": {"url": "/t"}})).unwrap();
+        assert!(matches!(c.add(Some("top"), json!({"id": "x"})), Err(HttpError::NoSuchItem(_))), "a request holds nothing");
+        assert!(matches!(c.add(None, json!({"id": "../x"})), Err(HttpError::BadId(_))));
+        assert!(matches!(c.add(None, json!({"name": "no id"})), Err(HttpError::BadId(_))));
+
+        c.set_request("top", json!({"method": "PUT", "url": "/u"})).unwrap();
+        assert_eq!(c.json()["item"][1], json!({"id": "top", "name": "Top", "event": [{"listen": "test"}], "request": {"method": "PUT", "url": "/u"}}));
+        assert!(matches!(c.set_request("f", json!({})), Err(HttpError::NoSuchItem(_))), "a folder has no request");
+
+        c.add(Some("g"), json!({"id": "Deeper", "name": "Deeper", "request": {"url": "/e"}})).unwrap();
+        assert!(c.ids().contains(&"deeper".to_string()), "lowercased, as a file name compares them");
+        assert_eq!(c.remove("Deeper").unwrap(), ["Deeper"], "found below the top");
+        assert_eq!(c.remove("f").unwrap(), ["deep"]);
+        assert_eq!(c.ids(), ["top"]);
+        assert!(matches!(c.remove("f"), Err(HttpError::NoSuchItem(_))));
+    }
+
+    #[test]
+    fn an_id_another_collection_has_is_replaced_and_no_other() {
+        let mut c = probe();
+        let ids = c.ids();
+        let taken = std::collections::HashSet::from([ids[0].clone()]);
+        assert_eq!(c.ensure_ids_besides(&taken), 1);
+        let now = c.ids();
+        assert_ne!(now[0], ids[0]);
+        assert_eq!(now[1..], ids[1..]);
+    }
+
+    #[test]
+    fn what_is_not_v2_1_is_named() {
+        let named = |text: &str| match Collection::parse(text) {
+            Err(HttpError::NotACollection(why)) => why,
+            Ok(_) => panic!("{text} parsed"),
+            Err(other) => panic!("{other:?}"),
+        };
+        assert_eq!(named(r#"{"info": {"schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json"}}"#), "it is v2.0 — export it from Postman as v2.1");
+        assert!(named(r#"{"name": "e", "values": [], "_postman_variable_scope": "environment"}"#).contains("environment"));
+        assert!(named(r#"{"id": "x", "requests": []}"#).contains("v1"));
+        assert!(named(r#"{"a": 1}"#).contains("info.schema"));
+        assert!(named("not json").contains("not JSON"));
+        assert!(named(r#"{"info": {"schema": "https://schema.postman.com/json/collection/v2.1.0/collection.json"}, "item": {}}"#).contains("item"));
+    }
+
+    #[test]
+    fn raw_urlencoded_basic_and_apikey_leave_as_postman_sent_them() {
+        let c = probe();
+        let raw = prepare(&c, "raw-json", &[]).unwrap().sent;
+        assert_eq!((raw.method.as_str(), raw.url.as_str()), ("POST", "http://127.0.0.1:8099/api/echo"));
+        assert_eq!(raw.headers, vec![("Content-Type".to_string(), wire_header("01-raw-json", "Content-Type"))]);
+        assert_eq!(raw.body.as_deref(), Some(wire_body("01-raw-json").as_str()));
+
+        let form = prepare(&c, "urlencoded", &[]).unwrap().sent;
+        assert_eq!(form.body.as_deref(), Some(wire_body("02-urlencoded").as_str()));
+        assert_eq!(header(&form, "Content-Type"), Some(wire_header("02-urlencoded", "Content-Type").as_str()));
+
+        let basic = prepare(&c, "basic-auth", &[]).unwrap().sent;
+        assert_eq!(header(&basic, "Authorization"), Some(wire_header("05-basic-auth", "Authorization").as_str()));
+        assert_eq!(basic.body, None);
+
+        let key = prepare(&c, "apikey-header", &[]).unwrap().sent;
+        assert_eq!(header(&key, "X-API-Key"), Some(wire_header("06-apikey-header", "X-API-Key").as_str()));
+        let query = prepare(&c, "apikey-query", &[]).unwrap().sent;
+        let line = wire("07-apikey-query");
+        assert!(line.starts_with(&format!("GET {} ", query.url.trim_start_matches("http://127.0.0.1:8099"))), "{}", query.url);
+    }
+
+    /// One request in a collection of its own: `request` over `POST http://a.test/x`.
+    fn one(request: Value) -> Collection {
+        let mut base = json!({"method": "POST", "url": "http://a.test/x"});
+        base.as_object_mut().unwrap().extend(request.as_object().unwrap().clone());
+        let file = json!({"info": {"name": "C", "schema": SCHEMA}, "item": [{"id": "r", "name": "R", "request": base}]});
+        Collection::parse(&file.to_string()).unwrap()
+    }
+
+    fn form(rows: Value) -> Collection {
+        one(json!({"body": {"mode": "formdata", "formdata": rows}}))
+    }
+
+    fn boundary_of(o: &Outgoing) -> String {
+        header(o, "Content-Type").unwrap().split("boundary=").nth(1).unwrap().to_string()
+    }
+
+    #[test]
+    fn formdata_goes_as_postman_sent_it() {
+        let c = probe();
+        let sent = prepare(&c, "formdata-file", &[var("baseUrl", "http://127.0.0.1:8099")]).unwrap().sent;
+        let theirs = wire_header("03-formdata-file", "Content-Type");
+        let boundary = theirs.split("boundary=").nth(1).unwrap();
+        let ours = boundary_of(&sent);
+        assert_eq!(sent.body.unwrap().replace(&ours, boundary), wire_body("03-formdata-file"));
+        assert_eq!(sent.headers.last().map(|(k, _)| k.as_str()), Some("Content-Type"), "after the user's, as Postman's");
+    }
+
+    #[test]
+    fn a_form_part_by_part() {
+        let c = form(json!([
+            {"key": "file", "type": "file", "value": "not a part of a file row"},
+            {"key": "off", "value": "1", "type": "text", "disabled": true},
+            {"key": "", "value": "no name", "type": "text"},
+            {"key": "description", "type": "text", "value": "test upload"},
+            {"key": "meta", "type": "text", "value": "{}", "contentType": "application/json"},
+            {"key": "no src", "type": "file", "src": []},
+            {"key": "null src", "type": "file", "src": null}
+        ]));
+        let sent = c.prepare("r", &Scope::default()).unwrap().sent;
+        let b = boundary_of(&sent);
+        let expected = format!(
+            "--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\"\r\n\r\n\r\n\
+             --{b}\r\nContent-Disposition: form-data; name=\"description\"\r\n\r\ntest upload\r\n\
+             --{b}\r\nContent-Disposition: form-data; name=\"meta\"\r\nContent-Type: application/json\r\n\r\n{{}}\r\n\
+             --{b}\r\nContent-Disposition: form-data; name=\"no src\"; filename=\"\"\r\n\r\n\r\n\
+             --{b}\r\nContent-Disposition: form-data; name=\"null src\"; filename=\"\"\r\n\r\n\r\n\
+             --{b}--\r\n"
+        );
+        assert_eq!(sent.body.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn a_boundary_is_postmans_shape_new_each_time_and_the_same_in_what_is_shown() {
+        let c = form(json!([{"key": "a", "value": "1"}]));
+        let (one, two) = (c.prepare("r", &Scope::default()).unwrap(), c.prepare("r", &Scope::default()).unwrap());
+        let b = boundary_of(&one.sent);
+        assert_eq!(b.len(), 50);
+        assert!(b.starts_with(&"-".repeat(26)) && b[26..].bytes().all(|d| d.is_ascii_digit()), "{b}");
+        assert_ne!(b, boundary_of(&two.sent));
+        assert_eq!(b, boundary_of(&one.shown));
+        assert!(one.shown.body.unwrap().contains(&b));
+    }
+
+    #[test]
+    fn a_form_fills_its_variables_and_masks_its_secrets() {
+        let c = form(json!([{"key": "{{k}}", "value": "{{token}}"}, {"key": "x", "value": "{{nowhere}}"}]));
+        let vars = [var("k", "name"), Variable { secret: true, ..var("token", "t0k") }];
+        let scope = Scope::new(&[&vars[..]]);
+        assert_eq!(c.prepare("r", &scope), Err(HttpError::UnknownVariables(vec!["nowhere".into()])));
+        let c = form(json!([{"key": "{{k}}", "value": "{{token}}"}]));
+        let done = c.prepare("r", &scope).unwrap();
+        assert!(done.sent.body.as_deref().unwrap().contains("name=\"name\"\r\n\r\nt0k\r\n"));
+        assert!(done.shown.body.as_deref().unwrap().contains("name=\"name\"\r\n\r\n•••\r\n"));
+    }
+
+    #[test]
+    fn a_name_cannot_end_its_header() {
+        let sent = form(json!([{"key": "a\"b\r\nX: 1", "value": "v"}])).prepare("r", &Scope::default()).unwrap().sent;
+        assert!(sent.body.unwrap().contains("name=\"a%22b%0D%0AX: 1\"\r\n"));
+    }
+
+    #[test]
+    fn a_real_file_is_refused_by_name_and_one_turned_off_is_not() {
+        let refused = Err(HttpError::UnsupportedBody("formdata file".into()));
+        assert_eq!(form(json!([{"key": "f", "type": "file", "src": "/etc/hosts"}])).prepare("r", &Scope::default()), refused);
+        assert_eq!(form(json!([{"key": "f", "type": "file", "src": ["/etc/hosts"]}])).prepare("r", &Scope::default()), refused);
+        assert!(form(json!([{"key": "f", "type": "file", "src": ""}])).prepare("r", &Scope::default()).is_ok());
+        assert!(form(json!([{"key": "f", "type": "file", "src": "/etc/hosts", "disabled": true}])).prepare("r", &Scope::default()).is_ok());
+        assert!(form(json!([{"key": "f", "type": "text", "src": "/etc/hosts"}])).prepare("r", &Scope::default()).is_ok(), "src on a text row means nothing");
+    }
+
+    #[test]
+    fn a_multipart_type_written_by_hand_gets_the_boundary_and_another_stays() {
+        let with = |value: &str| {
+            let c = one(json!({"header": [{"key": "content-type", "value": value}], "body": {"mode": "formdata", "formdata": [{"key": "a", "value": "1"}]}}));
+            c.prepare("r", &Scope::default()).unwrap()
+        };
+        let by_hand = with("multipart/form-data");
+        let b = by_hand.sent.body.as_deref().unwrap().lines().next().unwrap().strip_prefix("--").unwrap().to_string();
+        assert_eq!(header(&by_hand.sent, "content-type"), Some(format!("multipart/form-data; boundary={b}").as_str()));
+        assert_eq!(header(&by_hand.shown, "content-type"), Some(format!("multipart/form-data; boundary={b}").as_str()));
+        assert_eq!(by_hand.sent.headers.len(), 1, "not a second one");
+        assert_eq!(header(&with("multipart/form-data; boundary=mine").sent, "content-type"), Some("multipart/form-data; boundary=mine"), "the user's own");
+        assert_eq!(header(&with("text/plain").sent, "content-type"), Some("text/plain"));
+    }
+
+    #[test]
+    fn a_token_written_plainly_is_shown_masked() {
+        let done = oauth(json!([{"key": "accessToken", "value": "pasted"}])).prepare("r", &Scope::default()).unwrap();
+        assert_eq!(header(&done.sent, "authorization"), Some("Bearer pasted"));
+        assert_eq!(header(&done.shown, "authorization"), Some(format!("Bearer {SECRET_MASK}").as_str()));
+    }
+
+    fn oauth(rows: Value) -> Collection {
+        one(json!({"auth": {"type": "oauth2", "oauth2": rows}}))
+    }
+
+    #[test]
+    fn oauth2_reads_its_settings_as_postman_writes_them() {
+        let c = oauth(json!([
+            {"key": "accessToken", "value": "t"}, {"key": "grant_type", "value": "password_credentials"}, {"key": "accessTokenUrl", "value": "http://a.test/token"},
+            {"key": "refreshTokenUrl", "value": "http://a.test/refresh"}, {"key": "clientId", "value": "id"}, {"key": "clientSecret", "value": "s"}, {"key": "scope", "value": "read"},
+            {"key": "username", "value": "u"}, {"key": "password", "value": "p"}, {"key": "client_authentication", "value": "body"}, {"key": "addTokenTo", "value": "queryParams"}, {"key": "headerPrefix", "value": "Token"}
+        ]));
+        let expected = OAuth2 {
+            access_token: "t".into(), prefix: "Token".into(), in_query: true, grant: "password_credentials".into(), token_url: "http://a.test/token".into(), refresh_url: "http://a.test/refresh".into(),
+            client_id: "id".into(), client_secret: "s".into(), scope: "read".into(), username: "u".into(), password: "p".into(), client_in_body: true,
+        };
+        assert_eq!(c.auth_for("r").unwrap(), Auth::OAuth2(expected));
+        let Auth::OAuth2(plain) = oauth(json!([])).auth_for("r").unwrap() else { panic!("oauth2") };
+        assert_eq!((plain.prefix.as_str(), plain.in_query, plain.client_in_body), ("Bearer", false, false));
+    }
+
+    #[test]
+    fn a_saved_token_goes_as_postman_sent_it() {
+        let c = probe();
+        let sent = prepare(&c, "oauth2", &[var("baseUrl", "http://a.test"), var("access_token", "t0k")]).unwrap().sent;
+        assert_eq!(header(&sent, "Authorization"), Some("Bearer t0k"));
+        // The one difference from wire 10, on purpose: a variable found nowhere stops the send.
+        assert_eq!(prepare(&c, "oauth2", &[var("baseUrl", "http://a.test")]), Err(HttpError::UnknownVariables(vec!["access_token".into()])));
+    }
+
+    #[test]
+    fn oauth2_goes_where_it_is_told_with_the_prefix_it_is_told() {
+        let token = |rows: Value| oauth(rows).prepare("r", &Scope::default()).unwrap().sent;
+        let t = json!({"key": "accessToken", "value": "t"});
+        assert_eq!(token(json!([t, {"key": "headerPrefix", "value": "Token"}])).headers, vec![("Authorization".to_string(), "Token t".to_string())]);
+        assert_eq!(token(json!([t, {"key": "headerPrefix", "value": ""}])).headers, vec![("Authorization".to_string(), "t".to_string())], "written empty, the token goes alone");
+        assert_eq!(token(json!([t, {"key": "headerPrefix", "value": " Token "}])).headers, vec![("Authorization".to_string(), "Token t".to_string())], "trimmed, as Postman does");
+        let query = token(json!([t, {"key": "addTokenTo", "value": "queryParams"}]));
+        assert_eq!((query.url.as_str(), query.headers.len()), ("http://a.test/x?access_token=t", 0));
+        assert_eq!(token(json!([])).headers, vec![], "no token, no auth, as Postman");
+        assert_eq!(token(json!([{"key": "accessToken", "value": ""}, {"key": "addTokenTo", "value": "queryParams"}])).url, "http://a.test/x");
+    }
+
+    #[test]
+    fn a_token_got_for_the_send_takes_the_files_place_and_is_masked() {
+        let c = oauth(json!([{"key": "accessToken", "value": "{{nowhere}}"}]));
+        let done = c.prepare_with("r", &Scope::default(), Some("fresh")).unwrap();
+        assert_eq!(header(&done.sent, "Authorization"), Some("Bearer fresh"));
+        assert_eq!(header(&done.shown, "Authorization"), Some("Bearer •••"));
+        let c = oauth(json!([{"key": "addTokenTo", "value": "queryParams"}]));
+        let done = c.prepare_with("r", &Scope::default(), Some("fresh")).unwrap();
+        assert_eq!((done.sent.url.as_str(), done.shown.url.as_str()), ("http://a.test/x?access_token=fresh", "http://a.test/x?access_token=•••"));
+    }
+
+    #[test]
+    fn an_authorization_written_by_hand_stands_over_oauth2_and_digest() {
+        let header_row = json!([{"key": "authorization", "value": "Mine"}]);
+        let c = one(json!({"header": header_row, "auth": {"type": "oauth2", "oauth2": [{"key": "accessToken", "value": "t"}]}}));
+        assert_eq!(c.prepare("r", &Scope::default()).unwrap().sent.headers, vec![("authorization".to_string(), "Mine".to_string())]);
+        let c = one(json!({"header": header_row, "auth": {"type": "digest", "digest": [{"key": "username", "value": "u"}]}}));
+        assert_eq!(c.prepare("r", &Scope::default()).unwrap().sent.digest, None);
+    }
+
+    #[test]
+    fn digest_goes_to_the_sender_alone() {
+        let c = one(json!({"auth": {"type": "digest", "digest": [{"key": "username", "value": "{{u}}"}, {"key": "password", "value": "{{p}}"}]}}));
+        let vars = [var("u", "ann"), Variable { secret: true, ..var("p", "pw-secret") }];
+        let done = c.prepare("r", &Scope::new(&[&vars[..]])).unwrap();
+        assert_eq!(done.sent.digest, Some(("ann".to_string(), "pw-secret".to_string())));
+        assert!(done.sent.headers.is_empty(), "as wire 08: the first goes without");
+        assert_eq!(done.shown.digest, None);
+        assert!(!serde_json::to_string(&done.sent).unwrap().contains("pw-secret"), "nothing written out holds it");
+        let scope = Scope::default();
+        assert_eq!(c.prepare("r", &scope), Err(HttpError::UnknownVariables(vec!["u".into(), "p".into()])));
+    }
+
+    #[test]
+    fn what_is_kept_from_postman_but_not_sent_is_named() {
+        let c = probe();
+        assert_eq!(prepare(&c, "graphql", &[]), Err(HttpError::UnsupportedBody("graphql".into())));
+        assert_eq!(c.prepare("nope", &Scope::default()), Err(HttpError::NoSuchItem("nope".into())));
+        assert_eq!(c.prepare(&id_of(&c, "Body Types"), &Scope::default()), Err(HttpError::NoSuchItem(id_of(&c, "Body Types"))), "a folder is not sent");
+    }
+
+    #[test]
+    fn inherit_passes_the_nearest_folders_auth_through_a_folder_without_one() {
+        let c = probe();
+        assert_eq!(prepare(&c, "inherited-get", &[]), Err(HttpError::UnknownVariables(vec!["access_token".into()])));
+        let sent = prepare(&c, "inherited-get", &[var("access_token", "probe-token")]).unwrap().sent;
+        assert_eq!(header(&sent, "Authorization"), Some("Bearer probe-token"));
+    }
+
+    #[test]
+    fn the_nearest_auth_wins_noauth_stops_it_and_inherit_at_the_top_is_none() {
+        let bearer = |t: &str| json!({"type": "bearer", "bearer": [{"key": "token", "value": t, "type": "string"}]});
+        let request = |id: &str, auth: Value| json!({"id": id, "name": id, "request": {"method": "GET", "auth": auth, "url": "https://x"}});
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "auth": bearer("top"),
+            "item": [
+                {"id": "f", "name": "f", "auth": bearer("folder"), "item": [request("near", json!({"type": "inherit"})), request("off", json!({"type": "noauth"})), request("null", Value::Null)]},
+                request("top", json!({"type": "inherit"})),
+                {"id": "g", "name": "g", "auth": {"type": "inherit"}, "item": [{"id": "h", "name": "h", "item": [request("deep", json!({"type": "inherit"}))]}]},
+            ],
+        }).to_string()).unwrap();
+        assert_eq!(c.auth_for("near"), Ok(Auth::Bearer { token: "folder".into() }));
+        assert_eq!(c.auth_for("null"), Ok(Auth::Bearer { token: "folder".into() }), "auth: null inherits too");
+        assert_eq!(c.auth_for("off"), Ok(Auth::None));
+        assert_eq!(c.auth_for("top"), Ok(Auth::Bearer { token: "top".into() }));
+        assert_eq!(c.auth_for("deep"), Ok(Auth::Bearer { token: "top".into() }), "through two folders that inherit");
+
+        let mut open = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "auth": {"type": "inherit"},
+            "item": [request("r", json!({"type": "inherit"}))],
+        }).to_string()).unwrap();
+        assert_eq!(open.auth_for("r"), Ok(Auth::None), "inherit at the collection is no auth");
+        open.item_mut("r").unwrap()["request"]["header"] = json!([{"key": "Authorization", "value": "Mine"}]);
+        open.root["auth"] = bearer("t");
+        let sent = open.prepare("r", &Scope::default()).unwrap().sent;
+        assert_eq!(sent.headers, vec![("Authorization".to_string(), "Mine".to_string())], "a header written by hand wins over auth");
+    }
+
+    #[test]
+    fn the_environment_beats_the_collection_which_beats_globals() {
+        let c = probe();
+        let collection = c.variables();
+        let id = id_of(&c, "basic-auth");
+        let globals = [var("baseUrl", "https://global")];
+        let env = [var("baseUrl", "https://staging")];
+        assert_eq!(c.prepare(&id, &Scope::new(&[&globals, &collection, &env])).unwrap().sent.url, "https://staging/api/basic");
+        assert_eq!(c.prepare(&id, &Scope::new(&[&globals, &collection])).unwrap().sent.url, "http://127.0.0.1:8099/api/basic");
+    }
+
+    #[test]
+    fn a_secret_leaves_and_is_shown_masked_and_comments_never_leave() {
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "variable": [{"key": "pass", "value": "hunter2", "secret": true}, {"key": "off", "value": "x", "disabled": true}],
+            "item": [
+                {"id": "json", "name": "json", "request": {"method": "POST", "url": {"raw": "https://x/{{id}}"},
+                    "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}"}]},
+                    "header": [{"key": "X-Off", "value": "{{nowhere}}", "disabled": true}],
+                    "body": {"mode": "raw", "raw": "{\n  // {{commented}}\n  \"a\": \"{{token}}\" /* {{also}} */\n}", "options": {"raw": {"language": "json"}}}}},
+                {"id": "basic", "name": "basic", "request": {"method": "GET", "url": "https://x",
+                    "auth": {"type": "basic", "basic": [{"key": "username", "value": "me"}, {"key": "password", "value": "{{pass}}"}]}}},
+                {"id": "form", "name": "form", "request": {"method": "POST", "url": "https://x",
+                    "body": {"mode": "urlencoded", "urlencoded": [{"key": "q", "value": "a b&{{token}}"}, {"key": "skip", "value": "1", "disabled": true}]}}},
+            ],
+        }).to_string()).unwrap();
+        let collection = c.variables();
+        let env = [var("id", "7"), Variable { secret: true, ..var("token", "t0k") }];
+        let scope = Scope::new(&[&collection, &env]);
+
+        let json = c.prepare("json", &scope).unwrap();
+        assert_eq!(header(&json.sent, "Authorization"), Some("Bearer t0k"));
+        assert_eq!(header(&json.shown, "Authorization"), Some("Bearer •••"));
+        assert_eq!(json.sent.body.as_deref(), Some("{\n  \"a\": \"t0k\" \n}"));
+        assert_eq!(json.shown.body.as_deref(), Some("{\n  \"a\": \"•••\" \n}"));
+        assert_eq!(header(&json.sent, "Content-Type"), Some("application/json"));
+        assert_eq!(json.sent.url, "https://x/7");
+
+        let basic = c.prepare("basic", &scope).unwrap();
+        assert_eq!(header(&basic.sent, "Authorization"), Some("Basic bWU6aHVudGVyMg=="));
+        assert_eq!(header(&basic.shown, "Authorization"), Some("Basic me:•••"));
+
+        let form = c.prepare("form", &scope).unwrap();
+        assert_eq!(form.sent.body.as_deref(), Some("q=a%20b%26t0k"));
+        assert_eq!(form.shown.body.as_deref(), Some("q=a%20b%26%E2%80%A2%E2%80%A2%E2%80%A2"));
+        assert!(!format!("{:?}", [&json.shown, &basic.shown, &form.shown]).contains("t0k"));
+        assert!(!format!("{:?}", [&json.shown, &basic.shown, &form.shown]).contains("hunter2"));
+    }
+
+    /// The requests behind wire 14 and 15, as sent with the Postman CLI.
+    fn pruning() -> Collection {
+        let json_body = json!({"mode": "raw", "raw": "{\"a\":1}", "options": {"raw": {"language": "json"}}});
+        Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "variable": [{"key": "v", "value": "nine"}],
+            "item": [
+                {"id": "get", "name": "get", "request": {"method": "get", "url": "http://127.0.0.1:8099/prune/get", "body": json_body}},
+                {"id": "head", "name": "head", "request": {"method": "HEAD", "url": "https://x", "body": {"mode": "formdata", "formdata": []}}},
+                {"id": "kept", "name": "kept", "protocolProfileBehavior": {"disableBodyPruning": true},
+                    "request": {"method": "GET", "url": "https://x", "body": json_body}},
+                {"id": "delete", "name": "delete", "request": {"method": "DELETE", "url": "https://x", "body": json_body}},
+                {"id": "off", "name": "off", "request": {"method": "POST", "url": "https://x", "body": {"disabled": true, "mode": "raw", "raw": "{{nowhere}}"}}},
+                {"id": "path", "name": "path", "request": {"method": "GET",
+                    "url": {"raw": "http://127.0.0.1:8099/users/:id/orders/:id2?x=:id", "variable": [{"key": "id", "value": "7"}, {"key": "id2", "value": "{{v}}"}]}}},
+            ],
+        }).to_string()).unwrap()
+    }
+
+    #[test]
+    fn a_get_body_is_dropped_with_its_content_type_unless_pruning_is_off() {
+        let c = pruning();
+        let scope = Scope::new(&[&c.variables()]);
+        let get = c.prepare("get", &scope).unwrap().sent;
+        assert_eq!(wire_body("14-get-body-pruned"), "");
+        assert_eq!((get.body, get.headers), (None, vec![]), "as wire 14: no body, no Content-Type");
+        assert_eq!(c.prepare("head", &scope).unwrap().sent.body, None, "a body dropped is not an unsupported one");
+        let kept = c.prepare("kept", &scope).unwrap().sent;
+        assert_eq!((kept.body.as_deref(), header(&kept, "Content-Type")), (Some("{\"a\":1}"), Some("application/json")));
+        assert_eq!(c.prepare("delete", &scope).unwrap().sent.body.as_deref(), Some("{\"a\":1}"), "DELETE keeps it");
+        assert_eq!(c.prepare("off", &scope).unwrap().sent.body, None, "a body turned off is not sent, nor its variables asked for");
+    }
+
+    #[test]
+    fn a_request_is_listed_by_its_address_as_written() {
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [
+                {"id": "obj", "request": {"url": {"raw": "{{baseUrl}}/a/:id", "variable": [{"key": "id", "value": "7"}]}}},
+                {"id": "str", "request": {"url": "{{baseUrl}}/b"}},
+                {"id": "short", "request": "{{baseUrl}}/c"},
+                {"id": "folder", "item": []}
+            ]
+        }).to_string()).unwrap();
+        let written = |id| c.written_url(id);
+        assert_eq!((written("obj"), written("str"), written("short")), (Some("{{baseUrl}}/a/:id".into()), Some("{{baseUrl}}/b".into()), Some("{{baseUrl}}/c".into())));
+        assert_eq!((written("folder"), written("gone")), (None, None));
+    }
+
+    #[test]
+    fn a_path_variable_fills_its_segment_and_not_the_query() {
+        let c = pruning();
+        let sent = c.prepare("path", &Scope::new(&[&c.variables()])).unwrap().sent;
+        let line = wire("15-path-variables");
+        assert!(line.starts_with(&format!("GET {} ", sent.url.trim_start_matches("http://127.0.0.1:8099"))), "{}", sent.url);
+    }
+
+    #[test]
+    fn a_number_where_an_id_goes_is_replaced() {
+        let mut c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"name": "a", "id": 5, "request": "https://x"}, {"id": "b", "name": "b", "request": "https://x"},
+                {"id": "../../x", "name": "c", "item": [{"id": "", "name": "d", "request": "https://x"}]}],
+        }).to_string()).unwrap();
+        assert_eq!(c.ensure_ids(), 3, "a number, a path and an empty id");
+        let id = c.root["item"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(c.root["item"][0].as_object().unwrap().keys().collect::<Vec<_>>(), ["name", "id", "request"], "replaced where it was");
+        assert!(c.prepare(&id, &Scope::default()).is_ok());
+        assert_eq!(c.root["item"][1]["id"], "b");
+        assert!(c.request_ids().iter().all(|i| is_safe_id(i)));
+        assert_eq!(c.request_ids().len(), 3, "requests at any depth, not the folder");
+        assert!(!is_safe_id(&"a".repeat(65)) && is_safe_id(&"a".repeat(64)) && is_safe_id("A_b-9"));
+    }
+
+    #[test]
+    fn an_id_that_would_share_a_file_is_replaced() {
+        let mut c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"id": "abc", "name": "a", "request": "https://x"}, {"id": "ABC", "name": "b", "request": "https://x"},
+                {"id": "f", "name": "f", "item": [{"id": "abc", "name": "c", "request": "https://x"}, {"id": "Con", "name": "d", "request": "https://x"}]}],
+        }).to_string()).unwrap();
+        assert_eq!(c.ensure_ids(), 3, "ABC, the nested abc and Con");
+        assert_eq!(c.root["item"][0]["id"], "abc", "the first keeps its id");
+        let ids: std::collections::HashSet<String> = c.request_ids().iter().map(|i| i.to_ascii_lowercase()).collect();
+        assert_eq!(ids.len(), 4);
+        assert!(!is_safe_id("nul") && !is_safe_id("LPT1") && !is_safe_id("com9") && is_safe_id("com") && is_safe_id("comx") && is_safe_id("console"));
+    }
+
+    #[test]
+    fn a_secret_in_the_body_is_masked_in_history() {
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"id": "r", "name": "r", "request": {"method": "POST", "url": "https://x", "body": {"mode": "raw", "raw": "{\"password\": \"{{pass}}\"}"}}}],
+        }).to_string()).unwrap();
+        let env = [Variable { key: "pass".into(), value: "hunter2".into(), secret: true, enabled: true }];
+        let prepared = c.prepare("r", &Scope::new(&[&env])).unwrap();
+        let ok = Outcome::Response { status: 200, headers: vec![], url: "https://x".into(), redirects: vec![], elapsed_ms: 1 };
+        let entry = HistoryEntry::new(1, None, None, "https://x".into(), &prepared, ok, b"{}");
+        assert_eq!(entry.request.body.as_deref(), Some("{\"password\": \"•••\"}"));
+        assert!(!serde_json::to_string(&entry).unwrap().contains("hunter2"));
+    }
+
+    #[test]
+    fn globals_leave_for_postman_and_come_back() {
+        let globals = vec![Variable { key: "k".into(), value: "s".into(), secret: true, enabled: true }];
+        let out: Value = serde_json::from_str(&globals_to_postman(&globals, false)).unwrap();
+        assert_eq!((out["_postman_variable_scope"].as_str(), out["values"][0]["value"].as_str()), (Some("globals"), Some("")));
+        let Ok(Imported::Globals(back)) = read_import(&globals_to_postman(&globals, true)) else { panic!("globals") };
+        assert_eq!(back, globals);
+    }
+
+    #[test]
+    fn an_import_is_a_collection_an_environment_or_globals() {
+        let Ok(Imported::Collection(c)) = read_import(PROBE) else { panic!("a collection") };
+        assert_eq!(c.name(), "wire_kibo_test");
+        assert_eq!(c.request_ids().len(), 10, "ids given on import");
+
+        let env = r#"{"id": "pm-1", "name": "Stage", "values": [
+            {"key": "baseUrl", "value": "https://stage", "type": "default", "enabled": true},
+            {"key": "token", "value": "t0k", "type": "secret", "enabled": true},
+            {"key": "off", "value": 1, "enabled": false}, {"value": "no key"}],
+            "_postman_variable_scope": "environment", "_postman_exported_using": "Postman/12.0"}"#;
+        let Ok(Imported::Environment(e)) = read_import(env) else { panic!("an environment") };
+        assert_eq!(e.name, "Stage");
+        assert_ne!(e.id, "pm-1", "its own id: imported twice is two");
+        assert_eq!(e.variables, vec![
+            Variable { key: "baseUrl".into(), value: "https://stage".into(), secret: false, enabled: true },
+            Variable { key: "token".into(), value: "t0k".into(), secret: true, enabled: true },
+            Variable { key: "off".into(), value: "1".into(), secret: false, enabled: false },
+        ]);
+
+        let globals = r#"{"name": "Globals", "values": [{"key": "g", "value": "v"}], "_postman_variable_scope": "globals"}"#;
+        let Ok(Imported::Globals(g)) = read_import(globals) else { panic!("globals") };
+        assert_eq!((g[0].key.as_str(), g[0].enabled), ("g", true), "no enabled is on, as in Postman");
+    }
+
+    #[test]
+    fn what_is_not_imported_is_named() {
+        let named = |text: &str| match read_import(text) {
+            Err(HttpError::NotACollection(why)) => why,
+            _ => panic!("{text} imported"),
+        };
+        assert_eq!(named("$kind: http-request\nmethod: GET\nurl: https://x\n"), "it is Postman v3 — export the collection from Postman as v2.1");
+        assert_eq!(named(r#"{"$kind": "collection", "name": "x"}"#), "it is Postman v3 — export the collection from Postman as v2.1");
+        assert!(named(r#"{"info": {"schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json"}}"#).contains("v2.0"));
+        assert!(named(r#"{"openapi": "3.0.0"}"#).contains("no info.schema"));
+        assert!(named("GET https://x HTTP/1.1").contains("not JSON"));
+        assert!(named(r#"{"values": [], "_postman_variable_scope": "collection"}"#).contains("collection variables"));
+        assert!(named(r#"{"values": {}, "_postman_variable_scope": "environment"}"#).contains("not a list"));
+    }
+
+    #[test]
+    fn an_environment_leaves_for_postman_with_its_secrets_empty_unless_asked() {
+        let env = Environment { id: "e".into(), name: "Stage".into(), variables: vec![
+            Variable { key: "token".into(), value: "t0k".into(), secret: true, enabled: true },
+            Variable { key: "baseUrl".into(), value: "https://stage".into(), secret: false, enabled: false },
+        ], trusted_cert: None, agent: Default::default() };
+        let out: Value = serde_json::from_str(&environment_to_postman(&env, false)).unwrap();
+        assert_eq!(out["_postman_variable_scope"], "environment");
+        assert_eq!(out["values"][0], json!({"key": "token", "value": "", "type": "secret", "enabled": true}));
+        assert_eq!(out["values"][1], json!({"key": "baseUrl", "value": "https://stage", "type": "default", "enabled": false}));
+        let with = environment_to_postman(&env, true);
+        let Ok(Imported::Environment(back)) = read_import(&with) else { panic!("it imports back") };
+        assert_eq!(back.variables, env.variables, "with its secrets it comes back as it left");
+    }
+
+    #[test]
+    fn auth_meets_what_the_request_already_has() {
+        let basic = json!({"type": "basic", "basic": [{"key": "username", "value": "me"}, {"key": "password", "value": "p"}]});
+        let apikey = json!({"type": "apikey", "apikey": [{"key": "key", "value": "k"}, {"key": "value", "value": "v"}, {"key": "in", "value": "query"}]});
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [
+                {"id": "basic", "name": "basic", "request": {"method": "GET", "url": "https://x", "auth": basic, "header": [{"key": "authorization", "value": "Mine"}]}},
+                {"id": "query", "name": "query", "request": {"method": "GET", "url": "https://x/?a=1", "auth": apikey}},
+                {"id": "xml", "name": "xml", "request": {"method": "POST", "url": "https://x", "body": {"mode": "raw", "raw": "<a/>", "options": {"raw": {"language": "xml"}}}}},
+            ],
+        }).to_string()).unwrap();
+        assert_eq!(c.prepare("basic", &Scope::default()).unwrap().sent.headers, vec![("authorization".to_string(), "Mine".to_string())]);
+        assert_eq!(c.prepare("query", &Scope::default()).unwrap().sent.url, "https://x/?a=1&k=v");
+        assert_eq!(header(&c.prepare("xml", &Scope::default()).unwrap().sent, "Content-Type"), Some("application/xml"));
+    }
+
+    #[test]
+    fn every_unknown_variable_of_a_request_is_named_in_one_error() {
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "item": [{"id": "r", "name": "r", "request": {"method": "POST", "url": "{{host}}/x",
+                "header": [{"key": "X-A", "value": "{{a}}"}], "body": {"mode": "raw", "raw": "{{host}} {{b}}"}}}],
+        }).to_string()).unwrap();
+        assert_eq!(c.prepare("r", &Scope::default()), Err(HttpError::UnknownVariables(vec!["host".into(), "a".into(), "b".into()])));
+    }
+
+    #[test]
+    fn collection_variables_read_as_postman_writes_them() {
+        let vars = probe().variables();
+        assert_eq!(vars[0], var("baseUrl", "http://127.0.0.1:8099"));
+        assert_eq!(vars[1], Variable { secret: true, ..var("auth_password_16qu", "") }, "a secret exported without its value");
+
+        let c = Collection::parse(&json!({
+            "info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+            "variable": [{"key": "off", "value": "x", "disabled": true}, {"key": "n", "value": 3}, {"key": "s", "value": "v", "type": "secret"}],
+            "item": [{"id": "r", "name": "r", "request": {"method": "GET", "url": "https://x/{{n}}/{{off}}"}}],
+        }).to_string()).unwrap();
+        assert_eq!(c.variables()[1], var("n", "3"));
+        assert!(c.variables()[2].secret);
+        assert_eq!(c.prepare("r", &Scope::new(&[&c.variables()])), Err(HttpError::UnknownVariables(vec!["off".into()])), "turned off is not there");
+    }
+}

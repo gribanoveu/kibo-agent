@@ -3,24 +3,42 @@
 ## Unreleased
 
 - 2026-11-13 The message box keeps its height across the IDE layout switch: a line that wrapped while the chat was narrow is re-measured when the column widens — no keystroke needed to shrink the box back — and a line that wraps on the way in shows both rows at once
-
 - 2026-11-13 A dot on a catalog card's icon when the catalog has a newer version of what is installed — skills, servers, runbooks, commands and hooks alike; changed-here entries wear it too, and the details' Update is where it points
-
 - 2026-11-13 A helper run — a review, an explore — stands in the chat as a card of its own, like the background process's: what it was asked, the step it is on, how it stands in the badge — a click unfolds its steps, and a settled one its answer, with the run in the Agents tab a link away
-
 - 2026-11-13 The knowledge base is gone, and with it `/analyze`: the Knowledge page, the four tools `knowledgeWrite`, `knowledgeSearch`, `knowledgeRead` and `knowledgeRelations`, the `## Knowledge` prompt block and the `knowledge` feature in the Catalog. Notes the agent keeps are `remember`, as before
-
 - 2026-11-12 A review is an instrument of the agent, not a turn of its own: `/review` and the suggestion button send an ordinary message, the agent calls `review` itself — `from` and `to` naming the range, the chat's own commits found after a commit — and the review's card tells the whole story: the reviewer's steps, the budget note, the range it read and what it found, findings kept even when the review is stopped or runs out of rounds
 - 2026-11-12 File chats under folders of their own: Move to folder on a chat's row opens a picker of the folders — No folder and New folder when the right one isn't there yet — and rename and delete sit on the folder's heading; a deleted folder leaves its chats in the list, and folders fold away with their state remembered
 - 2026-11-12 Pin a chat from its row's menu and the sidebar holds it in its own Pinned group above the days, a small pin at the row's right edge; unpin and it sinks back to its day
 - 2026-11-12 The plan opens in a sheet over the chat — ⌘3, or "Review the plan" — instead of taking the column's width, so the chat keeps its width and the plan is read on the room it needs
 - 2026-11-12 The sidebar's Agent and Chat switch keeps its white raised pill, with the icon inside it in a muted accent instead of the full one, and the segment under the pointer shows a faint pill where it used to give nothing
 - 2026-11-12 The sidebar's chat search follows the panel's width when it is dragged narrow, instead of running past its right edge
+- 2026-11-11 See a chat's script draft on the HTTP request it is for — marked in the tree, with its run on the Scripts tab — and move it into the request after reading what it replaces, or reject it; a deleted chat takes its drafts with it
+- 2026-11-11 Ask the API role for tests or a pre-request script on a saved HTTP request: it drafts the script and runs it with nothing sent — tests on its last send of the request, a pre-request on the request as saved — and the draft runs nowhere until you move it into the request
+- 2026-11-11 Write and edit a request's own pre-request and post-response scripts on its Scripts tab; a new script runs once you turn it on
+- 2026-11-10 Turn each Postman script of an HTTP collection on or off on the request's Scripts tab, after reading its code; scripts that are off are marked in the tree and named under the response
+- 2026-11-10 Picking an HTTP request's tab opens its collection and folders in the tree and scrolls to it
+- 2026-11-10 The API role keeps a test case as a new request in your HTTP collections — beside the request it started from or in a folder inside that one; every save asks you first
+- 2026-11-09 The API role sends your saved HTTP requests with its own edits — method, path, query, headers, body, no auth — through the request's auth and the scripts you trusted, always to the saved request's host; its sends are in History, signed by the chat
+- 2026-11-09 The API role reads a request saved in your HTTP collections — its auth and the level it comes from, the variables it uses, its scripts — with credentials written in it masked
+- 2026-11-09 The Assistant chat no longer sends HTTP requests — it mistook them for fetching web pages; your HTTP environments are the API role's
+- 2026-11-09 An API role in Chat, listed while the HTTP client is on: it tests your API against its spec on the environments you opened to the agent
 - 2026-11-08 The Agent and Chat message boxes can notice Russian or English typed in the other keyboard layout, even a wrong fragment beside intentional words in mixed prose, and offer a Fix button or ⌘/Ctrl+F correction, with the caret and ordinary Undo kept; on macOS and Windows the feature's optional Catalog switch also selects the corrected text's dominant installed layout — turn Keyboard layout correction on in the Catalog
 - 2026-11-08 A review says what it is doing while it runs — the file it reads, the command it runs — instead of standing as a bare icon, and a helper's steps in the Agents tab and its sheet carry the app's own tool names
 - 2026-11-08 The Catalog shows eight cards of each kind under All before "Show all", which opens that kind's tab with the whole list; MCP servers sit right under Skills
 - 2026-11-08 A feature's card in the Catalog carries its own icon: the Meetings page's sound wave for Meeting notes, two people for Voice memory, the library for the knowledge base and a microphone for Voice input, instead of the generic puzzle piece
 - 2026-11-08 Chat with DeepSeek search on and the search in Settings off no longer answers that search is unavailable: what the model is told of it follows the tools it is given
+- 2026-11-08 The HTTP environment form saves itself as you leave a field — no Save button
+- 2026-11-08 HTTP collections and folders you opened stay open after a restart
+- 2026-11-08 Move an HTTP request or folder to another folder or collection from its menu
+- 2026-11-08 Typing {{ in an HTTP request's address, fields or body lists the variables in scope to pick from
+- 2026-11-08 Show a saved HTTP environment secret with the eye beside its field
+- 2026-11-08 A long HTTP response is coloured to its end as soon as it shows, not as you scroll
+- 2026-11-08 Add folders to an HTTP collection or folder from its menu
+- 2026-11-08 The agent can write to an HTTP stand you open to it for writes: POST, PUT, PATCH and DELETE with a body, each shown on a card first — every time with Ask for writes, or as other changes are with Writes as other tools
+- 2026-11-08 The agent works across your HTTP collections: it sends only to the hosts your collections' requests go to, gives you a curl command for any other, and first reads an environment's addresses, requests and open variables — a variable your collections use for sign-in stays hidden from it, marked secret or not
+- 2026-11-07 The agent reads the HTTP stands you open to it: an environment set to Read only takes its GET, HEAD and OPTIONS with no card, the app fills in `{{token}}` and scrubs secrets from what the model reads, and each send shows in History under its chat
+- 2026-11-05 The HTTP page signs in the way a collection says: OAuth 2.0 tokens are got by client credentials or password, kept sealed and renewed as requests go, digest answers its challenge, cookies a server sets go back to it and are listed by domain under Cookies, and form-data bodies with text fields go out
+- 2026-11-04 HTTP page in the Catalog: import Postman collections and environments, send requests, see each request's last response and the history, and run the collection's pre-request and test scripts once you trust them
 
 ## v0.12.0 — 2026-11-07
 

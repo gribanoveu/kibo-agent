@@ -616,12 +616,20 @@ pub fn delete(id: &str) -> Result<(), ChatError> {
     }
 }
 
-/// Every chat about `workspace` — a folder that is gone with them. How many.
-pub fn delete_in(workspace: &str) -> Result<usize, ChatError> {
-    let conn = open()?;
-    conn.execute("DELETE FROM runs WHERE chat_id IN (SELECT id FROM chats WHERE workspace = ?1)", params![workspace])
+/// Every chat about `workspace` — a folder that is gone with them. Their ids.
+pub fn delete_in(workspace: &str) -> Result<Vec<String>, ChatError> {
+    let mut conn = open()?;
+    // One transaction: a chat saved between the read and the delete is either in both or in neither.
+    let tx = conn.transaction().map_err(store)?;
+    let ids = tx
+        .prepare("SELECT id FROM chats WHERE workspace = ?1")
+        .and_then(|mut q| q.query_map(params![workspace], |r| r.get(0))?.collect::<Result<Vec<String>, _>>())
         .map_err(store)?;
-    conn.execute("DELETE FROM chats WHERE workspace = ?1", params![workspace]).map_err(store)
+    tx.execute("DELETE FROM runs WHERE chat_id IN (SELECT id FROM chats WHERE workspace = ?1)", params![workspace])
+        .map_err(store)?;
+    tx.execute("DELETE FROM chats WHERE workspace = ?1", params![workspace]).map_err(store)?;
+    tx.commit().map_err(store)?;
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -737,12 +745,14 @@ mod tests {
             let runs = |chat: &str| RunStore.processes(chat).len();
             ran("one");
             ran("three");
-            assert_eq!(delete_in("/wt/main-1").unwrap(), 2);
+            let mut gone = delete_in("/wt/main-1").unwrap();
+            gone.sort();
+            assert_eq!(gone, ["one", "two"]);
             assert_eq!((runs("one"), runs("three")), (0, 1), "a gone chat's runs go with it");
             assert!(list("/wt/main-1").unwrap().is_empty());
             assert_eq!(list("/wt/main-10").unwrap().len(), 1);
             assert_eq!(list("/repo").unwrap().len(), 1);
-            assert_eq!(delete_in("/wt/main-1").unwrap(), 0);
+            assert!(delete_in("/wt/main-1").unwrap().is_empty());
         });
     }
 

@@ -48,6 +48,8 @@ pub struct ChatTurn<'a> {
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads, while that feature is on.
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
+    /// The environments the `http*` tools reach, while that feature is on.
+    pub http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>,
     /// DeepSeek's search and page reader, while that feature is on.
     pub deepseek: Option<Web>,
     /// The features the user has on.
@@ -55,12 +57,17 @@ pub struct ChatTurn<'a> {
 }
 
 /// Deletes any chat, the agent's or Chat mode's: its row and its runs' record,
-/// and with it a Prototype chat's folder — any other chat has none. What it
-/// left running is stopped first: no tab would list it any more, and a stop
-/// saved after the delete would bring a row back.
+/// and with it a Prototype chat's folder — any other chat has none — and its HTTP
+/// script drafts. What it left running is stopped first: no tab would list it any
+/// more, and a stop saved after the delete would bring a row back.
 pub fn delete_chat(id: &str, processes: &crate::infra::background::Processes) -> Result<(), crate::domain::prototype::PrototypeError> {
     processes.stop_chat(id);
     crate::infra::chat_store::delete(id)?;
+    // A drafts file that does not open keeps no chat from being deleted: what it holds
+    // runs nowhere, and the newest 200 push the rest out.
+    if let Err(e) = super::http_client::forget_drafts_of(&[id.to_string()]) {
+        eprintln!("http: the drafts of a deleted chat are kept: {e}");
+    }
     crate::infra::prototype_store::remove(id)
 }
 
@@ -98,6 +105,8 @@ pub fn preview(kube: &KubeSetup, cluster: Option<&dyn KubeApi>, calls: &[LlmTool
     calls
         .iter()
         .map(|call| match parse_tool_call(call) {
+            Ok(crate::domain::tools::ToolCall::HttpSend(args)) => tools::http_send::preview(&args),
+            Ok(crate::domain::tools::ToolCall::HttpSaveRequest(args)) => tools::http_save_request::preview(&args),
             Ok(parsed) => tools::cluster::preview(pinned, &parsed),
             Err(e) => ToolPreview::Failed { reason: e.to_string() },
         })
@@ -148,6 +157,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         questions: None,
         board: chat.board.clone(),
         mongo: chat.mongo.clone(),
+        http: chat.http.clone(),
         deepseek: chat.deepseek.clone(),
         features: chat.features.clone(),
         fork: false,
@@ -222,6 +232,7 @@ mod tests {
         seen: Arc<Mutex<Vec<ChatTurnEvent>>>,
         board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
         mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
+        http: Option<Arc<dyn crate::domain::http_client::HttpStands>>,
         features: crate::domain::features::Features,
     }
 
@@ -248,6 +259,7 @@ mod tests {
             seen: Arc::default(),
             board: None,
             mongo: None,
+            http: None,
             features: Default::default(),
         }
     }
@@ -273,6 +285,7 @@ mod tests {
                 log_call: &log,
                 board: self.board.clone(),
                 mongo: self.mongo.clone(),
+                http: self.http.clone(),
                 deepseek: None,
                 features: self.features.clone(),
             })
@@ -319,6 +332,20 @@ mod tests {
         let cards = crate::domain::board::TaskBoard::cards(board.as_ref()).unwrap();
         assert_eq!(cards.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["Заявка на память в wlbuh"]);
         assert!(tool_result(&done.history).contains("c1 Заявка на память в wlbuh"), "{}", tool_result(&done.history));
+    }
+
+    /// The API role with the HTTP client on: offered it from the first step, as a
+    /// chat has no `toolSearch`, and the stand answers with no card asking first.
+    #[test]
+    fn the_api_role_reads_a_stand_while_the_feature_is_on() {
+        let mut chat = chat(vec![calls("httpSend", r#"{"request":"r1"}"#), said("It answers.")], None);
+        chat.features = crate::domain::features::Features::from_settings(&[("http-client".to_string(), true)].into());
+        chat.http = Some(crate::services::ai_tools::tools::http_send::tests::answering());
+        let done = done(chat.start(ChatRole::Api, vec![LlmMessage::user("стенд жив?")]));
+
+        let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
+        assert_eq!(offered, ["httpEnvironment", "httpSend", "httpReadRequest", "httpSaveRequest", "httpDraftScript"]);
+        assert!(tool_result(&done.history).starts_with("GET {{baseUrl}}/orders/1 → 200"), "{}", tool_result(&done.history));
     }
 
     /// The board turned off since: a call from memory is refused before it
@@ -777,6 +804,17 @@ mod tests {
         assert!(matches!(&unpinned[0], ToolPreview::Failed { reason } if reason.contains("no cluster")), "{unpinned:?}");
     }
 
+    /// A chat's card for a write to a stand is the agent's, with no cluster pinned.
+    #[test]
+    fn an_http_write_in_a_chat_shows_the_call_as_written() {
+        let call = LlmToolCall { id: "c1".into(), name: "httpSend".into(), arguments: r#"{"request":"w1","environment":"Stage","body":"{}"}"#.into() };
+        let shown = preview(&KubeSetup::NotSet, None, &[call]);
+        assert!(matches!(&shown[0], ToolPreview::Change { place, summary, .. } if place == "environment Stage" && summary == "request w1 as saved"), "{shown:?}");
+        let call = LlmToolCall { id: "c2".into(), name: "httpSaveRequest".into(), arguments: r#"{"from":"w1","name":"Empty"}"#.into() };
+        let kept = preview(&KubeSetup::NotSet, None, &[call]);
+        assert!(matches!(&kept[0], ToolPreview::Change { place, summary, .. } if place == "your HTTP collections, beside the request" && summary == "\"Empty\" — request w1 as saved"), "{kept:?}");
+    }
+
     fn pinned(namespace: &str) -> KubeSetup {
         KubeSetup::Pinned(KubeTarget {
             config: crate::domain::settings::Kubeconfig { name: "prod".into(), path: "/k/prod".into(), production: false },
@@ -924,9 +962,15 @@ mod tests {
             let folder = crate::infra::prototype_store::files_dir(id).unwrap();
             std::fs::write(folder.join("index.html"), "<p>hi</p>").unwrap();
 
+            use crate::domain::http_draft::ScriptDraft;
+            use crate::infra::http_collections::{drafts, save_draft};
+            save_draft(ScriptDraft::of_chat(id)).unwrap();
+            save_draft(ScriptDraft::of_chat("other")).unwrap();
+
             delete_chat(id, &crate::infra::background::Processes::default()).unwrap();
             assert!(!folder.parent().unwrap().exists());
             assert!(crate::infra::chat_store::load(id).is_err(), "the row goes too");
+            assert_eq!(drafts().unwrap(), [ScriptDraft::of_chat("other")], "and its HTTP drafts");
         });
     }
 

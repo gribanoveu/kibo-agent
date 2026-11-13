@@ -32,6 +32,7 @@ pub mod keyboard_layout;
 pub mod terminal;
 pub mod git;
 pub mod files;
+pub mod http;
 pub mod images;
 pub mod rewind;
 pub mod viewer;

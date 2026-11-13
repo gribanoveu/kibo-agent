@@ -622,6 +622,7 @@ describe("the box of a plain chat", () => {
     render(
       <PlainChat
         chat={chat}
+        featureOn={() => false}
         focus={0}
         dictate={dictate}
         models={{ choices: [], current: null }}

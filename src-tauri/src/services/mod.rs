@@ -25,6 +25,8 @@ mod search_bench;
 mod agent_bench;
 #[cfg(test)]
 mod kube_bench;
+#[cfg(test)]
+mod api_bench;
 pub mod skills;
 pub mod catalog;
 pub mod folder_trust;
@@ -39,3 +41,5 @@ pub mod provider_balance;
 pub mod dictation;
 pub mod meeting_notes;
 pub mod mongo;
+pub mod http_client;
+pub mod http_draft;

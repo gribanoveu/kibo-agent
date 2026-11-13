@@ -1,0 +1,43 @@
+{
+  "info": {
+    "name": "Orders",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "id": "order-create",
+      "name": "Create order",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"sum\": 120}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "order-get",
+      "name": "Get order",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/orders/{{orderId}}"
+      }
+    }
+  ]
+}

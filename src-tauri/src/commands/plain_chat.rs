@@ -93,11 +93,16 @@ pub struct RoleView {
     id: ChatRole,
     name: &'static str,
     description: &'static str,
+    /// The Catalog feature the menu waits for before it lists the role.
+    feature: Option<&'static str>,
 }
 
 #[tauri::command]
 pub fn plain_chat_roles() -> Vec<RoleView> {
-    ChatRole::ALL.iter().map(|&role| RoleView { id: role, name: role.name(), description: role.description() }).collect()
+    ChatRole::ALL
+        .iter()
+        .map(|&role| RoleView { id: role, name: role.name(), description: role.description(), feature: role.feature().map(|f| f.manifest().id) })
+        .collect()
 }
 
 /// A turn of the chat `chat_id` in `role` on `messages`, the whole conversation
@@ -171,11 +176,12 @@ where
     let board: Arc<dyn crate::domain::board::TaskBoard> = app.state::<Arc<crate::infra::board_store::Board>>().inner().clone();
     let embeddings = app.state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().embeddings();
     let mongo = super::chat::mongo_servers_of(&app);
+    let http = Some(super::chat::http_stands_of(&app, &chat_id));
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _running = running;
         let cancelled = || session.cancel.load(Ordering::SeqCst);
-        let chat = ChatTurnInput { chat_id, role, kube, clusters, board, mongo, embeddings, approval, events: &events, cancelled: &cancelled };
+        let chat = ChatTurnInput { chat_id, role, kube, clusters, board, mongo, http, embeddings, approval, events: &events, cancelled: &cancelled };
         let outcome = turn_setup::run_in_chat(chat, run).map_err(|e| e.to_string())?;
         session.paused.store(matches!(&outcome, ChatStreamOutcome::PendingApproval(_)), Ordering::SeqCst);
         Ok(outcome)
@@ -351,14 +357,22 @@ mod tests {
             "id": "assistant",
             "name": "Assistant",
             "description": ChatRole::Assistant.description(),
+            "feature": null,
         }, {
             "id": "kubernetes",
             "name": "Kubernetes",
             "description": ChatRole::Kubernetes.description(),
+            "feature": null,
         }, {
             "id": "prototype",
             "name": "Prototype",
             "description": ChatRole::Prototype.description(),
+            "feature": null,
+        }, {
+            "id": "api",
+            "name": "API",
+            "description": ChatRole::Api.description(),
+            "feature": "http-client",
         }]));
     }
 }

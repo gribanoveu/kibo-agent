@@ -173,6 +173,7 @@ mod tests {
         use crate::domain::tools::ToolName;
         assert_eq!(places(&[ToolName::RunCommand]), ["Agent"]);
         assert_eq!(places(&[ToolName::KubeList]), ["Kubernetes chat"]);
+        assert_eq!(places(&[ToolName::HttpSend]), ["API chat", "Agent"], "not the Assistant's");
     }
 
     #[test]

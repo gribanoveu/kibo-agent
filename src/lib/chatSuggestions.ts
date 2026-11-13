@@ -108,11 +108,22 @@ const PROTOTYPE_SUGGESTIONS = [
   "A dashboard mock-up with a few charts",
 ];
 
+/** For the API role: a check of the user's own API. */
+const API_SUGGESTIONS = [
+  "What can you reach in my environments?",
+  "Check the orders API against its spec",
+  "Does a missing token get a 401 everywhere?",
+  "What does the API answer for an id that does not exist?",
+  "Try the edge cases of creating an order",
+  "Which requests in my collections fail right now?",
+];
+
 /** Each role's set. */
 export const ROLE_SUGGESTIONS: Record<ChatRoleId, readonly string[]> = {
   assistant: CHAT_SUGGESTIONS,
   kubernetes: KUBE_SUGGESTIONS,
   prototype: PROTOTYPE_SUGGESTIONS,
+  api: API_SUGGESTIONS,
 };
 
 /** The empty chat's heading: one of these, or of the time of day's, as Claude greets. */

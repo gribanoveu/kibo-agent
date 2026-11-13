@@ -1,0 +1,7 @@
+{
+  "info": {"name": "Users", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
+  "item": [
+    {"id": "users-get", "name": "Get user", "request": {"method": "GET", "url": "{{baseUrl}}/users/7"}}
+  ]
+}

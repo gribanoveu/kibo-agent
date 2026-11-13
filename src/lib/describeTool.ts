@@ -87,6 +87,11 @@ export const LABELS: Record<string, string> = {
   deepseekFetch: "DeepSeek page",
   board: "Board",
   mongo: "MongoDB",
+  httpEnvironment: "HTTP environment",
+  httpSend: "HTTP",
+  httpReadRequest: "HTTP request",
+  httpSaveRequest: "Save HTTP case",
+  httpDraftScript: "HTTP script draft",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -304,6 +309,57 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
                 : "list",
         meta: cards === undefined ? undefined : `${cards} ${cards === 1 ? "card" : "cards"}`,
         detail: [str(args.note), str(args.due) && `due ${str(args.due)}`].filter(Boolean).join("\n"),
+      };
+    }
+
+    // The environment described: its name, and how many requests it has.
+    case "httpEnvironment":
+      return { name, arg: str(args.environment)?.trim() || "the environment", meta: str(result.summary), detail: str(result.text) ?? "" };
+
+    // `POST /orders/2 from r1 on Stage`: what the call changed, and the saved request it went from.
+    case "httpSend": {
+      const method = str(args.method)?.trim().toUpperCase();
+      const query = str(args.query)?.trim().replace(/^\?/, "");
+      const changed = [method, (str(args.path)?.trim() ?? "") + (query ? `?${query}` : "")].filter(Boolean).join(" ");
+      const environment = str(args.environment);
+      const from = str(args.request)?.trim() ?? "";
+      return {
+        name,
+        arg: [changed && `${changed} from`, from, environment && `on ${environment}`].filter(Boolean).join(" "),
+        meta: str(result.summary),
+        detail: str(result.text) ?? "",
+      };
+    }
+
+    // A saved request read: where it is once read (`Shop / Orders / Get one`), its id until then.
+    case "httpReadRequest": {
+      const environment = str(args.environment);
+      return {
+        name,
+        arg: [str(result.summary) ?? str(args.request)?.trim() ?? "", environment && `in ${environment}`].filter(Boolean).join(" "),
+        detail: str(result.text) ?? "",
+      };
+    }
+
+    // A case kept: its name and where it went once saved, its name and the request it starts from until then.
+    case "httpSaveRequest": {
+      const named = str(args.name)?.trim() ?? "";
+      const from = str(args.from)?.trim();
+      return {
+        name,
+        arg: [named && `"${named}"`, str(result.summary) ? `in ${str(result.summary)}` : from && `from ${from}`].filter(Boolean).join(" "),
+        detail: str(result.text) ?? "",
+      };
+    }
+
+    // A script drafted: its kind and request, and how its tests went once run.
+    case "httpDraftScript": {
+      const kind = str(args.listen) === "prerequest" ? "pre-request" : "post-response";
+      return {
+        name,
+        arg: [kind, `for ${str(args.request)?.trim() ?? ""}`].join(" "),
+        meta: str(result.summary),
+        detail: str(result.text) ?? str(args.code) ?? "",
       };
     }
 

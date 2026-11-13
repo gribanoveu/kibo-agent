@@ -9,6 +9,7 @@ import {
   CodeXml,
   FolderInput,
   GitBranch,
+  Globe,
   Info,
   Keyboard,
   Loader2,
@@ -153,7 +154,10 @@ export function Sidebar({
   // not the chats, so it lives in window storage and not in the store.
   const [collapsed, setCollapsed] = useStoredState<string[]>(`kibo-chat-groups-${groupScope ?? ""}`, [], isStringArray);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  useShortcuts({ shortcuts: () => setShortcutsOpen((v) => !v) });
+  useShortcuts({
+    // In an editor that can be written in, ⌘/ comments the lines out instead.
+    shortcuts: () => (document.activeElement?.matches('.cm-content:not([aria-readonly="true"])') ? false : setShortcutsOpen((v) => !v)),
+  });
   const [aboutOpen, setAboutOpen] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
@@ -211,6 +215,8 @@ export function Sidebar({
           <ShipWheel size={14} />
         ) : chat.role === "prototype" ? (
           <AppWindow size={14} />
+        ) : chat.role === "api" ? (
+          <Globe size={14} />
         ) : chat.role === "assistant" ? (
           <MessagesSquare size={14} />
         ) : (

@@ -33,6 +33,11 @@ pub mod explore;
 pub mod review;
 pub mod git;
 pub mod grep;
+pub mod http_read_request;
+pub mod http_environment;
+pub mod http_save_request;
+pub mod http_draft_script;
+pub mod http_send;
 pub mod mongo;
 pub mod cluster;
 pub mod runbook;
@@ -120,6 +125,11 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::DeepseekFetch, deepseek::fetch_definition),
     (ToolName::Board, board::definition),
     (ToolName::Mongo, mongo::definition),
+    (ToolName::HttpEnvironment, http_environment::definition),
+    (ToolName::HttpSend, http_send::definition),
+    (ToolName::HttpReadRequest, http_read_request::definition),
+    (ToolName::HttpSaveRequest, http_save_request::definition),
+    (ToolName::HttpDraftScript, http_draft_script::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -185,6 +195,11 @@ pub fn dispatch(
         ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
         ToolCall::Board(args) => board::board(args, deps),
         ToolCall::Mongo(args) => mongo::mongo(args, deps),
+        ToolCall::HttpEnvironment(args) => http_environment::http_environment(args, deps),
+        ToolCall::HttpSend(args) => http_send::http_send(args, deps),
+        ToolCall::HttpReadRequest(args) => http_read_request::http_read_request(args, deps),
+        ToolCall::HttpSaveRequest(args) => http_save_request::http_save_request(args, deps),
+        ToolCall::HttpDraftScript(args) => http_draft_script::http_draft_script(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -584,6 +599,55 @@ mod definition_tests {
                     id: Some("c1".into()),
                     column: Some(crate::domain::board::Column::Done),
                     due: None,
+                })],
+            ),
+            ToolName::HttpEnvironment => (
+                r#"{}"#,
+                vec![ToolCall::HttpEnvironment(crate::domain::tools::HttpEnvironmentArgs { environment: Some("Stage".into()) })],
+            ),
+            ToolName::HttpSend => (
+                r#"{"request":"r1"}"#,
+                vec![ToolCall::HttpSend(crate::domain::tools::HttpSendArgs {
+                    request: "r1".into(),
+                    environment: Some("Stage".into()),
+                    method: Some("GET".into()),
+                    path: Some("/orders".into()),
+                    query: Some("id=1".into()),
+                    headers: Some([("Authorization".to_string(), Some("Bearer {{token}}".to_string()))].into()),
+                    body: None,
+                    auth: Some("none".into()),
+                    variables: Some([("id".to_string(), serde_json::json!("1"))].into()),
+                    show_headers: Some(true),
+                })],
+            ),
+            ToolName::HttpReadRequest => (
+                r#"{"request":"r1"}"#,
+                vec![ToolCall::HttpReadRequest(crate::domain::tools::HttpReadRequestArgs { request: "r1".into(), environment: Some("Stage".into()) })],
+            ),
+            ToolName::HttpSaveRequest => (
+                r#"{"from":"r1","name":"No auth"}"#,
+                vec![ToolCall::HttpSaveRequest(crate::domain::tools::HttpSaveRequestArgs {
+                    from: "r1".into(),
+                    name: "No auth".into(),
+                    folder: Some("Cases".into()),
+                    environment: Some("Stage".into()),
+                    method: Some("POST".into()),
+                    path: Some("/orders".into()),
+                    query: Some("id=1".into()),
+                    headers: Some([("X-Id".to_string(), None)].into()),
+                    body: Some("{}".into()),
+                    auth: Some("none".into()),
+                })],
+            ),
+            ToolName::HttpDraftScript => (
+                r#"{"request":"r1","listen":"test","code":"pm.test('ok', () => {});"}"#,
+                vec![ToolCall::HttpDraftScript(crate::domain::tools::HttpDraftScriptArgs {
+                    request: "r1".into(),
+                    listen: "test".into(),
+                    code: "pm.test('ok', () => {});".into(),
+                    environment: Some("Stage".into()),
+                    exchange: Some("e1".into()),
+                    variables: Some([("id".to_string(), serde_json::json!("1"))].into()),
                 })],
             ),
             ToolName::Mongo => (

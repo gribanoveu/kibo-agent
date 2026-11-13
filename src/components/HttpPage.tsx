@@ -1,0 +1,2232 @@
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
+import { Decoration, keymap, MatchDecorator, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
+import { Prec, type Extension } from "@codemirror/state";
+import { acceptCompletion, autocompletion, closeCompletion, moveCompletionSelection, type CompletionContext } from "@codemirror/autocomplete";
+import {
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Check,
+  Columns2,
+  Cookie,
+  Copy,
+  Download,
+  Eye,
+  EyeOff,
+  FileCode2,
+  FilePen,
+  Folder,
+  FolderOpen,
+  Globe,
+  History,
+  Layers,
+  Loader2,
+  Lock,
+  LockOpen,
+  Minus,
+  MoreHorizontal,
+  Plus,
+  Rows2,
+  Send,
+  Settings2,
+  ShieldCheck,
+  Trash2,
+  Upload,
+  WandSparkles,
+  X,
+} from "lucide-react";
+import { Page, PageSheet } from "./Page";
+import { CodeEditor } from "./CodeEditor";
+import { Dropdown } from "./Dropdown";
+import { Switch } from "./Switch";
+import { Modal } from "./Modal";
+import { PanelResizeHandle } from "./PanelResizeHandle";
+import { DiffView } from "./DiffView";
+import { fileRows } from "../lib/diffRows";
+import { useHttpClient, type Sent } from "../hooks/useHttpClient";
+import { useCopied } from "../hooks/useCopied";
+import { useHttpCookies } from "../hooks/useHttpCookies";
+import { useShortcuts } from "../hooks/useShortcuts";
+import { useStoredState } from "../hooks/useStoredState";
+import { formatJson, formatXml } from "../lib/formatText";
+import { matches, shortcutText } from "../lib/shortcuts";
+import type { HttpDraftReport, HttpHistoryEntry, HttpOutcome, HttpScriptDraft, HttpScriptReport, HttpScriptState, HttpTestResult } from "../lib/httpCommands";
+import {
+  type AgentAccess,
+  requestsUnder,
+  METHODS,
+  asHttpText,
+  SECRET_MASK,
+  effectiveAuth,
+  authParam,
+  findRequest,
+  levelOf,
+  scriptsFor,
+  paramsOf,
+  pretty,
+  resolveRequest,
+  scope,
+  shownValues,
+  sizeLabel,
+  statusTone,
+  toCurl,
+  VARIABLE,
+  putVariable,
+  moveTargets,
+  type MovePlace,
+  variableAt,
+  variableHints,
+  variableParts,
+  variableValue,
+  withAuthParam,
+  withParams,
+  type Auth,
+  type Body,
+  type Collection,
+  type EnvVariable,
+  type Environment,
+  type HttpMethod,
+  type HttpRequest,
+  type Item,
+  type Pair,
+  type Place,
+} from "../lib/httpClient";
+import "./HttpPage.css";
+
+/**
+ * The HTTP page (docs/45-http-client.md): collections on the left, the open
+ * requests on the right — what is written on top, what came back under it —
+ * the environment and every send's history in the bar.
+ */
+export function HttpPage() {
+  const [sheet, setSheet] = useState<{ kind: "environment"; id: string } | { kind: "history" } | { kind: "cookies" } | null>(null);
+  const http = useHttpClient(sheet?.kind === "history");
+  const [layout, setLayout] = useStoredState<Layout>("http.layout", "stacked", isLayout);
+  // What was open in the tree is open again on the next visit, and after a restart.
+  const [opened, setOpened] = useStoredState<string[]>("http.expanded", [], isIds);
+  const expanded = useMemo(() => new Set(opened), [opened]);
+  const toggle = (id: string) => setOpened((o) => (o.includes(id) ? o.filter((open) => open !== id) : [...o, id]));
+
+  // A name being typed: for a node renamed, or for a collection or request made only once it is confirmed.
+  const [renaming, setRenaming] = useState<Naming | null>(null);
+  const [deleting, setDeleting] = useState<{ id: string; name: string; what: string; environment?: boolean } | null>(null);
+  const [moving, setMoving] = useState<{ id: string; name: string; to: string | null } | null>(null);
+  const targets = moving ? moveTargets(http.collections, moving.id) : [];
+  const [failed, setFailed] = useState<string | null>(null);
+  const shownProblem = failed ?? http.problem;
+  const dismiss = () => (failed ? setFailed(null) : http.dismissProblem());
+  const marks = useMemo(() => scriptMarks(http.collections, http.scripts), [http.collections, http.scripts]);
+
+  useShortcuts({
+    // Not under a dialog or a sheet: their ⌘Enter is theirs, not the request's.
+    httpSend: () => {
+      if (renaming || deleting || moving || shownProblem || sheet || !http.active) return false;
+      http.send(http.active);
+    },
+  });
+  const rename = () => {
+    const name = renaming?.name.trim();
+    if (!renaming || !name) return;
+    setRenaming(null);
+    if (renaming.kind === "rename") http.rename(renaming.id, name);
+    else if (renaming.kind === "request") {
+      reveal(renaming.parent);
+      http.newRequest(renaming.parent, name);
+    } else if (renaming.kind === "folder") {
+      reveal(renaming.parent);
+      http.newFolder(renaming.parent, name);
+    } else
+      http.newCollection(name).then(
+        (id) => reveal(id),
+        (e) => setFailed(`The collection was not made: ${e}`),
+      );
+  };
+  const move = () => {
+    if (!moving?.to) return;
+    reveal(moving.to);
+    http.move(moving.id, moving.to);
+    setMoving(null);
+  };
+  const remove = () => {
+    if (!deleting) return;
+    if (deleting.environment) {
+      setSheet(null);
+      http.deleteEnvironment(deleting.id).catch((e) => setFailed(`The environment was not deleted: ${e}`));
+    } else http.remove(deleting.id);
+    setDeleting(null);
+  };
+  const reveal = (id: string) => setOpened((o) => (o.includes(id) ? o : [...o, id]));
+  // A request picked outside the tree is shown in it: its collection and folders opened, its row scrolled to.
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const showInTree = (id: string) => {
+    const found = findRequest(http.collections, id);
+    if (!found) return;
+    setOpened((o) => (found.ids.every((open) => o.includes(open)) ? o : [...o, ...found.ids.filter((open) => !o.includes(open))]));
+    setScrollTo(id);
+  };
+  useEffect(() => {
+    if (!scrollTo) return;
+    const row = [...document.querySelectorAll<HTMLElement>("[data-tree-request]")].find((r) => r.dataset.treeRequest === scrollTo);
+    row?.scrollIntoView?.({ block: "nearest" });
+    setScrollTo(null);
+  }, [scrollTo]);
+  const newCollection = () => setRenaming({ kind: "collection", name: "New collection" });
+  const newRequest = (parent: string) => setRenaming({ kind: "request", parent, name: "New request" });
+  const newFolder = (parent: string) => setRenaming({ kind: "folder", parent, name: "New folder" });
+  const importFile = () =>
+    http.importFile().then(
+      (imported) => imported?.kind === "collection" && reveal(imported.id),
+      (e) => setFailed(`Nothing was imported: ${e}`),
+    );
+  const newEnvironment = () =>
+    http.newEnvironment().then(
+      (id) => setSheet({ kind: "environment", id }),
+      (e) => setFailed(`The environment was not made: ${e}`),
+    );
+  const menu = (node: TreeNode): Action[] => {
+    // Counted when Delete is picked, not for every row on every render.
+    const holds = () => {
+      const requests = requestsUnder(http.collections, node.id).length;
+      if (requests === 0) return "— there is nothing in it";
+      return `with ${requests === 1 ? "its request" : `its ${requests} requests`}`;
+    };
+    // A file that does not read can only go.
+    const broken = node.kind === "collection" && http.collections.some((c) => c.id === node.id && c.error);
+    return [
+      ...(node.kind === "request" || broken
+        ? []
+        : [
+            { value: "new", label: "New request", run: () => newRequest(node.id) },
+            { value: "folder", label: "New folder", run: () => newFolder(node.id) },
+          ]),
+      ...(broken ? [] : [{ value: "rename", label: "Rename…", run: () => setRenaming({ kind: "rename", id: node.id, name: node.name }) }]),
+      ...(node.kind === "collection" ? [] : [{ value: "move", label: "Move to…", run: () => setMoving({ id: node.id, name: node.name, to: null }) }]),
+      ...(node.kind === "collection" && !broken
+        ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => void http.exportCollection(node.id).catch((e) => setFailed(`The collection was not exported: ${e}`)) }]
+        : []),
+      {
+        value: "delete",
+        label: "Delete…",
+        run: () =>
+          setDeleting({
+            id: node.id,
+            name: node.name,
+            what: node.kind === "request" ? "Deletes the request and its last response." : `Deletes the ${node.kind} ${holds()}.`,
+          }),
+      },
+    ];
+  };
+
+  const editingEnv = sheet?.kind === "environment" ? (http.environments.find((e) => e.id === sheet.id) ?? null) : null;
+  const openTab = http.active ? findRequest(http.collections, http.active) : null;
+
+  return (
+    <Page
+      title="HTTP"
+      bar={
+        <>
+          <Dropdown
+            below
+            heading="Environment"
+            label={
+              <span className="http-env-label">
+                <Globe size={13} />
+                {http.environment?.name ?? "No environment"}
+              </span>
+            }
+            title="The environment whose variables fill {{…}}"
+            options={[
+              { value: "", label: "No environment", hint: "Globals and the collection's variables only" },
+              ...http.environments.map((e) => ({
+                value: e.id,
+                label: e.name,
+                hint: e.variables.find(({ key }) => key === "baseUrl")?.value,
+                action: { icon: <Settings2 size={13} />, title: `Edit ${e.name}`, onRun: () => setSheet({ kind: "environment", id: e.id }) },
+              })),
+            ]}
+            value={http.environment?.id ?? ""}
+            onPick={(id) => http.setEnvironmentId(id || null)}
+          />
+          <button
+            type="button"
+            className="http-icon-button"
+            data-sheet-opener
+            title={`Edit ${http.environment?.name ?? "the environment"}`}
+            aria-label="Edit the environment"
+            disabled={!http.environment}
+            onClick={() => http.environment && setSheet({ kind: "environment", id: http.environment.id })}
+          >
+            <Settings2 size={14} />
+          </button>
+          <button type="button" className="http-icon-button" data-sheet-opener title="New environment" aria-label="New environment" onClick={newEnvironment}>
+            <Plus size={14} />
+          </button>
+          <span className="http-spacer" />
+          <div className="http-layout-switch" role="group" aria-label="Where the response goes">
+            {LAYOUTS.map(({ value, icon: Icon, title }) => (
+              <button key={value} type="button" className={`http-icon-button${layout === value ? " on" : ""}`} title={title} aria-label={title} aria-pressed={layout === value} onClick={() => setLayout(value)}>
+                <Icon size={14} />
+              </button>
+            ))}
+          </div>
+          <button type="button" className="http-bar-button" data-sheet-opener title="What each domain set, sent back with its next request" onClick={() => setSheet({ kind: "cookies" })}>
+            <Cookie size={13} />
+            Cookies
+          </button>
+          <button type="button" className="http-bar-button" data-sheet-opener title="Every request sent — yours and the agent's" onClick={() => setSheet({ kind: "history" })}>
+            <History size={13} />
+            History
+          </button>
+        </>
+      }
+      sheet={
+        editingEnv ? (
+          <PageSheet icon={Globe} title="Environment" label={`Environment ${editingEnv.name}`} onClose={() => setSheet(null)}>
+            <EnvironmentForm
+              key={editingEnv.id}
+              environment={editingEnv}
+              onSave={http.saveEnvironment}
+              onReveal={(key) => http.secretOf(editingEnv.id, key)}
+              onExport={() => http.exportEnvironment(editingEnv.id)}
+              onDelete={() => setDeleting({ id: editingEnv.id, name: editingEnv.name, what: "Deletes the environment and its sealed secrets.", environment: true })}
+            />
+          </PageSheet>
+        ) : sheet?.kind === "history" ? (
+          <PageSheet icon={History} title="History" label="Every request sent" onClose={() => setSheet(null)}>
+            <HistoryList
+              entries={http.history}
+              // A request deleted since keeps its history, with nothing to open.
+              canOpen={(id) => findRequest(http.collections, id) !== null}
+              onOpen={(id) => {
+                http.open(id);
+                showInTree(id);
+                setSheet(null);
+              }}
+            />
+          </PageSheet>
+        ) : sheet?.kind === "cookies" ? (
+          <PageSheet icon={Cookie} title="Cookies" label="Cookies kept by domain" onClose={() => setSheet(null)}>
+            <CookieList />
+          </PageSheet>
+        ) : null
+      }
+    >
+      <div className="http-layout">
+        <nav className="http-tree" aria-label="Collections">
+          <div className="http-tree-head">
+            <span>Collections</span>
+            <button type="button" className="http-icon-button" title="Import a Postman collection, environment or globals file (v2.1)" aria-label="Import" onClick={importFile}>
+              <Upload size={14} />
+            </button>
+            <button type="button" className="http-icon-button" title="New collection" aria-label="New collection" onClick={newCollection}>
+              <Plus size={14} />
+            </button>
+          </div>
+          <ul className="http-tree-list">
+            {http.collections.map((c) => (
+              <CollectionNode key={c.id} collection={c} expanded={expanded} toggle={toggle} active={http.active} open={http.open} menu={menu} marks={marks} drafts={http.drafts} />
+            ))}
+          </ul>
+        </nav>
+
+        <section className="http-main" aria-label="Requests">
+          <div className="http-tabs" role="tablist" aria-label="Open requests">
+            {http.tabs.map((id) => {
+              const found = findRequest(http.collections, id);
+              if (!found) return null;
+              const on = id === http.active;
+              return (
+                <div key={id} className={`http-tab${on ? " on" : ""}`}>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    className="http-tab-name"
+                    title={[...found.path, found.request.name].join(" › ")}
+                    onClick={() => {
+                      http.setActive(id);
+                      showInTree(id);
+                    }}
+                  >
+                    <MethodBadge method={found.request.method} />
+                    {found.request.name}
+                    {http.sent[id]?.busy && <Loader2 size={11} className="http-spin" />}
+                  </button>
+                  <button type="button" className="http-tab-close" title="Close" aria-label={`Close ${found.request.name}`} onClick={() => http.close(id)}>
+                    <X size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          {openTab ? (
+            <RequestView
+              key={openTab.request.id}
+              collection={openTab.collection}
+              request={openTab.request}
+              environment={http.environment}
+              globals={http.globals}
+              layout={layout}
+              sent={http.sent[openTab.request.id]}
+              onEdit={http.edit}
+              onPasteCurl={(command) => http.pasteCurl(openTab.request, command).catch((e) => setFailed(`The command was not read: ${e}`))}
+              onSend={() => http.send(openTab.request.id)}
+              scripts={http.scripts[openTab.collection.id] ?? NO_SCRIPTS}
+              onTurnScripts={(hashes, on) => void http.turnScripts(openTab.collection.id, hashes, on)}
+              onEditScript={(listen, code) => http.editScript(openTab.collection.id, openTab.request.id, listen, code)}
+              typedScripts={http.typed}
+              drafts={drafted(http.drafts, openTab.collection.id, openTab.request.id)}
+              onApplyDraft={(d) => void http.applyDraft(d)}
+              onRejectDraft={(d) => void http.rejectDraft(d)}
+            />
+          ) : (
+            <p className="http-quiet http-empty">Pick a request on the left, or import a Postman collection.</p>
+          )}
+        </section>
+      </div>
+      <Modal
+        title={NAMING_TITLE[renaming?.kind ?? "rename"]}
+        open={renaming !== null}
+        onClose={() => setRenaming(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setRenaming(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" disabled={!renaming?.name.trim()} onClick={rename}>
+              {renaming?.kind === "rename" ? "Rename" : "Create"}
+            </button>
+          </>
+        }
+      >
+        <input
+          className="http-rename"
+          ref={selectAll}
+          value={renaming?.name ?? ""}
+          aria-label="Name"
+          onChange={(e) => renaming && setRenaming({ ...renaming, name: e.target.value })}
+          // A form field's Enter, as in every settings form here — not a shortcut.
+          onKeyDown={(e) => {
+            if (!matches(e, "accept")) return;
+            e.preventDefault();
+            rename();
+          }}
+        />
+      </Modal>
+      <Modal
+        title={`Delete “${deleting?.name ?? ""}”?`}
+        open={deleting !== null}
+        onClose={() => setDeleting(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setDeleting(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" onClick={remove}>
+              Delete
+            </button>
+          </>
+        }
+      >
+        <p className="http-confirm">{deleting?.what}</p>
+      </Modal>
+      <Modal
+        title={`Move “${moving?.name ?? ""}”`}
+        open={moving !== null}
+        onClose={() => setMoving(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setMoving(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" disabled={!moving?.to} onClick={move}>
+              Move
+            </button>
+          </>
+        }
+      >
+        {targets.every((t) => t.here) ? (
+          <p className="http-confirm">There is nowhere else to put it: make a folder or another collection first.</p>
+        ) : (
+          moving && <MovePicker key={moving.id} places={targets} value={moving.to} onPick={(to) => setMoving({ ...moving, to })} />
+        )}
+      </Modal>
+      <Modal
+        title="Not done"
+        open={shownProblem !== null}
+        onClose={dismiss}
+        footer={
+          <button type="button" className="btn btn-primary" onClick={dismiss}>
+            OK
+          </button>
+        }
+      >
+        <p className="http-confirm">{shownProblem}</p>
+      </Modal>
+    </Page>
+  );
+}
+
+// Focused with the name selected, as a new name replaces it more often than not. Outside
+// the component: a new function each render would be called again, and select again.
+const selectAll = (input: HTMLInputElement | null) => input?.select();
+
+/** A curl command, as DevTools and docs write it. */
+const CURL = /^\s*curl\s/;
+
+/** What the name dialog names: a node there is, or one made on Create. */
+type Naming =
+  | { kind: "rename"; id: string; name: string }
+  | { kind: "collection"; name: string }
+  | { kind: "request" | "folder"; parent: string; name: string };
+
+const NAMING_TITLE: Record<Naming["kind"], string> = { rename: "Rename", collection: "New collection", request: "New request", folder: "New folder" };
+
+function MethodBadge({ method }: { method: HttpMethod }) {
+  return <span className={`http-method http-method-${method.toLowerCase()}`}>{method === "DELETE" ? "DEL" : method === "OPTIONS" ? "OPT" : method}</span>;
+}
+
+type TreeNode = { id: string; name: string; kind: "collection" | "folder" | "request" };
+type Action = { value: string; label: string; hint?: string; run: () => void };
+type TreeProps = {
+  expanded: Set<string>;
+  toggle: (id: string) => void;
+  active: string | null;
+  open: (id: string) => void;
+  menu: (node: TreeNode) => Action[];
+  /** A level's own scripts, by its id or its collection's: "off" when any of them is. */
+  marks: Map<string, Mark>;
+  /** The model's drafts waiting, each marked on its request. */
+  drafts: HttpScriptDraft[];
+};
+type Mark = "on" | "off";
+
+/** Says a level carries Postman scripts and whether they run — on hover, in words. */
+function ScriptsMark({ mark }: { mark: Mark | undefined }) {
+  if (!mark) return null;
+  const said = mark === "on" ? "Postman scripts, on" : "Postman scripts, off";
+  const where = mark === "on" ? "they run on Send" : "they do not run until turned on in a request's Scripts tab";
+  return (
+    <span className={`http-tree-mark${mark === "off" ? " off" : ""}`} title={`${said} — ${where}`} aria-label={said}>
+      <FileCode2 size={12} />
+    </span>
+  );
+}
+
+/** Says a chat's script draft waits on this request (HC-11d). */
+function DraftMark({ count }: { count: number }) {
+  if (!count) return null;
+  const said = count === 1 ? "A script draft from a chat is waiting" : `${count} script drafts from chats are waiting`;
+  return (
+    <span className="http-tree-mark draft" title={`${said} — on the request's Scripts tab, to move into it or reject`} aria-label={said}>
+      <FilePen size={12} />
+    </span>
+  );
+}
+
+/** The drafts waiting on the requests in `folder`, however deep. */
+function draftsUnder(drafts: HttpScriptDraft[], collection: string, folder: Item): number {
+  const requests = new Set<string>();
+  const walk = (item: Item): void => void (item.kind === "request" ? requests.add(item.id) : item.items.forEach(walk));
+  walk(folder);
+  return drafts.filter((d) => d.collection === collection && requests.has(d.request)).length;
+}
+
+const NO_SCRIPTS: HttpScriptState[] = [];
+const NO_DRAFTS: HttpScriptDraft[] = [];
+
+/** Each level's mark: its own scripts' states, "off" when any is. */
+function scriptMarks(collections: Collection[], states: Record<string, HttpScriptState[]>): Map<string, Mark> {
+  const marks = new Map<string, Mark>();
+  for (const c of collections)
+    for (const s of states[c.id] ?? []) {
+      const at = s.item ?? c.id;
+      if (marks.get(at) !== "off") marks.set(at, s.on ? "on" : "off");
+    }
+  return marks;
+}
+
+/** A row of the tree, and beside it what can be done to it. */
+function TreeRow({ node, menu, children }: { node: TreeNode; menu: TreeProps["menu"]; children: ReactNode }) {
+  const actions = menu(node);
+  return (
+    <div className="http-tree-item">
+      {children}
+      <span className="http-tree-menu">
+        <Dropdown
+          label={<MoreHorizontal size={14} aria-label={`Actions for ${node.name}`} />}
+          title={`Actions for ${node.name}`}
+          options={actions.map(({ value, label, hint }) => ({ value, label, hint }))}
+          value=""
+          onPick={(value) => actions.find((a) => a.value === value)?.run()}
+          below
+          right
+        />
+      </span>
+    </div>
+  );
+}
+
+function CollectionNode({ collection, ...tree }: { collection: Collection } & TreeProps) {
+  const isOpen = tree.expanded.has(collection.id);
+  return (
+    <li>
+      <TreeRow node={{ id: collection.id, name: collection.name, kind: "collection" }} menu={tree.menu}>
+        <button type="button" className="http-tree-row http-tree-collection" aria-expanded={isOpen} onClick={() => tree.toggle(collection.id)}>
+          {isOpen ? <ChevronDown size={13} className="http-tree-chevron" /> : <ChevronRight size={13} className="http-tree-chevron" />}
+          <Layers size={13} className="http-tree-icon" />
+          <span className="http-tree-name">{collection.name}</span>
+          <ScriptsMark mark={tree.marks.get(collection.id)} />
+          <DraftMark count={tree.drafts.filter((d) => d.collection === collection.id).length} />
+        </button>
+      </TreeRow>
+      {isOpen &&
+        (collection.error ? (
+          <p className="http-error http-tree-empty">Does not read: {collection.error}</p>
+        ) : collection.items.length > 0 ? (
+          <Items items={collection.items} collection={collection.id} {...tree} />
+        ) : (
+          <p className="http-quiet http-tree-empty">No requests yet</p>
+        ))}
+    </li>
+  );
+}
+
+function Items({ items, collection, ...tree }: { items: Item[]; collection: string } & TreeProps) {
+  return (
+    <ul className="http-tree-list">
+      {items.map((item) =>
+        item.kind === "folder" ? (
+          <li key={item.id}>
+            <TreeRow node={{ id: item.id, name: item.name, kind: "folder" }} menu={tree.menu}>
+              <button type="button" className="http-tree-row" aria-expanded={tree.expanded.has(item.id)} onClick={() => tree.toggle(item.id)}>
+                {tree.expanded.has(item.id) ? <FolderOpen size={13} className="http-tree-icon" /> : <Folder size={13} className="http-tree-icon" />}
+                <span className="http-tree-name">{item.name}</span>
+                <ScriptsMark mark={tree.marks.get(item.id)} />
+                <DraftMark count={draftsUnder(tree.drafts, collection, item)} />
+              </button>
+            </TreeRow>
+            {tree.expanded.has(item.id) && <Items items={item.items} collection={collection} {...tree} />}
+          </li>
+        ) : (
+          <li key={item.id}>
+            <TreeRow node={{ id: item.id, name: item.name, kind: "request" }} menu={tree.menu}>
+              <button type="button" className={`http-tree-row${tree.active === item.id ? " on" : ""}`} data-tree-request={item.id} onClick={() => tree.open(item.id)}>
+                <MethodBadge method={item.method} />
+                <span className="http-tree-name">{item.name}</span>
+                <ScriptsMark mark={tree.marks.get(item.id)} />
+                <DraftMark count={tree.drafts.filter((d) => d.collection === collection && d.request === item.id).length} />
+              </button>
+            </TreeRow>
+          </li>
+        ),
+      )}
+    </ul>
+  );
+}
+
+function ago(at: number): string {
+  const minutes = Math.round((Date.now() - at) / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  return hours < 24 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+}
+
+/** Opening a send's request from the history, if it is still there. */
+type Opening = { canOpen: (requestId: string) => boolean; onOpen: (requestId: string) => void };
+
+const pairs = (headers: [string, string][]): Pair[] => headers.map(([key, value]) => ({ key, value }));
+const contentTypeOf = (headers: [string, string][]) => headers.find(([key]) => key.toLowerCase() === "content-type")?.[1] ?? "";
+const statusOf = (outcome: HttpOutcome) => (outcome.kind === "response" ? outcome.status : null);
+
+/** The jar by domain: names and dates, no value leaves the backend. */
+function CookieList() {
+  const { cookies, problem, remove, clear } = useHttpCookies();
+  if (cookies === null) return <p className="http-quiet">{problem ?? "Reading…"}</p>;
+  if (cookies.length === 0) return <p className="http-quiet">No cookies yet. What a response sets goes back with the next request to its domain.</p>;
+  return (
+    <div className="http-form">
+      {problem && <p className="http-kept">{problem}</p>}
+      <table className="http-pairs http-cookies">
+        <thead>
+          <tr>
+            <th>Domain</th>
+            <th>Name</th>
+            <th>Path</th>
+            <th>Expires</th>
+            <th aria-label="Remove" />
+          </tr>
+        </thead>
+        <tbody>
+          {cookies.map((c) => (
+            <tr key={`${c.domain} ${c.path} ${c.name}`}>
+              <td className="http-mono">{c.domain}</td>
+              <td className="http-mono">{c.name}</td>
+              <td className="http-mono">{c.path}</td>
+              <td>{c.expiresAt ? new Date(c.expiresAt).toLocaleString() : "When cleared"}</td>
+              <td>
+                <button type="button" className="http-icon-button" title={`Delete ${c.name}`} aria-label={`Delete ${c.name}`} onClick={() => remove(c)}>
+                  <X size={13} />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div>
+        <button type="button" className="btn" onClick={clear}>
+          Clear all
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HistoryList({ entries, ...opening }: { entries: HttpHistoryEntry[] | null } & Opening) {
+  const [shown, setShown] = useState<string | null>(null);
+  if (entries === null) return <p className="http-quiet">Reading…</p>;
+  if (entries.length === 0) return <p className="http-quiet">Nothing sent yet.</p>;
+  return (
+    <ul className="http-history">
+      {entries.map((h) => (
+        <HistoryRow key={h.id} entry={h} expanded={shown === h.id} onToggle={() => setShown(shown === h.id ? null : h.id)} {...opening} />
+      ))}
+    </ul>
+  );
+}
+
+function HistoryRow({ entry, expanded, onToggle, ...opening }: { entry: HttpHistoryEntry; expanded: boolean; onToggle: () => void } & Opening) {
+  const path = entry.templateUrl.replace(/^\{\{baseUrl\}\}/, "");
+  const where = entry.environment ?? "no environment";
+  const status = statusOf(entry.outcome);
+  return (
+    <li>
+      <button
+        type="button"
+        className={`http-tree-row http-history-row${expanded ? " on" : ""}`}
+        aria-expanded={expanded}
+        title={`${entry.request.method} ${entry.templateUrl} · ${where}${entry.agentChat ? ` · sent by the agent in “${entry.agentChat}”` : ""}`}
+        onClick={onToggle}
+      >
+        {expanded ? <ChevronDown size={13} className="http-tree-chevron" /> : <ChevronRight size={13} className="http-tree-chevron" />}
+        <MethodBadge method={entry.request.method} />
+        <span className="http-tree-name http-mono">{path}</span>
+        <span className="http-quiet">{where}</span>
+        {entry.agentChat && <Bot size={12} className="http-tree-mark" aria-label="Sent by the agent" />}
+        {status === null ? (
+          <span className="http-status-text http-tone-server">failed</span>
+        ) : (
+          <span className={`http-status-text http-tone-${statusTone(status)}`}>{status}</span>
+        )}
+        <span className="http-quiet">{ago(entry.at)}</span>
+      </button>
+      {expanded && <Exchange entry={entry} {...opening} />}
+    </li>
+  );
+}
+
+/** One send in full: the request as it left, a secret masked, and what came back. */
+function Exchange({ entry, canOpen, onOpen }: { entry: HttpHistoryEntry } & Opening) {
+  const { request, outcome } = entry;
+  const response = outcome.kind === "response" ? outcome : null;
+  const body = useMemo(() => (response && entry.responseBody ? pretty(entry.responseBody, contentTypeOf(response.headers)) : null), [response, entry.responseBody]);
+  const requestId = entry.requestId && canOpen(entry.requestId) ? entry.requestId : null;
+  return (
+    <div className="http-exchange">
+      <div className="http-exchange-head">
+        <span className="http-label">Request</span>
+        <span className="http-quiet">
+          {new Date(entry.at).toLocaleString()} · {entry.environment ?? "no environment"}
+          {entry.agentChat && ` · the agent, in “${entry.agentChat}”`}
+        </span>
+        <span className="http-spacer" />
+        {requestId && (
+          <button type="button" className="http-bar-button" onClick={() => onOpen(requestId)}>
+            Open request
+          </button>
+        )}
+      </div>
+      <div className="http-code-box http-code-box-log">
+        <CodeEditor text={asHttpText(`${request.method} ${request.url}`, pairs(request.headers), request.body)} language="http" numbered={false} label="Request" />
+      </div>
+      <div className="http-exchange-head">
+        <span className="http-label">Response</span>
+        {response && <span className="http-quiet">{response.elapsedMs} ms</span>}
+      </div>
+      {response ? (
+        <div className="http-code-box http-code-box-log">
+          <CodeEditor text={asHttpText(`HTTP/1.1 ${response.status}`, pairs(response.headers), body)} language="http" numbered={false} label="Response" />
+        </div>
+      ) : (
+        <p className="http-error">{outcome.kind === "failed" && outcome.error}</p>
+      )}
+    </div>
+  );
+}
+
+type Tab = "params" | "headers" | "auth" | "body" | "scripts" | "preview";
+
+/** The response under the request, or beside it. */
+type Layout = "stacked" | "side";
+const LAYOUTS = [
+  { value: "stacked", icon: Rows2, title: "Response under the request" },
+  { value: "side", icon: Columns2, title: "Response beside the request" },
+] as const;
+const isLayout = (v: unknown): v is Layout => v === "stacked" || v === "side";
+const isIds = (v: unknown): v is string[] => Array.isArray(v) && v.every((id) => typeof id === "string");
+
+/**
+ * Neither side closes: the request keeps its tabs and a couple of lines of
+ * body, the response its tabs and a few lines — under it, or beside it.
+ */
+const PANE_MIN = { stacked: 160, side: 400 };
+const RESPONSE_MIN = { stacked: 160, side: 320 };
+const isSize = (v: unknown): v is number | null => v === null || (typeof v === "number" && v > 0);
+
+/**
+ * Where a move goes, as the tree it is: a list in the dialog, not a dropdown — the
+ * dialog's body scrolls, and would cut a menu off. A place that holds others folds;
+ * at first only the way to where the item is now is open, so many collections are
+ * a short list.
+ */
+function MovePicker({ places, value, onPick }: { places: MovePlace[]; value: string | null; onPick: (id: string) => void }) {
+  const holders = new Set(places.flatMap((p) => p.parents));
+  const [closed, setClosed] = useState(() => {
+    const here = places.find((p) => p.here);
+    const open = new Set(here ? [...here.parents, here.id] : []);
+    return new Set([...holders].filter((id) => !open.has(id)));
+  });
+  const fold = (id: string) =>
+    setClosed((c) => {
+      const next = new Set(c);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const all = closed.size > 0;
+  return (
+    <div className="http-move">
+      {holders.size > 0 && (
+        <button type="button" className="http-bar-button http-move-all" onClick={() => setClosed(all ? new Set() : new Set(holders))}>
+          {all ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          {all ? "Expand all" : "Collapse all"}
+        </button>
+      )}
+      <div className="http-move-list" role="listbox" aria-label="Where to move it — last into">
+        {places
+          .filter((p) => !p.parents.some((id) => closed.has(id)))
+          .map((p) => (
+            <div key={p.id} className="http-move-row" style={{ "--depth": p.parents.length } as CSSProperties}>
+              {holders.has(p.id) ? (
+                <button type="button" className="http-icon-button" aria-label={`${closed.has(p.id) ? "Expand" : "Collapse"} ${p.label}`} aria-expanded={!closed.has(p.id)} onClick={() => fold(p.id)}>
+                  {closed.has(p.id) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </button>
+              ) : (
+                <span className="http-move-gap" />
+              )}
+              <button
+                type="button"
+                role="option"
+                aria-label={p.label}
+                aria-selected={value === p.id}
+                disabled={p.here}
+                title={p.here ? "It is here now" : p.label}
+                className={`http-move-target${p.parents.length === 0 ? " collection" : ""}${value === p.id ? " on" : ""}`}
+                onClick={() => onPick(p.id)}
+              >
+                {p.parents.length > 0 && <Folder size={13} className="http-tree-icon" />}
+                <span className="http-move-name">{p.name}</span>
+                {p.here && <span className="http-move-here">here now</span>}
+              </button>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+/** What a variable is said to be on hover: its value, or that nothing in scope has it. */
+const variableTitle = (name: string, value: string | null) => (value === null ? `{{${name}}} is not set in the environment or the collection` : `{{${name}}} = ${value}`);
+
+/** `{{variables}}` in an editor, found or not, their value on hover. */
+function variableMarks(values: ReadonlyMap<string, string>): Extension {
+  const decorator = new MatchDecorator({
+    regexp: new RegExp(VARIABLE.source, "g"),
+    decoration: (m) => {
+      const value = variableValue(m[1], values);
+      return Decoration.mark({ class: value === null ? "cm-variable missing" : "cm-variable", attributes: { title: variableTitle(m[1], value) } });
+    },
+  });
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+      constructor(view: EditorView) {
+        this.decorations = decorator.createDeco(view);
+      }
+      update(update: ViewUpdate) {
+        this.decorations = decorator.updateDeco(update, this.decorations);
+      }
+    },
+    { decorations: (plugin) => plugin.decorations },
+  );
+}
+
+/**
+ * The list a `{{` opens in an editor — the body — of the variables in scope, a
+ * secret masked; picked, `{{name}}` replaces what was typed, the closer kept once.
+ * Its keys by the registry, as the field's list has them.
+ */
+function variableCompletion(values: ReadonlyMap<string, string>): Extension {
+  const source = (context: CompletionContext) => {
+    const at = context.matchBefore(/\{\{\s*[^{}\s]*/);
+    if (!at) return null;
+    return {
+      from: at.from,
+      filter: false,
+      options: variableHints(values, variableAt(at.text, at.text.length)?.typed ?? "").map(({ name, value }) => ({
+        label: `{{${name}}}`,
+        detail: value,
+        apply: (view: EditorView, _: unknown, from: number, to: number) => {
+          const text = view.state.sliceDoc(from, Math.min(view.state.doc.length, to + 200));
+          const put = putVariable(text, 0, to - from, name);
+          view.dispatch({ changes: { from, to: from + text.length, insert: put.text }, selection: { anchor: from + put.caret } });
+        },
+      })),
+    };
+  };
+  return [
+    autocompletion({ override: [source], icons: false, defaultKeymap: false }),
+    Prec.highest(
+      keymap.of([
+        {
+          any: (view, e) =>
+            matches(e, "httpVarNext")
+              ? moveCompletionSelection(true)(view)
+              : matches(e, "httpVarPrev")
+                ? moveCompletionSelection(false)(view)
+                : matches(e, "httpVarPick")
+                  ? acceptCompletion(view)
+                  : matches(e, "close") && closeCompletion(view),
+        },
+      ]),
+    ),
+  ];
+}
+
+/**
+ * A text field whose `{{variables}}` are drawn found or not. A field cannot
+ * colour part of its text, so while it holds a variable its own text is made
+ * invisible and drawn again over it — the caret, the selection and the
+ * field's look stay the field's. The value of each is on the field's hover.
+ */
+function VarInput({ values, value, className, ...field }: InputHTMLAttributes<HTMLInputElement> & { value: string; values: ReadonlyMap<string, string> }) {
+  const input = useRef<HTMLInputElement>(null);
+  const over = useRef<HTMLSpanElement>(null);
+  const id = useId();
+  // Where the caret is while the field has focus; `null` keeps the list closed.
+  const [caret, setCaret] = useState<number | null>(null);
+  const [active, setActive] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  const typing = caret === null || dismissed ? null : variableAt(value, caret);
+  const hints = typing ? variableHints(values, typing.typed) : [];
+  const picked = hints[Math.min(active, hints.length - 1)];
+  // The caret a pick leaves, set once React has put the new text in.
+  const after = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (after.current === null || !input.current) return;
+    input.current.setSelectionRange(after.current, after.current);
+    setCaret(after.current);
+    after.current = null;
+  });
+  // Put in as typing would be — the field's own onChange gets it — so every caller takes it as it takes a key.
+  const pick = (name: string) => {
+    if (!typing || caret === null || !input.current) return;
+    const put = putVariable(value, typing.from, caret, name);
+    after.current = put.caret;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input.current, put.text);
+    input.current.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const keyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (picked) {
+      const moves = matches(e, "httpVarNext") ? 1 : matches(e, "httpVarPrev") ? -1 : 0;
+      if (moves) {
+        e.preventDefault();
+        return setActive((active + moves + hints.length) % hints.length);
+      }
+      if (matches(e, "httpVarPick")) {
+        e.preventDefault();
+        return pick(picked.name);
+      }
+      if (matches(e, "close")) {
+        e.stopPropagation();
+        return setDismissed(true);
+      }
+    }
+    field.onKeyDown?.(e);
+  };
+  const parts = variableParts(value, values);
+  const marked = parts.some((part) => part.variable);
+  // The drawn text sits where the field's would: its font, padding and border, and where it is scrolled to.
+  const follow = () => {
+    if (input.current && over.current) over.current.scrollLeft = input.current.scrollLeft;
+  };
+  useLayoutEffect(() => {
+    if (!input.current || !over.current) return;
+    const s = getComputedStyle(input.current);
+    Object.assign(over.current.style, {
+      fontFamily: s.fontFamily,
+      fontSize: s.fontSize,
+      fontWeight: s.fontWeight,
+      letterSpacing: s.letterSpacing,
+      color: s.color,
+      textDecorationLine: s.textDecorationLine,
+      paddingTop: s.paddingTop,
+      paddingRight: s.paddingRight,
+      paddingBottom: s.paddingBottom,
+      paddingLeft: s.paddingLeft,
+      borderTopWidth: s.borderTopWidth,
+      borderRightWidth: s.borderRightWidth,
+      borderBottomWidth: s.borderBottomWidth,
+      borderLeftWidth: s.borderLeftWidth,
+    });
+    follow();
+  });
+  const title = parts.flatMap((part) => (part.variable ? [variableTitle(part.variable.name, part.variable.value)] : [])).join("\n");
+  return (
+    <span className="http-var-field">
+      <input
+        {...field}
+        ref={input}
+        value={value}
+        title={title || field.title}
+        className={`${className ?? ""}${marked ? " http-var-hidden" : ""}`}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={!!picked}
+        aria-controls={picked ? `${id}-list` : undefined}
+        aria-activedescendant={picked ? `${id}-${hints.indexOf(picked)}` : undefined}
+        autoComplete="off"
+        onChange={(e) => {
+          field.onChange?.(e);
+          setCaret(e.target.selectionStart);
+          setActive(0);
+          setDismissed(false);
+        }}
+        onKeyDown={keyDown}
+        onBlur={(e) => {
+          setCaret(null);
+          field.onBlur?.(e);
+        }}
+        onScroll={follow}
+        onSelect={(e) => {
+          follow();
+          setCaret(e.currentTarget.selectionStart);
+        }}
+        onKeyUp={follow}
+      />
+      {picked && (
+        <div className="http-var-list" role="listbox" id={`${id}-list`} aria-label="Variables">
+          {hints.map((hint, i) => (
+            <div
+              key={hint.name}
+              id={`${id}-${i}`}
+              role="option"
+              aria-selected={hint === picked}
+              className={`http-var-option${hint === picked ? " active" : ""}`}
+              // Picked without taking the focus from the field.
+              onPointerDown={(e) => {
+                e.preventDefault();
+                pick(hint.name);
+              }}
+            >
+              <span className="http-mono">{`{{${hint.name}}}`}</span>
+              <span className="http-var-value">{hint.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {marked && (
+        <span ref={over} className="http-var-over" aria-hidden="true">
+          <span className="http-var-line">
+            {parts.map((part, i) =>
+              part.variable ? (
+                <span key={i} className={`http-var${part.variable.value === null ? " missing" : ""}`}>
+                  {part.text}
+                </span>
+              ) : (
+                part.text
+              ),
+            )}
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+function RequestView({
+  collection,
+  request,
+  environment,
+  globals,
+  layout,
+  sent,
+  onEdit,
+  onPasteCurl,
+  onSend,
+  scripts: states,
+  onTurnScripts,
+  onEditScript,
+  typedScripts,
+  drafts,
+  onApplyDraft,
+  onRejectDraft,
+}: {
+  collection: Collection;
+  request: HttpRequest;
+  environment: Environment | null;
+  globals: EnvVariable[];
+  layout: Layout;
+  sent: Sent | undefined;
+  onEdit: (r: HttpRequest) => void;
+  onPasteCurl: (command: string) => void;
+  onSend: () => void;
+  scripts: HttpScriptState[];
+  onTurnScripts: (hashes: string[], on: boolean) => void;
+  onEditScript: (listen: "prerequest" | "test", code: string) => void;
+  /** What was typed into requests' own scripts, by `request\nlisten`. */
+  typedScripts: Record<string, string>;
+  /** The chats' drafts of this request's scripts. */
+  drafts: HttpScriptDraft[];
+  onApplyDraft: (draft: HttpScriptDraft) => void;
+  onRejectDraft: (draft: HttpScriptDraft) => void;
+}) {
+  const [tab, setTab] = useState<Tab>(request.body.mode === "none" ? "params" : "body");
+  // Dragged by the line between the request and the response, a size per layout. Until then, stacked,
+  // the request takes what it needs up to 45%; side by side, half.
+  const [height, setHeight] = useStoredState<number | null>("http.requestHeight", null, isSize);
+  const [width, setWidth] = useStoredState<number | null>("http.requestWidth", null, isSize);
+  const split = useRef<HTMLDivElement>(null);
+  const pane = useRef<HTMLDivElement>(null);
+  const stacked = layout === "stacked";
+  const resize = (delta: number) => {
+    if (!split.current || !pane.current) return;
+    const whole = split.current.getBoundingClientRect();
+    const own = pane.current.getBoundingClientRect();
+    const fit = (from: number | null, now: number, room: number) => Math.max(PANE_MIN[layout], Math.min((from ?? now) + delta, room - RESPONSE_MIN[layout]));
+    if (stacked) setHeight((h) => fit(h, own.height, whole.bottom - own.top));
+    else setWidth((w) => fit(w, own.width, whole.right - own.left));
+  };
+  const size = stacked ? (height === null ? undefined : { height, maxHeight: "none" }) : width === null ? undefined : { width, flexBasis: "auto" };
+  const resolved = useMemo(() => resolveRequest(collection, request, environment, "mask", globals), [collection, request, environment, globals]);
+  const values = useMemo(() => shownValues(scope(collection, environment, globals)), [collection, environment, globals]);
+  const valuesKey = JSON.stringify([...values]);
+  // Keyed by what the values say, not by the map: typing makes a new map of the same values,
+  // and new marks would have the editors draw every variable again.
+  const marks = useMemo(() => variableMarks(values), [valuesKey]);
+  const typed = useMemo(() => [marks, variableCompletion(values)], [valuesKey]);
+  const { copied, copy } = useCopied();
+  const notIn = (names: string[]) => (names.length > 0 ? `Not in ${environment?.name ?? "any environment"}: ${names.map((m) => `{{${m}}}`).join(", ")}` : undefined);
+  const missing = notIn(resolved.missing);
+  // Marked where it is written: the address for its own, a tab's dot for the rest.
+  const missingInUrl = notIn(resolved.missingIn.url);
+  const warn = (place: Place) => {
+    const said = notIn(resolved.missingIn[place]);
+    return said ? <span className="http-dot http-dot-amber" role="img" aria-label={said} title={said} /> : null;
+  };
+  const params = paramsOf(request);
+  const set = (patch: Partial<HttpRequest>) => onEdit({ ...request, ...patch });
+  const count = (n: number) => (n > 0 ? <span className="http-count">{n}</span> : null);
+  // As the backend reads them: what is not read yet is not said to be on.
+  const chain = useMemo(() => scriptsFor(collection, request.id, states), [collection, request.id, states]);
+  const scripts = chain.length > 0;
+  const scriptsOff = chain.some((s) => !s.on);
+
+  return (
+    <div className="http-request">
+      <div className={`http-url-row${missingInUrl ? " missing" : ""}`} title={missingInUrl}>
+        <Dropdown
+          below
+          label={<MethodBadge method={request.method} />}
+          title="Method"
+          options={METHODS.map((m) => ({ value: m }))}
+          value={request.method}
+          onPick={(m) => set({ method: m as HttpMethod })}
+        />
+        <VarInput
+          className="http-url http-mono"
+          aria-label="Address"
+          spellCheck={false}
+          values={values}
+          value={request.url}
+          // A whole `curl …`, as DevTools copies it, becomes the request rather than its address —
+          // caught on `paste`, and again on the input it makes, for a webview whose paste event
+          // carries no text (in the app the curl landed in the address as it was).
+          onChange={(e) => {
+            const pasted = (e.nativeEvent as InputEvent).inputType === "insertFromPaste";
+            if (pasted && CURL.test(e.target.value)) onPasteCurl(e.target.value.trim());
+            else set({ url: e.target.value });
+          }}
+          onPaste={(e) => {
+            const pasted = e.clipboardData.getData("text/plain");
+            if (!CURL.test(pasted)) return;
+            e.preventDefault();
+            onPasteCurl(pasted.trim());
+          }}
+          placeholder="{{baseUrl}}/path — or paste a curl command"
+        />
+        <button
+          type="button"
+          className="http-icon-button"
+          title={copied ? "Copied" : "Copy as cURL — secrets as their {{name}}, never their value"}
+          aria-label="Copy as cURL"
+          onClick={() => copy(toCurl(resolveRequest(collection, request, environment, "name", globals)))}
+        >
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+        </button>
+        <button type="button" className="http-send" title={`Send (${shortcutText("httpSend")})`} disabled={sent?.busy} onClick={onSend}>
+          {sent?.busy ? <Loader2 size={14} className="http-spin" /> : <Send size={14} />}
+          Send
+        </button>
+      </div>
+
+      <div ref={split} className={`http-split ${layout}`}>
+        <div ref={pane} className="http-request-pane" style={size}>
+          <div className="http-subtabs" role="tablist" aria-label="Request">
+            {(
+              [
+                ["params", "Params", count(params.filter((p) => !p.disabled).length)],
+                ["headers", "Headers", <>{count(request.headers.filter((h) => !h.disabled).length)}{warn("headers")}</>],
+                ["auth", "Auth", warn("auth")],
+                ["body", "Body", warn("body") ?? (request.body.mode === "none" ? null : <span className="http-dot" />)],
+                [
+                  "scripts",
+                  "Scripts",
+                  drafts.length > 0 ? (
+                    <span className="http-dot http-dot-accent" role="img" aria-label="A draft waiting" title="A chat's draft of a script waits here, to move into the request or reject" />
+                  ) : scriptsOff ? (
+                    <span className="http-dot http-dot-amber" role="img" aria-label="Scripts off" title="Some of the scripts are off: they do not run" />
+                  ) : scripts ? (
+                    <span className="http-dot" role="img" aria-label="Scripts on" title="The scripts run on Send" />
+                  ) : null,
+                ],
+                ["preview", <Eye size={15} />, missing || resolved.notes.length ? <span className="http-dot http-dot-amber" /> : null],
+              ] as [Tab, ReactNode, ReactNode][]
+            ).map(([id, label, extra]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                className={`http-subtab${tab === id ? " on" : ""}${id === "preview" ? " http-subtab-aside" : ""}`}
+                title={id === "preview" ? "Preview — the request as it will leave, variables and auth filled in" : undefined}
+                aria-label={id === "preview" ? "Preview" : undefined}
+                onClick={() => setTab(id)}
+              >
+                {label}
+                {extra}
+              </button>
+            ))}
+          </div>
+
+          <div className={`http-editor${(tab === "body" && request.body.mode === "raw") || tab === "scripts" || tab === "preview" ? " fills" : ""}`}>
+            {tab === "params" && <PairsTable rows={params} keyLabel="Parameter" values={values} onChange={(rows) => onEdit(withParams(request, rows))} />}
+            {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" values={values} onChange={(headers) => set({ headers })} />}
+            {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} values={values} onChange={(auth) => set({ auth })} />}
+            {tab === "body" && <BodyEditor body={request.body} values={values} marks={typed} onChange={(body) => set({ body })} />}
+            {tab === "scripts" && <ScriptsView collection={collection} request={request.id} chain={chain} all={states} typed={typedScripts} onTurn={onTurnScripts} onEdit={onEditScript} drafts={drafts} onApplyDraft={onApplyDraft} onRejectDraft={onRejectDraft} />}
+            {tab === "preview" && <PreviewView resolved={resolved} missing={missing} marks={marks} />}
+          </div>
+        </div>
+        <PanelResizeHandle
+          axis={stacked ? "y" : "x"}
+          ariaLabel="Resize the request and the response"
+          onResize={resize}
+          onResizeEnd={(px) => px && (stacked ? setHeight : setWidth)(Math.round(px))}
+        />
+        <ResponseView sent={sent} scripts={scripts} onShowScripts={() => setTab("scripts")} />
+      </div>
+    </div>
+  );
+}
+
+/** The request as it will leave — what Send sends, a secret masked. */
+function PreviewView({ resolved, missing, marks }: { resolved: ReturnType<typeof resolveRequest>; missing?: string; marks: Extension }) {
+  // The body as written, not reformatted: a preview that pretty-prints shows `1250` for the `1250.00` sent.
+  const text = asHttpText(`${resolved.method} ${resolved.url}`, resolved.headers, resolved.body);
+  return (
+    <div className="http-form">
+      {missing && <p className="http-error">{missing} — nothing would be sent.</p>}
+      {resolved.notes.map((n) => (
+        <p key={n} className="http-note">
+          <FileCode2 size={13} />
+          {n[0].toUpperCase() + n.slice(1)}.
+        </p>
+      ))}
+      <div className="http-code-box http-code-box-fill">
+        <CodeEditor text={text} language="http" numbered={false} label="The request as it will leave" extensions={marks} />
+      </div>
+    </div>
+  );
+}
+
+function PairsTable({ rows, keyLabel, values, onChange }: { rows: Pair[]; keyLabel: string; values: ReadonlyMap<string, string>; onChange: (rows: Pair[]) => void }) {
+  // The last row is always empty: typing into it adds one.
+  const shown = [...rows, { key: "", value: "" }];
+  const put = (i: number, patch: Partial<Pair>) => {
+    const next = shown.map((r, j) => (j === i ? { ...r, ...patch } : r));
+    onChange(next.filter(({ key, value }, j) => j < rows.length || key !== "" || value !== ""));
+  };
+  return (
+    <table className="http-pairs">
+      <thead>
+        <tr>
+          <th aria-label="On" />
+          <th>{keyLabel}</th>
+          <th>Value</th>
+          <th aria-label="Remove" />
+        </tr>
+      </thead>
+      <tbody>
+        {shown.map((r, i) => {
+          const last = i === rows.length;
+          return (
+            <tr key={i} className={r.disabled ? "off" : ""}>
+              <td>{!last && <input type="checkbox" aria-label={`Send ${r.key}`} checked={!r.disabled} onChange={(e) => put(i, { disabled: !e.target.checked })} />}</td>
+              <td>
+                <VarInput className="http-mono" aria-label={keyLabel} spellCheck={false} values={values} value={r.key} placeholder={last ? `New ${keyLabel.toLowerCase()}` : ""} onChange={(e) => put(i, { key: e.target.value })} />
+              </td>
+              <td>
+                <VarInput className="http-mono" aria-label="Value" spellCheck={false} values={values} value={r.value} onChange={(e) => put(i, { value: e.target.value })} />
+              </td>
+              <td>
+                {!last && (
+                  <button type="button" className="http-icon-button" title="Remove" aria-label={`Remove ${r.key}`} onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+const AUTH_TYPES = [
+  { value: "inherit", label: "Inherit from parent" },
+  { value: "noauth", label: "No auth" },
+  { value: "bearer", label: "Bearer token" },
+  { value: "basic", label: "Basic auth" },
+  { value: "apikey", label: "API key" },
+  { value: "digest", label: "Digest" },
+  { value: "oauth2", label: "OAuth 2.0" },
+];
+
+/** The grants Kibo gets a token by; anything else is shown as written, and takes a pasted token. */
+const GRANTS = [
+  { value: "client_credentials", label: "Client credentials" },
+  { value: "password_credentials", label: "Password" },
+];
+
+function authLine(auth: Auth): string {
+  switch (auth.type) {
+    case "bearer":
+      return `Bearer ${auth.token}`;
+    case "basic":
+      return `Basic ${auth.username}:•••`;
+    case "apikey":
+      return `${auth.key}: ${auth.value} (${auth.in})`;
+    case "digest":
+      return `Digest ${authParam(auth, "username")}:•••`;
+    case "oauth2":
+      return `OAuth 2.0 ${authParam(auth, "grant_type")}`.trim();
+    case "other":
+      return `${auth.name} — kept from Postman`;
+    default:
+      return "No auth";
+  }
+}
+
+function AuthEditor({
+  auth,
+  inherited,
+  values,
+  onChange,
+}: {
+  auth: Auth;
+  inherited: { auth: Auth; from: string } | null;
+  values: ReadonlyMap<string, string>;
+  onChange: (a: Auth) => void;
+}) {
+  const pick = (type: string) => {
+    if (type === "bearer") onChange({ type, token: "{{token}}" });
+    else if (type === "basic") onChange({ type, username: "", password: "" });
+    else if (type === "apikey") onChange({ type, key: "X-Api-Key", value: "{{apiKey}}", in: "header" });
+    else if (type === "digest") onChange({ type, params: [] });
+    else if (type === "oauth2") onChange({ type, params: [{ key: "grant_type", value: "client_credentials", type: "string" }] });
+    else onChange({ type: type as "inherit" | "noauth" });
+  };
+  return (
+    <div className="http-form">
+      <div className="http-field-row">
+        <span className="http-label">Type</span>
+        {auth.type === "other" ? (
+          <span className="http-kept">{auth.name} — kept from Postman, not editable here</span>
+        ) : (
+          <Dropdown below label={AUTH_TYPES.find((t) => t.value === auth.type)?.label} options={AUTH_TYPES} value={auth.type} onPick={pick} />
+        )}
+      </div>
+      {auth.type === "inherit" && inherited && (
+        <p className="http-quiet">
+          From <strong>{inherited.from}</strong>: <span className="http-mono">{authLine(inherited.auth)}</span>
+          {inherited.auth.type === "other" && " — not sent yet"}
+        </p>
+      )}
+      {auth.type === "bearer" && <Field label="Token" values={values} value={auth.token} onChange={(token) => onChange({ ...auth, token })} />}
+      {auth.type === "basic" && (
+        <>
+          <Field label="Username" values={values} value={auth.username} onChange={(username) => onChange({ ...auth, username })} />
+          <Field label="Password" values={values} value={auth.password} onChange={(password) => onChange({ ...auth, password })} />
+        </>
+      )}
+      {auth.type === "apikey" && (
+        <>
+          <Field label="Key" values={values} value={auth.key} onChange={(key) => onChange({ ...auth, key })} />
+          <Field label="Value" values={values} value={auth.value} onChange={(value) => onChange({ ...auth, value })} />
+        </>
+      )}
+      {auth.type === "digest" && (
+        <>
+          <Field label="Username" values={values} value={authParam(auth, "username")} onChange={(v) => onChange(withAuthParam(auth, "username", v))} />
+          <Field label="Password" values={values} value={authParam(auth, "password")} onChange={(v) => onChange(withAuthParam(auth, "password", v))} />
+        </>
+      )}
+      {auth.type === "oauth2" && <OAuth2Editor auth={auth} values={values} onChange={onChange} />}
+    </div>
+  );
+}
+
+function OAuth2Editor({ auth, values, onChange }: { auth: Extract<Auth, { params: unknown }>; values: ReadonlyMap<string, string>; onChange: (a: Auth) => void }) {
+  const param = (label: string, key: string) => <Field label={label} values={values} value={authParam(auth, key)} onChange={(v) => onChange(withAuthParam(auth, key, v))} />;
+  const pick = (label: string, key: string, options: { value: string; label: string }[], fallback: string) => {
+    const value = authParam(auth, key) || fallback;
+    return (
+      <div className="http-field-row">
+        <span className="http-label">{label}</span>
+        <Dropdown below label={options.find((o) => o.value === value)?.label ?? value} options={options} value={value} onPick={(v) => onChange(withAuthParam(auth, key, v))} />
+      </div>
+    );
+  };
+  const grant = authParam(auth, "grant_type");
+  const known = GRANTS.some((g) => g.value === grant);
+  return (
+    <>
+      {pick("Grant", "grant_type", GRANTS, grant)}
+      {!known && <p className="http-quiet">Kibo cannot get a token by this grant: it needs a browser. Put one below, as a secret variable to keep it out of the collection's file, or pick a grant above.</p>}
+      {param("Access token", "accessToken")}
+      {known && (
+        <>
+          {param("Token URL", "accessTokenUrl")}
+          {param("Client ID", "clientId")}
+          {param("Client secret", "clientSecret")}
+          {param("Scope", "scope")}
+          {grant === "password_credentials" && param("Username", "username")}
+          {grant === "password_credentials" && param("Password", "password")}
+          {pick(
+            "Client goes in",
+            "client_authentication",
+            [
+              { value: "header", label: "Basic auth header" },
+              { value: "body", label: "Request body" },
+            ],
+            "header",
+          )}
+        </>
+      )}
+      {pick(
+        "Token goes in",
+        "addTokenTo",
+        [
+          { value: "header", label: "Header" },
+          { value: "queryParams", label: "Query" },
+        ],
+        "header",
+      )}
+      {known && <p className="http-quiet">The token is got as the request goes, kept sealed, and renewed when it runs out or a 401 says so.</p>}
+    </>
+  );
+}
+
+function Field({ label, value, values, onChange }: { label: string; value: string; values: ReadonlyMap<string, string>; onChange: (v: string) => void }) {
+  return (
+    <label className="http-field-row">
+      <span className="http-label">{label}</span>
+      <VarInput className="http-input http-mono" spellCheck={false} values={values} value={value} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+}
+
+const BODY_MODES = [
+  { value: "none", label: "none" },
+  { value: "raw", label: "raw" },
+  { value: "urlencoded", label: "x-www-form-urlencoded" },
+  { value: "formdata", label: "form-data" },
+];
+
+function BodyEditor({ body, values, marks, onChange }: { body: Body; values: ReadonlyMap<string, string>; marks: Extension; onChange: (b: Body) => void }) {
+  if (body.mode === "other")
+    return (
+      <p className="http-kept">
+        A <strong>{body.name}</strong> body — kept from Postman as it came, not editable or sent yet.
+      </p>
+    );
+  return (
+    <div className="http-form">
+      <div className="http-segments" role="radiogroup" aria-label="Body">
+        {BODY_MODES.map((m) => (
+          <button
+            key={m.value}
+            type="button"
+            role="radio"
+            aria-checked={body.mode === m.value}
+            className={`http-segment${body.mode === m.value ? " on" : ""}`}
+            onClick={() =>
+              onChange(m.value === "raw" ? { mode: "raw", language: "json", raw: "" } : m.value === "urlencoded" || m.value === "formdata" ? { mode: m.value, fields: [] } : { mode: "none" })
+            }
+          >
+            {m.label}
+          </button>
+        ))}
+        {body.mode === "raw" && (
+          <>
+            <span className="http-spacer" />
+            {body.language !== "text" && (
+              <button
+                type="button"
+                className="http-icon-button"
+                title={`Beautify the ${body.language.toUpperCase()} — numbers, {{variables}} and comments stay as written`}
+                aria-label="Beautify"
+                onClick={() => onChange({ ...body, raw: body.language === "json" ? formatJson(body.raw) : formatXml(body.raw) })}
+              >
+                <WandSparkles size={14} />
+              </button>
+            )}
+            <Dropdown
+              below
+              right
+              label={body.language.toUpperCase()}
+              options={["json", "text", "xml"].map((l) => ({ value: l, label: l.toUpperCase() }))}
+              value={body.language}
+              onPick={(language) => onChange({ ...body, language: language as "json" | "text" | "xml" })}
+            />
+          </>
+        )}
+      </div>
+      {body.mode === "none" && <p className="http-quiet">This request sends no body.</p>}
+      {body.mode === "raw" && (
+        <div className="http-code-box http-code-box-input">
+          <CodeEditor text={body.raw} language={body.language} label="Body" extensions={marks} onChange={(raw) => onChange({ ...body, raw })} />
+        </div>
+      )}
+      {body.mode === "urlencoded" && <PairsTable rows={body.fields} keyLabel="Field" values={values} onChange={(fields) => onChange({ ...body, fields })} />}
+      {body.mode === "formdata" && <PairsTable rows={body.fields} keyLabel="Field" values={values} onChange={(fields) => onChange({ ...body, fields })} />}
+      {body.mode === "formdata" && body.fields.some((f) => f.file !== undefined) && <p className="http-quiet">A file field goes empty; one with a file picked in Postman is not sent yet.</p>}
+    </div>
+  );
+}
+
+const KIND = { prerequest: "pre-request", test: "post-response" } as const;
+
+/** `Orders · pre-request`, or the request's own `Pre-request`. */
+function scriptLabel(collection: Collection, s: HttpScriptState) {
+  const level = levelOf(collection, s.item);
+  const kind = KIND[s.listen];
+  return level?.kind === "request" ? kind[0].toUpperCase() + kind.slice(1) : `${level?.name ?? "?"} · ${kind}`;
+}
+
+/**
+ * The scripts that run with this request, picked one at a time, as the Body tab picks its mode;
+ * each with its switch (HC-11a). The code shown is the backend's — what runs and what the switch
+ * turns on — not read again here. A collection's or folder's switch is for all its requests.
+ * The request's own two are there even empty, and are edited here (HC-11b).
+ */
+function ScriptsView({
+  collection,
+  request,
+  chain,
+  all,
+  typed,
+  onTurn,
+  onEdit,
+  drafts,
+  onApplyDraft,
+  onRejectDraft,
+}: {
+  collection: Collection;
+  request: string;
+  /** What was typed into requests' own scripts, by `request\nlisten`: shown over what was read. */
+  typed: Record<string, string>;
+  /** This request's scripts, in the order they are listed. */
+  chain: HttpScriptState[];
+  /** The whole collection's: what "turn on all" turns on. */
+  all: HttpScriptState[];
+  onTurn: (hashes: string[], on: boolean) => void;
+  onEdit: (listen: "prerequest" | "test", code: string) => void;
+  drafts: HttpScriptDraft[];
+  onApplyDraft: (draft: HttpScriptDraft) => void;
+  onRejectDraft: (draft: HttpScriptDraft) => void;
+}) {
+  // In the order Postman runs them: every level's pre-request, then every level's post-response.
+  const scripts = (["prerequest", "test"] as const).flatMap((listen) => {
+    const above = chain.filter((s) => s.listen === listen && s.item !== request);
+    const own = chain.find((s) => s.listen === listen && s.item === request);
+    return [
+      ...above.map((state) => ({ id: `${state.item ?? "collection"}-${listen}`, listen, own: false, label: scriptLabel(collection, state), text: state.codes.join("\n\n"), state: state as HttpScriptState | undefined })),
+      { id: `own-${listen}`, listen, own: true, label: listen === "prerequest" ? "Pre-request" : "Post-response", text: typed[`${request}\n${listen}`] ?? own?.codes.join("\n\n") ?? "", state: own },
+    ];
+  });
+  // A draft waiting is what the tab opens on; else the first script there is.
+  const [shown, setShown] = useState((scripts.find((s) => s.own && drafts.some((d) => d.listen === s.listen)) ?? scripts.find((s) => s.state) ?? scripts[0]).id);
+  const [turningAll, setTurningAll] = useState(false);
+  const off = all.filter((s) => !s.on);
+  const current = scripts.find((script) => script.id === shown) ?? scripts[0];
+  const owner = current.state ? levelOf(collection, current.state.item)?.kind : "request";
+  const type = (code: string) => onEdit(current.listen, code);
+  const waiting = current.own ? drafts.filter((d) => d.listen === current.listen) : NO_DRAFTS;
+  return (
+    <div className="http-form">
+      <div className="http-segments" role="tablist" aria-label="Scripts, in the order they run">
+        {scripts.map((script) => (
+          <button
+            key={script.id}
+            type="button"
+            role="tab"
+            aria-selected={script.id === current.id}
+            className={`http-segment${script.id === current.id ? " on" : ""}`}
+            onClick={() => setShown(script.id)}
+          >
+            {script.label}
+            {script.state?.on === false && <span className="http-dot http-dot-amber" role="img" aria-label="off" />}
+            {script.own && drafts.some((d) => d.listen === script.listen) && <span className="http-dot http-dot-accent" role="img" aria-label="a draft waiting" />}
+          </button>
+        ))}
+      </div>
+      <div className="http-script-bar">
+        {current.state ? (
+          <label className="http-script-switch">
+            <Switch label={`Run ${current.label}`} on={current.state.on} onChange={(on) => current.state && onTurn(current.state.hashes, on)} />
+            <span>{current.state.on ? "On — runs on Send" : "Off — does not run"}</span>
+          </label>
+        ) : (
+          <span className="http-quiet">Empty — what you write here runs once you turn it on.</span>
+        )}
+        {owner && owner !== "request" && <span className="http-quiet">{`The ${owner}'s script: its switch is for every request in the ${owner}.`}</span>}
+        {current.own && current.state?.on === false && <span className="http-quiet">An edit leaves it off until you turn it on.</span>}
+        <span className="http-spacer" />
+        {off.length > 0 && (
+          <button type="button" className="http-bar-button" onClick={() => setTurningAll(true)}>
+            {off.length === 1 ? "Turn on the 1 script off…" : `Turn on all ${off.length} scripts off…`}
+          </button>
+        )}
+      </div>
+      {waiting.length > 0 && (
+        <div className="http-drafts">
+          {waiting.map((d) => (
+            <DraftBlock
+              key={d.chat}
+              draft={d}
+              current={current.text}
+              label={current.label}
+              alsoOn={all.filter((s) => !s.on && !(s.item === request && s.listen === d.listen) && s.codes.includes(d.code)).map((s) => scriptLabel(collection, s))}
+              onApply={onApplyDraft}
+              onReject={onRejectDraft}
+            />
+          ))}
+        </div>
+      )}
+      <div className="http-code-box http-code-box-fill">
+        <CodeEditor key={current.id} text={current.text} language="javascript" label={current.label} onChange={current.own ? type : undefined} />
+      </div>
+      <Modal
+        title={`Turn on the scripts of “${collection.name}”?`}
+        open={turningAll}
+        onClose={() => setTurningAll(false)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setTurningAll(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                setTurningAll(false);
+                onTurn(
+                  off.flatMap((s) => s.hashes),
+                  true,
+                );
+              }}
+            >
+              Turn on {off.length === 1 ? "1 script" : `${off.length} scripts`}
+            </button>
+          </>
+        }
+      >
+        <p className="http-confirm">
+          A script reads every variable, secrets too, and can send them anywhere with pm.sendRequest. Turn these on only if you have read them. One that changes later is off again.
+        </p>
+        {off.map((s) => {
+          const level = levelOf(collection, s.item);
+          return (
+            <div key={`${s.item ?? "collection"}-${s.listen}`} className="http-script-read">
+              <p className="http-quiet">{`${level?.kind ?? "?"} “${level?.name ?? "?"}” · ${KIND[s.listen]}`}</p>
+              <pre className="http-mono">{s.codes.join("\n\n")}</pre>
+            </div>
+          );
+        })}
+      </Modal>
+    </div>
+  );
+}
+
+/** The chat's drafts of one request's scripts. */
+function drafted(drafts: HttpScriptDraft[], collection: string, request: string): HttpScriptDraft[] {
+  const these = drafts.filter((d) => d.collection === collection && d.request === request);
+  return these.length ? these : NO_DRAFTS;
+}
+
+/**
+ * A chat's draft of the request's own script (HC-11d): its code, what its run with nothing
+ * sent did, and the user's two answers. Moving it shows what it replaces first: it is on
+ * from then, and runs on every Send.
+ */
+function DraftBlock({
+  draft,
+  current,
+  label,
+  alsoOn,
+  onApply,
+  onReject,
+}: {
+  draft: HttpScriptDraft;
+  current: string;
+  label: string;
+  /** The scripts off elsewhere in the collection with the same code: moving this one turns them on too. */
+  alsoOn: string[];
+  onApply: (draft: HttpScriptDraft) => void;
+  onReject: (draft: HttpScriptDraft) => void;
+}) {
+  // What the dialog shows is held as it was opened: a draft the model writes again while it is
+  // read is not what the button moves — the backend refuses the one read, as no longer there.
+  const [moving, setMoving] = useState<{ draft: HttpScriptDraft; current: string; alsoOn: string[] } | null>(null);
+  const rows = useMemo(() => (moving ? fileRows(moving.current, moving.draft.code, true) : []), [moving]);
+  const { report } = draft;
+  const on = draft.listen === "prerequest" ? "the saved request" : report.ranOn;
+  return (
+    <section className="http-draft" aria-label={`Draft from “${draft.chatTitle}”`}>
+      <div className="http-draft-head">
+        <FilePen size={13} className="http-draft-icon" />
+        <span className="http-draft-title">{`Draft from “${draft.chatTitle}”`}</span>
+        <span className="http-quiet">{`${draft.environment} · ${receivedAt(draft.at)}`}</span>
+        <span className="http-spacer" />
+        <button type="button" className="http-bar-button" onClick={() => onReject(draft)}>
+          Reject
+        </button>
+        <button type="button" className="http-bar-button" onClick={() => setMoving({ draft, current, alsoOn })}>
+          Move into the request…
+        </button>
+      </div>
+      <p className="http-quiet">{`Run on ${on} with nothing sent. It does not run on Send until you move it into the request.`}</p>
+      <DraftWarnings draft={draft} alsoOn={alsoOn} />
+      <DraftRun report={report} />
+      <pre className="http-mono http-draft-code">{draft.code}</pre>
+      <Modal
+        title={`Move the draft into the request's ${label.toLowerCase()} script?`}
+        open={moving !== null}
+        onClose={() => setMoving(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setMoving(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                if (moving) onApply(moving.draft);
+                setMoving(null);
+              }}
+            >
+              Move and turn on
+            </button>
+          </>
+        }
+      >
+        <p className="http-confirm">
+          It takes the place of the request's own script below, and is on: it runs on every Send. A script reads every variable, secrets too, and can send them anywhere with pm.sendRequest.
+        </p>
+        {moving && moving.draft.code !== draft.code && (
+          <p className="http-error">The chat has written this draft again since you opened this: what is below is no longer the draft, and moving it is refused. Cancel to read the new one.</p>
+        )}
+        {moving && <DraftWarnings draft={moving.draft} alsoOn={moving.alsoOn} />}
+        <DiffView rows={rows} />
+      </Modal>
+    </section>
+  );
+}
+
+/** Characters that show as nothing, or turn the text around it: code that reads one way and runs another. */
+const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+
+/**
+ * What a draft asks to be read for before it is moved (decision 7): every request it would send,
+ * louder when a hidden value goes in it or it goes to a host none of the collection's requests
+ * does; what it ran blind to; scripts it would turn on with it; code that does not show.
+ */
+function DraftWarnings({ draft, alsoOn }: { draft: HttpScriptDraft; alsoOn: string[] }) {
+  const { report } = draft;
+  const hidden = INVISIBLE.test(draft.code);
+  if (!report.sends.length && !report.masked.length && !report.hidden.length && !report.skipped && !alsoOn.length && !hidden) return null;
+  return (
+    <ul className="http-draft-warnings" aria-label="Read before moving">
+      {report.sends.map((s, i) => {
+        const loud = [s.masked && "a hidden value goes in it", s.foreign && "a host none of the collections' requests goes to"].filter(Boolean);
+        return (
+          <li key={i} className={loud.length ? "http-draft-warning" : undefined}>
+            {`Sends ${s.method} ${s.url}${loud.length ? ` — ${loud.join(", ")}` : ""}`}
+          </li>
+        );
+      })}
+      {report.skipped && <li className="http-draft-warning">It skips the request: Send would not go.</li>}
+      {hidden && <li className="http-draft-warning">Its code has characters that do not show, or that turn the text around them: what runs may not be what reads here.</li>}
+      {alsoOn.length > 0 && <li className="http-draft-warning">{`The same code is a script that is off: moving this turns it on too — ${alsoOn.join(", ")}`}</li>}
+      {report.masked.length > 0 && <li>{`Masked (•••) in the send it ran on — a test of these fails though the API is right: ${report.masked.join(", ")}`}</li>}
+      {report.hidden.length > 0 && <li>{`Hidden, so ••• in the run — what it computed from them was computed from the mask: ${report.hidden.join(", ")}`}</li>}
+      {report.supplied.length > 0 && <li>{`Run with values the chat gave, not the environment's: ${report.supplied.join(", ")}`}</li>}
+    </ul>
+  );
+}
+
+/** What a draft's run did: its tests and console, what it would write, how the request would change. */
+function DraftRun({ report }: { report: HttpDraftReport }) {
+  return (
+    <>
+      <ScriptResults report={{ off: [], tests: report.tests, console: report.console, error: report.error ?? undefined, changed: false }} scripts />
+      {report.request.length > 0 && (
+        <table className="http-draft-changes" aria-label="The request after it">
+          <tbody>
+            {report.request.map((c) => (
+              <tr key={c.part}>
+                <th scope="row">{c.part}</th>
+                <td className="http-mono">{c.before ?? "—"}</td>
+                <td className="http-mono">{c.after ?? "removed"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {report.requestError && <p className="http-error">{`The request after it does not put together: ${report.requestError}`}</p>}
+      {report.writes.length > 0 && (
+        <p className="http-quiet">{`Would set: ${report.writes.map((w) => (w.value === null ? `${w.scope} ${w.key} removed` : `${w.scope} ${w.key} = ${w.value}`)).join("; ")}`}</p>
+      )}
+    </>
+  );
+}
+
+type ResTab = "body" | "headers" | "tests";
+
+/** `14:32` today, `27 Oct 14:32` before. */
+function receivedAt(at: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${time}`;
+}
+
+/** What the scripts of a send said: the tests, what stopped them, their console. */
+function ScriptResults({ report, scripts }: { report: HttpScriptReport; scripts: boolean }) {
+  const { tests, console: lines, error } = report;
+  if (!tests.length && !lines.length && !error) return <p className="http-quiet">{scripts ? "No pm.test ran in this request's scripts." : "This request has no scripts."}</p>;
+  return (
+    <>
+      {error && <p className="http-error">{error}</p>}
+      {tests.length > 0 && (
+        <ul className="http-tests" aria-label="Tests">
+          {tests.map((t, i) => (
+            // By place: two tests can share a name.
+            <li key={i} className={`http-test http-test-${testState(t)}`}>
+              {t.skipped ? <Minus size={13} /> : t.passed ? <Check size={13} /> : <X size={13} />}
+              <span>
+                {t.name}
+                {t.error && <span className="http-test-error">{t.error}</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {lines.length > 0 && (
+        <ol className="http-console" aria-label="Console">
+          {lines.map((line, i) => (
+            <li key={i} className={`http-mono http-console-${line.level}`}>
+              {line.text}
+            </li>
+          ))}
+        </ol>
+      )}
+    </>
+  );
+}
+
+const testState = (t: HttpTestResult) => (t.skipped ? "skipped" : t.passed ? "passed" : "failed");
+
+function ResponseView({ sent, scripts, onShowScripts }: { sent: Sent | undefined; scripts: boolean; onShowScripts: () => void }) {
+  const [tab, setTab] = useState<ResTab>("body");
+  const view = sent?.view;
+  const report = view?.scripts;
+  const failed = (report?.tests.filter((t) => testState(t) === "failed").length ?? 0) + (report?.error ? 1 : 0);
+  const response = view?.outcome.kind === "response" ? view.outcome : null;
+  const contentType = response ? contentTypeOf(response.headers) : "";
+  // Undefined when there is no text to show: nothing came back, or not text.
+  const body = useMemo(() => (response && view?.body != null ? pretty(view.body, contentType) : undefined), [response, view, contentType]);
+  const { copied, copy } = useCopied();
+  const count = (n: number | undefined) => (n ? <span className="http-count">{n}</span> : null);
+  const tabs: [ResTab, string, ReactNode][] = [
+    ["body", "Response", null],
+    ["headers", "Headers", count(response?.headers.length)],
+    ["tests", "Tests", failed ? <span className="http-count http-count-failed">{failed} failed</span> : count(report?.tests.length)],
+  ];
+  return (
+    <section className="http-response" aria-label="Response" aria-busy={sent?.busy}>
+      <div className="http-response-head">
+        <div className="http-subtabs" role="tablist" aria-label="Response">
+          {tabs.map(([id, label, extra]) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} className={`http-subtab${tab === id ? " on" : ""}`} onClick={() => setTab(id)}>
+              {label}
+              {extra}
+            </button>
+          ))}
+        </div>
+        <span className="http-spacer" />
+        {/* A script can wait on a timer or on pm.sendRequest for up to a minute. */}
+        {sent?.busy && scripts && <span className="http-quiet">Scripts may be waiting…</span>}
+        {sent?.busy && <Loader2 size={13} className="http-spin" />}
+        {response && <span className={`http-status http-tone-${statusTone(response.status)}`}>{response.status}</span>}
+        {view && (
+          <span className="http-quiet http-response-meta" title={`Received ${new Date(view.at).toLocaleString()}${view.environment ? ` from ${view.environment}` : ""}`}>
+            {[response && `${response.elapsedMs} ms`, response && sizeLabel(view.size), receivedAt(view.at), view.environment].filter(Boolean).join(" · ")}
+          </span>
+        )}
+        {body !== undefined && (
+          <button type="button" className="http-icon-button" title={copied ? "Copied" : "Copy the response's body"} aria-label="Copy the response's body" onClick={() => copy(body)}>
+            {copied ? <Check size={13} /> : <Copy size={13} />}
+          </button>
+        )}
+        {/* TODO(out of plan): no action — saving a response to a file is outside docs/45-http-client.md. */}
+        {response && (
+          <button type="button" className="http-icon-button" title="Save the response to a file" aria-label="Save the response">
+            <Download size={13} />
+          </button>
+        )}
+      </div>
+      <div className="http-response-body">
+        {sent?.notSent && <p className="http-error">{sent.notSent}</p>}
+        {view?.outcome.kind === "failed" && <p className="http-error">{view.outcome.error}</p>}
+        {!view && !sent?.busy && !sent?.notSent && <p className="http-quiet http-empty">Send the request to see the response here.</p>}
+        {report && report.off.length > 0 && (
+          <p className="http-note">
+            <FileCode2 size={13} />
+            <span title={report.off.join("\n")}>
+              {report.off.length === 1 ? "1 script did not run: it is off" : `${report.off.length} scripts did not run: they are off`}. If one of them gets a token, the request went without it.
+            </span>
+            <span className="http-spacer" />
+            <button type="button" className="http-bar-button" onClick={onShowScripts}>
+              Show scripts
+            </button>
+          </p>
+        )}
+        {response?.redirects && <p className="http-quiet http-mono" title="Redirected through">{[...response.redirects, response.url].join(" → ")}</p>}
+        {response && tab === "body" &&
+          (body ? (
+            <div className="http-code-box http-code-box-fill">
+              <CodeEditor text={body} language={/json/i.test(contentType) ? "json" : /xml/i.test(contentType) ? "xml" : "text"} label="Response body" />
+            </div>
+          ) : (
+            <p className="http-quiet">{view && view.size > 0 ? `Not text — ${sizeLabel(view.size)}${contentType ? ` of ${contentType}` : ""}.` : "No body."}</p>
+          ))}
+        {response && tab === "headers" && (
+          <table className="http-pairs http-pairs-read">
+            <tbody>
+              {response.headers.map(([key, value], i) => (
+                // By place: a header can come more than once (`Set-Cookie`).
+                <tr key={i}>
+                  <td className="http-mono">{key}</td>
+                  <td className="http-mono">{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {report && tab === "tests" && <ScriptResults report={report} scripts={scripts} />}
+      </div>
+    </section>
+  );
+}
+
+/** A variable in the form; `kept` when a sealed value is behind it. */
+type Row = EnvVariable & { kept?: boolean; shown?: boolean; revealed?: string };
+type Draft = Omit<Environment, "variables"> & { variables: Row[] };
+
+/**
+ * What the form saves: a sealed value left empty, or as the eye read it, goes back as
+ * the mask, which keeps it — so a secret only looked at is not a change.
+ */
+const toSave = (d: Draft): Environment => ({
+  ...d,
+  variables: d.variables.map(({ kept, shown: _, revealed, ...v }) => (kept && (v.value === "" || v.value === revealed) ? { ...v, value: SECRET_MASK } : v)),
+});
+
+/** The rows as the form opens them: a saved secret's field empty, `kept` behind it. */
+const opened = (e: Environment): Draft => ({
+  ...e,
+  variables: e.variables.map((v): Row => (v.secret && v.value === SECRET_MASK ? { ...v, value: "", kept: true } : v)),
+});
+
+/**
+ * The form's rows after the backend changed under it — a script's `pm.environment.set`, a save:
+ * a row the user has not touched since `was` is as `now` has it, one the backend added
+ * comes in, and what the user typed stays.
+ */
+const rebased = (draft: Draft, was: Draft, now: Draft): Draft => {
+  const same = (a: Row, b: Row | undefined) => b !== undefined && a.value === b.value && a.secret === b.secret && a.enabled === b.enabled && a.kept === b.kept;
+  const before = new Map(was.variables.map((v) => [v.key, v]));
+  const after = new Map(now.variables.map((v) => [v.key, v]));
+  const variables = draft.variables.flatMap((v) => {
+    if (!same(v, before.get(v.key))) return [v];
+    const fresh = after.get(v.key);
+    return fresh ? [fresh] : [];
+  });
+  const mine = new Set(draft.variables.map((v) => v.key));
+  const added = now.variables.filter((v) => !before.has(v.key) && !mine.has(v.key));
+  return { ...draft, variables: [...variables, ...added] };
+};
+
+const AGENT_ACCESS = [
+  { value: "off", label: "Off", hint: "the agent does not know it is here" },
+  { value: "readOnly", label: "Read only", hint: "GET, HEAD and OPTIONS to your collections' hosts, with no card; it reads the values that are not secret" },
+  { value: "askForWrites", label: "Ask for writes", hint: "reads with no card; POST, PUT, PATCH and DELETE ask every time, even when always allowed or in Auto" },
+  { value: "writesAsOtherTools", label: "Writes as other tools", hint: "reads with no card; a write asks as any change does — Always allow and Auto skip the card" },
+];
+
+function EnvironmentForm({
+  environment,
+  onSave,
+  onReveal,
+  onExport,
+  onDelete,
+}: {
+  environment: Environment;
+  onSave: (e: Environment) => Promise<void>;
+  /** A saved secret's value, by its name — asked for by the eye button only. */
+  onReveal: (key: string) => Promise<string>;
+  onExport: () => Promise<boolean>;
+  onDelete: () => void;
+}) {
+  // A saved secret's field starts empty — typing replaces it — never `•••` to type after. `kept` says
+  // a sealed value is behind the row: left empty, it goes back as the mask, which keeps the value —
+  // and is refused when the row was renamed away from it, rather than saved empty.
+  const [draft, setDraft] = useState<Draft>(() => opened(environment));
+  const [said, setSaid] = useState<{ error: boolean; text: string } | null>(null);
+  // What was last sent, as text: a field left with nothing changed saves nothing.
+  const sent = useRef(JSON.stringify(toSave(draft)));
+  // The environment as the backend last said. A save is the whole of it, so what a script
+  // wrote since the form opened is taken in — or the next save would write over it.
+  const base = useRef(environment);
+  useEffect(() => {
+    const was = base.current;
+    if (was === environment) return;
+    base.current = environment;
+    setDraft((d) => rebased(d, opened(was), opened(environment)));
+    sent.current = JSON.stringify(toSave(opened(environment)));
+  }, [environment]);
+  const put = (i: number, patch: Partial<Row>) => setDraft((d) => ({ ...d, variables: d.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) }));
+  // Only a secret saved under the name the row still has: its value is what the eye asks for.
+  const sealed = new Set(environment.variables.filter((s) => s.secret).map((s) => s.key));
+  const saved = (v: Row) => v.secret && sealed.has(v.key);
+  const reveal = (i: number, v: Row) => {
+    if (v.shown) return put(i, { shown: false });
+    if (v.value !== "") return put(i, { shown: true });
+    // By the name, not the index: a row removed while the value is read moves the rest up,
+    // and the value must not land in another — or in one the user has typed into meanwhile.
+    const key = v.key;
+    onReveal(key).then(
+      (value) =>
+        setDraft((d) => ({ ...d, variables: d.variables.map((r) => (r.secret && key === r.key && r.value === "" ? { ...r, value, shown: true, revealed: value } : r)) })),
+      (e) => setSaid({ error: true, text: `The secret was not read: ${e}` }),
+    );
+  };
+  // Saved as a field is left, a switch is flipped, a row goes — and as the form closes. No Save button.
+  const save = (from: Draft = draft) => {
+    const next = toSave(from);
+    const text = JSON.stringify(next);
+    if (text === sent.current) return;
+    sent.current = text;
+    const typed = new Map(next.variables.filter((v) => v.secret && v.value !== SECRET_MASK).map((v) => [v.key, v.value]));
+    onSave(next).then(
+      () => {
+        setSaid({ error: false, text: "Saved." });
+        // A secret just typed is sealed now: its field empties, as a saved one's is — unless the eye
+        // shows it, or something else has been typed there since.
+        setDraft((d) => ({
+          ...d,
+          variables: d.variables.map((v) => (v.secret && !v.shown && v.value !== "" && typed.get(v.key) === v.value ? { ...v, value: "", kept: true } : v)),
+        }));
+      },
+      (e) => {
+        sent.current = "";
+        setSaid({ error: true, text: String(e) });
+      },
+    );
+  };
+  const change = (next: Draft) => {
+    setDraft(next);
+    save(next);
+  };
+  const flip = (i: number, patch: Partial<Row>) => change({ ...draft, variables: draft.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) });
+  const latest = useRef(save);
+  latest.current = save;
+  useEffect(() => () => latest.current(), []);
+  return (
+    <div className="http-form http-env" onBlur={() => save()}>
+      <label className="http-field-row">
+        <span className="http-label">Name</span>
+        <input className="http-input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+      </label>
+
+      <table className="http-pairs">
+        <thead>
+          <tr>
+            <th aria-label="On" />
+            <th>Variable</th>
+            <th>Value</th>
+            <th aria-label="Secret" />
+            <th aria-label="Remove" />
+          </tr>
+        </thead>
+        <tbody>
+          {draft.variables.map((v, i) => (
+            <tr key={i} className={v.enabled ? "" : "off"}>
+              <td>
+                <input type="checkbox" aria-label={`Use ${v.key}`} checked={v.enabled} onChange={(e) => flip(i, { enabled: e.target.checked })} />
+              </td>
+              <td>
+                <input className="http-mono" aria-label="Variable" spellCheck={false} value={v.key} onChange={(e) => put(i, { key: e.target.value })} />
+              </td>
+              <td>
+                <input
+                  className="http-mono"
+                  aria-label="Value"
+                  spellCheck={false}
+                  type={v.secret && !v.shown ? "password" : "text"}
+                  value={v.value}
+                  placeholder={v.secret && v.kept ? `${SECRET_MASK} saved — type to replace` : ""}
+                  onChange={(e) => put(i, { value: e.target.value })}
+                />
+              </td>
+              <td className="http-env-secret">
+                {(saved(v) || (v.secret && v.value !== "")) && (
+                  <button
+                    type="button"
+                    className="http-icon-button"
+                    title={v.shown ? "Hide the value" : "Show the value — here only, until the form closes"}
+                    aria-label={v.shown ? `Hide ${v.key}` : `Show ${v.key}`}
+                    aria-pressed={!!v.shown}
+                    onClick={() => reveal(i, v)}
+                  >
+                    {v.shown ? <EyeOff size={13} /> : <Eye size={13} />}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={`http-icon-button${v.secret ? " on" : ""}`}
+                  title={v.secret ? "Secret: sealed, shown only by the eye, scrubbed from what the agent reads" : "Make it a secret"}
+                  aria-label={v.secret ? `${v.key} is a secret` : `Make ${v.key} a secret`}
+                  aria-pressed={v.secret}
+                  onClick={() => flip(i, { secret: !v.secret, shown: false })}
+                >
+                  {v.secret ? <Lock size={13} /> : <LockOpen size={13} />}
+                </button>
+              </td>
+              <td>
+                <button
+                  type="button"
+                  className="http-icon-button"
+                  title="Remove"
+                  aria-label={`Remove ${v.key}`}
+                  onClick={() => change({ ...draft, variables: draft.variables.filter((_, j) => j !== i) })}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button type="button" className="http-bar-button" onClick={() => setDraft({ ...draft, variables: [...draft.variables, { key: "", value: "", secret: false, enabled: true }] })}>
+        <Plus size={13} />
+        Variable
+      </button>
+
+      <div className="http-field-row http-agent-row">
+        <span className="http-label">
+          <Bot size={13} /> Agent access
+        </span>
+        <Dropdown
+          below
+          right
+          label={AGENT_ACCESS.find((a) => a.value === (draft.agent ?? "off"))?.label}
+          title="What the agent may do here"
+          options={AGENT_ACCESS}
+          value={draft.agent ?? "off"}
+          onPick={(agent) => change({ ...draft, agent: agent as AgentAccess })}
+        />
+      </div>
+
+      <label className="http-field-row http-field-top">
+        <span className="http-label">
+          <ShieldCheck size={13} /> Certificate
+        </span>
+        <textarea
+          className="http-input http-mono http-cert"
+          rows={4}
+          spellCheck={false}
+          value={draft.trustedCert ?? ""}
+          placeholder="The stand's own certificate or its CA's, PEM — empty for the system's trust store"
+          onChange={(e) => setDraft({ ...draft, trustedCert: e.target.value })}
+        />
+      </label>
+
+      <p className="http-quiet">
+        Saved as you leave a field. Sealed on this computer under the app's master key, as the API keys are. A secret shows only here, by its eye — leave it empty to keep it.
+      </p>
+      <div className="http-actions">
+        <button
+          type="button"
+          className="http-bar-button"
+          title="As a Postman environment file — secrets empty"
+          onClick={() => onExport().catch((e) => setSaid({ error: true, text: `Not exported: ${e}` }))}
+        >
+          <Download size={13} />
+          Export
+        </button>
+        <button type="button" className="http-bar-button" onClick={onDelete}>
+          <Trash2 size={13} />
+          Delete…
+        </button>
+        <span className="http-spacer" />
+        {said && <span className={said.error ? "http-error" : "http-quiet"}>{said.text}</span>}
+      </div>
+    </div>
+  );
+}

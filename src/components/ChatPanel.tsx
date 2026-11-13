@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   AppWindow,
   ArrowUpRight,
+  BookmarkPlus,
   Brain,
   Loader2,
   ChevronRight,
@@ -21,6 +22,7 @@ import {
   ListTodo,
   NotebookPen,
   ScrollText,
+  FileCode,
   SquareKanban,
   Database,
   Telescope,
@@ -94,6 +96,11 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Explore: Telescope,
   Board: SquareKanban,
   MongoDB: Database,
+  HTTP: Globe,
+  "HTTP request": Globe,
+  "HTTP environment": Globe,
+  "Save HTTP case": BookmarkPlus,
+  "HTTP script draft": FileCode,
   Prototype: AppWindow,
 };
 

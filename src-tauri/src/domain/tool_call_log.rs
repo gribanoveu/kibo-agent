@@ -405,6 +405,30 @@ mod tests {
                 Some(ToolCall::Mongo(crate::domain::tools::MongoArgs { op: crate::domain::tools::MongoOp::Find, filter: Some("{ paid: true }".into()), ..Default::default() })),
                 ToolResult::Mongo { text: LEAK.into(), summary: "3 documents".into() },
             ),
+            // What was asked is what the log is for, `{{token}}` written out; what came back goes as `text`.
+            ToolName::HttpEnvironment => (
+                Some(ToolCall::HttpEnvironment(crate::domain::tools::HttpEnvironmentArgs { environment: Some("Stage".into()) })),
+                ToolResult::HttpEnvironment { text: LEAK.into(), summary: "Stage · 3 requests".into() },
+            ),
+            ToolName::HttpSend => (
+                Some(ToolCall::HttpSend(crate::domain::tools::HttpSendArgs { request: "r1".into(), method: Some("GET".into()), path: Some("/orders".into()), ..Default::default() })),
+                ToolResult::HttpSend { text: LEAK.into(), summary: "200 · 12 ms".into() },
+            ),
+            // Which request was read is what the log is for; the request itself goes as `text`.
+            ToolName::HttpReadRequest => (
+                Some(ToolCall::HttpReadRequest(crate::domain::tools::HttpReadRequestArgs { request: "r1".into(), environment: Some("Stage".into()) })),
+                ToolResult::HttpReadRequest { text: LEAK.into(), summary: "Shop / Get one".into() },
+            ),
+            // Which request the case came from and where it went: what the log is for; the request goes as `text`.
+            ToolName::HttpSaveRequest => (
+                Some(ToolCall::HttpSaveRequest(crate::domain::tools::HttpSaveRequestArgs { from: "r1".into(), name: "No auth".into(), auth: Some("none".into()), ..Default::default() })),
+                ToolResult::HttpSaveRequest { text: LEAK.into(), summary: "Shop / Cases".into() },
+            ),
+            // Which request and script, and how its tests went: what the log is for; the report goes as `text`.
+            ToolName::HttpDraftScript => (
+                Some(ToolCall::HttpDraftScript(crate::domain::tools::HttpDraftScriptArgs { request: "r1".into(), listen: "test".into(), code: "pm.test('ok', () => {});".into(), ..Default::default() })),
+                ToolResult::HttpDraftScript { text: LEAK.into(), summary: "post-response · 2 passed".into() },
+            ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),

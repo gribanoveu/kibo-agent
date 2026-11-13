@@ -1,0 +1,128 @@
+{
+  "solve": [
+    {
+      "send": {
+        "request": "order-get"
+      }
+    },
+    {
+      "call": "httpDraftScript",
+      "args": {
+        "request": "order-get",
+        "listen": "test",
+        "code": "pm.test('status 200', () => pm.response.to.have.status(200));\npm.test('an order as the spec says', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(['paid', 'open']).to.include(o.status);\n  pm.expect(o.sum).to.be.a('number');\n});"
+      }
+    },
+    {
+      "say": "The draft's tests: `sum` comes as the string \"120.00\", where the spec says a number."
+    }
+  ],
+  "wrong": {
+    "fit-to-the-stand": [
+      {
+        "send": {
+          "request": "order-get"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('status 200', () => pm.response.to.have.status(200));\npm.test('an order as the spec says', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(['paid', 'open']).to.include(o.status);\n  pm.expect(o.sum).to.exist;\n});"
+        }
+      },
+      {
+        "say": "All tests pass."
+      }
+    ],
+    "status-only": [
+      {
+        "send": {
+          "request": "order-get"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('status 200', () => pm.response.to.have.status(200));"
+        }
+      },
+      {
+        "say": "It answers 200."
+      }
+    ],
+    "said-not-drafted": [
+      {
+        "send": {
+          "request": "order-get"
+        }
+      },
+      {
+        "say": "pm.test('sum is a number', () => pm.expect(pm.response.json().sum).to.be.a('number'));"
+      }
+    ],
+    "a-call-elsewhere": [
+      {
+        "send": {
+          "request": "order-get"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('status 200', () => pm.response.to.have.status(200));\npm.test('an order as the spec says', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(['paid', 'open']).to.include(o.status);\n  pm.expect(o.sum).to.be.a('number');\n});"
+        }
+      },
+      {
+        "call": "webFetch",
+        "args": {
+          "url": "https://example.test"
+        }
+      },
+      {
+        "say": "The draft's tests: `sum` comes as the string \"120.00\", where the spec says a number."
+      }
+    ],
+    "status-not-checked": [
+      {
+        "send": {
+          "request": "order-get"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('status 200', () => pm.response.to.have.status(200));\npm.test('an order as the spec says', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.be.a('number');\n});"
+        }
+      },
+      {
+        "say": "The draft's tests: `sum` comes as the string \"120.00\", where the spec says a number."
+      }
+    ],
+    "a-field-the-spec-lacks": [
+      {
+        "send": {
+          "request": "order-get"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('status 200', () => pm.response.to.have.status(200));\npm.test('an order as the spec says', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(['paid', 'open']).to.include(o.status);\n  pm.expect(o.sum).to.be.a('number');\n  pm.expect(o).to.have.property('currency');\n});"
+        }
+      },
+      {
+        "say": "The draft's tests: `sum` comes as the string \"120.00\", where the spec says a number."
+      }
+    ]
+  }
+}

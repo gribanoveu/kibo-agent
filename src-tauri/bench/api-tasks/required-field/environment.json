@@ -1,0 +1,8 @@
+{
+  "name": "Stage",
+  "_postman_variable_scope": "environment",
+  "values": [
+    {"key": "baseUrl", "value": "__BASE_URL__", "type": "default", "enabled": true},
+    {"key": "token", "value": "s3cr3t-cr34te-t0k", "type": "secret", "enabled": true}
+  ]
+}
