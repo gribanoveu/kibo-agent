@@ -653,7 +653,6 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, worksp
     let shell = crate::infra::shells::for_commands();
     let today = crate::services::llm_chat::today();
     let features = crate::services::features::enabled();
-    let knowledge = root.and_then(|root| crate::services::knowledge::overview_offered(&features, root));
     context_compaction::request_frame(
         &TurnContext {
             mode,
@@ -667,7 +666,6 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, worksp
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
             mcp_servers: mcp.notes(),
-            knowledge: knowledge.as_ref(),
         },
         &mcp,
         crate::services::web_search::is_on(WebSearchPlace::Agent),
@@ -873,13 +871,6 @@ pub(super) fn mongo_servers_of<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<dyn
     Some(Arc::new(crate::services::mongo::Servers(Arc::clone(&clients))))
 }
 
-/// The knowledge base's search. `None` without the index — and without an
-/// app directory, where the base would be.
-pub(super) fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
-    let base = crate::infra::knowledge_store::KnowledgeStore::open().ok()?;
-    Some(app.try_state::<Arc<WorkspaceIndex>>()?.knowledge_searcher(base.dir().to_path_buf()))
-}
-
 /// Assembles a turn and runs it on a blocking thread.
 ///
 /// The processes and helpers a turn of `chat_id` starts through: recorded as
@@ -938,7 +929,6 @@ where
     );
     let handles = FolderHandles {
         search: searcher_of(&app, &workspace),
-        knowledge: knowledge_searcher_of(&app),
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
         processes,

@@ -82,7 +82,6 @@ import { RewindDialog } from "./components/RewindDialog";
 import { useRewind } from "./hooks/useRewind";
 import { builtInCommands, expandTemplate, fileCommands, mcpPromptCommands, typedCommand } from "./lib/slashCommands";
 import initPrompt from "./prompts/init.md?raw";
-import analyzePrompt from "./prompts/analyze.md?raw";
 import reviewPrompt from "./prompts/review.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
@@ -409,7 +408,6 @@ export default function App() {
       started: agent.turn.blocks.length > 0,
       folder: !!workspace.path,
       agentMode: conversation.value === "agent",
-      knowledge: features.isOn("knowledge"),
     },
     {
       compact: () => void compactNow(),
@@ -417,7 +415,6 @@ export default function App() {
       review: (args) => void send(typedCommand("review", args), expandTemplate(reviewPrompt, args)),
       // `send` is declared further down; the arrow reaches it when a command runs.
       init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
-      analyze: (args) => void send(typedCommand("analyze", args), expandTemplate(analyzePrompt, args)),
       trust: trust.ask,
     },
   );

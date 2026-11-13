@@ -217,7 +217,6 @@ mod tests {
                 parallel: None,
                 language: None,
                 mcp_servers: mcp.notes(),
-                knowledge: None,
             },
             mcp,
             false,

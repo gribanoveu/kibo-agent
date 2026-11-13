@@ -26,7 +26,6 @@ mod agent_bench;
 #[cfg(test)]
 mod kube_bench;
 pub mod skills;
-pub mod knowledge;
 pub mod catalog;
 pub mod folder_trust;
 pub mod project_rules;

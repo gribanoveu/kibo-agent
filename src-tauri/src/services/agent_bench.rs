@@ -334,8 +334,6 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         take_steering: &take_steering,
         notes_typed: &notes_typed,
         search: Some(search),
-        knowledge: None,
-        knowledge_overview: None,
         skills: &[],
         rules: &rules,
         frozen: None,

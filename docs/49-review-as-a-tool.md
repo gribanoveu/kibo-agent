@@ -236,7 +236,7 @@
 
 | Что | Кто пишет | Где |
 |---|---|---|
-| Системный промпт | приложение, на каждый запрос | `prompt::system_messages`: `INSTRUCTIONS` + `mode_instructions(ConversationMode::Review)` + список навыков + правила проекта, память, обзор базы знаний + блок фактов о папке ([prompt.rs:570](../src-tauri/src/domain/prompt.rs#L570), [prompt.rs:179](../src-tauri/src/domain/prompt.rs#L179)); подставляется в `request_messages` ([llm_chat.rs:1839](../src-tauri/src/services/llm_chat.rs#L1839)) |
+| Системный промпт | приложение, на каждый запрос | `prompt::system_messages`: `INSTRUCTIONS` + `mode_instructions(ConversationMode::Review)` + список навыков + правила проекта, память + блок фактов о папке ([prompt.rs:570](../src-tauri/src/domain/prompt.rs#L570), [prompt.rs:179](../src-tauri/src/domain/prompt.rs#L179)); подставляется в `request_messages` ([llm_chat.rs:1839](../src-tauri/src/services/llm_chat.rs#L1839)) |
 | Сообщение с изменением | приложение | `review::review_message` ([review.rs:186](../src-tauri/src/domain/review.rs#L186)): диффы в пределах `MESSAGE_DIFF_CHARS`, имена не влезших, отсеянные с причиной, напоминание о языке |
 | Список инструментов | приложение | `conversation_mode::tools(Review)`; `tool_definitions_for` с `web: false`, `McpTools::default()`, `Features::default()` ([llm_chat.rs:1756](../src-tauri/src/services/llm_chat.rs#L1756)) |
 | Что говорит модель | её вызов | `from`, `to` и `focus` в аргументах инструмента — плюс, внутри ревью, его собственные `reportFinding` и финальный ответ |
@@ -246,7 +246,7 @@
 отбрасывается, когда форка нет ([llm_chat.rs:1323](../src-tauri/src/services/llm_chat.rs#L1323)).
 
 Из контекста чата ревьюер получает **не историю**, а только то, что не зависит от
-разговора: правила проекта (`AGENTS.md`/`CLAUDE.md`), навыки, обзор базы знаний, хуки —
+разговора: правила проекта (`AGENTS.md`/`CLAUDE.md`), навыки, хуки —
 `run_helper` передаёт их как есть. Чего у него нет: истории чата, плана, чеклиста, MCP,
 веба, инструментов фич, `explore` (вложенных хелперов), `remember`, `todo` и
 `writePlan`.

@@ -114,17 +114,12 @@ impl ChatRole {
     /// is off (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
-            // The knowledge base read, never written: a chat has no repository
-            // for a document to be about, nor code to check it against.
             ChatRole::Assistant => &[
                 ToolName::WebSearch,
                 ToolName::WebFetch,
                 ToolName::DeepseekSearch,
                 ToolName::DeepseekFetch,
                 ToolName::Board,
-                ToolName::KnowledgeSearch,
-                ToolName::KnowledgeRead,
-                ToolName::KnowledgeRelations,
                 // Reads, while the user has MongoDB on.
                 ToolName::Mongo,
             ],
@@ -394,8 +389,8 @@ A Secret's values are never shown to you; do not try to get them another way. Wh
 mod tests {
     use super::*;
 
-    /// The assistant talks, searches the web, keeps the board and reads the
-    /// knowledge base and MongoDB — nothing it has writes there. The Kubernetes role's tools
+    /// The assistant talks, searches the web, keeps the board and reads
+    /// MongoDB — nothing it has writes there. The Kubernetes role's tools
     /// are the cluster's and the web's — none reaches a file — and the ones
     /// that change it are listed here by name: a new one is a decision, not a
     /// side effect.
@@ -409,9 +404,6 @@ mod tests {
                 ToolName::DeepseekSearch,
                 ToolName::DeepseekFetch,
                 ToolName::Board,
-                ToolName::KnowledgeSearch,
-                ToolName::KnowledgeRead,
-                ToolName::KnowledgeRelations,
                 ToolName::Mongo
             ]
         );

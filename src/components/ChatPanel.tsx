@@ -37,7 +37,6 @@ import {
   RotateCcw,
   Undo2,
   MousePointerClick,
-  Library,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard, ReviewReport } from "./ReviewCard";
@@ -88,10 +87,6 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   "DeepSeek page": Globe,
   Search: Search,
   Memory: NotebookPen,
-  Knowledge: Library,
-  "Knowledge search": Library,
-  "Knowledge doc": Library,
-  "Knowledge links": Library,
   Plan: ScrollText,
   Offer: SearchCheck,
   Review: SearchCheck,

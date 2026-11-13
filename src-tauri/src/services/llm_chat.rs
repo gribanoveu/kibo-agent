@@ -194,22 +194,15 @@ pub struct Turn<'a> {
     /// Search of the open folder's index, for `semanticSearch`; `None` when
     /// the folder has none, and the tool says so to the model.
     pub search: Option<CodeSearchFn>,
-    /// Search of the knowledge base, for `knowledgeSearch`; `None` where the
-    /// app has none.
-    pub knowledge: Option<CodeSearchFn>,
-    /// What the knowledge base has, for the prompt; `None` while the feature
-    /// is off. Read once per turn, as the skills are.
-    pub knowledge_overview: Option<&'a crate::domain::knowledge::Overview>,
     /// The open folder's skills and the user's, listed in the prompt for
     /// `skill` to load. Read once per turn, so the prompt does not change
     /// between its rounds.
     pub skills: &'a [Skill],
     /// The open folder's instruction files, read once per turn like the skills.
     pub rules: &'a [RuleFile],
-    /// The rules and the knowledge base's overview as the chat's first turn
-    /// read them, which the prompt keeps saying; what changed since reaches
-    /// the model through the history ([`restore_standing`]). `None` says
-    /// [`Turn::rules`] and [`Turn::knowledge_overview`] in the prompt.
+    /// The rules as the chat's first turn read them, which the prompt keeps
+    /// saying; what changed since reaches the model through the history
+    /// ([`restore_standing`]). `None` says [`Turn::rules`] in the prompt.
     pub frozen: Option<&'a Frozen>,
     /// Where each settled call's redacted record goes — the log on disk in
     /// the app, a list in a test. A port rather than a direct write so that
@@ -260,8 +253,7 @@ pub struct Turn<'a> {
 }
 
 /// The part of a folder's prompt that the files behind it can change in the
-/// middle of a chat: the instruction files, the memory among them, and the
-/// knowledge base's overview.
+/// middle of a chat: the instruction files, the memory among them.
 ///
 /// Kept as the chat's first turn read it. The system prompt comes first in
 /// every request, so a change to it is a cache miss on the whole
@@ -272,7 +264,6 @@ pub struct Turn<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frozen {
     pub rules: Vec<RuleFile>,
-    pub knowledge: Option<crate::domain::knowledge::Overview>,
     /// The shared-tree warning as this chat's first turn saw it.
     pub parallel: Option<String>,
 }
@@ -1053,7 +1044,6 @@ fn execute_call(
         shell: turn.shell.clone(),
         output: Some(output.clone()),
         search: turn.search.clone().map(|search| crate::services::search_rerank::reranking(search, Arc::new(turn.session.clone()))),
-        knowledge: turn.knowledge.clone(),
         skills: turn.skills.to_vec(),
         mcp: turn.mcp.clone(),
         cancelled: Some(turn.cancelled),
@@ -1265,7 +1255,7 @@ fn side_by_side(
     early
 }
 
-/// `remember`'s and `knowledgeWrite`'s check: `text` alone under `prompt`, to
+/// `remember`'s check: `text` alone under `prompt`, to
 /// the turn's model with no tools and no history, as a chat's name is asked
 /// for (`services::chat_title`). The verdict is SAVE or REFUSE either way.
 fn check_with(session: &LlmSession, prompt: &str, text: &str) -> Result<(), String> {
@@ -1376,9 +1366,6 @@ fn run_helper(
         take_steering: &no_steering,
         notes_typed: &|| 0,
         search: turn.search.clone(),
-        // A helper looks up what another repository's agent wrote, as the calling turn would.
-        knowledge: turn.knowledge.clone(),
-        knowledge_overview: turn.knowledge_overview,
         skills: turn.skills,
         rules: turn.rules,
         // A fork's prompt is the calling turn's, for the cache; a helper's
@@ -1952,9 +1939,9 @@ pub fn today() -> String {
 
 /// What a request in the open folder is told before the conversation.
 fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode, today: &'a str) -> prompt::TurnContext<'a> {
-    let (rules, knowledge) = match turn.frozen {
-        Some(frozen) => (&frozen.rules[..], frozen.knowledge.as_ref()),
-        None => (turn.rules, turn.knowledge_overview),
+    let rules = match turn.frozen {
+        Some(frozen) => &frozen.rules[..],
+        None => turn.rules,
     };
     prompt::TurnContext {
         mode,
@@ -1967,7 +1954,6 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
         parallel: turn.frozen.and_then(|frozen| frozen.parallel.as_deref()),
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),
-        knowledge,
     }
 }
 
@@ -2069,8 +2055,7 @@ fn standing_note(name: &str, now: Option<&str>) -> String {
 /// ([`Frozen`]) until a note has followed it — and otherwise leaves it alone.
 /// The latest note, not any: a file put back as it was is a change too.
 fn restore_standing(history: &mut Vec<LlmMessage>, turn: &Turn) {
-    let (Some(frozen), Some(mode)) = (turn.frozen, turn.place.mode()) else { return };
-    let knowledge = |overview: Option<&crate::domain::knowledge::Overview>| overview.map(|o| prompt::knowledge_block(o, mode));
+    let (Some(frozen), Some(_mode)) = (turn.frozen, turn.place.mode()) else { return };
     let parallel = match turn.place {
         Place::Folder { parallel, .. } => prompt::parallel_block(&parallel()),
         Place::Chat { .. } => None,
@@ -2078,7 +2063,6 @@ fn restore_standing(history: &mut Vec<LlmMessage>, turn: &Turn) {
     let parts = [
         ("Project instructions", prompt::rules_block(&frozen.rules), prompt::rules_block(turn.rules)),
         ("Memory", prompt::memory_block(&frozen.rules), prompt::memory_block(turn.rules)),
-        ("Knowledge", knowledge(frozen.knowledge.as_ref()), knowledge(turn.knowledge_overview)),
         ("Parallel sessions", frozen.parallel.clone(), parallel),
     ];
     for (name, was, now) in parts {
@@ -2507,14 +2491,12 @@ mod tests {
     }
 
     impl LlmProvider for Scripted {
-        /// Only compaction and the checks of `remember` and `knowledgeWrite`
-        /// get here: the loop itself always streams. A check passes what it
+        /// Only compaction and the check of `remember` gets here: the loop
+        /// itself always streams. A check passes what it
         /// is shown unless that says "approve".
         fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
             let note = request.messages.last().and_then(|m| m.content.clone()).unwrap_or_default();
-            let checking = [crate::domain::project_rules::MEMORY_CHECK_PROMPT, crate::domain::knowledge::KNOWLEDGE_CHECK_PROMPT]
-                .iter()
-                .any(|prompt| request.messages[0].content.as_deref() == Some(*prompt));
+            let checking = request.messages[0].content.as_deref() == Some(crate::domain::project_rules::MEMORY_CHECK_PROMPT);
             self.summaries.lock().unwrap().push(request);
             let reply = match (checking, note.contains("approve")) {
                 (true, false) => "SAVE",
@@ -2603,7 +2585,6 @@ mod tests {
         steering: Arc<SteeringQueue>,
         search: Option<CodeSearchFn>,
         skills: Vec<Skill>,
-        knowledge_overview: Option<crate::domain::knowledge::Overview>,
         rules: Vec<RuleFile>,
         frozen: Option<Frozen>,
         logged: Arc<Mutex<Vec<ToolCallLogEntry>>>,
@@ -2660,7 +2641,6 @@ mod tests {
             steering,
             search: None,
             skills: Vec::new(),
-            knowledge_overview: None,
             rules: Vec::new(),
             frozen: None,
             logged: Arc::new(Mutex::new(Vec::new())),
@@ -2725,8 +2705,6 @@ mod tests {
                 take_steering: &take_steering,
                 notes_typed: &notes_typed,
                 search: self.search.clone(),
-                knowledge: None,
-                knowledge_overview: self.knowledge_overview.as_ref(),
                 shell: &shell,
                 shell_described: &self.shell_described,
                 skills: &self.skills,
@@ -4653,13 +4631,13 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two, the knowledge base's four, MongoDB's one — the Kubernetes role's and the
+        // DeepSeek's two, MongoDB's one — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
         // is connected. Those waiting for `toolSearch` are found with it.
         let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
         assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
         // And `toolSearch`, which is there for them.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 12 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+        assert_eq!(offered.len(), ToolName::ALL.len() - 8 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
@@ -5945,7 +5923,7 @@ mod tests {
     fn a_changed_file_is_a_note_once_and_the_prompt_stays_as_the_chat_began() {
         let mut h = harness("standing-changed", vec![asks(vec![wants("r1", "listFiles", r#"{"path":"."}"#)]), text("done"), text("again")]);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], parallel: None });
 
         let first = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("fix it")], vec![])).expect("finishes"));
         let mut history = first.clone();
@@ -5960,7 +5938,7 @@ mod tests {
         let notes = notes_of(&second, "Project instructions");
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("### AGENTS.md\n\nRun bun test."), "{}", notes[0]);
-        assert!(notes_of(&second, "Memory").is_empty() && notes_of(&second, "Knowledge").is_empty(), "only what changed is said");
+        assert!(notes_of(&second, "Memory").is_empty(), "only what changed is said");
         assert!(requests[0].messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Run bun test."))), "the first request is told");
         // Each request extends the last: the note sits where the first turn put it.
         assert_eq!(&second[..first.len()], &first[..]);
@@ -5972,7 +5950,7 @@ mod tests {
         let second = "second".to_string();
         let mut h = harness("standing-parallel", vec![text("one"), text("two"), text("three"), text("four")]);
         h.parallel = vec![first.clone()];
-        h.frozen = Some(Frozen { rules: Vec::new(), knowledge: None, parallel: prompt::parallel_block(&h.parallel) });
+        h.frozen = Some(Frozen { rules: Vec::new(), parallel: prompt::parallel_block(&h.parallel) });
 
         let one = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
         h.parallel = vec![second.clone()];
@@ -6008,7 +5986,7 @@ mod tests {
         let rules = vec![RuleFile::new("AGENTS.md", "Run cargo test.")];
         let mut h = harness("standing-back", vec![text("done"), text("done"), text("done")]);
         h.rules = rules.clone();
-        h.frozen = Some(Frozen { rules: rules.clone(), knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: rules.clone(), parallel: None });
 
         let quiet = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
         assert!(notes_of(&quiet, "Project instructions").is_empty(), "{quiet:?}");
@@ -6032,7 +6010,7 @@ mod tests {
     fn a_shortened_file_is_not_taken_for_the_longer_note() {
         let mut h = harness("standing-shortened", vec![text("done")]);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], parallel: None });
         let longer = standing_note("Project instructions", Some(&prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.\n\nThen lint.")]).unwrap()));
 
         let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user(longer), LlmMessage::user("go")], vec![])).expect("finishes"));
@@ -6052,7 +6030,7 @@ mod tests {
         );
         h.session.context_limit = Some(90_000);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], parallel: None });
         std::fs::write(h.root.join("big.txt"), "x".repeat(40_000)).unwrap();
 
         h.run(|turn| stream(turn, long_conversation(), vec![])).expect("turn");
@@ -6068,22 +6046,18 @@ mod tests {
         assert_eq!(retry.iter().filter(|m| says(m)).count(), 1, "{retry:?}");
     }
 
-    /// The knowledge base's overview is frozen with the rules: a document
-    /// written mid-chat is a note, and a part that is gone says so.
+    /// A part of the prompt that is gone says so: a memory file removed
+    /// mid-chat is a note, not a prompt that changed silently.
     #[test]
-    fn a_written_document_is_a_knowledge_note_and_a_lost_memory_says_gone() {
+    fn a_lost_memory_says_gone() {
         use crate::domain::project_rules::MEMORY_NAME;
-        let overview = |repo: &str| crate::domain::knowledge::Overview { repo: repo.into(), ..Default::default() };
-        let mut h = harness("standing-knowledge", vec![text("done")]);
-        h.knowledge_overview = Some(overview("tax-api-now"));
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new(MEMORY_NAME, "- k8s is OrbStack")], knowledge: Some(overview("tax-api")), parallel: None });
+        let mut h = harness("standing-gone", vec![text("done")]);
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new(MEMORY_NAME, "- k8s is OrbStack")], parallel: None });
 
         let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
 
         let request = &h.provider.requests()[0];
-        assert!(system_says(request, "`tax-api` in the base") && system_says(request, "k8s is OrbStack"), "the prompt moved");
-        let knowledge = notes_of(&history, "Knowledge");
-        assert!(knowledge.len() == 1 && knowledge[0].contains("`tax-api-now` in the base"), "{knowledge:?}");
+        assert!(system_says(request, "k8s is OrbStack"), "the prompt moved");
         let memory = notes_of(&history, "Memory");
         assert!(memory.len() == 1 && memory[0].contains("Gone: the section no longer applies.\n[End of Memory.]"), "{memory:?}");
     }
@@ -6627,46 +6601,6 @@ mod tests {
         });
     }
 
-    /// Documents are checked under the knowledge base's own prompt, which
-    /// says what they are — not memory's, which would judge them as a note.
-    #[test]
-    fn knowledge_documents_are_checked_under_their_own_prompt() {
-        crate::testing::with_app_dir("knowledge-loop", || {
-            let doc = "---\nid: overview\nkind: concept\ntitle: Overview\nconfidence: inferred\n---\n# Overview\n\nWhat this is.\n";
-            let arguments = serde_json::json!({ "documents": [doc] }).to_string();
-            let mut h = harness("knowledge-loop", vec![asks(vec![wants("k1", "knowledgeWrite", &arguments)]), text("done")]);
-            h.features = Features::all();
-            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
-
-            let checks = h.provider.summaries.lock().unwrap().clone();
-            assert_eq!(checks.len(), 1);
-            assert_eq!(checks[0].messages[0].content.as_deref(), Some(crate::domain::knowledge::KNOWLEDGE_CHECK_PROMPT));
-            assert!(checks[0].messages[1].content.as_deref().is_some_and(|t| t.contains("# Overview")));
-            let back = tool_contents(&h.provider.requests()[1]);
-            assert!(back[0].starts_with("Saved to the knowledge base:"), "{back:?}");
-        });
-    }
-
-    /// What the knowledge base has is in the prompt of the turn and of its
-    /// helper — which reads the base but does not write it.
-    #[test]
-    fn the_knowledge_block_reaches_the_turn_and_its_helper() {
-        let mut h = harness(
-            "knowledge-block",
-            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]), text("X is nowhere"), text("done")],
-        );
-        h.knowledge_overview = Some(crate::domain::knowledge::Overview { repo: "tax-api".into(), ..Default::default() });
-        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
-        let requests = h.provider.requests();
-        let block = |request: &ChatRequest| {
-            request.messages.iter().filter(|m| m.role == LlmRole::System).find_map(|m| m.content.clone().filter(|c| c.starts_with("## Knowledge")))
-        };
-        let caller = block(&requests[0]).expect("the turn's prompt has it");
-        assert!(caller.contains("`knowledgeWrite`") && caller.contains("`tax-api` in the base"), "{caller}");
-        let helper = block(&requests[1]).expect("the helper's prompt has it");
-        assert!(!helper.contains("knowledgeWrite"), "{helper}");
-    }
-
     /// The helper works in a conversation of its own, and the calling turn
     /// gets its answer — not the file it read to find it.
     #[test]
@@ -6927,7 +6861,7 @@ mod tests {
         h.features = Features::all();
         // Its prompt is the caller's frozen one, not the files as they are now.
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], parallel: None });
         let h = with_server(h, 1);
         std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
