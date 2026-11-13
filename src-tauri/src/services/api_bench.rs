@@ -25,7 +25,7 @@
 //!
 //! `api_fixtures` runs no model: a model from each task's `fixtures.json` goes
 //! through the same turn, stand and check — untouched must fail, solved must pass,
-//! each wrong one must fail.
+//! each wrong one must fail, each other right one (`right`) must pass.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
@@ -69,6 +69,24 @@ struct Task {
     variants: Value,
     /// By request id, the path of the send its variants stand on, `{{name}}` the value given.
     on: Value,
+}
+
+/// What `on`'s `{{name}}`s are in `path`, when it is one of its paths: a name given is
+/// its value only, one not given any one segment — the collection's run fills it from
+/// the environment, as a create's test that keeps the id there does.
+fn slots(on: &str, given: &[(String, String)], path: &str) -> Option<Vec<(String, String)>> {
+    let slot = regex::Regex::new(r"\{\{([^{}]+)\}\}").unwrap();
+    let (mut pattern, mut names, mut last) = (String::from("^"), Vec::new(), 0);
+    for c in slot.captures_iter(on) {
+        let whole = c.get(0).unwrap();
+        pattern += &regex::escape(&on[last..whole.start()]);
+        pattern += &given.iter().find(|(k, _)| k == &c[1]).map_or_else(|| "([^/]+)".to_string(), |(_, v)| format!("({})", regex::escape(v)));
+        names.push(c[1].to_string());
+        last = whole.end();
+    }
+    pattern += &regex::escape(&on[last..]);
+    let found = regex::Regex::new(&format!("{pattern}$")).unwrap().captures(path)?;
+    Some(names.into_iter().zip(found.iter().skip(1).map(|m| m.unwrap().as_str().to_string())).collect())
 }
 
 /// A URL's path, without its origin and query: `http://h:1/orders/5?x` is `/orders/5`.
@@ -167,25 +185,30 @@ impl Fixture {
         let mut reruns = Vec::new();
         for draft in &drafts {
             let Some(variants) = task.variants.get(&draft.request).and_then(Value::as_object) else { continue };
-            // The values of the call that left the draft: the last that did not fail — a failed
-            // one saves nothing. The log keeps a call as `{tool, args}`.
-            let variables = calls
+            // The values the draft was run with, latest first. The log keeps a call as `{tool, args}`.
+            let given: Vec<Vec<(String, String)>> = calls
                 .iter()
                 .rev()
-                .filter(|c| c.tool == "httpDraftScript" && c.status != CallStatus::Error)
+                .filter(|c| c.tool == "httpDraftScript")
                 .filter_map(|c| serde_json::from_value::<HttpDraftScriptArgs>(c.args["args"].clone()).ok())
-                .find(|a| a.request == draft.request && a.listen == draft.listen)
+                .filter(|a| a.request == draft.request && a.listen == draft.listen)
                 .map(|a| a.variables())
-                .unwrap_or_default();
-            // The send the variants stand on: the latest that succeeded at the task's path
-            // for the request, its `{{name}}`s the values given — not whichever the model ran
-            // its draft on last, which is often a 404, a 401 or a 422 on purpose.
+                .collect();
+            // The send the variants stand on: the latest that succeeded at the task's path for
+            // the request, its `{{name}}`s the values given — not whichever the model ran its
+            // draft on last, which is often a 404, a 401 or a 422 on purpose. The values are
+            // the latest that have such a send: a model's last run is often a control, its
+            // values another order's, to see the test fail.
             let on = task.on[&draft.request].as_str().unwrap_or_else(|| panic!("{}: {} has variants and no `on`", task.name, draft.request));
-            let path = variables.iter().fold(on.to_string(), |p, (k, v)| p.replace(&format!("{{{{{k}}}}}"), v));
-            let sent = history.iter().rev().find(|e| {
-                e.request_id.as_deref() == Some(draft.request.as_str()) && url_path(&e.request.url) == path && matches!(e.outcome, Outcome::Response { status, .. } if (200..300).contains(&status))
+            let sent = given.into_iter().find_map(|variables| {
+                history
+                    .iter()
+                    .rev()
+                    .filter(|e| e.request_id.as_deref() == Some(draft.request.as_str()) && matches!(e.outcome, Outcome::Response { status, .. } if (200..300).contains(&status)))
+                    .find_map(|e| slots(on, &variables, url_path(&e.request.url)).map(|s| (e, s)))
+                    .map(|(e, s)| (e, s, variables))
             });
-            let Some(sent) = sent else {
+            let Some((sent, slots, variables)) = sent else {
                 reruns.push(json!({"request": draft.request, "listen": draft.listen, "variant": null, "tests": [], "error": "no send of the request to stand the variants on"}));
                 continue;
             };
@@ -214,8 +237,8 @@ impl Fixture {
                 if let Some(renumber) = answer.get("renumber") {
                     let name = renumber["variable"].as_str().unwrap_or_else(|| panic!("{}: variant {variant} renumbers no variable", task.name));
                     let to = renumber["to"].as_str().unwrap_or_else(|| panic!("{}: variant {variant} renumbers to nothing", task.name));
-                    // Not given, no rerun: the check finds the variant not run.
-                    let Some((_, from)) = variables.iter().find(|(k, _)| k == name) else { continue };
+                    // What it is in the send's address; not in `on`, no rerun: the check finds the variant not run.
+                    let Some((_, from)) = slots.iter().find(|(k, _)| k == name) else { continue };
                     let word = regex::Regex::new(&format!(r"\b{}\b", regex::escape(from))).unwrap();
                     given = given.into_iter().map(|(k, v)| (k, word.replace_all(&v, to).into_owned())).collect();
                     let path = url_path(&entry.request.url).to_string();
@@ -469,6 +492,9 @@ fn api_fixtures() {
         let fixtures: Value = serde_json::from_str(&std::fs::read_to_string(task.dir.join("fixtures.json")).unwrap()).unwrap();
         let mut legs = vec![("untouched".to_string(), json!([{"say": "PASS"}]), false), ("solved".to_string(), fixtures["solve"].clone(), true)];
         legs.extend(fixtures["wrong"].as_object().unwrap().iter().map(|(label, replies)| (format!("wrong:{label}"), replies.clone(), false)));
+        // Other right turns, where the bench could fail a model unfairly.
+        let right = fixtures.get("right").and_then(Value::as_object).into_iter().flatten();
+        legs.extend(right.map(|(label, replies)| (format!("right:{label}"), replies.clone(), true)));
         for (leg, replies, expected) in legs {
             let run = with_app_dir(&format!("api-fixtures-{}", task.name), || run_task(&scripted_session(scripted(&replies)), &task, Duration::from_secs(60)));
             let why = if run.passed { String::new() } else { run.check_output.lines().next().unwrap_or(&run.ended).to_string() };

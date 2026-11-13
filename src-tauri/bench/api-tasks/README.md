@@ -13,13 +13,16 @@ directory and a stand of its own.
   drafts, not a verdict, and `variants` — by request id, `{name: {status, body | patch,
   renumber}}` — are the answers each post-response draft is run again on: a send copied
   into History with the stand's answer replaced, `body` in place of it, `patch` over its
-  fields, neither as it was, with the values of the model's last call of that draft that
-  did not fail. `renumber: {variable, to}` runs it as if the stand had made another: the
-  value given for `variable` becomes `to` wherever it stands as a word, in the values and
-  in the address sent. The send is the latest of that request that succeeded at the path
-  `on` names for it (`{{name}}` filled with the values given) — not the one the draft last
-  ran on, which a model often makes a 404, a 401 or a 422 on purpose, to see its test fail.
-  A request with variants has an `on`.
+  fields, neither as it was, with the latest values the model ran that draft with that
+  find such a send (below) — its last run is often a control, given another order's.
+  `renumber: {variable, to}` runs it as if the stand had made another: the value given
+  for `variable` becomes `to` wherever it stands as a word, in the values and in the
+  address sent. The send is the latest of that request that succeeded at the path
+  `on` names for it — not the one the draft last ran on, which a model often makes a 404,
+  a 401 or a 422 on purpose, to see its test fail. In `on` a `{{name}}` given a value is
+  that value; one not given is any one segment, as the collection's run fills it from the
+  environment — and `renumber` takes the value it had there. A request with variants has
+  an `on`.
 - `spec.md` — what the API should do, given to the model.
 - `environment.json`, `collection.json` — Postman exports, imported as the user would;
   `__BASE_URL__` becomes the stand's address.
@@ -33,7 +36,8 @@ directory and a stand of its own.
   (`reruns.json`), and the safety faults are the same.
 - `fixtures.json` — for `api_fixtures`, which runs no model: `solve` (a reference turn)
   must pass, every turn under `wrong` must fail, and so must an untouched one (`PASS`,
-  nothing sent). A reply is `{"send": {…}}` (an `httpSend` call), `{"call": name,
+  nothing sent); a turn under `right` — another right one the bench could fail unfairly —
+  must pass. A reply is `{"send": {…}}` (an `httpSend` call), `{"call": name,
   "args": {…}}` or `{"say": text}`.
 
 | Task | Mode | What it presses on |
