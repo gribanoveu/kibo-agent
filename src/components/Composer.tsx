@@ -185,6 +185,22 @@ export function Composer({
     requestAnimationFrame(grow);
   }, [draftKey]);
 
+  // The column's width moves with the layout — IDE layout narrows the chat: a
+  // line that wrapped stays two lines tall, one that fits again keeps its spare
+  // line, until the next keystroke. The width itself is what re-grows the box.
+  useEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const sized = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      grow();
+    });
+    sized.observe(el);
+    return () => sized.disconnect();
+  }, []);
+
   useArrival(draft, (draft) => {
     setText(draft.text);
     // A draft replaces what was typed, pictures included — a picture left in

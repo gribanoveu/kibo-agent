@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-13 The message box keeps its height across the IDE layout switch: a line that wrapped while the chat was narrow is re-measured when the column widens — no keystroke needed to shrink the box back — and a line that wraps on the way in shows both rows at once
+
 - 2026-11-13 A dot on a catalog card's icon when the catalog has a newer version of what is installed — skills, servers, runbooks, commands and hooks alike; changed-here entries wear it too, and the details' Update is where it points
 
 - 2026-11-13 A helper run — a review, an explore — stands in the chat as a card of its own, like the background process's: what it was asked, the step it is on, how it stands in the badge — a click unfolds its steps, and a settled one its answer, with the run in the Agents tab a link away
