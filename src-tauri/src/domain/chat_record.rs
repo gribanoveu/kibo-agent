@@ -50,6 +50,10 @@ pub enum ChatError {
     BadId(String),
     #[error("no such chat: {0}")]
     NotFound(String),
+    #[error("a folder named \"{0}\" already exists")]
+    AlreadyExists(String),
+    #[error("a folder's name cannot be empty")]
+    EmptyName,
     #[error("could not name the chat: {0}")]
     Naming(#[from] LlmError),
 }
@@ -100,6 +104,12 @@ pub struct ChatRecord {
     /// another chat's switch moves the folder, never this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
+    /// The commit `HEAD` pointed at when the chat was first saved — what
+    /// "this chat's work" is measured from. Set once and never rewritten,
+    /// like `created_at`; absent in chats saved before the marker existed
+    /// and in those begun before their folder's first commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_at_start: Option<String>,
 }
 
 /// A row in the sidebar. Deliberately not the whole record: listing a folder
@@ -116,6 +126,16 @@ pub struct ChatSummary {
     /// than in it, so a record alone says `false`.
     #[serde(default)]
     pub archived: bool,
+    /// Held above the list, ahead of every day group. Kept beside the record
+    /// for the same reason as `archived`: pinning is not something said in
+    /// the chat, so a record alone says `false`.
+    #[serde(default)]
+    pub pinned: bool,
+    /// The folder the chat was moved to — the id of a `chat_groups` row of
+    /// the same workspace, `None` for unfiled chats and for rows saved
+    /// before folders existed.
+    #[serde(default)]
+    pub group: Option<String>,
     /// Who the model is in a Chat mode conversation, for the row's sign.
     /// `None` for the agent's, and for a chat last saved before rows kept it.
     #[serde(default)]
@@ -134,10 +154,22 @@ impl From<&ChatRecord> for ChatSummary {
             updated_at: record.updated_at,
             branched_from: record.branched_from.clone(),
             archived: false,
+            pinned: false,
+            group: None,
             role: record.role,
             git_branch: record.git_branch.clone(),
         }
     }
+}
+
+/// A folder the sidebar files chats under — a theme of work, not a date.
+/// Rows carry the id only; the name and order are the folder's own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatGroup {
+    pub id: String,
+    pub name: String,
+    pub position: i64,
 }
 
 /// Reads one stored chat, reporting a version it does not understand as
@@ -264,6 +296,7 @@ mod tests {
             kube: None,
             worktree_base: None,
             git_branch: None,
+            head_at_start: None,
         }
     }
 

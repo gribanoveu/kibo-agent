@@ -19,6 +19,8 @@ import { DictateButton } from "./DictateButton";
 import { DictationLine } from "./VoiceWave";
 import { ImageThumbs } from "./ImageThumbs";
 import { ErrorNote } from "./ErrorNote";
+import { LayoutCorrectionHint } from "./LayoutCorrectionHint";
+import { useLayoutCorrection } from "../hooks/useLayoutCorrection";
 import "./Composer.css";
 
 type Props = {
@@ -83,6 +85,11 @@ type Props = {
   draftKey: string;
   /** Whether Voice input is on: its button, its key. */
   dictate?: boolean;
+  /** Whether the wrong-layout hint is on. Corrections are never automatic. */
+  layoutCorrection?: boolean;
+  /** Whether Fix also selects the corrected prose's dominant system layout. */
+  switchLayoutAfterFix?: boolean;
+  onLayoutCorrectionError?: (message: string) => void;
 };
 
 export function Composer({
@@ -116,6 +123,9 @@ export function Composer({
   focus = 0,
   draftKey,
   dictate = false,
+  layoutCorrection = false,
+  switchLayoutAfterFix = false,
+  onLayoutCorrectionError,
 }: Props) {
   const [text, setText, take] = useChatDraft(draftKey);
   /** The queued row shown whole; the rest are a line each. */
@@ -126,6 +136,15 @@ export function Composer({
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLElement>(null);
   const dictation = useDictation({ on: dictate, draftKey, text, setText, area, onChange: () => requestAnimationFrame(grow) });
+  const correction = useLayoutCorrection({
+    on: layoutCorrection && !dictation.active,
+    text,
+    setText,
+    area,
+    draftKey,
+    switchLayout: switchLayoutAfterFix,
+    onError: onLayoutCorrectionError,
+  });
   // The menu follows the text: shown while a name is being typed, until
   // Escape or a click elsewhere — and back with the next keystroke. What is
   // *typed*, not what the box holds: a draft restored as a chat opens is not
@@ -165,6 +184,22 @@ export function Composer({
     setActive(0);
     requestAnimationFrame(grow);
   }, [draftKey]);
+
+  // The column's width moves with the layout — IDE layout narrows the chat: a
+  // line that wrapped stays two lines tall, one that fits again keeps its spare
+  // line, until the next keystroke. The width itself is what re-grows the box.
+  useEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const sized = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      grow();
+    });
+    sized.observe(el);
+    return () => sized.disconnect();
+  }, []);
 
   useArrival(draft, (draft) => {
     setText(draft.text);
@@ -344,6 +379,7 @@ export function Composer({
               }
               value={text}
               onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
+              onBlur={correction.check}
               onChange={(e) => {
                 setText(e.target.value);
                 setTypedIn(draftKey);
@@ -351,6 +387,14 @@ export function Composer({
                 grow();
               }}
               onKeyDown={(e) => {
+                if (matches(e, "convertLayout") && correction.apply()) {
+                  e.preventDefault();
+                  return;
+                }
+                if (matches(e, "undo") && correction.undo()) {
+                  e.preventDefault();
+                  return;
+                }
                 if (menuOpen) {
                   // Only the line saying more is coming: nothing to move to or
                   // pick, and Enter does what it does with the menu closed.
@@ -411,6 +455,7 @@ export function Composer({
         </div>
         {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
       </section>
+      {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
       <div className="composer-strip">
         {tab}
         <ComposerSettings

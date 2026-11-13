@@ -14,6 +14,10 @@ export type FeatureView = {
   tools: { name: string; description: string }[];
   /** Whether the model gets them while the feature is on. */
   toolsOn: boolean;
+  /** Whether Fix also selects the corrected text's dominant system keyboard layout. */
+  layoutSwitchOn: boolean;
+  /** macOS and Windows only. */
+  layoutSwitchSupported: boolean;
   /** Where: "Assistant chat", "Agent", "Analyst". */
   places: string[];
   /** Its file, `~/.kibo/…`; null for a feature with none. */
@@ -47,6 +51,12 @@ export async function setFeature(id: string, on: boolean): Promise<FeatureView[]
 export async function setFeatureTools(id: string, on: boolean): Promise<FeatureView[]> {
   requireBackend();
   return invoke<FeatureView[]>("features_set_tools", { id, on });
+}
+
+/** Whether Fix also selects the corrected text's dominant system keyboard layout. */
+export async function setFeatureLayoutSwitch(on: boolean): Promise<FeatureView[]> {
+  requireBackend();
+  return invoke<FeatureView[]>("features_set_layout_switch", { on });
 }
 
 /** Only while it is off. The list after it. */

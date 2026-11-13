@@ -27,7 +27,7 @@ import {
   plainChatSave,
   plainChatSend,
 } from "../lib/plainChat";
-import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived } from "../lib/savedChats";
+import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived, setChatGroup, setChatPinned } from "../lib/savedChats";
 import {
   acceptEvent,
   acceptOutcome,
@@ -608,6 +608,26 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     void refresh();
   };
 
+  const pin = async (id: string, pinned: boolean) => {
+    try {
+      await setChatPinned(id, pinned);
+    } catch (e) {
+      active.current.error = String(e);
+      changed(active.current);
+    }
+    void refresh();
+  };
+
+  const move = async (id: string, groupId: string | null) => {
+    try {
+      await setChatGroup(id, groupId);
+    } catch (e) {
+      active.current.error = String(e);
+      changed(active.current);
+    }
+    void refresh();
+  };
+
   const preview = useCallback(
     (calls: PendingToolCall[]) => plainChatPreview(kubeFor(active.current, lastKubeconfig), calls),
     [lastKubeconfig],
@@ -649,6 +669,9 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     draft: current.draft,
     remove,
     archive,
+    pin,
+    move,
+    refresh,
   };
 }
 

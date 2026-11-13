@@ -109,6 +109,8 @@ pub enum GitChangesError {
     InvalidPath(String),
     #[error("the commit message is empty")]
     EmptyMessage,
+    #[error("not a commit, branch or tag: {0}")]
+    UnknownRef(String),
     #[error("nothing is staged to commit")]
     NothingStaged,
     #[error("git user.name and user.email are not set; set them with git config")]

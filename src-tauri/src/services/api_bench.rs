@@ -351,7 +351,6 @@ fn run_task(session: &LlmSession, task: &Task, limit: Duration) -> Run {
         mongo: None,
         http: Some(Arc::clone(&http)),
         deepseek: None,
-        knowledge: None,
         // As the user has it: the HTTP client on, and nothing else of the Catalog.
         features: Features::from_settings(&[("http-client".to_string(), true)].into()),
     };

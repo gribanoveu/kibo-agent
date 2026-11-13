@@ -25,6 +25,10 @@ pub struct FeatureView {
     pub tools: Vec<FeatureTool>,
     /// Whether the model gets them while the feature is on.
     pub tools_on: bool,
+    /// Whether Fix also selects the corrected text's dominant system keyboard layout.
+    pub layout_switch_on: bool,
+    /// The native switch exists on macOS and Windows; the Catalog hides it elsewhere.
+    pub layout_switch_supported: bool,
     /// Where the model is given them: a chat's role, a mode in a folder.
     pub places: Vec<String>,
     /// Its file, as a path under the home folder reads; `None` for a feature with none.
@@ -60,6 +64,12 @@ pub fn set(id: &str, on: bool) -> Result<(), FeatureError> {
 pub fn set_tools(id: &str, on: bool) -> Result<(), FeatureError> {
     let feature = Feature::from_id(id).ok_or_else(|| FeatureError::Unknown(id.to_string()))?;
     settings_store::update(|s| s.feature_tools.set_enabled(feature.manifest().id, on))?;
+    Ok(())
+}
+
+/// Whether Fix also selects the corrected text's dominant system keyboard layout.
+pub fn set_layout_switch(on: bool) -> Result<(), FeatureError> {
+    settings_store::update(|s| s.layout_correction_switch = on)?;
     Ok(())
 }
 
@@ -110,6 +120,8 @@ fn views(settings: &AppSettings, app_dir: Option<&Path>) -> Vec<FeatureView> {
                 on: on.is_on(feature),
                 tools,
                 tools_on: settings.feature_tools.is_enabled(manifest.id),
+                layout_switch_on: settings.layout_correction_switch,
+                layout_switch_supported: crate::infra::keyboard_layout::SUPPORTED,
                 places: places(manifest.tools),
                 data: manifest.data.map(|file| format!("~/.kibo/{file}")),
                 has_data: data_path(feature, app_dir).is_some_and(|path| path.exists()),
@@ -180,6 +192,18 @@ mod tests {
             set_tools("mongodb", true).unwrap();
             assert!(enabled().offers(ToolName::Mongo));
             assert!(set_tools("nope", false).is_err());
+        });
+    }
+
+    #[test]
+    fn the_layout_switch_is_off_until_chosen_and_its_choice_is_saved() {
+        crate::testing::with_app_dir("features-layout-switch", || {
+            let current = || list().into_iter().find(|f| f.id == "layout-correction").unwrap();
+            assert!(!current().layout_switch_on);
+            set_layout_switch(true).unwrap();
+            assert!(current().layout_switch_on);
+            set_layout_switch(false).unwrap();
+            assert!(!current().layout_switch_on);
         });
     }
 

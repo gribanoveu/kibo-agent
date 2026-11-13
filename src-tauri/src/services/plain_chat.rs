@@ -52,8 +52,6 @@ pub struct ChatTurn<'a> {
     pub http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>,
     /// DeepSeek's search and page reader, while that feature is on.
     pub deepseek: Option<Web>,
-    /// The knowledge base's search, for a role that reads it, while that feature is on.
-    pub knowledge: Option<crate::domain::tools::CodeSearchFn>,
     /// The features the user has on.
     pub features: crate::domain::features::Features,
 }
@@ -143,14 +141,13 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         take_steering: &take_steering,
         notes_typed: &|| 0,
         search: None,
-        knowledge: chat.knowledge.clone(),
-        knowledge_overview: None,
         skills: &[],
         rules: &[],
         frozen: None,
         log_call: chat.log_call,
         plan: None,
         worktree_of: None,
+        chat_head: None,
         mcp: &mcp,
         hooks: &hooks,
         processes: None,
@@ -237,7 +234,6 @@ mod tests {
         mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
         http: Option<Arc<dyn crate::domain::http_client::HttpStands>>,
         features: crate::domain::features::Features,
-        knowledge: Option<crate::domain::tools::CodeSearchFn>,
     }
 
     fn chat(replies: Vec<ChatStreamResult>, language: Option<&'static str>) -> Chat {
@@ -265,7 +261,6 @@ mod tests {
             mongo: None,
             http: None,
             features: Default::default(),
-            knowledge: None,
         }
     }
 
@@ -291,7 +286,6 @@ mod tests {
                 board: self.board.clone(),
                 mongo: self.mongo.clone(),
                 http: self.http.clone(),
-                knowledge: self.knowledge.clone(),
                 deepseek: None,
                 features: self.features.clone(),
             })
@@ -352,22 +346,6 @@ mod tests {
         let offered: Vec<String> = chat.asked()[0].tools.iter().map(|t| t.name.clone()).collect();
         assert_eq!(offered, ["httpEnvironment", "httpSend", "httpReadRequest", "httpSaveRequest", "httpDraftScript"]);
         assert!(tool_result(&done.history).starts_with("GET {{baseUrl}}/orders/1 → 200"), "{}", tool_result(&done.history));
-    }
-
-    /// The Assistant with the knowledge base on: told of it, offered its
-    /// three readers, and its search is the one that answers the call.
-    #[test]
-    fn the_assistant_searches_the_knowledge_base_while_it_is_on() {
-        let mut chat = chat(vec![calls("knowledgeSearch", r#"{"query":"billing topics"}"#), said("Nothing there.")], None);
-        chat.features = crate::domain::features::Features::from_settings(&[("knowledge".to_string(), true)].into());
-        chat.knowledge = Some(Arc::new(|_, _, _, _| Err("the base answered".into())));
-        let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("какие топики у биллинга?")]));
-
-        let asked = &chat.asked()[0];
-        let offered: Vec<String> = asked.tools.iter().map(|t| t.name.clone()).collect();
-        assert_eq!(offered, ["knowledgeSearch", "knowledgeRead", "knowledgeRelations"]);
-        assert!(asked.messages.iter().any(|m| m.content.as_deref() == Some(crate::domain::prompt::CHAT_KNOWLEDGE)));
-        assert!(tool_result(&done.history).contains("the base answered"), "{}", tool_result(&done.history));
     }
 
     /// The board turned off since: a call from memory is refused before it

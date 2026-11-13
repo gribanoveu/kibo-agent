@@ -3259,6 +3259,7 @@ dependencies = [
  "block2",
  "chrono",
  "cookie_store",
+ "core-foundation 0.10.1",
  "cpal",
  "dirs 7.0.0",
  "dom_query 0.28.0",

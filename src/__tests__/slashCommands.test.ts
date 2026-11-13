@@ -175,16 +175,6 @@ describe("the /init prompt", () => {
   });
 });
 
-const analyzePrompt = (await import("../prompts/analyze.md", { with: { type: "text" } })).default as string;
-
-describe("the /analyze prompt", () => {
-  test("is a prompt with one place for the focus and the domain", () => {
-    expect(analyzePrompt.startsWith("---")).toBe(false);
-    expect(analyzePrompt.split("$ARGUMENTS")).toHaveLength(2);
-    expect(expandTemplate(analyzePrompt, "тариф --domain usn")).toContain("(may be empty): тариф --domain usn\n");
-  });
-});
-
 describe("a command's prompt and the reply language", () => {
   // The prompt is the app's words; what the user typed — the one thing in
   // their language — is not what the model gets, so the prompt says it.
@@ -257,12 +247,11 @@ describe("the app's own commands", () => {
   const actions = {
     compact: () => ran.push("compact"),
     fork: () => ran.push("fork"),
-    review: (handed: boolean) => ran.push(handed ? "review:handed" : "review"),
+    review: (args: string) => ran.push(`review:${args}`),
     init: (args: string) => ran.push(`init:${args}`),
-    analyze: (args: string) => ran.push(`analyze:${args}`),
     trust: () => ran.push("trust"),
   };
-  const ready = { busy: false, started: true, folder: true, agentMode: true, knowledge: true };
+  const ready = { busy: false, started: true, folder: true, agentMode: true };
   const why = (state: Partial<Parameters<typeof builtInCommands>[0]>) =>
     Object.fromEntries(
       builtInCommands({ ...ready, ...state }, actions).map((c) => [
@@ -273,32 +262,31 @@ describe("the app's own commands", () => {
 
   /// Each says why it cannot run, in its place in the menu.
   test("say why they cannot run now", () => {
-    expect(why({})).toEqual({ compact: null, fork: null, review: null, init: null, analyze: null, trust: null });
+    expect(why({})).toEqual({ compact: null, fork: null, review: null, init: null, trust: null });
     const running = why({ busy: true });
-    expect([running.compact, running.fork, running.review, running.init, running.analyze]).toEqual(Array(5).fill("Not while a turn is running"));
+    expect([running.compact, running.fork, running.review, running.init]).toEqual(Array(4).fill("Not while a turn is running"));
     expect(running.trust).toBeNull();
     expect(why({ started: false }).fork).toBe("Nothing to fork yet");
-    expect(why({ folder: false })).toMatchObject({ review: "Open a folder first", analyze: "Open a folder first", trust: "Open a folder first" });
+    expect(why({ folder: false })).toMatchObject({ review: "Open a folder first", trust: "Open a folder first" });
     expect(why({ agentMode: false })).toMatchObject({
       init: "Switch to Agent mode — it writes files",
-      analyze: "Switch to Agent mode — it writes to the knowledge base",
     });
-    expect("analyze" in why({ knowledge: false })).toBe(false);
   });
 
   test("run what they are given, init with what was typed after it", () => {
     ran.length = 0;
     for (const command of builtInCommands(ready, actions)) command.run("docs only");
-    expect(ran).toEqual(["compact", "fork", "review", "init:docs only", "analyze:docs only", "trust"]);
+    expect(ran).toEqual(["compact", "fork", "review:docs only", "init:docs only", "trust"]);
   });
 
-  /// `/review send-result-to-agent` hands the findings to the agent; anything else leaves them to the user.
-  test("review hands its findings to the agent only when told to", () => {
+  /// What is typed after `/review` names where the review starts — a branch,
+  /// tag or commit passed to the tool as `from`.
+  test("review passes what was typed as its from", () => {
     ran.length = 0;
     const review = builtInCommands(ready, actions).find((c) => c.name === "review")!;
-    review.run(" send-result-to-agent ");
+    review.run(" main ");
     review.run("");
-    expect(ran).toEqual(["review:handed", "review"]);
-    expect(review.argumentHint).toBe("[send-result-to-agent]");
+    expect(ran).toEqual(["review: main ", "review:"]);
+    expect(review.argumentHint).toBe("[from]");
   });
 });

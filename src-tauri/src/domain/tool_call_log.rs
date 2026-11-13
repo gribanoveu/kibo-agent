@@ -42,8 +42,6 @@ pub const CONTENT_FIELDS: &[&str] = &[
     "output",
     // skill
     "instructions",
-    // knowledgeWrite: whole documents, written from code that was read
-    "documents",
 ];
 
 pub const REDACTED: &str = "<redacted>";
@@ -302,40 +300,6 @@ mod tests {
                 Some(ToolCall::Remember(crate::domain::tools::RememberArgs { fact: "bench needs --release".into() })),
                 ToolResult::Remembered { already: false },
             ),
-            ToolName::KnowledgeWrite => (
-                Some(ToolCall::KnowledgeWrite(crate::domain::tools::KnowledgeWriteArgs {
-                    documents: Some(vec![LEAK.into()]),
-                    delete: Some(vec!["tax-api/old".into()]),
-                    new_domains: vec![],
-                })),
-                ToolResult::KnowledgeWritten { repo: "tax-api".into(), written: vec!["tax-api/a".into()], deleted: vec![], new_domains: vec![] },
-            ),
-            ToolName::KnowledgeSearch => (
-                Some(ToolCall::KnowledgeSearch(crate::domain::tools::KnowledgeSearchArgs { query: "tax events".into(), ..Default::default() })),
-                ToolResult::KnowledgeFound {
-                    hits: vec![crate::domain::knowledge::KnowledgeHit {
-                        id: "tax-api/events".into(),
-                        domain: "usn".into(),
-                        title: "Events".into(),
-                        kind: crate::domain::knowledge::Kind::Event,
-                        confidence: crate::domain::knowledge::Confidence::Confirmed,
-                        section: Some("Формат".into()),
-                        text: LEAK.into(),
-                        evidence: vec!["src/a.rs#L1".into()],
-                        stale: false,
-                    }],
-                    weak: false,
-                },
-            ),
-            // Contract names, ids and titles: what documents are, not what they say.
-            ToolName::KnowledgeRelations => (
-                Some(ToolCall::KnowledgeRelations(crate::domain::tools::KnowledgeRelationsArgs { entity: Some("topic: t".into()), repo: None })),
-                ToolResult::KnowledgeRelations { asked: "`topic: t`".into(), relations: vec![] },
-            ),
-            ToolName::KnowledgeRead => (
-                Some(ToolCall::KnowledgeRead(crate::domain::tools::KnowledgeReadArgs { id: "tax-api/events".into(), section: None })),
-                ToolResult::KnowledgeDocument { id: "tax-api/events".into(), domain: "usn".into(), section: None, text: LEAK.into(), stale: false },
-            ),
             // The reason is the model's own words, shown on the button.
             ToolName::Offer => (
                 Some(ToolCall::Offer(crate::domain::tools::OfferArgs { kind: crate::domain::tools::OfferKind::Review, reason: "the lock".into() })),
@@ -397,6 +361,11 @@ mod tests {
             ToolName::Explore => (
                 Some(ToolCall::Explore(ExploreArgs { task: "where is X".into(), fork: false })),
                 ToolResult::Explored { text: LEAK.into(), agent: 1, tokens: Default::default() },
+            ),
+            // The range is the caller's own words; the report is the review's.
+            ToolName::Review => (
+                Some(ToolCall::Review(ReviewArgs { from: Some("main".into()), to: None, focus: None })),
+                ToolResult::Reviewed { findings: vec![], text: LEAK.into(), range: "main → working tree".into(), agent: 1, tokens: Default::default() },
             ),
             ToolName::Skill => (
                 Some(ToolCall::Skill(SkillArgs { name: "release".into(), path: None })),

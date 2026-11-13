@@ -3,7 +3,7 @@
 .sidebar {
   width: var(--sidebar-width, 248px);
   flex: 0 1 auto;
-  min-width: 180px;
+  min-width: 228px;
   position: relative;
   background: var(--bg-box);
   border-radius: var(--radius-panel);
@@ -42,6 +42,10 @@
 /* The chats' search: the mode's list, narrowed as it is typed. */
 .sidebar-search {
   flex: 0 0 100%;
+  /* The field's own content — its input's intrinsic width — is wider than a
+     narrow rail, and as a flex item's automatic minimum that would hold the
+     field past the panel's edge instead of letting it follow the 100%. */
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -135,16 +139,27 @@
   flex: 1;
   justify-content: center;
   height: var(--control-sm);
+  /* Narrow rail: the two share the panel, and a label too long for its half is
+     cut at the frame rather than pushing the pair past the edge. */
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-box-hint);
 }
-.mode-switch:not(.sidebar-pages) .mode-opt:hover {
-  background: none;
+/* A segment the pointer is over pays its way without pinching the pill: the
+   one in use is already saying what it is. */
+.mode-switch:not(.sidebar-pages) .mode-opt:not(.active):hover {
+  background: color-mix(in srgb, var(--bg-panel) 55%, transparent);
   color: var(--text);
 }
 .mode-switch:not(.sidebar-pages) .mode-opt.active {
   background: var(--bg-panel);
   box-shadow: var(--shadow-raised);
   color: var(--text);
+}
+/* The icon sits with the accent rather than in it: enough to belong to the
+   chosen mode, grey enough not to shout beside the word. */
+.mode-switch:not(.sidebar-pages) .mode-opt.active svg {
+  color: color-mix(in srgb, var(--accent) 50%, var(--text-dim));
 }
 .sidebar-pages .mode-opt {
   height: var(--control);
@@ -253,6 +268,12 @@
 .chat .chat-activity {
   color: var(--text-faint);
 }
+/* The pin is a filing mark like the archive icon, standing at the row's
+   right edge — the title flexes, the pin stays put. */
+.chat .chat-pin {
+  margin-left: auto;
+  color: var(--text-faint);
+}
 .chat .chat-activity-running {
   color: var(--accent);
   animation: chat-activity-spin 0.9s linear infinite;
@@ -354,6 +375,90 @@
 }
 .chat-row.archived > .chat:not(:hover):not(.active) {
   color: var(--text-faint);
+}
+
+/* A folder's heading on the day's sticky line: the collapse toggle with the
+   name and count, and its own menu — always shown, a folder is not a hover.
+   The toggle keeps the day's padding, so a folder's name sits on the same
+   left edge as Today and Pinned above it. */
+.chat-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+}
+/* The same ⋮ the chat rows wear: same size, same right edge, the dots land
+   on the same line down the column. */
+.chat-folder-head .chat-menu-button {
+  width: 24px;
+  height: 24px;
+}
+.chat-folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.chat-folder-toggle:hover {
+  color: var(--text);
+}
+.chat-folder-toggle svg {
+  flex: none;
+  color: var(--text-faint);
+}
+/* The collapse chevron stands at the row's end, past the count. */
+.chat-folder-toggle .chat-folder-chev {
+  margin-left: auto;
+  transition: transform 0.15s ease;
+}
+.chat-folder-toggle .chat-folder-chev.chat-folder-open {
+  transform: rotate(90deg);
+}
+.chat-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-folder-count {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.chat-folder-empty {
+  padding: 4px 12px 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+
+/* The folder-name field and the refusal, kept in the dialog. */
+.sidebar-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.sidebar-field input {
+  height: var(--control);
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-box);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-family: inherit;
+}
+.sidebar-field-error {
+  margin: 8px 0 0;
+  color: var(--red);
+  font-size: var(--fs-sm);
 }
 
 .sidebar-delete-text {

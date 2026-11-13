@@ -244,6 +244,8 @@ pub struct AppSettings {
     /// Features whose tools the model is not given, by id. The feature stays
     /// on, with its page: a MongoDB page with no `mongo` in the chat.
     pub feature_tools: OptOut,
+    /// After a wrong-layout Fix, select the corrected text's dominant keyboard layout.
+    pub layout_correction_switch: bool,
     /// A call recorded on the Meetings page is transcribed as soon as it is
     /// stopped; off, it waits in the list for Transcribe (`docs/36`).
     pub meeting_auto_process: bool,

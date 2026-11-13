@@ -3162,7 +3162,6 @@ mod tests {
             mongo: None,
             http: Some(http),
             deepseek: None,
-            knowledge: None,
             // As the user has it: the HTTP client on, and nothing else of the Catalog.
             features: Features::from_settings(&[("http-client".to_string(), true)].into()),
         };

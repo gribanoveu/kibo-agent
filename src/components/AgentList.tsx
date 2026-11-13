@@ -1,6 +1,6 @@
 import { ChevronRight, Square } from "lucide-react";
 import { type AgentInfo, agentStatus, briefTitle, splitStep } from "../lib/agents";
-import type { AgentFocus } from "../lib/describeTool";
+import { toolLabel, type AgentFocus } from "../lib/describeTool";
 import "./AgentList.css";
 
 type Props = {
@@ -36,7 +36,7 @@ export function AgentList({ agents, error, onStop, onOpen }: Props) {
               <button type="button" className="agent-open" title={a.task} onClick={() => onOpen({ id: a.id, task: a.task })}>
                 <span className="agent-dot" aria-hidden />
                 <span className="agent-title">{briefTitle(a.task)}</span>
-                <span className="agent-now">{running ? (now ? splitStep(now).tool : "thinking") : agentStatus(a.state)}</span>
+                <span className="agent-now">{running ? (now ? toolLabel(splitStep(now).tool) : "thinking") : agentStatus(a.state)}</span>
                 <ChevronRight className="agent-chev" size={13} aria-hidden />
               </button>
               {running && (

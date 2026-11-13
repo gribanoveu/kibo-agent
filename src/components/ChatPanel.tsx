@@ -39,7 +39,6 @@ import {
   RotateCcw,
   Undo2,
   MousePointerClick,
-  Library,
 } from "lucide-react";
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard, ReviewReport } from "./ReviewCard";
@@ -58,7 +57,8 @@ import { CopyAction } from "./CopyAction";
 import { ImageThumbs } from "./ImageThumbs";
 import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
-import { describeActive, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
+import { describeActive, describeHelperStep, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
+import { type AgentTokens, tokensSpent } from "../lib/agents";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
@@ -90,10 +90,6 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   "DeepSeek page": Globe,
   Search: Search,
   Memory: NotebookPen,
-  Knowledge: Library,
-  "Knowledge search": Library,
-  "Knowledge doc": Library,
-  "Knowledge links": Library,
   Plan: ScrollText,
   Offer: SearchCheck,
   Review: SearchCheck,
@@ -242,6 +238,68 @@ function ToolRow({
 }
 
 const previewInOpenWorkspace: PreviewCalls = (calls) => previewCalls("", calls);
+
+/**
+ * A helper run — a `review` or an `explore` — as one card, the way a
+ * background process is: what it was asked, what it is doing now, how it
+ * stands. While it runs, the second line is its current step; a click
+ * unfolds the steps so far, a settled one its answer, with its run in the
+ * Agents tab a link away.
+ */
+function SubagentCard({
+  block,
+  onOpenAgent,
+}: {
+  block: Extract<Block, { kind: "tool" }>;
+  onOpenAgent?: OpenAgent;
+}) {
+  const [open, setOpen] = useState(false);
+  const shown = describeTool(block);
+  const running = block.status === "running";
+  // A helper's steps are its output, one line each; the last one is what it
+  // is doing now. Held a moment each, so quick steps do not flicker past.
+  const steps = block.output.split("\n").filter(Boolean);
+  const now = useSteadyValue(running && steps.length > 0 ? describeHelperStep(steps[steps.length - 1]) : null, STEP_MS);
+  const tokens =
+    !block.error && block.result && typeof block.result === "object" ? (block.result as { tokens?: AgentTokens }).tokens : undefined;
+  const facts = [
+    steps.length > 0 ? `${steps.length} ${steps.length === 1 ? "step" : "steps"}` : "",
+    tokens ? tokensSpent(tokens) : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  // A call with no body of its own unfolds to its argument in full.
+  const detail = shown.detail || shown.arg;
+  const Icon = block.name === "review" ? SearchCheck : Telescope;
+  return (
+    <div className={`subagent-card ${block.status}${open ? " open" : ""}`}>
+      <button type="button" className="subagent-row" onClick={() => setOpen((v) => !v)}>
+        <span className="subagent-ico" aria-hidden>
+          <Icon size={14} />
+        </span>
+        <span className="subagent-body">
+          <span className="subagent-title">{block.name === "review" ? shown.name : shown.arg}</span>
+          <span className="subagent-meta">
+            {now && <span className="subagent-now">{now}</span>}
+            {facts && <span className="subagent-facts">{facts}</span>}
+          </span>
+        </span>
+        <span className="subagent-state">
+          {running && <Loader2 className="tool-run-spin" size={11} aria-hidden />}
+          {block.status}
+        </span>
+        <ChevronRight className="subagent-chev" size={13} aria-hidden />
+      </button>
+      {open && shown.agent && onOpenAgent && (
+        <button type="button" className="tool-open-agent" data-sheet-opener onClick={() => onOpenAgent(shown.agent!)}>
+          Show run
+          <ArrowUpRight size={12} aria-hidden />
+        </button>
+      )}
+      {open && detail && <pre className="tool-detail">{detail}</pre>}
+    </div>
+  );
+}
 
 function ApprovalCard({
   block,
@@ -599,9 +657,10 @@ function fold(blocks: Block[]): (Block | Run)[] {
   for (const block of blocks) {
     if (offerOf(block)) continue;
     const last = out[out.length - 1];
-    // A review stands alone while it runs and when it failed too: it is the turn.
-    const review = block.kind === "tool" && block.name === "review";
-    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block) || review || presentedOf(block)) {
+    // A helper — a review, an explore — stands alone, running, settled or
+    // failed: it is a run of its own, shown as its own card.
+    const helper = block.kind === "tool" && (block.name === "review" || block.name === "explore");
+    if ((block.kind !== "tool" && block.kind !== "reasoning") || findingOf(block) || helper || presentedOf(block)) {
       out.push(block);
     } else if (last?.kind === "run") {
       last.blocks.push(block);
@@ -1198,6 +1257,12 @@ function renderBlock(
       // So is a page put in front of the user.
       const presented = presentedOf(block);
       if (presented) return <PresentedCard key={block.id} page={presented} onOpen={onOpenVersion} />;
+      // A helper run is a card of its own, like a background process, not a
+      // row in the calls — a review here is the running or the failed one, a
+      // settled one stood as its report above.
+      if (block.name === "review" || block.name === "explore") {
+        return <SubagentCard key={block.id} block={block} onOpenAgent={onOpenAgent} />;
+      }
       return (
         <div className="tools" key={block.id}>
           <ToolRow block={block} onOpenProcess={onOpenProcess} onOpenAgent={onOpenAgent} />

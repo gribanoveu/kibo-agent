@@ -93,11 +93,6 @@ fn base_tools() -> HashSet<ToolName> {
         ToolName::GitBlame,
         ToolName::GitLog,
         ToolName::SemanticSearch,
-        // While the user has the knowledge base on (`domain::features`):
-        // what other repositories' agents wrote down, read.
-        ToolName::KnowledgeSearch,
-        ToolName::KnowledgeRelations,
-        ToolName::KnowledgeRead,
         ToolName::Skill,
         // A process's output is something to look at; one may still run
         // from an Agent turn before the mode changed.
@@ -152,10 +147,11 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 // Where the MCP tools are, so is the way to the deferred ones.
                 ToolName::ToolSearch,
                 ToolName::Explore,
+                // A change reviewed inside the turn, transparent like explore.
+                ToolName::Review,
                 ToolName::Remember,
                 // While the user has the feature on (`domain::features`).
                 ToolName::Board,
-                ToolName::KnowledgeWrite,
                 // Here and not in `base_tools`: with HC-8 it writes, and Analyst gets nothing that does.
                 ToolName::HttpEnvironment,
                 ToolName::HttpSend,
@@ -167,10 +163,9 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
         // Research handed off reads the same files, only somewhere else.
         // `remember` writes the agent's memory, not the tree: "remember
         // that" is something the user says in any mode they talk in — and
-        // "remind me", which is the board's. No `knowledgeWrite`: the base is
-        // what other repositories' agents read, not a place for an answer.
+        // "remind me", which is the board's.
         ConversationMode::Analyst => {
-            tools.extend([ToolName::Explore, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
+            tools.extend([ToolName::Explore, ToolName::Review, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
         }
         // Reading, running what proves something — a build, the tests — and
         // saying what is wrong. Nothing that writes a file: a review that
@@ -211,11 +206,13 @@ mod tests {
         }
     }
 
-    /// What Analyst has beyond every mode's reading, and nothing else.
+    /// What Analyst has beyond every mode's reading, and nothing else: a
+    /// helper's hand-offs (research, a review) and its own memory, board and
+    /// servers.
     #[test]
-    fn an_analyst_gets_the_helper_memory_board_and_servers() {
+    fn an_analyst_gets_the_helper_handoffs_memory_board_and_servers() {
         let mut expected = base_tools();
-        expected.extend([ToolName::Explore, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
+        expected.extend([ToolName::Explore, ToolName::Review, ToolName::Remember, ToolName::Board, ToolName::Mcp, ToolName::ToolSearch]);
         assert_eq!(tools(ConversationMode::Analyst), expected);
     }
 
@@ -235,6 +232,17 @@ mod tests {
             assert!(offers(mode, ToolName::Explore), "{mode:?}");
         }
         assert!(!offers(ConversationMode::Review, ToolName::Explore));
+    }
+
+    /// A review runs in the modes the user talks in — and not inside a
+    /// helper: no review of a review, none beside an explore.
+    #[test]
+    fn a_review_runs_in_picked_modes_and_not_inside_a_helper() {
+        for mode in picked() {
+            assert!(offers(mode, ToolName::Review), "{mode:?}");
+        }
+        assert!(!offers(ConversationMode::Explore, ToolName::Review));
+        assert!(!offers(ConversationMode::Review, ToolName::Review));
     }
 
     /// Looking at the user's terminal is reading; typing into it is not.
@@ -318,10 +326,10 @@ mod tests {
 
 
     /// A plan is a document and a list of steps, and the button that starts
-    /// it; a question needs none of them, and writes nothing to the base.
+    /// it; a question needs none of them.
     #[test]
     fn a_plan_is_agents_and_a_question_has_no_use_for_one() {
-        for tool in [ToolName::Todo, ToolName::WritePlan, ToolName::Offer, ToolName::KnowledgeWrite] {
+        for tool in [ToolName::Todo, ToolName::WritePlan, ToolName::Offer] {
             assert!(offers(ConversationMode::Agent, tool), "{tool:?}");
             assert!(!offers(ConversationMode::Analyst, tool), "{tool:?}");
         }

@@ -130,6 +130,11 @@
   color: var(--text-faint);
   font-size: var(--fs-xs);
 }
+.review-report-range {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
 .review-report-summary {
   margin: 2px 0 2px;
   color: var(--text-dim);

@@ -432,13 +432,6 @@ function applyEvent(state: TurnState, event: TurnEvent, now: number, model?: str
     case "hookFeedback":
       return appendNotice(state, hookNotice(event.payload));
 
-    case "wrapUpReminded":
-      // A review that went on long was asked to finish with what it has.
-      return appendNotice(
-        state,
-        `The review had spent ${event.payload.rounds} rounds and ~${Math.round(event.payload.tokens / 1000)}k tokens — the agent was asked to wrap up`,
-      );
-
     case "loopReminded":
       // The model was told it is going round in circles; the reader sees why
       // the next round changes course, or why it should have.

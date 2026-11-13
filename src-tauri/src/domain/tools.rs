@@ -55,17 +55,13 @@ pub enum ToolName {
     /// A research task handed to a read-only helper turn with a context of
     /// its own; only its answer comes back.
     Explore,
+    /// A change read by a helper turn in Review mode; its findings come back
+    /// in the result (`docs/49-review-as-a-tool.md`). Reads and reports —
+    /// it writes nothing itself.
+    Review,
     /// A note for later conversations in this folder, checked by the model
     /// before it is kept.
     Remember,
-    /// Documents about the open repository for the knowledge base, checked
-    /// like a note (`docs/40-knowledge-base.md`).
-    KnowledgeWrite,
-    /// The knowledge base searched, and one of its documents read.
-    KnowledgeSearch,
-    KnowledgeRead,
-    /// Who provides and who consumes a contract, across the base.
-    KnowledgeRelations,
     /// The Kubernetes role's reads of the cluster its chat is pinned to
     /// (`docs/21-kubernetes-mode.md`, K-3).
     KubeList,
@@ -163,11 +159,8 @@ impl ToolName {
         ToolName::ReportFinding,
         ToolName::Offer,
         ToolName::Explore,
+        ToolName::Review,
         ToolName::Remember,
-        ToolName::KnowledgeWrite,
-        ToolName::KnowledgeSearch,
-        ToolName::KnowledgeRead,
-        ToolName::KnowledgeRelations,
         ToolName::KubeList,
         ToolName::KubeGet,
         ToolName::KubeEvents,
@@ -227,11 +220,8 @@ impl ToolName {
             ToolName::ReportFinding => "reportFinding",
             ToolName::Offer => "offer",
             ToolName::Explore => "explore",
+            ToolName::Review => "review",
             ToolName::Remember => "remember",
-            ToolName::KnowledgeWrite => "knowledgeWrite",
-            ToolName::KnowledgeSearch => "knowledgeSearch",
-            ToolName::KnowledgeRead => "knowledgeRead",
-            ToolName::KnowledgeRelations => "knowledgeRelations",
             ToolName::KubeList => "kubeList",
             ToolName::KubeGet => "kubeGet",
             ToolName::KubeEvents => "kubeEvents",
@@ -287,7 +277,7 @@ impl ToolName {
     /// found with it first (`docs/43-single-loop.md`, Ш9). The wildcard is the
     /// point: a tool not listed here — a new one too — costs a request nothing
     /// until the model asks for it. Listed are the tools of first need, those
-    /// the prompt sends the model to by name (`remember`, `knowledgeRelations`),
+    /// the prompt sends the model to by name (`remember`),
     /// `toolSearch` itself, and the role and MCP placeholders, which never wait.
     pub fn loads_up_front(self) -> bool {
         matches!(
@@ -311,11 +301,9 @@ impl ToolName {
                 | ToolName::ReportFinding
                 | ToolName::Offer
                 | ToolName::Explore
+                // `/review` names the tool in the command's message.
+                | ToolName::Review
                 | ToolName::Remember
-                | ToolName::KnowledgeWrite
-                | ToolName::KnowledgeSearch
-                | ToolName::KnowledgeRead
-                | ToolName::KnowledgeRelations
                 | ToolName::KubeList
                 | ToolName::KubeGet
                 | ToolName::KubeEvents
@@ -388,9 +376,6 @@ impl ToolName {
             | ToolName::GitLog
             | ToolName::GitStatus
             | ToolName::SemanticSearch
-            | ToolName::KnowledgeSearch
-            | ToolName::KnowledgeRead
-            | ToolName::KnowledgeRelations
             | ToolName::Skill
             | ToolName::WritePlan
             | ToolName::ReadOutput
@@ -399,9 +384,10 @@ impl ToolName {
             | ToolName::ReportFinding
             | ToolName::Offer
             | ToolName::Explore
+            // Reads a change and reports; the helper's own commands are
+            // accounted by the rewind window, not a write here.
+            | ToolName::Review
             | ToolName::Remember
-            // The app's own folder, as `remember`; the tree is not touched.
-            | ToolName::KnowledgeWrite
             | ToolName::KubeList
             | ToolName::KubeGet
             | ToolName::KubeEvents
@@ -446,9 +432,6 @@ impl ToolName {
             | ToolName::GitStatus
             | ToolName::SemanticSearch
             | ToolName::Explore
-            | ToolName::KnowledgeSearch
-            | ToolName::KnowledgeRead
-            | ToolName::KnowledgeRelations
             | ToolName::WebSearch
             | ToolName::WebFetch
             | ToolName::DeepseekSearch
@@ -475,6 +458,9 @@ impl ToolName {
             | ToolName::WritePlan
             | ToolName::ReportFinding
             | ToolName::Offer
+            // One reviewer at a time: two in one reply are two helpers and
+            // two proving builds at once, which gains nothing.
+            | ToolName::Review
             // Change what the model sees or is told next.
             | ToolName::Skill
             | ToolName::ToolSearch
@@ -484,7 +470,6 @@ impl ToolName {
             | ToolName::ReadTerminal
             // Kept, after the model checks them.
             | ToolName::Remember
-            | ToolName::KnowledgeWrite
             | ToolName::Board
             | ToolName::Present
             // The cluster's reads wait on it and have a bench of their own to
@@ -532,9 +517,6 @@ impl ToolName {
             | ToolName::GitBlame
             | ToolName::GitLog
             | ToolName::SemanticSearch
-            | ToolName::KnowledgeSearch
-            | ToolName::KnowledgeRead
-            | ToolName::KnowledgeRelations
             | ToolName::WebSearch
             | ToolName::WebFetch
             | ToolName::DeepseekSearch
@@ -557,14 +539,17 @@ impl ToolName {
             | ToolName::Explore => true,
             // Anything at all; a command line is not a tool name.
             ToolName::RunCommand | ToolName::Mcp => false,
-            // The folder's memory file and the knowledge base, which stay.
-            ToolName::Remember | ToolName::KnowledgeWrite => false,
+            // The folder's memory file, which stays.
+            ToolName::Remember => false,
             // A stand, which a rewind does not reach: a write there stays.
             ToolName::HttpSend => false,
             // The user's collections, which a rewind does not reach: the case stays.
             ToolName::HttpSaveRequest => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
+            // Its helper may run commands to prove a finding (a build writes
+            // `target/`) — the rewind window counts the call, not skips it.
+            ToolName::Review => false,
             // A button under the answer; nothing outside the chat.
             ToolName::Offer => true,
             // The cluster, in a chat — no folder to rewind.
@@ -628,12 +613,6 @@ impl ToolName {
             // Indexed lookups and a scan of the vectors; the first search
             // after the model was unloaded also loads it (~0.35 s).
             ToolName::SemanticSearch => 2,
-            // The same search, after a sync that usually finds nothing new.
-            ToolName::KnowledgeSearch => 2,
-            // One small file.
-            ToolName::KnowledgeRead => 1,
-            // Every header of the base, which is small.
-            ToolName::KnowledgeRelations => 1,
             // Read, diff against the new content, write.
             ToolName::WriteFile | ToolName::EditFile => 2,
             // A rename. Atlas charged 2 because its `move` also rewrote
@@ -647,11 +626,10 @@ impl ToolName {
             // A whole turn of its own. That turn has its own ceiling, so this
             // only keeps a turn from delegating without end.
             ToolName::Explore => 5,
+            // A whole review helper turn, the same shape and ceiling.
+            ToolName::Review => 5,
             // A short request to the model, and a line appended.
             ToolName::Remember => 2,
-            // A short request to the model and a few files written, each
-            // evidence path read once.
-            ToolName::KnowledgeWrite => 2,
             // A request or two to the cluster; logs may be ten pods' worth.
             ToolName::KubeList
             | ToolName::KubeGet
@@ -896,7 +874,7 @@ mod tests {
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            58,
+            55,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1299,9 +1277,6 @@ pub struct ToolDeps<'a> {
     pub output: Option<crate::domain::command_exec::CommandSink>,
     /// The open folder's index; `None` when there is none.
     pub search: Option<CodeSearchFn>,
-    /// The knowledge base's index, for `knowledgeSearch`; `None` where the
-    /// app has none.
-    pub knowledge: Option<CodeSearchFn>,
     /// The skills this turn's prompt listed — the only ones `skill` loads,
     /// each from its own folder.
     pub skills: Vec<crate::domain::skills::Skill>,
@@ -1331,8 +1306,12 @@ pub struct ToolDeps<'a> {
     /// Runs `explore`'s task as a helper turn; `None` where there is no model
     /// to run it with.
     pub explore: Option<&'a dyn Fn(&ExploreArgs) -> Result<ToolResult, ToolError>>,
-    /// Asks the model whether text may be kept — a `remember` note, a
-    /// `knowledgeWrite`'s documents — under the tool's guard prompt, which
+    /// Runs `review`'s range as a helper turn in Review mode; `None` where
+    /// there is no model to run it with. The default is the readable refusal
+    /// a test wants, as with `explore`.
+    pub review_run: Option<&'a dyn Fn(&ReviewArgs) -> Result<ToolResult, ToolError>>,
+    /// Asks the model whether text may be kept — a `remember` note — under
+    /// the tool's guard prompt, which
     /// is answered SAVE or REFUSE; `Err` says why not, or why it could not be
     /// asked. `None` where there is no model.
     pub check: Option<&'a dyn Fn(&str, &str) -> Result<(), String>>,
@@ -1362,6 +1341,11 @@ pub struct ToolDeps<'a> {
     pub parallel: Option<&'a dyn Fn() -> Vec<String>>,
     /// The base recorded when this chat moved to its worktree.
     pub worktree_base: Option<&'a str>,
+    /// The commit `HEAD` pointed at when this chat was first saved — what a
+    /// review counts as this chat's work. `None` for a chat without the
+    /// marker; the offer of a review reads it so the button and the tool
+    /// plan on the same facts.
+    pub chat_head: Option<&'a str>,
     /// Whether the chat has a plan to implement: written this turn, or in the
     /// window with something in it.
     pub has_plan: bool,
@@ -1552,15 +1536,13 @@ pub enum ToolError {
     /// The helper turn ended without an answer.
     #[error("explore: {0}")]
     Explore(String),
+    /// The review could not be set up or run; the reason is the model's to
+    /// read and carry back to the user.
+    #[error("review: {0}")]
+    Review(String),
     /// A `remember` note that was not kept, and why.
     #[error("remember: {0}")]
     Memory(String),
-    /// Documents that were not written, and why — each one's reason.
-    #[error("knowledgeWrite: {0}")]
-    Knowledge(String),
-    /// A search or read of the knowledge base that could not be done.
-    #[error("{0}")]
-    KnowledgeRead(String),
     /// A change asked for while "Allow changes" is off. The switch
     /// is the user's; the model says what it would do and where to turn it on.
     #[error("read-only: this chat may not change the cluster. Tell the user what you would change, and that they can allow it by turning on \"Allow changes\" in the cluster panel under the message box.")]
@@ -1648,11 +1630,8 @@ pub enum ToolCall {
     ReportFinding(crate::domain::review::FindingArgs),
     Offer(OfferArgs),
     Explore(ExploreArgs),
+    Review(ReviewArgs),
     Remember(RememberArgs),
-    KnowledgeWrite(KnowledgeWriteArgs),
-    KnowledgeSearch(KnowledgeSearchArgs),
-    KnowledgeRead(KnowledgeReadArgs),
-    KnowledgeRelations(KnowledgeRelationsArgs),
     KubeList(KubeListArgs),
     KubeGet(KubeGetArgs),
     KubeEvents(KubeEventsArgs),
@@ -1711,11 +1690,8 @@ impl ToolCall {
             ToolCall::ReportFinding(_) => ToolName::ReportFinding,
             ToolCall::Offer(_) => ToolName::Offer,
             ToolCall::Explore(_) => ToolName::Explore,
+            ToolCall::Review(_) => ToolName::Review,
             ToolCall::Remember(_) => ToolName::Remember,
-            ToolCall::KnowledgeWrite(_) => ToolName::KnowledgeWrite,
-            ToolCall::KnowledgeSearch(_) => ToolName::KnowledgeSearch,
-            ToolCall::KnowledgeRead(_) => ToolName::KnowledgeRead,
-            ToolCall::KnowledgeRelations(_) => ToolName::KnowledgeRelations,
             ToolCall::KubeList(_) => ToolName::KubeList,
             ToolCall::KubeGet(_) => ToolName::KubeGet,
             ToolCall::KubeEvents(_) => ToolName::KubeEvents,
@@ -1987,32 +1963,6 @@ pub enum ToolResult {
     /// A note was kept — or was there already, word for word. The text is in
     /// the call's own arguments.
     Remembered { already: bool },
-    /// What one `knowledgeWrite` changed: the documents by id, as the
-    /// repository is named in the base, and the domains it added.
-    #[serde(rename_all = "camelCase")]
-    KnowledgeWritten {
-        repo: String,
-        written: Vec<String>,
-        deleted: Vec<String>,
-        new_domains: Vec<String>,
-    },
-    /// `knowledgeSearch`: the sections found, best first. `weak` when the
-    /// ranking itself doubts them.
-    KnowledgeFound {
-        hits: Vec<crate::domain::knowledge::KnowledgeHit>,
-        weak: bool,
-    },
-    /// `knowledgeRelations`: every document on a side of what was asked
-    /// about, by contract; `asked` says what that was.
-    KnowledgeRelations { asked: String, relations: Vec<crate::domain::knowledge::Relation> },
-    /// `knowledgeRead`: a document, or the one section asked for.
-    KnowledgeDocument {
-        id: String,
-        domain: String,
-        section: Option<String>,
-        text: String,
-        stale: bool,
-    },
     /// An MCP tool's answer, already text.
     Mcp { text: String },
     /// The helper turn's closing answer, which run it was — its number in
@@ -2022,15 +1972,17 @@ pub enum ToolResult {
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
     },
-    /// A review run as a helper over the uncommitted change: what it kept,
-    /// and its closing answer. `handed` when the findings went on to the
-    /// agent to go through, rather than to the user.
+    /// A review run as a helper over a change: what it kept and its closing
+    /// answer. The findings always come back in the conversation; what is
+    /// done about them is the calling turn's or the user's next message.
     Reviewed {
         findings: Vec<crate::domain::review::Finding>,
         text: String,
         agent: u32,
         tokens: crate::domain::agents::AgentTokens,
-        handed: bool,
+        /// Folder, refs and file selection; empty in results saved before R-0.
+        #[serde(default)]
+        range: String,
     },
     /// What a Kubernetes tool read, already shaped for the model — a table,
     /// YAML, a log — and a few words for the row in the transcript.
@@ -2573,24 +2525,26 @@ pub struct ExploreArgs {
     pub fork: bool,
 }
 
+/// `review`: what to review. `from` and `to` name the range's ends; left out,
+/// the app picks — uncommitted changes first, then this chat's work, then
+/// the branch against its upstream or base. `focus` is the caller's accent,
+/// one or two phrases, appended to the reviewer's brief as one line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewArgs {
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub focus: Option<String>,
+}
+
 /// `remember`: one fact for later conversations in this folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RememberArgs {
     pub fact: String,
-}
-
-/// `knowledgeWrite`: whole documents, Markdown with frontmatter; ids of the
-/// open repository's documents to remove; domains to add for them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgeWriteArgs {
-    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
-    pub documents: Option<Vec<String>>,
-    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
-    pub delete: Option<Vec<String>>,
-    #[serde(default)]
-    pub new_domains: Vec<crate::domain::knowledge::Domain>,
 }
 
 /// `present` arguments: the page, by its path in the chat's folder, and what
@@ -3160,41 +3114,6 @@ pub struct GitDiffArgs {
     /// a large change before asking for the files that matter.
     #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
     pub stat: Option<bool>,
-}
-
-/// `knowledgeRelations`: a contract by its exact name, or a repository whose
-/// contracts to follow; both narrow to that contract among the repository's.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgeRelationsArgs {
-    #[serde(default)]
-    pub entity: Option<String>,
-    #[serde(default)]
-    pub repo: Option<String>,
-}
-
-/// `knowledgeSearch`: a question, and where to look.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgeSearchArgs {
-    pub query: String,
-    #[serde(default)]
-    pub domain: Option<String>,
-    #[serde(default)]
-    pub repo: Option<String>,
-    #[serde(default)]
-    pub kind: Option<crate::domain::knowledge::Kind>,
-    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_usize")]
-    pub limit: Option<usize>,
-}
-
-/// `knowledgeRead`: a document by id, and optionally one of its sections.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgeReadArgs {
-    pub id: String,
-    #[serde(default)]
-    pub section: Option<String>,
 }
 
 /// `semanticSearch` arguments.

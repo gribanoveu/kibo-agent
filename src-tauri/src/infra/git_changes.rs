@@ -53,20 +53,32 @@ pub fn totals(root: &Path) -> Result<ChangeTotals, GitChangesError> {
 /// its tools where it needs to.
 pub const REVIEW_CONTEXT_LINES: u32 = 10;
 
-/// What a review reads: the working tree against HEAD, the index in between,
-/// new files included, renames found — each file with its patch from the
-/// first hunk on and the new side of every hunk. Paths are relative to the
-/// open folder, as the agent's tools name them, and only its changes count.
-pub fn review_diffs(root: &Path) -> Result<Vec<FileDiff>, GitChangesError> {
+/// What a review reads: the working tree against `HEAD`, the index in
+/// between, new files included, renames found — each file with its patch
+/// from the first hunk on and the new side of every hunk. `from` and `to`
+/// move the range off that default: `from: Some(rev)` diffs the tree `rev`
+/// names against the working tree, `to: Some(rev)` diffs two trees and the
+/// working tree is not part of it. Paths are relative to the open folder,
+/// as the agent's tools name them, and only its changes count.
+pub fn review_diffs(root: &Path, from: Option<&str>, to: Option<&str>) -> Result<Vec<FileDiff>, GitChangesError> {
     let repo = open(root)?;
-    let head = head_tree(&repo)?;
     let folder = folder_in_repo(&repo, root).filter(|folder| !folder.as_os_str().is_empty());
     let mut options = DiffOptions::new();
     options.show_untracked_content(true).recurse_untracked_dirs(true).context_lines(REVIEW_CONTEXT_LINES);
     if let Some(folder) = &folder {
         options.pathspec(folder);
     }
-    let mut diff = repo.diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut options)).map_err(git)?;
+    let old = match from {
+        Some(rev) => Some(rev_tree(&repo, rev)?),
+        None => head_tree(&repo)?,
+    };
+    let mut diff = match to {
+        None => repo.diff_tree_to_workdir_with_index(old.as_ref(), Some(&mut options)).map_err(git)?,
+        Some(rev) => {
+            let new = rev_tree(&repo, rev)?;
+            repo.diff_tree_to_tree(old.as_ref(), Some(&new), Some(&mut options)).map_err(git)?
+        }
+    };
     diff.find_similar(Some(git2::DiffFindOptions::new().renames(true))).map_err(git)?;
     let prefix = folder.as_ref().map(|f| format!("{}/", f.to_string_lossy().replace('\\', "/"))).unwrap_or_default();
     let shown = |path: Option<&Path>| {
@@ -369,6 +381,65 @@ fn head_tree(repo: &Repository) -> Result<Option<git2::Tree<'_>>, GitChangesErro
         Err(e) if e.code() == ErrorCode::UnbornBranch || e.code() == ErrorCode::NotFound => Ok(None),
         Err(e) => Err(git(e)),
     }
+}
+
+/// The tree `rev` names — a branch, tag, sha or an expression like
+/// `HEAD~1`. An unknown name is told apart from a git failure, so the caller
+/// can say "no such ref" with what to do about it.
+fn rev_tree<'a>(repo: &'a Repository, rev: &str) -> Result<git2::Tree<'a>, GitChangesError> {
+    repo.revparse_single(rev).map_err(|_| GitChangesError::UnknownRef(rev.to_string()))?.peel_to_tree().map_err(git)
+}
+
+/// What `review::plan` asks about the repository, read in one open: where
+/// `HEAD` is, whether the tree holds changes, the upstream `HEAD` is ahead
+/// of, the base of the range's far end, and where the chat's marker stands.
+/// `end` is the range's far end as named by the caller — `None` means
+/// `HEAD`, and only that case has an upstream.
+pub fn review_facts(root: &Path, end: Option<&str>, marker: Option<&str>) -> Result<crate::domain::review::ReviewFacts, GitChangesError> {
+    let repo = open(root)?;
+    // Bound before use: the references borrow `repo`.
+    let head = repo.head().ok().and_then(|head| head.target().map(|id| id.to_string()));
+    let uncommitted = match &head {
+        None => true,
+        Some(_) => totals(root)?.files > 0,
+    };
+    let far_end = match end {
+        Some(rev) => Some(repo.revparse_single(rev).map_err(|_| GitChangesError::UnknownRef(rev.to_string()))?.peel_to_commit().map_err(git)?.id()),
+        None => head.as_ref().and_then(|sha| sha.parse().ok()),
+    };
+    let upstream = upstream_tip(&repo, far_end)?;
+    let merge_base = far_end.and_then(|end| {
+        for candidate in ["origin/HEAD", "main", "master"] {
+            if let Some(commit) = repo.revparse_single(candidate).ok().and_then(|obj| obj.peel_to_commit().ok()) {
+                if let Ok(base) = repo.merge_base(end, commit.id()) {
+                    return Some(base.to_string());
+                }
+            }
+        }
+        None
+    });
+    let marker = marker.and_then(|sha| {
+        let commit = repo.revparse_single(sha).ok()?.peel_to_commit().ok()?;
+        let end = far_end?;
+        (end != commit.id() && repo.graph_descendant_of(end, commit.id()).unwrap_or(false)).then(|| commit.id().to_string())
+    });
+    Ok(crate::domain::review::ReviewFacts { head, uncommitted, upstream, merge_base, marker })
+}
+
+/// The upstream branch's tip, and only when the far end is strictly ahead of
+/// it; an unborn or upstream-less repository, and an explicit far end, read
+/// as no upstream.
+fn upstream_tip(repo: &Repository, end: Option<git2::Oid>) -> Result<Option<String>, GitChangesError> {
+    let (Some(end), Ok(head)) = (end, repo.head()) else { return Ok(None) };
+    if head.target() != Some(end) || !head.is_branch() {
+        return Ok(None);
+    }
+    let (Some(local), Ok(upstream)) = (head.target(), git2::Branch::wrap(head).upstream()) else {
+        return Ok(None);
+    };
+    let Some(remote) = upstream.get().target() else { return Ok(None) };
+    let (ahead, _) = repo.graph_ahead_behind(local, remote).map_err(git)?;
+    Ok((ahead > 0).then(|| remote.to_string()))
 }
 
 /// Each file of a diff with its added and removed lines; a binary file counts
@@ -715,7 +786,7 @@ mod tests {
         fs::write(dir.join("new/b.rs"), "fresh\n").unwrap();
         fs::write(dir.join("logo.bin"), [0u8, 1, 2, 0]).unwrap();
 
-        let files = review_diffs(&dir).unwrap();
+        let files = review_diffs(&dir, None, None).unwrap();
         let summary: Vec<(&str, &FileStatus, bool)> = files.iter().map(|f| (f.path.as_str(), &f.status, f.binary)).collect();
         assert_eq!(
             summary,
@@ -744,7 +815,7 @@ mod tests {
         commit(&dir, "first").unwrap();
         fs::write(dir.join("a.rs"), text("changed")).unwrap();
 
-        let files = review_diffs(&dir).unwrap();
+        let files = review_diffs(&dir, None, None).unwrap();
         let numbers: Vec<u32> = files[0].lines.iter().map(|l| l.number).collect();
         assert_eq!(numbers, (5..=25).collect::<Vec<_>>());
     }
@@ -755,8 +826,128 @@ mod tests {
         fs::create_dir(dir.join("app")).unwrap();
         fs::write(dir.join("app/x.rs"), "x\n").unwrap();
         fs::write(dir.join("root.rs"), "r\n").unwrap();
-        let files = review_diffs(&dir.join("app")).unwrap();
+        let files = review_diffs(&dir.join("app"), None, None).unwrap();
         assert_eq!(files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["x.rs"]);
-        assert_eq!(review_diffs(&temp_dir("git-review-plain")), Err(GitChangesError::NotARepository));
+        assert_eq!(review_diffs(&temp_dir("git-review-plain"), None, None), Err(GitChangesError::NotARepository));
+    }
+
+    /// A range named explicitly: `from` walks the working tree back to that
+    /// rev — committed and uncommitted both; `to` pins both ends to trees,
+    /// and the uncommitted state is not part of a commit-to-commit range.
+    #[test]
+    fn a_named_range_moves_the_review_off_head() {
+        let (dir, _repo) = repo();
+        fs::write(dir.join("a.rs"), "one\n").unwrap();
+        stage(&dir, &["a.rs".into()]).unwrap();
+        commit(&dir, "first").unwrap();
+        let first = crate::infra::git_head::current_commit(&dir).unwrap();
+
+        fs::write(dir.join("a.rs"), "one\ntwo\n").unwrap();
+        stage(&dir, &["a.rs".into()]).unwrap();
+        commit(&dir, "second").unwrap();
+        fs::write(dir.join("a.rs"), "one\ntwo\nthree\n").unwrap();
+
+        let since_first = review_diffs(&dir, Some(&first), None).unwrap();
+        let added: Vec<u32> = since_first[0].lines.iter().filter(|l| l.added).map(|l| l.number).collect();
+        assert_eq!(added, [2, 3], "against the first commit: the committed line and the uncommitted one");
+
+        let committed = review_diffs(&dir, Some(&first), Some("HEAD")).unwrap();
+        let added: Vec<u32> = committed[0].lines.iter().filter(|l| l.added).map(|l| l.number).collect();
+        assert_eq!(added, [2], "tree against tree: the uncommitted third line is not in it");
+
+        assert_eq!(
+            review_diffs(&dir, Some("no-such-ref"), None),
+            Err(GitChangesError::UnknownRef("no-such-ref".into()))
+        );
+    }
+
+    /// No commits yet: HEAD names an unborn branch, the tree counts as
+    /// "uncommitted", and a review reads the whole folder as new files.
+    #[test]
+    fn an_unborn_repository_reviews_everything_as_new() {
+        let (dir, _repo) = repo();
+        fs::write(dir.join("a.rs"), "one\n").unwrap();
+        let facts = review_facts(&dir, None, Some("any-marker")).unwrap();
+        assert_eq!(facts.head, None);
+        assert!(facts.uncommitted);
+        let files = review_diffs(&dir, None, None).unwrap();
+        assert_eq!(files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["a.rs"]);
+        assert!(matches!(files[0].status, FileStatus::Added));
+    }
+
+    /// What the plan asks, read from a real repository: the uncommitted
+    /// flag, the upstream only while HEAD is strictly ahead of it, the
+    /// marker only as a strict ancestor of the far end, the branch's base.
+    #[test]
+    fn review_facts_feed_the_plan() {
+        let (dir, repo) = repo();
+        fs::write(dir.join("a.rs"), "one\n").unwrap();
+        stage(&dir, &["a.rs".into()]).unwrap();
+        commit(&dir, "first").unwrap();
+        let first = crate::infra::git_head::current_commit(&dir).unwrap();
+        let facts = review_facts(&dir, None, Some(&first)).unwrap();
+        assert!(!facts.uncommitted);
+        assert_eq!(facts.marker, None, "HEAD itself is not its own ancestor");
+        assert_eq!(facts.upstream, None);
+        assert!(facts.merge_base.is_some(), "a sole branch reads as its own base");
+
+        fs::write(dir.join("a.rs"), "one\ntwo\n").unwrap();
+        assert!(review_facts(&dir, None, Some(&first)).unwrap().uncommitted);
+
+        // A sibling branch: a marker on it is not an ancestor of HEAD; a range
+        // that ends on the side branch starts where the chat started.
+        let c1 = repo.find_commit(first.parse().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree = c1.tree().unwrap();
+        let side = repo.commit(Some("refs/heads/side-r2"), &sig, &sig, "side", &tree, &[&c1]).unwrap();
+        let facts = review_facts(&dir, None, Some(&side.to_string())).unwrap();
+        assert_eq!(facts.marker, None, "a sibling branch is not on HEAD's history");
+        let facts = review_facts(&dir, Some("side-r2"), Some(&first)).unwrap();
+        assert_eq!(facts.marker.as_deref(), Some(first.as_str()), "of a range ending on the side branch, the chat's start is its start");
+
+        // An upstream behind HEAD: fact now, gone once the tip catches up.
+        fs::write(dir.join("a.rs"), "one\ntwo\n").unwrap();
+        stage(&dir, &["a.rs".into()]).unwrap();
+        commit(&dir, "second").unwrap();
+        let branch = crate::infra::git_head::current_branch(&dir).unwrap();
+        repo.remote("origin", "https://example.invalid/upstream.git").unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str(&format!("branch.{branch}.remote"), "origin").unwrap();
+        config.set_str(&format!("branch.{branch}.merge"), &format!("refs/heads/{branch}")).unwrap();
+        repo.reference(&format!("refs/remotes/origin/{branch}"), first.parse().unwrap(), false, "").unwrap();
+        let facts = review_facts(&dir, None, None).unwrap();
+        assert!(!facts.uncommitted);
+        assert_eq!(facts.upstream.as_deref(), Some(first.as_str()));
+        let head = crate::infra::git_head::current_commit(&dir).unwrap();
+        repo.reference(&format!("refs/remotes/origin/{branch}"), head.parse().unwrap(), true, "").unwrap();
+        assert_eq!(review_facts(&dir, None, None).unwrap().upstream, None, "caught up is not ahead");
+    }
+
+    /// A review in a linked worktree reads the worktree's own history: the
+    /// chat's marker (the main checkout's tip) is an ancestor of the
+    /// worktree's HEAD there, and the main checkout itself has no change.
+    #[test]
+    fn a_review_in_a_worktree_reads_the_worktree() {
+        let (dir, _repo) = repo();
+        fs::write(dir.join("a.rs"), "one\n").unwrap();
+        stage(&dir, &["a.rs".into()]).unwrap();
+        commit(&dir, "first").unwrap();
+        let base = crate::infra::git_head::current_commit(&dir).unwrap();
+        let branch = crate::infra::git_head::current_branch(&dir).unwrap();
+
+        let linked = crate::infra::git_branches::add_worktree(&dir, &branch, "review-wt", &temp_dir("git-review-wt-home")).unwrap();
+        fs::write(linked.join("a.rs"), "one\ntwo\n").unwrap();
+        stage(&linked, &["a.rs".into()]).unwrap();
+        commit(&linked, "worktree change").unwrap();
+
+        let facts = review_facts(&linked, None, Some(&base)).unwrap();
+        let planned = crate::domain::review::plan(None, None, &facts).unwrap();
+        assert_eq!(planned.why, crate::domain::review::RangeWhy::ChatWork, "the marker is where the worktree started");
+        let files = review_diffs(&linked, planned.from.as_deref(), planned.to.as_deref()).unwrap();
+        assert_eq!(files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["a.rs"]);
+        assert!(files[0].lines.iter().any(|l| l.added && l.text == "two"));
+
+        let main = review_diffs(&dir, Some(&base), None).unwrap();
+        assert!(main.is_empty(), "the main checkout has no change of its own");
     }
 }

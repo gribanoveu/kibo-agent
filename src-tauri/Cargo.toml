@@ -138,6 +138,7 @@ keyring = { version = "3", features = ["apple-native"] }
 # completion blocks. Tauri brings both already; named here to be called.
 objc2 = "0.6.4"
 block2 = "0.6.2"
+core-foundation = "0.10.1"
 
 # `sync-secret-service`: a blocking Secret Service client over dbus, since
 # there is no free async context here. `crypto-rust` encrypts the dbus

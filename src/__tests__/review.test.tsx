@@ -93,23 +93,22 @@ describe("the finding card", () => {
 });
 
 describe("the review in the transcript", () => {
-  test("a review asked to wrap up says so, with what it had spent", () => {
+  test("a review asked to wrap up says so on its card, not as a chat notice", () => {
     const state = acceptEvent(appendUserMessage(emptyTurn(), "/review", 1000), {
       turnId: "t",
       seq: 1,
       round: 11,
       type: "wrapUpReminded",
-      payload: { rounds: 10, tokens: 312_400 },
+      payload: { rounds: 10, tokens: 312_400, text: "[Review budget] This review has used 80% of its budget (10 of 60 rounds)" },
     });
-    expect(state.blocks[state.blocks.length - 1]).toMatchObject({
-      kind: "notice",
-      text: "The review had spent 10 rounds and ~312k tokens — the agent was asked to wrap up",
-    });
+    expect(state.blocks).toHaveLength(1);
+    expect(state.blocks[0]).toMatchObject({ kind: "user", text: "/review" });
   });
 });
 
 describe("a review a subagent ran", () => {
-  const card = (handed: boolean): Block => ({
+  const range = "/repo/.claude/worktrees/review-task · HEAD → working tree · 1 file reviewed · 1 left out (documentation)";
+  const card = (): Block => ({
     kind: "tool",
     id: "review",
     round: 0,
@@ -124,50 +123,52 @@ describe("a review a subagent ran", () => {
       text: "One real problem.",
       agent: 4,
       tokens: { prompt: 0, cached: 0, completion: 0 },
-      handed,
+      range,
     },
     output: "",
   });
 
-  test("its report: the findings, what the reviewer said, whose they are", () => {
-    expect(reviewOf(card(false))).toEqual({
+  test("its report: the findings, what the reviewer said and what it compared", () => {
+    expect(reviewOf(card())).toEqual({
       findings: [{ path: "src/pay.rs", startLine: 11, endLine: 11, severity: "high", category: "bug", title: "Divides by zero", body: "Panics.", suggestion: undefined } as Finding],
       summary: "One real problem.",
       agent: 4,
-      handed: false,
+      range,
     });
-    expect(reviewOf({ ...(card(false) as Tool), status: "failed", result: undefined, error: "nothing to review" })).toBeNull();
+    expect(reviewOf({ ...(card() as Tool), status: "failed", result: undefined, error: "nothing to review" })).toBeNull();
     expect(reviewOf(call())).toBeNull();
   });
 
   /// The report is what the work was for: it stands in the turn, not folded into the line of work.
-  test("stands on its own in the transcript", () => {
-    render(<Transcript turn={{ ...emptyTurn(), status: "done", blocks: [{ kind: "user", id: "u", text: "/review" }, card(false)] }} onDecide={() => {}} />);
+  test("stands on its own in the transcript and names the worktree it read", () => {
+    render(<Transcript turn={{ ...emptyTurn(), status: "done", blocks: [{ kind: "user", id: "u", text: "/review" }, card()] }} onDecide={() => {}} />);
     expect(screen.getByText("Divides by zero")).toBeTruthy();
+    expect(screen.getByText(range)).toBeTruthy();
   });
 
-  /// A review that failed is still the turn's one piece of work: its row stands alone, not folded away.
+  /// A review that failed is still the turn's one piece of work: its card stands alone, not folded away.
   test("a failed review stays in sight", () => {
-    const failed = { ...(card(false) as Tool), status: "failed" as const, result: undefined, error: "the review was stopped before it finished" };
+    const failed = { ...(card() as Tool), status: "failed" as const, result: undefined, error: "the review was stopped before it finished" };
     render(<Transcript turn={{ ...emptyTurn(), status: "done", blocks: [{ kind: "user", id: "u", text: "/review" }, failed] }} onDecide={() => {}} />);
     expect(document.querySelector(".tool-run")).toBeNull();
-    expect(document.querySelector(".tools")).toBeTruthy();
+    expect(document.querySelector(".subagent-card.failed")).toBeTruthy();
   });
 
-  /// The user's findings carry Fix; the agent's do not — it answers for them itself.
-  test("Fix on the user's findings, not on those handed to the agent", () => {
+  /// The findings are the user's to act on whenever they choose — Fix is on
+  /// each one, whoever the review was asked by.
+  test("Fix on every finding, always", () => {
     const fixed: string[] = [];
     const opened: number[] = [];
-    const mine = render(<ReviewReport review={reviewOf(card(false))!} onFix={(t) => fixed.push(t)} onOpenAgent={(a) => opened.push(a.id)} />);
+    const mine = render(<ReviewReport review={reviewOf(card())!} onFix={(t) => fixed.push(t)} onOpenAgent={(a) => opened.push(a.id)} />);
     expect(screen.getByText("1 finding")).toBeTruthy();
     expect(screen.getByText("One real problem.")).toBeTruthy();
+    expect(screen.queryByText(/handed to the agent/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Fix/ }));
     fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
     expect(fixed).toEqual(["Fix the finding from the review: Divides by zero (src/pay.rs:11)"]);
     expect(opened).toEqual([4]);
     mine.unmount();
-    render(<ReviewReport review={reviewOf(card(true))!} onFix={(t) => fixed.push(t)} />);
-    expect(screen.getByText(/handed to the agent/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Fix/ })).toBeNull();
+    render(<ReviewReport review={reviewOf(card())!} onFix={(t) => fixed.push(t)} />);
+    expect(screen.getByRole("button", { name: /Fix/ })).toBeTruthy();
   });
 });

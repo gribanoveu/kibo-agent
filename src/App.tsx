@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { AgentSheet } from "./components/AgentSheet";
+import { PlanSheet } from "./components/PlanSheet";
 import { Composer } from "./components/Composer";
 import { ProviderBalance } from "./components/ProviderBalance";
 import { PlainChat } from "./components/PlainChat";
@@ -27,6 +28,7 @@ import { useAgentTurn } from "./hooks/useAgentTurn";
 import { usePlainChat } from "./hooks/usePlainChat";
 import { usePrototypePreview } from "./hooks/usePrototypePreview";
 import { useChatHistory } from "./hooks/useChatHistory";
+import { useChatGroups } from "./hooks/useChatGroups";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useLlmSettings } from "./hooks/useLlmSettings";
 import { useKubeconfigs } from "./hooks/useKubeconfigs";
@@ -60,7 +62,7 @@ import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
-import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST } from "./lib/offer";
+import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
 import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedChats";
@@ -80,7 +82,7 @@ import { RewindDialog } from "./components/RewindDialog";
 import { useRewind } from "./hooks/useRewind";
 import { builtInCommands, expandTemplate, fileCommands, mcpPromptCommands, typedCommand } from "./lib/slashCommands";
 import initPrompt from "./prompts/init.md?raw";
-import analyzePrompt from "./prompts/analyze.md?raw";
+import reviewPrompt from "./prompts/review.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
@@ -232,13 +234,19 @@ export default function App() {
   // The terminal is not in the column: it opens under the message box, as wide
   // as the chat, so it needs no width of the window's own.
   const bottomShown = agentMode ? bottomTab : null;
-  const dockShown = !topHidden;
+  // The plan is read in a sheet over the chat (PlanSheet, in the chat below)
+  // rather than in the column: it asks the window for none of the width the
+  // column needs, so it opens wherever it fits, a narrow window included.
+  const planSheet = agentMode && !onPage && !asideHidden && tab === "plan";
+  // The column, and its handle: away while the plan's sheet has the corner.
+  const dockShown = !topHidden && !planSheet;
   const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame, ide })}px)`);
   const rail = collapsed || !sidebarFits;
   // On screen in either dock: what decides whether a pane's data is read.
   const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
   const toolLog = useToolLog(logOpen);
   const history = useChatHistory(workspace.path);
+  const chatGroups = useChatGroups(agentMode ? workspace.path : null);
   const [movedChat, setMovedChat] = useState<{ id: string; path: string } | null>(null);
   const movedChatOpened = useCallback(() => setMovedChat(null), []);
   // The list is redrawn from disk after every save rather than guessed at
@@ -299,7 +307,9 @@ export default function App() {
   });
 
   // Where each pane goes is `lib/docks.ts`'s rule; this only stores the answer.
-  const docks: Docks = { top: tab, topHidden, bottom: bottomShown, swap: ide };
+  // The plan's sheet asks for no room, so a narrow window is no reason for its
+  // key to think it is away: what the key toggles is the user's wish.
+  const docks: Docks = { top: tab, topHidden: planSheet ? false : topHidden, bottom: bottomShown, swap: ide };
   const putDocks = (next: Docks) => {
     setTab(next.top);
     setAsideHidden(next.topHidden);
@@ -307,8 +317,9 @@ export default function App() {
   };
   const setDocks = (next: Docks) => {
     // A pane asked for where the viewer leaves the column no room: the viewer
-    // gives way, or the pane would open out of sight.
-    if (!dockFits && !next.topHidden) viewer.closeAll();
+    // gives way, or the pane would open out of sight. The plan opens in a sheet
+    // over the chat, so it asks for none of that room.
+    if (!dockFits && !next.topHidden && next.top !== "plan") viewer.closeAll();
     putDocks(next);
   };
   // The tree is what the layout is for: it opens with it, in the dock now on the
@@ -397,15 +408,13 @@ export default function App() {
       started: agent.turn.blocks.length > 0,
       folder: !!workspace.path,
       agentMode: conversation.value === "agent",
-      knowledge: features.isOn("knowledge"),
     },
     {
       compact: () => void compactNow(),
       fork: () => agent.branch(),
-      review: (handed) => void agent.review(handed),
+      review: (args) => void send(typedCommand("review", args), expandTemplate(reviewPrompt, args)),
       // `send` is declared further down; the arrow reaches it when a command runs.
       init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
-      analyze: (args) => void send(typedCommand("analyze", args), expandTemplate(analyzePrompt, args)),
       trust: trust.ask,
     },
   );
@@ -487,7 +496,7 @@ export default function App() {
   };
 
   const pickOffer = async (kind: OfferKind) => {
-    if (kind === "review") return agent.review(true);
+    if (kind === "review") return send(REVIEW_REQUEST);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
     // Not `send`: that would drop the checklist the plan came with.
@@ -703,6 +712,9 @@ export default function App() {
             focus={composerFocus}
             // Not behind a page: the box is hidden there and the key would dictate into nothing to see.
             dictate={features.isOn("voice-input") && !onPage}
+            layoutCorrection={features.isOn("layout-correction") && !onPage}
+            switchLayoutAfterFix={features.layoutSwitch}
+            onLayoutCorrectionError={toast.show}
             // The box is this chat's: what was typed in another one waits there.
             draftKey={chatDraftKey("agent", agent.chatId)}
             onStop={agent.cancel}
@@ -740,12 +752,16 @@ export default function App() {
           {agentShown && agentShown.chatId === agent.chatId && (
             <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} onOpenFile={workspace.path ? openFileLink : undefined} />
           )}
+          {planSheet && <PlanSheet plan={panes.plan} onClose={() => setAsideHidden(true)} />}
         </>
       ) : (
         <PlainChat
           chat={plain}
           featureOn={features.isOn}
           dictate={features.isOn("voice-input") && !onPage}
+          layoutCorrection={features.isOn("layout-correction") && !onPage}
+          switchLayoutAfterFix={features.layoutSwitch}
+          onLayoutCorrectionError={toast.show}
           focus={composerFocus}
           models={llm.models}
           imagesEnabled={imagesEnabled}
@@ -836,7 +852,7 @@ export default function App() {
 
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${dockShown ? "" : " aside-hidden"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
@@ -889,11 +905,40 @@ export default function App() {
             setPage(next);
           }}
           chats={agentMode ? history.chats : plain.chats}
+          groups={chatGroups.groups}
+          groupScope={workspace.path}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
           onArchiveChat={(id, archived) =>
             agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
+          }
+          onPinChat={(id, pinned) =>
+            agentMode ? history.pin(id, pinned).catch((e) => toast.show(String(e))) : void plain.pin(id, pinned)
+          }
+          onMoveChat={(id, group) =>
+            agentMode ? history.move(id, group).catch((e) => toast.show(String(e))) : void plain.move(id, group)
+          }
+          onCreateGroup={async (name) => {
+            try {
+              return { id: (await chatGroups.create(name)).id };
+            } catch (e) {
+              return { error: String(e) };
+            }
+          }}
+          onRenameGroup={async (id, name) => {
+            try {
+              await chatGroups.rename(id, name);
+              return {};
+            } catch (e) {
+              return { error: String(e) };
+            }
+          }}
+          onDeleteGroup={(id) =>
+            void chatGroups.remove(id).then(
+              () => (agentMode ? history.refresh() : plain.refresh()),
+              (e) => toast.show(String(e)),
+            )
           }
           onDeleteChat={(id) => {
             if (!agentMode)
@@ -940,7 +985,7 @@ export default function App() {
           }
           viewer={fileViewer}
           top={topPane}
-          topShown={!topHidden}
+          topShown={dockShown}
           panels={panels}
         />
       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AppWindow, Globe, MessagesSquare, MousePointerClick, SendHorizontal, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
@@ -15,6 +15,7 @@ import { boxTakesPictures } from "../lib/images";
 import type { Pointed } from "../lib/prototype";
 import { useAttachments } from "../hooks/useAttachments";
 import { ImageThumbs } from "./ImageThumbs";
+import { LayoutCorrectionHint } from "./LayoutCorrectionHint";
 import { DictateButton } from "./DictateButton";
 import { ErrorNote } from "./ErrorNote";
 import { DictationLine } from "./VoiceWave";
@@ -24,6 +25,7 @@ import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useArrival } from "../hooks/useArrival";
 import { chatDraftKey, useChatDraft } from "../hooks/useChatDraft";
 import { useDictation } from "../hooks/useDictation";
+import { useLayoutCorrection } from "../hooks/useLayoutCorrection";
 import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import "./PlainChat.css";
 
@@ -79,10 +81,16 @@ type Props = {
     onUnpoint: () => void;
     /** Opens the panel on its pictures: some are being attached to a message. */
     onShowAssets: () => void;
-  };  /** Whether Voice input is on: its button, its key. */
+  };
+  /** Whether Voice input is on: its button, its key. */
   dictate?: boolean;
   /** Whether a Catalog feature is on: a role that needs one is listed only while it is. */
   featureOn: (id: string) => boolean;
+  /** Whether the wrong-layout hint is on. Corrections are never automatic. */
+  layoutCorrection?: boolean;
+  /** Whether Fix also selects the corrected prose's dominant system layout. */
+  switchLayoutAfterFix?: boolean;
+  onLayoutCorrectionError?: (message: string) => void;
 };
 
 
@@ -106,6 +114,9 @@ export function PlainChat({
   pages,
   dictate = false,
   featureOn,
+  layoutCorrection = false,
+  switchLayoutAfterFix = false,
+  onLayoutCorrectionError,
 }: Props) {
   // The box belongs to this chat, as the agent's does: what was typed here
   // waits here while another chat is open, and comes back with this one.
@@ -118,6 +129,15 @@ export function PlainChat({
   const input = useRef<HTMLTextAreaElement>(null);
   // The box measures itself on every change of the text, so there is nothing to tell it.
   const dictation = useDictation({ on: dictate, draftKey, text: draft, setText: setDraft, area: input, onChange: () => {} });
+  const correction = useLayoutCorrection({
+    on: layoutCorrection && !dictation.active,
+    text: draft,
+    setText: setDraft,
+    area: input,
+    draftKey,
+    switchLayout: switchLayoutAfterFix,
+    onError: onLayoutCorrectionError,
+  });
   /** A send waiting for a picture to be read: a second Enter is the same message, not a copy of it. */
   const waiting = useRef(false);
   const running = chat.turn.status === "running";
@@ -175,14 +195,34 @@ export function PlainChat({
   }, [pointed]);
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
   // The box fits what is in it, wherever it came from.
-  useEffect(() => {
+  const fit = useCallback(() => {
     const el = input.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
     el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
-  }, [draft]);
+  }, []);
+
+  useEffect(() => {
+    fit();
+  }, [draft, fit]);
+
+  // The column's width moves with the layout (IDE layout): a wrapped line keeps
+  // its second line, a freed one keeps the paid-for height, until the text
+  // changes — the width itself is what re-fits the box.
+  useEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const sized = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fit();
+    });
+    sized.observe(el);
+    return () => sized.disconnect();
+  }, [fit]);
 
   return (
     <>
@@ -260,7 +300,16 @@ export function PlainChat({
               value={draft}
               onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
               onChange={(e) => setDraft(e.target.value)}
+              onBlur={correction.check}
               onKeyDown={(e) => {
+                if (matches(e, "convertLayout") && correction.apply()) {
+                  e.preventDefault();
+                  return;
+                }
+                if (matches(e, "undo") && correction.undo()) {
+                  e.preventDefault();
+                  return;
+                }
                 if (matches(e, "send")) {
                   e.preventDefault();
                   void send();
@@ -291,6 +340,9 @@ export function PlainChat({
           </div>
           {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
         </section>
+        {correction.suggestion && (
+          <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />
+        )}
         {/* Under the box, where the agent's says which folder: here, who the
             model is. The chat's own settings go on this strip as they come. */}
         <div className="plain-tab">

@@ -204,6 +204,119 @@
   color: var(--text-faint);
 }
 
+/* A helper run — a review, an explore — as a card like the background process
+   above: what it was asked, what it is doing now, how it stands in the
+   badge's colour — accent while it runs, green settled, amber failed. A click
+   unfolds what it has done so far; its run in the Agents tab is a link away. */
+.subagent-card {
+  --state: var(--text-faint);
+  margin: 6px 0 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.subagent-card.running {
+  --state: var(--accent);
+}
+.subagent-card.done {
+  --state: var(--green);
+}
+.subagent-card.failed {
+  --state: var(--amber);
+}
+.subagent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+.subagent-row:hover {
+  background: var(--bg-hover);
+}
+.subagent-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--state) 14%, transparent);
+  color: var(--state);
+}
+.subagent-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.subagent-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subagent-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.subagent-now {
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subagent-facts {
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The separator only when the live step stands before the facts. */
+.subagent-now + .subagent-facts::before {
+  content: "·";
+  margin-right: 6px;
+}
+.subagent-state {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--state) 16%, transparent);
+  color: var(--state);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.subagent-chev {
+  flex: none;
+  color: var(--text-faint);
+  transition: transform 0.15s;
+}
+.subagent-card.open .subagent-chev {
+  transform: rotate(90deg);
+}
+.subagent-card .tool-open-agent {
+  margin-left: 10px;
+}
+.subagent-card .tool-detail {
+  margin: 0 10px 8px;
+}
+
 
 .thread {
   flex: 1;
