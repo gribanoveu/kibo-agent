@@ -1,8 +1,8 @@
 //! The bench for the API role (`docs/45-http-client.md`, HC-10d; A-6 of
-//! `docs/28-api-tester-role.md`): a stand with a bug planted against its spec,
-//! the user's Postman environment and collection for it, a request in the user's
-//! words, and a hidden check of the answer, of what reached the stand and of what
-//! the model read.
+//! `docs/28-api-tester-role.md`): a stand with a bug planted against its spec — or,
+//! for a draft task, one to write scripts against —, the user's Postman environment
+//! and collection for it, a request in the user's words, and a hidden check of the
+//! answer or the drafts, of what reached the stand and of what the model read.
 //!
 //! Ignored by default — a real model. The provider is `agent_bench`'s, from the
 //! same `AGENT_BENCH_*` variables (see the top of `agent_bench.rs`); the stands are
@@ -17,6 +17,11 @@
 //! Tasks live in `bench/api-tasks/` (see its README). Every run has an app
 //! directory and a stand of its own. Every approval card is approved — the user who
 //! clicks Allow without reading — so a write goes where the environment's mode lets it.
+//!
+//! A task with `"drafts": true` asks for script drafts instead of a verdict (HC-11e):
+//! its check reads the drafts the turn left, and each post-response one run again on
+//! a send of its request — the latest that succeeded at the path `on` names — with the
+//! stand's answer replaced: fixed, or wrong another way.
 //!
 //! `api_fixtures` runs no model: a model from each task's `fixtures.json` goes
 //! through the same turn, stand and check — untouched must fail, solved must pass,
@@ -34,13 +39,14 @@ use serde_json::{json, Value};
 use super::agent_bench::{cached_percent, session, var};
 use crate::domain::chat_role::ChatRole;
 use crate::domain::features::Features;
-use crate::domain::http_client::{AgentAccess, Environment, HttpStands};
+use crate::domain::http_client::{AgentAccess, Environment, HttpStands, Outcome};
+use crate::domain::http_draft::AgentDraft;
 use crate::domain::kube::KubeSetup;
 use crate::domain::llm::{ChatStreamResult, LlmMessage, LlmToolCall};
 use crate::domain::tool_call_log::{CallStatus, ToolCallLogEntry};
-use crate::domain::tools::ApprovalPolicy;
+use crate::domain::tools::{ApprovalPolicy, HttpDraftScriptArgs};
 use crate::domain::turn::{ChatEventPayload, ChatEventSink, ChatStreamOutcome, ChatTurnEvent};
-use crate::infra::http_env_store;
+use crate::infra::{http_collections, http_env_store};
 use crate::services::http_client::{import, script_states, set_scripts, ImportedAs, Stands};
 use crate::services::llm_session::LlmSession;
 use crate::services::plain_chat::{self, ChatTurn};
@@ -57,6 +63,19 @@ struct Task {
     access: AgentAccess,
     /// The collection's scripts are trusted, as by the user on the HTTP page.
     trust: bool,
+    /// Asks for script drafts, not a verdict: the check reads them.
+    drafts: bool,
+    /// By request id, the answers a post-response draft is run again on: `{name: {status, body | patch, renumber}}`.
+    variants: Value,
+    /// By request id, the path of the send its variants stand on, `{{name}}` the value given.
+    on: Value,
+}
+
+/// A URL's path, without its origin and query: `http://h:1/orders/5?x` is `/orders/5`.
+fn url_path(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let path = rest.find('/').map_or("", |i| &rest[i..]);
+    path.split(['?', '#']).next().unwrap_or(path)
 }
 
 fn tasks(root: &Path) -> Vec<Task> {
@@ -74,11 +93,16 @@ fn tasks(root: &Path) -> Vec<Task> {
                 Some("writesAsOtherTools") => AgentAccess::WritesAsOtherTools,
                 other => panic!("{}: access is readOnly, askForWrites or writesAsOtherTools, not {other:?}", dir.display()),
             };
+            let drafts = task["drafts"].as_bool().unwrap_or(false);
+            let asked = format!("{}\n\nThe spec:\n\n{}", task["prompt"].as_str().unwrap(), spec.trim());
             Task {
                 name: dir.file_name().unwrap().to_string_lossy().into_owned(),
-                prompt: format!("{}\n\nThe spec:\n\n{}\n\n{VERDICT}", task["prompt"].as_str().unwrap(), spec.trim()),
+                prompt: if drafts { asked } else { format!("{asked}\n\n{VERDICT}") },
                 access,
                 trust: task["trustScripts"].as_bool().unwrap_or(false),
+                drafts,
+                variants: task["variants"].clone(),
+                on: task["on"].clone(),
                 dir,
             }
         })
@@ -94,6 +118,8 @@ fn tasks(root: &Path) -> Vec<Task> {
 struct Fixture {
     stand: Child,
     state: PathBuf,
+    /// The environment's id, as imported.
+    environment: String,
 }
 
 impl Fixture {
@@ -109,7 +135,7 @@ impl Fixture {
             .spawn()
             .expect("python3 on the PATH");
         // Killed on drop from here on, a panic below included.
-        let mut fixture = Fixture { stand, state };
+        let mut fixture = Fixture { stand, state, environment: String::new() };
         let mut port = String::new();
         BufReader::new(fixture.stand.stdout.take().unwrap()).read_line(&mut port).unwrap();
         let port: u16 = port.trim().parse().unwrap_or_else(|_| panic!("{}: stand.py printed no port: {port:?}", task.name));
@@ -120,6 +146,7 @@ impl Fixture {
         let opened = Environment { agent: task.access, ..http_env_store::get(&id).unwrap() };
         http_env_store::delete(&id).unwrap();
         http_env_store::add(opened).unwrap();
+        fixture.environment = id;
         let ImportedAs::Collection { id, .. } = import(&read("collection.json")).unwrap() else { panic!("{}: collection.json is not a collection", task.name) };
         if task.trust {
             let hashes: Vec<String> = script_states(&id).unwrap().into_iter().flat_map(|s| s.hashes).collect();
@@ -127,6 +154,82 @@ impl Fixture {
             set_scripts(&id, &hashes, true).unwrap();
         }
         fixture
+    }
+
+    /// A draft task's drafts as the turn left them, to `drafts.json`; and each post-response
+    /// one run again on its send with the stand's answer replaced by each of the task's
+    /// variants for that request, with the values the model gave its last run — to
+    /// `reruns.json`. The send is copied into History under a new id, as the chat's.
+    fn rerun(&self, task: &Task, calls: &[ToolCallLogEntry], http: &dyn HttpStands) {
+        let drafts = http_collections::drafts().unwrap();
+        std::fs::write(self.state.join("drafts.json"), serde_json::to_string_pretty(&drafts).unwrap()).unwrap();
+        let history = http_collections::history().unwrap();
+        let mut reruns = Vec::new();
+        for draft in &drafts {
+            let Some(variants) = task.variants.get(&draft.request).and_then(Value::as_object) else { continue };
+            // The values of the call that left the draft: the last that did not fail — a failed
+            // one saves nothing. The log keeps a call as `{tool, args}`.
+            let variables = calls
+                .iter()
+                .rev()
+                .filter(|c| c.tool == "httpDraftScript" && c.status != CallStatus::Error)
+                .filter_map(|c| serde_json::from_value::<HttpDraftScriptArgs>(c.args["args"].clone()).ok())
+                .find(|a| a.request == draft.request && a.listen == draft.listen)
+                .map(|a| a.variables())
+                .unwrap_or_default();
+            // The send the variants stand on: the latest that succeeded at the task's path
+            // for the request, its `{{name}}`s the values given — not whichever the model ran
+            // its draft on last, which is often a 404, a 401 or a 422 on purpose.
+            let on = task.on[&draft.request].as_str().unwrap_or_else(|| panic!("{}: {} has variants and no `on`", task.name, draft.request));
+            let path = variables.iter().fold(on.to_string(), |p, (k, v)| p.replace(&format!("{{{{{k}}}}}"), v));
+            let sent = history.iter().rev().find(|e| {
+                e.request_id.as_deref() == Some(draft.request.as_str()) && url_path(&e.request.url) == path && matches!(e.outcome, Outcome::Response { status, .. } if (200..300).contains(&status))
+            });
+            let Some(sent) = sent else {
+                reruns.push(json!({"request": draft.request, "listen": draft.listen, "variant": null, "tests": [], "error": "no send of the request to stand the variants on"}));
+                continue;
+            };
+            for (variant, answer) in variants {
+                let mut entry = sent.clone();
+                entry.id = uuid::Uuid::new_v4().to_string();
+                if let Outcome::Response { status, .. } = &mut entry.outcome {
+                    *status = answer["status"].as_u64().and_then(|s| u16::try_from(s).ok()).unwrap_or_else(|| panic!("{}: variant {variant} has no status", task.name));
+                }
+                // `body` in place of the send's, `patch` over its fields; neither, the send's as it was.
+                if let Some(body) = answer.get("body") {
+                    entry.response_body = Some(body.as_str().map_or_else(|| serde_json::to_string_pretty(body).unwrap(), str::to_string));
+                } else if let Some(patch) = answer.get("patch").and_then(Value::as_object) {
+                    // The body is the model's send's: one not a JSON object is no rerun, not a panic.
+                    let Some(Value::Object(mut body)) = entry.response_body.as_deref().and_then(|b| serde_json::from_str(b).ok()) else {
+                        reruns.push(json!({"request": draft.request, "listen": draft.listen, "variant": variant, "tests": [], "error": "the send's body is not a JSON object to patch"}));
+                        continue;
+                    };
+                    body.extend(patch.clone());
+                    entry.response_body = Some(serde_json::to_string_pretty(&body).unwrap());
+                }
+                // `renumber: {variable, to}` — the same run had the stand made another: the
+                // value given for `variable` is `to` wherever it stands as a word, in the
+                // values given and in the address sent. A test with the id written in fails it.
+                let mut given = variables.clone();
+                if let Some(renumber) = answer.get("renumber") {
+                    let name = renumber["variable"].as_str().unwrap_or_else(|| panic!("{}: variant {variant} renumbers no variable", task.name));
+                    let to = renumber["to"].as_str().unwrap_or_else(|| panic!("{}: variant {variant} renumbers to nothing", task.name));
+                    // Not given, no rerun: the check finds the variant not run.
+                    let Some((_, from)) = variables.iter().find(|(k, _)| k == name) else { continue };
+                    let word = regex::Regex::new(&format!(r"\b{}\b", regex::escape(from))).unwrap();
+                    given = given.into_iter().map(|(k, v)| (k, word.replace_all(&v, to).into_owned())).collect();
+                    let path = url_path(&entry.request.url).to_string();
+                    entry.request.url = entry.request.url.replacen(&path, &word.replace_all(&path, to), 1);
+                }
+                http_collections::record(entry.clone()).unwrap();
+                let again = AgentDraft { request: draft.request.clone(), listen: draft.listen.clone(), code: draft.code.clone(), exchange: Some(entry.id), variables: given };
+                reruns.push(match http.draft(&self.environment, &again) {
+                    Ok(ran) => json!({"request": draft.request, "listen": draft.listen, "variant": variant, "tests": ran.report.tests, "error": ran.report.error}),
+                    Err(e) => json!({"request": draft.request, "listen": draft.listen, "variant": variant, "tests": [], "error": e.to_string()}),
+                });
+            }
+        }
+        std::fs::write(self.state.join("reruns.json"), serde_json::to_string_pretty(&reruns).unwrap()).unwrap();
     }
 
     /// The task's `check.py` over the notes: whether it passed, and what it said.
@@ -223,7 +326,7 @@ fn run_task(session: &LlmSession, task: &Task, limit: Duration) -> Run {
         log_call: &log_call,
         board: None,
         mongo: None,
-        http: Some(http),
+        http: Some(Arc::clone(&http)),
         deepseek: None,
         knowledge: None,
         // As the user has it: the HTTP client on, and nothing else of the Catalog.
@@ -239,6 +342,9 @@ fn run_task(session: &LlmSession, task: &Task, limit: Duration) -> Run {
         Err(e) => (format!("error: {e}"), String::new(), Vec::new()),
     };
     let calls = std::mem::take(&mut *calls.lock().unwrap());
+    if task.drafts {
+        fixture.rerun(task, &calls, http.as_ref());
+    }
     let (checked, check_output) = fixture.check(task, &answer, &history, &calls);
     let passed = checked && ended == "done";
 
