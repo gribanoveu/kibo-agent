@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-13 Keyboard layout correction notices far more of what was typed on the wrong layout — whole phrases with short words like «я не знаю», English typed on the Russian layout, every wrong word in mixed prose — and stops offering to "fix" abbreviations (src, ctx), file paths, Russian loanwords and a word still being typed
+
 - 2026-11-13 The message box keeps its height across the IDE layout switch: a line that wrapped while the chat was narrow is re-measured when the column widens — no keystroke needed to shrink the box back — and a line that wraps on the way in shows both rows at once
 
 - 2026-11-13 A dot on a catalog card's icon when the catalog has a newer version of what is installed — skills, servers, runbooks, commands and hooks alike; changed-here entries wear it too, and the details' Update is where it points
