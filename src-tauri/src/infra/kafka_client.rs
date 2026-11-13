@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use krafka::admin::{ConfigResource, OffsetSpec, TopicPartition};
@@ -18,8 +18,9 @@ use krafka::auth::{AuthConfig, TlsConfig};
 use krafka::producer::Record;
 use krafka::Kafka;
 
+use crate::sync::lock;
 use crate::domain::kafka::{
-    fresh, is_consumer_group, key_is, live_tick, quota, reached_end, scan_over, starting, ConfigView, Connection, GroupList, GroupView, KafkaError, LagView, LiveBatch, LiveSink, LiveSpec, Message,
+    fresh, is_consumer_group, key_is, live_tick, quota, reached_end, scan_over, scan_time, starting, ConfigView, Connection, GroupList, GroupView, KafkaError, LagView, LiveBatch, LiveSink, LiveSpec, Message,
     MessagePage, PartitionView, ProduceSpec, Produced, ReadPage, ReadSpec, SaslMechanism, ScanPage, ScanSpec, TopicView, LIVE_PER_TICK, LIVE_TICK, MAX_READ_COUNT, MAX_READ_PARTITIONS,
 };
 
@@ -48,13 +49,17 @@ const SHOWN_CONFIGS: &[&str] = &["retention.ms", "cleanup.policy", "max.message.
 /// on every call. Keyed by the connection's id, and remade when its settings
 /// change: same id, new brokers or a new password, is a different cluster as
 /// far as the pool is concerned.
+/// A topic's partitions as described, with the fingerprint of the connection
+/// they were described on and when.
+type Shape = (u64, std::time::Instant, Arc<Vec<PartitionView>>);
+
 #[derive(Default)]
 pub struct KafkaClients {
     clients: Mutex<HashMap<String, (u64, Arc<Kafka>)>>,
     /// The partitions of each topic already described, by topic name, with the
     /// fingerprints of the connection they were described on: another cluster
     /// is another shape, even for a topic of the same name.
-    shapes: Mutex<HashMap<String, (u64, std::time::Instant, Arc<Vec<PartitionView>>)>>,
+    shapes: Mutex<HashMap<String, Shape>>,
 }
 
 impl KafkaClients {
@@ -70,7 +75,7 @@ impl KafkaClients {
             return Ok(kafka);
         }
         let kafka = Arc::new(connect(connection)?);
-        let mut clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut clients = lock(&self.clients);
         if let Some((made, kept)) = clients.get(&connection.id) {
             if *made == settings {
                 return Ok(kept.clone());
@@ -81,30 +86,30 @@ impl KafkaClients {
     }
 
     fn remembered(&self, id: &str, settings: u64) -> Option<Arc<Kafka>> {
-        let clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
+        let clients = lock(&self.clients);
         clients.get(id).filter(|(made, _)| *made == settings).map(|(_, kafka)| kafka.clone())
     }
 
     /// A connection deleted: its pool is let go, and a call holding it finishes
     /// before its sockets close. What its topics looked like goes too.
     pub fn forget(&self, id: &str) {
-        self.clients.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
-        self.shapes.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        lock(&self.clients).remove(id);
+        lock(&self.shapes).clear();
+    }
+
+    /// What the broker said about topics is let go: the next read asks again.
+    /// The page's refresh button is the one caller — a topic made a moment ago
+    /// waits for nothing.
+    pub fn forget_shapes(&self) {
+        lock(&self.shapes).clear();
     }
 
     /// Every pool let go: the feature is off, or its data was deleted. Each one
     /// holds a SASL password and open sockets to the user's cluster, so they go
     /// with the connections rather than at the end of the session.
-    /// What the broker said about topics is let go: the next read asks again.
-    /// The page's refresh button is the one caller — a topic made a moment ago
-    /// waits for nothing.
-    pub fn forget_shapes(&self) {
-        self.shapes.lock().unwrap_or_else(PoisonError::into_inner).clear();
-    }
-
     pub fn forget_all(&self) {
-        self.clients.lock().unwrap_or_else(PoisonError::into_inner).clear();
-        self.shapes.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        lock(&self.clients).clear();
+        lock(&self.shapes).clear();
     }
 
     /// The partitions of `names`, from what was described a moment ago where it
@@ -116,7 +121,7 @@ impl KafkaClients {
         let mut known: HashMap<String, Arc<Vec<PartitionView>>> = HashMap::new();
         let mut stale: Vec<String> = Vec::new();
         {
-            let shapes = self.shapes.lock().unwrap_or_else(PoisonError::into_inner);
+            let shapes = lock(&self.shapes);
             for name in names {
                 match shapes.get(name) {
                     Some((made, at, partitions)) if *made == settings && fresh(*at, now, SHAPE_TTL) => {
@@ -133,7 +138,7 @@ impl KafkaClients {
         let kafka = self.kafka(connection)?;
         let admin = kafka.admin();
         let described = within("the topics", admin.describe_topics(&stale, Default::default()))?;
-        let mut shapes = self.shapes.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut shapes = lock(&self.shapes);
         for (name, description) in described {
             let Ok(description) = description else { continue };
             let partitions: Vec<PartitionView> = description
@@ -212,10 +217,7 @@ fn security(connection: &Connection) -> Option<AuthConfig> {
             None => TlsConfig::new(),
         });
     }
-    match connection.tls || connection.sasl.is_some() {
-        true => Some(auth),
-        false => None,
-    }
+    (connection.tls || connection.sasl.is_some()).then_some(auth)
 }
 
 /// The broker's answer to "who are you": cluster id and how many brokers.
@@ -260,14 +262,13 @@ pub fn topics(clients: &KafkaClients, connection: &Connection, names: &[String])
     // Only as many partitions as one page carries: the topics that did not fit
     // are left out rather than asked for one partition at a time.
     let mut budget = MAX_PARTITIONS;
-    let mut fitting: Vec<String> = Vec::new();
-    for topic in &topics {
-        if topic.partitions.len() <= budget {
+    topics.retain(|topic| {
+        let fits = topic.partitions.len() <= budget;
+        if fits {
             budget -= topic.partitions.len();
-            fitting.push(topic.name.clone());
         }
-    }
-    topics.retain(|topic| fitting.contains(&topic.name));
+        fits
+    });
 
     // The watermarks come in a map keyed by partition, so the beginning and the
     // end of the log are two answers, not one.
@@ -277,10 +278,7 @@ pub fn topics(clients: &KafkaClients, connection: &Connection, names: &[String])
             .iter()
             .flat_map(|topic| {
                 topic.partitions.iter().map(move |partition| {
-                    let spec = match end {
-                        true => OffsetSpec::Latest,
-                        false => OffsetSpec::Earliest,
-                    };
+                    let spec = if end { OffsetSpec::Latest } else { OffsetSpec::Earliest };
                     (TopicPartition::new(topic.name.clone(), partition.partition), spec)
                 })
             })
@@ -335,68 +333,28 @@ pub fn read(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) ->
 /// What the agent's tool reads, so it can pick the view and redact what it shows.
 pub fn records(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec) -> Result<MessagePage, KafkaError> {
     let spec = spec.clone().clamped();
-    let topic = spec.topic.clone();
-
-    let mut partitions = spec.partitions.clone();
-    if partitions.is_empty() {
-        // The same shape the list shows, so a page of messages costs no metadata
-        // call of its own.
-        let all = names(clients, connection)?;
-        let wanted: Vec<String> = all.into_iter().filter(|name| name == &topic).collect();
-        let shapes = clients.partitions_of(connection, &wanted)?;
-        partitions = shapes.get(&topic).map(|partitions| partitions.iter().map(|partition| partition.partition).collect()).unwrap_or_default();
-        partitions.sort();
-        partitions.truncate(MAX_READ_PARTITIONS);
-    }
-    if partitions.is_empty() {
-        // A topic that is not there is not an empty one: nothing was described,
-        // and saying "no messages" would be a guess.
-        return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
-    }
-
+    let topic = spec.topic.as_str();
+    let partitions = read_partitions(clients, connection, topic, &spec.partitions)?;
     let kafka = clients.kafka(connection)?;
-    let admin = kafka.admin();
-
-    // The watermarks are two answers keyed by partition, and both ends are
-    // needed whoever asked what: an offset inside the log is the start, an
-    // offset outside it is clamped to its edge, and "the last N" counts back
-    // from the end.
-    let specs: Vec<(TopicPartition, OffsetSpec)> = partitions.iter().map(|p| (TopicPartition::new(topic.clone(), *p), OffsetSpec::Earliest)).collect();
-    let earliest = within("the watermarks", admin.list_offsets(specs, Default::default()))?;
-    let specs: Vec<(TopicPartition, OffsetSpec)> = partitions.iter().map(|p| (TopicPartition::new(topic.clone(), *p), OffsetSpec::Latest)).collect();
-    let latest = within("the watermarks", admin.list_offsets(specs, Default::default()))?;
-    let count = spec.count.clamp(1, MAX_READ_COUNT);
+    let logs = watermarks(&kafka, topic, &partitions)?;
+    let count = spec.count;
     let share = quota(count, partitions.len());
+    let starts: Vec<(i32, Option<i64>)> = logs.iter().map(|&(partition, earliest, latest)| (partition, Some(starting(spec.from, earliest, latest, share)))).collect();
 
-    let mut starts: Vec<(i32, i64)> = Vec::new();
-    let mut ends: Vec<(i32, i64)> = Vec::new();
-    for partition in &partitions {
-        let at = TopicPartition::new(topic.clone(), *partition);
-        // A partition whose watermarks the broker would not give is left out
-        // rather than read from a guessed zero.
-        let (Some(Ok(from)), Some(Ok(to))) = (earliest.get(&at), latest.get(&at)) else { continue };
-        starts.push((*partition, starting(spec.from, from.offset, to.offset, share)));
-        ends.push((*partition, to.offset));
-    }
-    if starts.is_empty() {
-        return Err(KafkaError::Broker(format!("the watermarks of \"{topic}\" were not given")));
-    }
-    // Every failure of the consumer is one sentence: the broker's own text is
-    // the useful half of it.
-    let broke = |e: krafka::error::KrafkaError| KafkaError::Broker(format!("the messages: {e}"));
     let messages = within("the messages", async {
-        let consumer = kafka.consumer_without_group().build().await.map_err(broke)?;
-        consumer.assign(&topic, partitions.clone()).await.map_err(broke)?;
-        for (partition, start) in &starts {
-            consumer.seek(&topic, *partition, *start).await.map_err(broke)?;
-        }
+        let consumer = assigned(&kafka, topic, &starts).await?;
         let mut messages: Vec<Message> = Vec::new();
-        let mut quiet = 0;
-        let mut spent = 0u32;
+        // Per partition: one past the last record read, and how many were kept.
         // A partition gives its share and no more: a busy one must not fill the
         // answer while the others are still unread.
-        let mut taken: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
+        let mut read: HashMap<i32, (i64, usize)> = starts.iter().map(|&(partition, at)| (partition, (at.unwrap_or(0), 0))).collect();
+        let (mut quiet, mut spent) = (0, 0u32);
         while messages.len() < count && quiet < 2 && spent < 16 {
+            // Every partition gave its share or reached its end: another poll
+            // would only read records to drop them.
+            if logs.iter().all(|(partition, _, latest)| read.get(partition).is_some_and(|&(next, kept)| kept >= share || next >= *latest)) {
+                break;
+            }
             spent += 1;
             let batch = consumer.poll(Duration::from_millis(500)).await.map_err(broke)?;
             if batch.is_empty() {
@@ -405,19 +363,13 @@ pub fn records(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec)
             }
             quiet = 0;
             for record in batch {
-                let kept = taken.entry(record.partition).or_insert(0);
+                let Some((next, kept)) = read.get_mut(&record.partition) else { continue };
+                *next = (*next).max(record.offset + 1);
                 if *kept >= share || messages.len() >= count {
                     continue;
                 }
                 *kept += 1;
-                messages.push(Message {
-                    partition: record.partition,
-                    offset: record.offset,
-                    timestamp: record.timestamp,
-                    key: record.key.map(|key| key.to_vec()),
-                    value: record.value.map(|value| value.to_vec()),
-                    headers: record.headers.into_iter().map(|(name, value)| (name, value.map(|value| value.to_vec()))).collect(),
-                });
+                messages.push(message(record));
             }
         }
         Ok::<Vec<Message>, KafkaError>(messages)
@@ -426,7 +378,7 @@ pub fn records(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec)
     // Whether the count ran out before the log did: any partition that has
     // records past the last one read. The page continues from the last offset
     // it was given, and only this says there is reason to.
-    let more = messages.iter().any(|message| ends.iter().any(|(partition, end)| *partition == message.partition && message.offset + 1 < *end));
+    let more = messages.iter().any(|message| logs.iter().any(|(partition, _, latest)| *partition == message.partition && message.offset + 1 < *latest));
     let mut messages = messages;
     // Partition then offset: within a partition that is write order, and across
     // partitions it is the only order that does not depend on whose clock the
@@ -441,54 +393,20 @@ pub fn records(clients: &KafkaClients, connection: &Connection, spec: &ReadSpec)
 /// walks the log from `from`, or from its oldest offset still stored, and stops
 /// at whichever of `domain::kafka::scan_over`'s ceilings comes first.
 pub fn scan(clients: &KafkaClients, connection: &Connection, spec: &ScanSpec) -> Result<ScanPage, KafkaError> {
-    let topic = spec.topic.clone();
-    let mut partitions = spec.partitions.clone();
-    partitions.truncate(MAX_READ_PARTITIONS);
-    if partitions.is_empty() {
-        let all = names(clients, connection)?;
-        let wanted: Vec<String> = all.into_iter().filter(|name| name == &topic).collect();
-        let shapes = clients.partitions_of(connection, &wanted)?;
-        partitions = shapes.get(&topic).map(|partitions| partitions.iter().map(|partition| partition.partition).collect()).unwrap_or_default();
-        partitions.sort();
-        partitions.truncate(MAX_READ_PARTITIONS);
-    }
-    if partitions.is_empty() {
-        return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
-    }
-
+    let topic = spec.topic.as_str();
+    let partitions = read_partitions(clients, connection, topic, &spec.partitions)?;
     let kafka = clients.kafka(connection)?;
-    let admin = kafka.admin();
-    let offsets = |spec: OffsetSpec| -> Vec<(TopicPartition, OffsetSpec)> {
-        partitions.iter().map(|partition| (TopicPartition::new(topic.clone(), *partition), spec.clone())).collect()
-    };
-    let earliest = within("the watermarks", admin.list_offsets(offsets(OffsetSpec::Earliest), Default::default()))?;
-    let latest = within("the watermarks", admin.list_offsets(offsets(OffsetSpec::Latest), Default::default()))?;
-
-    // A partition whose watermarks the broker would not give is left out
-    // rather than looked through from a guessed zero — and out of the answer
-    // too: what was scanned is what is said.
-    let mut starts: Vec<(i32, i64)> = Vec::new();
-    let mut ends: Vec<(i32, i64)> = Vec::new();
-    for partition in &partitions {
-        let at = TopicPartition::new(topic.clone(), *partition);
-        let (Some(Ok(from)), Some(Ok(to))) = (earliest.get(&at), latest.get(&at)) else { continue };
-        // Without `from` a scan starts at the oldest record still stored: from
-        // the end it would find nothing by construction.
-        starts.push((*partition, spec.from.map_or(from.offset, |offset| starting(Some(offset), from.offset, to.offset, 0))));
-        ends.push((*partition, to.offset));
-    }
-    if starts.is_empty() {
-        return Err(KafkaError::Broker(format!("the watermarks of \"{topic}\" were not given")));
-    }
-    let scanned_partitions: Vec<i32> = starts.iter().map(|(partition, _)| *partition).collect();
-    let broke = |e: krafka::error::KrafkaError| KafkaError::Broker(format!("the messages: {e}"));
-    let budget = REQUEST_TIMEOUT + crate::domain::kafka::SCAN_TIME * starts.len() as u32;
+    // A partition whose watermarks the broker would not give is out of the
+    // answer too: what was scanned is what is said.
+    let logs = watermarks(&kafka, topic, &partitions)?;
+    // Without `from` a scan starts at the oldest record still stored: from the
+    // end it would find nothing by construction.
+    let starts: Vec<(i32, Option<i64>)> = logs.iter().map(|&(partition, earliest, latest)| (partition, Some(spec.from.map_or(earliest, |offset| offset.clamp(earliest, latest))))).collect();
+    let ends: Vec<(i32, i64)> = logs.iter().map(|&(partition, _, latest)| (partition, latest)).collect();
+    let scanned_partitions: Vec<i32> = logs.iter().map(|(partition, _, _)| *partition).collect();
+    let budget = REQUEST_TIMEOUT + scan_time(logs.len());
     let (messages, scanned, more) = within_for("the messages", budget, async {
-        let consumer = kafka.consumer_without_group().build().await.map_err(broke)?;
-        consumer.assign(&topic, scanned_partitions.clone()).await.map_err(broke)?;
-        for (partition, start) in &starts {
-            consumer.seek(&topic, *partition, *start).await.map_err(broke)?;
-        }
+        let consumer = assigned(&kafka, topic, &starts).await?;
         let began = std::time::Instant::now();
         let mut messages: Vec<Message> = Vec::new();
         let (mut scanned, mut bytes, mut quiet) = (0usize, 0usize, 0);
@@ -496,11 +414,8 @@ pub fn scan(clients: &KafkaClients, connection: &Connection, spec: &ScanSpec) ->
         // ended is a fact about the offsets. A broker that went quiet for two
         // polls is not the end of a log, and "nothing has that key" said on
         // that guess is the worst answer this tool could give.
-        let mut next: Vec<(i32, i64)> = starts.clone();
-        loop {
-            if scan_over(scanned, bytes, began.elapsed(), starts.len()) || messages.len() >= MAX_READ_COUNT {
-                break;
-            }
+        let mut next: Vec<(i32, i64)> = starts.iter().map(|&(partition, at)| (partition, at.unwrap_or(0))).collect();
+        while !scan_over(scanned, bytes, began.elapsed(), logs.len()) && messages.len() < MAX_READ_COUNT {
             let batch = consumer.poll(Duration::from_millis(500)).await.map_err(broke)?;
             if batch.is_empty() {
                 quiet += 1;
@@ -516,17 +431,9 @@ pub fn scan(clients: &KafkaClients, connection: &Connection, spec: &ScanSpec) ->
                 if let Some(entry) = next.iter_mut().find(|(partition, _)| *partition == record.partition) {
                     entry.1 = entry.1.max(record.offset + 1);
                 }
-                if !key_is(record.key.as_deref(), &spec.key) {
-                    continue;
+                if key_is(record.key.as_deref(), &spec.key) {
+                    messages.push(message(record));
                 }
-                messages.push(Message {
-                    partition: record.partition,
-                    offset: record.offset,
-                    timestamp: record.timestamp,
-                    key: record.key.map(|key| key.to_vec()),
-                    value: record.value.map(|value| value.to_vec()),
-                    headers: record.headers.into_iter().map(|(name, value)| (name, value.map(|value| value.to_vec()))).collect(),
-                });
             }
         }
         Ok::<(Vec<Message>, usize, bool), KafkaError>((messages, scanned, !reached_end(&next, &ends)))
@@ -536,6 +443,87 @@ pub fn scan(clients: &KafkaClients, connection: &Connection, spec: &ScanSpec) ->
     Ok(ScanPage { messages, partitions: scanned_partitions, scanned, more })
 }
 
+/// The partitions a read follows: the ones asked for, or every one of the
+/// topic's in order — up to [`MAX_READ_PARTITIONS`] either way.
+///
+/// Never called inside a `block_on`: making a client and describing a topic
+/// block on the runtime themselves, and nested that is a panic, not an error.
+fn read_partitions(clients: &KafkaClients, connection: &Connection, topic: &str, asked: &[i32]) -> Result<Vec<i32>, KafkaError> {
+    let mut partitions = asked.to_vec();
+    // Listed before it is described: a broker that makes topics on demand
+    // would make one that was only looked at.
+    if partitions.is_empty() && names(clients, connection)?.iter().any(|name| name == topic) {
+        let shapes = clients.partitions_of(connection, &[topic.to_string()])?;
+        partitions = shapes.get(topic).map(|shape| shape.iter().map(|partition| partition.partition).collect()).unwrap_or_default();
+        partitions.sort();
+    }
+    partitions.truncate(MAX_READ_PARTITIONS);
+    // A topic that is not there is not an empty one: saying "no messages" would
+    // be a guess.
+    if partitions.is_empty() {
+        return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
+    }
+    Ok(partitions)
+}
+
+/// Each partition's log as the broker has it now: `(partition, earliest,
+/// latest)`. The two ends are two answers keyed by partition. A partition whose
+/// watermarks the broker would not give is left out rather than read from a
+/// guessed zero.
+fn watermarks(kafka: &Kafka, topic: &str, partitions: &[i32]) -> Result<Vec<(i32, i64, i64)>, KafkaError> {
+    let admin = kafka.admin();
+    let ask = |spec: OffsetSpec| -> Vec<(TopicPartition, OffsetSpec)> { partitions.iter().map(|partition| (TopicPartition::new(topic.to_string(), *partition), spec)).collect() };
+    let earliest = within("the watermarks", admin.list_offsets(ask(OffsetSpec::Earliest), Default::default()))?;
+    let latest = within("the watermarks", admin.list_offsets(ask(OffsetSpec::Latest), Default::default()))?;
+    let logs: Vec<(i32, i64, i64)> = partitions
+        .iter()
+        .filter_map(|partition| {
+            let at = TopicPartition::new(topic.to_string(), *partition);
+            match (earliest.get(&at), latest.get(&at)) {
+                (Some(Ok(from)), Some(Ok(to))) => Some((*partition, from.offset, to.offset)),
+                _ => None,
+            }
+        })
+        .collect();
+    if logs.is_empty() {
+        return Err(KafkaError::Broker(format!("the watermarks of \"{topic}\" were not given")));
+    }
+    Ok(logs)
+}
+
+/// A consumer **without a group**, assigned and seeked: `assign`, not
+/// `subscribe`, so a read leaves nothing behind in the cluster and no member
+/// appears in a group the user never made. `None` is the log's end.
+async fn assigned(kafka: &Kafka, topic: &str, starts: &[(i32, Option<i64>)]) -> Result<krafka::consumer::Consumer, KafkaError> {
+    let consumer = kafka.consumer_without_group().build().await.map_err(broke)?;
+    consumer.assign(topic, starts.iter().map(|(partition, _)| *partition).collect()).await.map_err(broke)?;
+    for (partition, start) in starts {
+        match start {
+            Some(offset) => consumer.seek(topic, *partition, *offset).await,
+            None => consumer.seek_to_end(topic, *partition).await,
+        }
+        .map_err(broke)?;
+    }
+    Ok(consumer)
+}
+
+/// A record as the domain has it: bytes, nothing interpreted.
+fn message(record: krafka::consumer::ConsumerRecord) -> Message {
+    Message {
+        partition: record.partition,
+        offset: record.offset,
+        timestamp: record.timestamp,
+        key: record.key.map(|key| key.to_vec()),
+        value: record.value.map(|value| value.to_vec()),
+        headers: record.headers.into_iter().map(|(name, value)| (name, value.map(|value| value.to_vec()))).collect(),
+    }
+}
+
+/// The consumer's failure, as the broker words it: the call that wraps it
+/// names what was asked.
+fn broke(e: krafka::error::KrafkaError) -> KafkaError {
+    KafkaError::Broker(e.to_string())
+}
 /// How many groups one answer lists, and how many of them get their lag read:
 /// a group's lag is two calls of its own, and a cluster with hundreds of them
 /// is not something one page waits for.
@@ -588,7 +576,7 @@ pub fn groups(clients: &KafkaClients, connection: &Connection) -> Result<GroupLi
                         // out: `latest: 0` would read as an empty partition,
                         // which is a different thing from no data.
                         .filter_map(|(partition, answered)| {
-                            answered.ok().map(|lag| LagView::new(name, &partition.topic, partition.partition, lag.committed_offset, lag.end_offset, false))
+                            answered.ok().map(|lag| LagView::new(name, &partition.topic, partition.partition, lag.committed_offset, lag.end_offset))
                         })
                         .collect();
                     lags.sort_by(|a, b| (a.topic.as_str(), a.partition).cmp(&(b.topic.as_str(), b.partition)));
@@ -603,92 +591,47 @@ pub fn groups(clients: &KafkaClients, connection: &Connection) -> Result<GroupLi
 }
 
 /// Reads a topic live, without a group: `assign` on the chosen partitions,
-/// seeked to the end, and a batch per tick for as long as `stop` is false.
+/// seeked to the end or to `from`, and a batch per tick for as long as `stop`
+/// is false.
 ///
-/// Returns once the stop flag is set, the read fails, or the tick budget is
-/// spent — the caller owns the flag and the reporting.
-pub fn live(clients: &KafkaClients, connection: &Connection, spec: &LiveSpec, stop: std::sync::Arc<std::sync::atomic::AtomicBool>, sink: LiveSink) -> Result<(), KafkaError> {
-    use std::sync::atomic::Ordering;
-    let topic = spec.topic.clone();
-    let broke = |e: krafka::error::KrafkaError| KafkaError::Broker(format!("the live read: {e}"));
-    let answered = tauri::async_runtime::block_on(async {
-        // Everything a read needs — the connection, the topic's partitions — is
-        // asked inside, so a broker that will not open is said on the sink like
-        // any other end of a read.
+/// Returns once the stop flag is set, the window is gone, or the read fails —
+/// and a failure is said on the sink, since nobody is waiting on this thread.
+pub fn live(clients: &KafkaClients, connection: &Connection, spec: &LiveSpec, stop: std::sync::Arc<std::sync::atomic::AtomicBool>, sink: LiveSink) {
+    let read = || -> Result<(), KafkaError> {
+        // Asked before the runtime is entered: both may connect, and each
+        // blocks on the runtime itself (`read_partitions`).
         let kafka = clients.kafka(connection)?;
-        let mut partitions = spec.partitions.clone();
-        if partitions.is_empty() {
-            let shapes = clients.partitions_of(connection, &[topic.clone()])?;
-            partitions = shapes.get(&topic).map(|partitions| partitions.iter().map(|partition| partition.partition).collect()).unwrap_or_default();
-        }
-        partitions.sort();
-        partitions.truncate(MAX_READ_PARTITIONS);
-        if partitions.is_empty() {
-            return Err(KafkaError::Broker(format!("the cluster has no topic \"{topic}\" any more")));
-        }
-        // Every step before the loop is bounded: a broker that takes the socket
-        // and says nothing must not hold the thread where a stop is not read.
-        let consumer = tokio::time::timeout(REQUEST_TIMEOUT, kafka.consumer_without_group().build())
-            .await
-            .map_err(|_| KafkaError::Broker(format!("the live read: no answer in {}s", REQUEST_TIMEOUT.as_secs())))?
-            .map_err(broke)?;
-        tokio::time::timeout(REQUEST_TIMEOUT, consumer.assign(&topic, partitions.clone()))
-            .await
-            .map_err(|_| KafkaError::Broker(format!("the live read: no answer in {}s", REQUEST_TIMEOUT.as_secs())))?
-            .map_err(broke)?;
-        for partition in &partitions {
-            let seek = async {
-                match spec.from {
-                    Some(from) => consumer.seek(&topic, *partition, from).await,
-                    None => consumer.seek_to_end(&topic, *partition).await,
+        let partitions = read_partitions(clients, connection, &spec.topic, &spec.partitions)?;
+        let starts: Vec<(i32, Option<i64>)> = partitions.iter().map(|partition| (*partition, spec.from)).collect();
+        tauri::async_runtime::block_on(async {
+            // Every step is bounded: a broker that takes the socket and says
+            // nothing must not hold the thread where a stop is not read.
+            let consumer = deadline("the live read", REQUEST_TIMEOUT, assigned(&kafka, &spec.topic, &starts)).await?;
+            let mut waiting: Vec<Message> = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                // What the last tick could not carry goes first: `poll` has
+                // already moved past those records, so dropping them would lose them.
+                if waiting.is_empty() {
+                    let records = deadline("the live read", REQUEST_TIMEOUT, consumer.poll(LIVE_TICK)).await?;
+                    waiting.extend(records.into_iter().map(message));
                 }
-            };
-            tokio::time::timeout(REQUEST_TIMEOUT, seek)
-                .await
-                .map_err(|_| KafkaError::Broker(format!("the live read: no answer in {}s", REQUEST_TIMEOUT.as_secs())))?
-                .map_err(broke)?;
-        }
-        // A tick reports as it happens: the window sees a message when it lands,
-        // not when the read ends. Each poll is bounded, so a stop is noticed
-        // within a tick.
-        let mut waiting: Vec<Message> = Vec::new();
-        while !stop.load(Ordering::Relaxed) {
-            // What the last tick could not carry goes first: `poll` has already
-            // moved past those records, so dropping them would lose them.
-            if waiting.is_empty() {
-                let records = tokio::time::timeout(REQUEST_TIMEOUT, consumer.poll(LIVE_TICK))
-                    .await
-                    .map_err(|_| KafkaError::Broker(format!("the live read: no answer in {}s", REQUEST_TIMEOUT.as_secs())))?
-                    .map_err(broke)?;
-                waiting.extend(records.into_iter().map(|record| Message {
-                    partition: record.partition,
-                    offset: record.offset,
-                    timestamp: record.timestamp,
-                    key: record.key.map(|key| key.to_vec()),
-                    value: record.value.map(|value| value.to_vec()),
-                    headers: record.headers.into_iter().map(|(name, value)| (name, value.map(|value| value.to_vec()))).collect(),
-                }));
+                if waiting.is_empty() {
+                    continue;
+                }
+                let (batch, rest) = live_tick(std::mem::take(&mut waiting), LIVE_PER_TICK);
+                waiting = rest;
+                if !sink(LiveBatch { messages: batch.iter().map(Message::view).collect(), more: waiting.len(), failed: None }) {
+                    // The window that was reading is gone: a reload, a closed tab.
+                    break;
+                }
             }
-            if waiting.is_empty() {
-                continue;
-            }
-            let (batch, rest) = live_tick(std::mem::take(&mut waiting), LIVE_PER_TICK);
-            waiting = rest;
-            if !sink(LiveBatch { messages: batch.iter().map(Message::view).collect(), more: waiting.len(), failed: None }) {
-                // The window that was reading is gone: a reload, a closed tab.
-                break;
-            }
-        }
-        Ok::<(), KafkaError>(())
-    });
-    // The read ends for the window, not only for the log: it says so where it
-    // has been reporting, since nobody is waiting on this thread.
-    if let Err(failure) = answered {
+            Ok(())
+        })
+    };
+    if let Err(failure) = read() {
         let _ = sink(LiveBatch { messages: Vec::new(), more: 0, failed: Some(failure.to_string()) });
     }
-    Ok(())
 }
-
 /// Sends one record, and answers where it landed. The only write this module
 /// has: nothing else about a cluster is ever changed from here.
 pub fn produce(clients: &KafkaClients, connection: &Connection, spec: &ProduceSpec) -> Result<Produced, KafkaError> {
@@ -726,12 +669,6 @@ fn applied(partition: &mut PartitionView, end: bool, offset: Option<i64>) -> boo
     }
 }
 
-/// Every failure of the client becomes one sentence naming what was asked:
-/// the broker's own error text is the useful half of it.
-fn failed<T>(what: &str, result: Result<T, impl std::fmt::Display>) -> Result<T, KafkaError> {
-    result.map_err(|e| KafkaError::Broker(format!("{what}: {e}")))
-}
-
 /// One call with a deadline of its own: the client's request timeout is a
 /// socket one, and an answer that never comes must not hold a page — nor a
 /// command that others wait on.
@@ -742,12 +679,18 @@ fn within<T, E: std::fmt::Display>(what: &str, future: impl Future<Output = Resu
 /// The same with the caller's deadline: a key scan runs as long as its own
 /// budget allows, and the socket's fifteen seconds would cut it short.
 fn within_for<T, E: std::fmt::Display>(what: &str, allowed: Duration, future: impl Future<Output = Result<T, E>>) -> Result<T, KafkaError> {
-    match tauri::async_runtime::block_on(async { tokio::time::timeout(allowed, future).await }) {
-        Ok(answer) => failed(what, answer),
+    tauri::async_runtime::block_on(deadline(what, allowed, future))
+}
+
+/// Every failure of the client becomes one sentence naming what was asked —
+/// the broker's own error text is the useful half of it — and an answer that
+/// does not come in `allowed` is one too.
+async fn deadline<T, E: std::fmt::Display>(what: &str, allowed: Duration, future: impl Future<Output = Result<T, E>>) -> Result<T, KafkaError> {
+    match tokio::time::timeout(allowed, future).await {
+        Ok(answer) => answer.map_err(|e| KafkaError::Broker(format!("{what}: {e}"))),
         Err(_) => Err(KafkaError::Broker(format!("{what}: no answer in {}s", allowed.as_secs()))),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,6 +707,26 @@ mod tests {
             read_only: false,
             agent: false,
         }
+    }
+
+    /// A live read with no client made yet connects before the runtime is
+    /// entered: inside a `block_on` the connect's own `block_on` is a panic,
+    /// the thread dies silent and the window waits on "live" forever. A broker
+    /// that is not there is a `failed` batch on the sink instead.
+    #[test]
+    fn a_live_read_that_cannot_connect_says_so_on_the_sink() {
+        let said = Arc::new(Mutex::new(Vec::new()));
+        let heard = said.clone();
+        let sink: LiveSink = Arc::new(move |batch| {
+            heard.lock().unwrap().push(batch);
+            true
+        });
+        let spec = LiveSpec { topic: "orders".into(), partitions: Vec::new(), from: None };
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        live(&KafkaClients::default(), &connection("127.0.0.1:1"), &spec, stop, sink);
+        let said = said.lock().unwrap();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].failed.as_deref().is_some_and(|failed| failed.contains("did not answer")), "{said:?}");
     }
 
     /// A broker that is not there answers in seconds with the connection's

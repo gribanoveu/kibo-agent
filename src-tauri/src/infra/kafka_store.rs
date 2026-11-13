@@ -5,14 +5,15 @@
 //! the IPC boundary but [`ConnectionView`], which has no password.
 
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::Mutex;
 
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::domain::kafka::{Connection, ConnectionView, KafkaError};
 use crate::infra::app_dir;
 use crate::infra::master_key;
 use crate::infra::secret_store::{self, SecretPurpose};
+use crate::sync::lock;
 
 /// The file's name under the app directory — the feature's data, which
 /// "Delete data" removes (`domain::features`).
@@ -23,47 +24,30 @@ const PURPOSE: SecretPurpose = SecretPurpose::KafkaConnections;
 /// the list without the other's connection.
 static WRITING: Mutex<()> = Mutex::new(());
 
-fn writing() -> MutexGuard<'static, ()> {
-    WRITING.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 fn path() -> Result<PathBuf, KafkaError> {
     Ok(app_dir::dir().map_err(|e| KafkaError::Store(e.to_string()))?.join(FILE))
 }
 
-/// The decrypted list, every password wiped when it drops.
-#[derive(Default)]
-struct Connections(Vec<Connection>);
-
-impl Drop for Connections {
-    fn drop(&mut self) {
-        for connection in &mut self.0 {
-            if let Some(sasl) = &mut connection.sasl {
-                sasl.password.zeroize();
-            }
-        }
-    }
-}
-
 /// No file is none saved; a file that does not open says so, rather than
-/// reading as an empty list the next save would write over.
-fn load() -> Result<Connections, KafkaError> {
+/// reading as an empty list the next save would write over. Every password in
+/// it is wiped when the list drops (`domain::kafka::Sasl`).
+fn load() -> Result<Vec<Connection>, KafkaError> {
     let path = path()?;
     let shown = path.display();
     let blob = match std::fs::read(&path) {
         Ok(blob) => blob,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Connections::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(KafkaError::Store(format!("could not read {shown}: {e}"))),
     };
     let key = master_key::resolve().map_err(|e| KafkaError::Store(format!("the key the connections are sealed under is out of reach: {e}")))?;
     let plain = secret_store::open(&key, PURPOSE, &blob)
         .map_err(|_| KafkaError::Store(format!("{shown} does not open with this machine's key — delete the Kafka data in the Catalog and add the connections again")))?;
-    serde_json::from_slice(&plain).map(Connections).map_err(|_| KafkaError::Store(format!("{shown} is damaged")))
+    serde_json::from_slice(&plain).map_err(|_| KafkaError::Store(format!("{shown} is damaged")))
 }
 
-fn save(connections: &Connections) -> Result<(), KafkaError> {
+fn save(connections: &[Connection]) -> Result<(), KafkaError> {
     let store = |e: String| KafkaError::Store(e);
-    let plain = Zeroizing::new(serde_json::to_vec(&connections.0).map_err(|e| store(e.to_string()))?);
+    let plain = Zeroizing::new(serde_json::to_vec(connections).map_err(|e| store(e.to_string()))?);
     let key = master_key::resolve().map_err(store)?;
     let blob = secret_store::seal(&key, PURPOSE, &plain).map_err(|e| store(e.to_string()))?;
     app_dir::ensure().map_err(store)?;
@@ -72,60 +56,41 @@ fn save(connections: &Connections) -> Result<(), KafkaError> {
 
 /// What the window lists, in the order they were added.
 pub fn list() -> Result<Vec<ConnectionView>, KafkaError> {
-    Ok(load()?.0.iter().map(ConnectionView::from).collect())
+    Ok(load()?.iter().map(ConnectionView::from).collect())
 }
 
 /// A connection as the client needs it, password and all. Never crosses the
 /// IPC boundary: the window asks for [`list`].
 pub fn get(id: &str) -> Result<Connection, KafkaError> {
-    let connections = load()?;
-    connections.0.iter().find(|connection| connection.id == id).cloned().ok_or_else(|| KafkaError::NoConnection(id.to_string()))
+    load()?.into_iter().find(|connection| connection.id == id).ok_or_else(|| KafkaError::NoConnection(id.to_string()))
 }
 
 /// Adds `connection`, or replaces the one with its id. A password left empty
 /// in an edit keeps the one already saved — the form never shows it, so it has
 /// nothing to send back.
 pub fn put(mut connection: Connection) -> Result<(), KafkaError> {
-    let _held = writing();
+    let _held = lock(&WRITING);
     let mut connections = load()?;
-    let saved = connections.0.iter_mut().find(|c| c.id == connection.id);
-    if let (Some(saved), Some(sasl)) = (saved.as_ref(), connection.sasl.as_ref()) {
-        if sasl.password.is_empty() {
-            let kept = saved.sasl.as_ref().map(|old| old.password.clone()).unwrap_or_default();
-            if let Some(new) = connection.sasl.as_mut() {
-                new.password = kept;
-            }
-        }
-    }
-    match saved {
+    match connections.iter_mut().find(|c| c.id == connection.id) {
         Some(saved) => {
-            // The password it had goes too: `Connections` wipes only the ones still in the list.
-            if let Some(sasl) = &mut saved.sasl {
-                sasl.password.zeroize();
+            if let (Some(new), Some(old)) = (connection.sasl.as_mut(), saved.sasl.as_mut()) {
+                if new.password.is_empty() {
+                    std::mem::swap(&mut new.password, &mut old.password);
+                }
             }
             *saved = connection;
         }
-        None => connections.0.push(connection),
+        None => connections.push(connection),
     }
     save(&connections)
 }
 
 /// Gone is gone: deleting what is not there is not an error.
 pub fn delete(id: &str) -> Result<(), KafkaError> {
-    let _held = writing();
+    let _held = lock(&WRITING);
     let mut connections = load()?;
-    let before = connections.0.len();
-    // Its password wiped before it leaves the list: `Connections` wipes only
-    // the ones still in it.
-    connections.0.iter_mut().filter(|c| c.id == id).for_each(|c| {
-        if let Some(sasl) = &mut c.sasl {
-            sasl.password.zeroize();
-        }
-    });
-    connections.0.retain(|c| c.id != id);
-    if connections.0.len() == before {
-        return Ok(());
-    }
+    let Some(at) = connections.iter().position(|c| c.id == id) else { return Ok(()) };
+    connections.remove(at);
     save(&connections)
 }
 

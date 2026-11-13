@@ -15,6 +15,7 @@
 use chrono::DateTime;
 use serde_json::{json, Value};
 
+use crate::domain::kube_view::{redact_text, REDACTED};
 use crate::domain::kafka::{self, ConnectionView, KafkaError, KafkaServers, Message, MessagePage, ReadSpec, ScanPage, ScanSpec, TopicDetail, ValueView};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::tools::{KafkaArgs, KafkaOp, ToolDeps, ToolError, ToolResult};
@@ -99,10 +100,13 @@ fn topics(servers: &dyn KafkaServers, open: &[ConnectionView], args: &KafkaArgs)
         }
     }
     listed.truncate(LISTED);
-    if total == 1 {
-        if let [only] = &listed[..] {
-            return Ok(card(&servers.topic(&connection.id, &only.name)?, connection));
-        }
+    // The topic named whole is the one asked about, even when longer names
+    // have it in them: `orders` beside `orders-dlq` would otherwise never
+    // answer with its card.
+    let exact = needle.and_then(|needle| listed.iter().find(|topic| topic.name == needle));
+    let only = listed.first().filter(|_| total == 1);
+    if let Some(topic) = exact.or(only) {
+        return Ok(card(&servers.topic(&connection.id, &topic.name)?, connection));
     }
 
     let asked = match needle {
@@ -139,21 +143,19 @@ fn card(detail: &TopicDetail, connection: &ConnectionView) -> (String, String) {
             partition.stored()
         ));
     }
-    match detail.configs.is_empty() {
-        true => lines.push("No config of a reader's kind is set on it: the broker's defaults apply.".to_string()),
-        false => lines.push(format!(
-            "Configs: {}.",
-            detail.configs.iter().map(|config| format!("{}={}", config.name, config.value)).collect::<Vec<_>>().join(", ")
-        )),
-    }
+    lines.push(if detail.configs.is_empty() {
+        "No config of a reader's kind is set on it: the broker's defaults apply.".to_string()
+    } else {
+        format!("Configs: {}.", detail.configs.iter().map(|config| format!("{}={}", config.name, config.value)).collect::<Vec<_>>().join(", "))
+    });
     (lines.join("\n"), format!("{} partitions, {} records", topic.partitions.len(), topic.stored()))
 }
 
 fn numbers(list: &[i32]) -> String {
-    match list.is_empty() {
-        true => "none".to_string(),
-        false => list.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "),
+    if list.is_empty() {
+        return "none".to_string();
     }
+    list.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")
 }
 
 fn read(servers: &dyn KafkaServers, open: &[ConnectionView], args: &KafkaArgs) -> Result<(String, String), ToolError> {
@@ -171,10 +173,10 @@ fn read(servers: &dyn KafkaServers, open: &[ConnectionView], args: &KafkaArgs) -
 /// a topic of a hundred and twenty partitions is not one answer, and a model
 /// that asked for all of them has to be told which twenty it got.
 fn partitions_read(read: &[i32], asked: &[i32]) -> String {
-    match asked.len() > kafka::MAX_READ_PARTITIONS {
-        true => format!("{}, the first {} of {} asked for", numbers(read), kafka::MAX_READ_PARTITIONS, asked.len()),
-        false => numbers(read),
+    if asked.len() <= kafka::MAX_READ_PARTITIONS {
+        return numbers(read);
     }
+    format!("{}, the first {} of {} asked for", numbers(read), kafka::MAX_READ_PARTITIONS, asked.len())
 }
 
 /// A window of the topic: the last `count` records, or those from an offset.
@@ -196,18 +198,20 @@ fn window(servers: &dyn KafkaServers, connection: &ConnectionView, topic: &str, 
         text.push_str(&format!(", from offset {from}"));
     }
     text.push('.');
-    match messages.is_empty() {
-        true => text.push_str(" No records in that window."),
-        false => text.push_str(&format!("\n{}", render(&messages))),
+    if messages.is_empty() {
+        text.push_str(" No records in that window.");
+    } else {
+        text.push_str(&format!("\n{}", render(&messages)));
     }
-    match page.more || trimmed {
-        // Offsets, not a page number: retention moves the beginning of a
-        // topic, so "page 2" is another place by the time it is asked for.
-        true => text.push_str(&format!(
+    // Offsets, not a page number: retention moves the beginning of a topic,
+    // so "page 2" is another place by the time it is asked for.
+    if page.more || trimmed {
+        text.push_str(&format!(
             "\nMore follow. Continue with `from` where a partition stopped — {}. Read one partition at a time to continue it exactly.",
             next(&messages)
-        )),
-        false => text.push_str("\nNothing follows these on these partitions."),
+        ));
+    } else {
+        text.push_str("\nNothing follows these on these partitions.");
     }
     Ok((text, format!("{} messages", messages.len())))
 }
@@ -240,11 +244,12 @@ fn scanned(servers: &dyn KafkaServers, connection: &ConnectionView, topic: &str,
                 None => "narrow the partitions, or give `from` — an offset a `read` window showed — to start further in",
             };
             text.push_str(&format!(
-                " Not found in what it looked at, and the scan stopped before the end of the log (its ceilings: {} records, {} MiB of values, {} s per partition or {} matches, whichever came first) — {wider}.",
-                crate::domain::kafka::MAX_SCAN,
-                crate::domain::kafka::SCAN_BYTES / (1024 * 1024),
-                crate::domain::kafka::SCAN_TIME.as_secs(),
-                crate::domain::kafka::MAX_READ_COUNT
+                " Not found in what it looked at, and the scan stopped before the end of the log (its ceilings: {} records, {} MiB of values, {} s per partition up to {} s in all, or {} matches, whichever came first) — {wider}.",
+                kafka::MAX_SCAN,
+                kafka::SCAN_BYTES / (1024 * 1024),
+                kafka::SCAN_TIME.as_secs(),
+                kafka::SCAN_TIME_MOST.as_secs(),
+                kafka::MAX_READ_COUNT
             ));
         }
         // An offset narrows what was looked at: "everything stored" would be a lie.
@@ -276,7 +281,7 @@ fn line(message: &Message) -> String {
         head.push_str(&format!(", {}", at.format("%Y-%m-%d %H:%M:%S UTC")));
     }
     if let Some(key) = &message.key {
-        head.push_str(&format!(", key \"{}\"", String::from_utf8_lossy(key)));
+        head.push_str(&format!(", key \"{}\"", redact_text(&String::from_utf8_lossy(key))));
     }
     let (kind, text) = value(message.value.as_deref());
     head.push_str(&format!(", {kind} value, {} bytes", message.value.as_ref().map_or(0, Vec::len)));
@@ -285,17 +290,31 @@ fn line(message: &Message) -> String {
             .headers
             .iter()
             .map(|(name, value)| match value {
-                Some(bytes) => format!("{name}={}", String::from_utf8_lossy(bytes)),
+                Some(bytes) => format!("{name}={}", header(name, bytes)),
                 None => name.clone(),
             })
             .collect();
         head.push_str(&format!(", headers {}", headers.join(", ")));
     }
-    match text.is_empty() {
-        true => head,
-        // A dump ends with a newline; the indent should not.
-        false => format!("{head}\n  {}", text.trim_end().replace('\n', "\n  ")),
+    if text.is_empty() {
+        return head;
     }
+    // A dump ends with a newline; the indent should not.
+    format!("{head}\n  {}", text.trim_end().replace('\n', "\n  "))
+}
+
+/// A header's value as the model reads it. Headers are where a token rides
+/// along — `Authorization`, a cookie — so one named like that is hidden, and
+/// any other goes through the rule a document's field of its name would: a
+/// `x-api-key` hidden, a `password=…` inside a value hidden too.
+fn header(name: &str, bytes: &[u8]) -> String {
+    let lower = name.to_ascii_lowercase();
+    if ["authorization", "cookie"].iter().any(|word| lower.contains(word)) {
+        return REDACTED.to_string();
+    }
+    let mut field = json!({ name: String::from_utf8_lossy(bytes) });
+    crate::domain::mongo::redact_document(&mut field);
+    field[name].as_str().unwrap_or_default().to_string()
 }
 
 /// A value as the model reads it, and what kind of thing it is. JSON goes
@@ -329,7 +348,7 @@ fn value(bytes: Option<&[u8]>) -> (String, String) {
     // A form body, a config line: a password in it is hidden by name, as the
     // text of a cluster's own objects is.
     let text = match &view {
-        ValueView::Text { text, .. } | ValueView::Json { text, .. } => crate::domain::kube_view::redact_text(text),
+        ValueView::Text { text, .. } | ValueView::Json { text, .. } => redact_text(text),
         other => other.text(),
     };
     (kind.to_string(), cut(&text, whole))
@@ -344,10 +363,8 @@ fn cut(text: &str, whole: bool) -> String {
         return text.to_string();
     }
     let shown: String = text.chars().take(VALUE_CHARS).collect();
-    match whole {
-        true => format!("{shown}… (cut: {total} characters in all)"),
-        false => format!("{shown}… (cut: the value is longer than this)"),
-    }
+    let why = if whole { format!("{total} characters in all") } else { "the value is longer than this".to_string() };
+    format!("{shown}… (cut: {why})")
 }
 
 /// Where each partition of a window continues: one past its last offset read.
@@ -369,10 +386,10 @@ pub(super) fn definition() -> LlmToolDefinition {
             names they gave them. Nothing is written, and no consumer group is created: a read leaves the cluster as it \
             was. Find a topic first: op `topic` with `name` (a whole name, or part of one, any case) — one match answers \
             with its card, partitions, leaders, replicas, in-sync copies, watermarks and the configs a reader cares about; \
-            several matches, or no `name`, list them (up to 200). Then op `read` with `connection` (may be left out when \
+            an exact name answers with its card even when longer names contain it; several matches, or no `name`, list them (up to 200). Then op `read` with `connection` (may be left out when \
             only one is open), `topic`, and: `partitions` (empty is all, up to 20), `from` (an offset; empty reads the last \
             `count`), `count` (up to 50, 20 by default), `key` (only records with that key). Kafka indexes nothing by key: \
-            a read with `key` is a scan of the log, bounded to 20 000 records, 8 MiB of values or 5 s per partition, and \
+            a read with `key` is a scan of the log, bounded to 20 000 records, 8 MiB of values or 5 s per partition (30 s in all), and \
             the answer says what it looked at. A value comes as JSON, as a raw protobuf dump by field number (no schema, \
             so no field names), as text, or as hex. When more follow, the answer names the offset each partition continues \
             from; read one partition at a time to continue exactly."
@@ -573,6 +590,31 @@ mod tests {
         assert!(!asked.iter().any(|a| a.starts_with("topic ")), "{asked:?}");
     }
 
+    /// A whole name is that topic's card, even with longer names containing it.
+    #[test]
+    fn an_exact_name_is_its_card_beside_longer_names() {
+        let (result, asked) = run(Fake { names: vec!["orders", "orders-dlq"], ..servers() }, json!({ "op": "topic", "name": "orders" }));
+        assert!(said(result).starts_with("orders — 2 partitions, 20 records on Local:"));
+        assert!(asked.contains(&"topic c1 orders".to_string()), "{asked:?}");
+    }
+
+    /// A header carries tokens: one named for them is hidden, and so is a
+    /// credential inside a key or another header's value.
+    #[test]
+    fn a_token_in_a_header_or_a_key_is_not_shown() {
+        let mut message = record(0, 1, "user password=hunter2", b"plain");
+        message.headers = vec![
+            ("Authorization".into(), Some(b"Bearer abc.def".to_vec())),
+            ("x-api-key".into(), Some(b"k-123".to_vec())),
+            ("trace".into(), Some(b"t-1".to_vec())),
+        ];
+        let text = said(run(Fake { messages: vec![message], ..servers() }, json!({ "op": "read", "topic": "orders" })).0);
+        for gone in ["abc.def", "k-123", "hunter2"] {
+            assert!(!text.contains(gone), "{gone} in {text}");
+        }
+        assert!(text.contains("Authorization=<redacted>, x-api-key=<redacted>, trace=t-1"), "{text}");
+    }
+
     #[test]
     fn a_card_carries_the_partitions_watermarks_and_the_configs_a_reader_needs() {
         // The connection's name is matched in any case, as `mongo`'s is.
@@ -628,12 +670,12 @@ mod tests {
 
     #[test]
     fn a_key_is_a_scan_and_a_scan_that_found_nothing_says_what_it_looked_at() {
-        let ceiling = Fake { scanned_count: crate::domain::kafka::MAX_SCAN, scan_more: true, ..servers() };
+        let ceiling = Fake { scanned_count: kafka::MAX_SCAN, scan_more: true, ..servers() };
         let (result, asked) = run(ceiling, json!({ "op": "read", "topic": "orders", "key": "user-1" }));
         assert_eq!(asked, ["scan c1 orders partitions [] from None key user-1"]);
         assert_eq!(
             said(result),
-            "Scanned 20000 records of \"orders\" on Local for key \"user-1\" — partitions 0, 1. Not found in what it looked at, and the scan stopped before the end of the log (its ceilings: 20000 records, 8 MiB of values, 5 s per partition or 100 matches, whichever came first) — narrow the partitions, or give `from` — an offset a `read` window showed — to start further in."
+            "Scanned 20000 records of \"orders\" on Local for key \"user-1\" — partitions 0, 1. Not found in what it looked at, and the scan stopped before the end of the log (its ceilings: 20000 records, 8 MiB of values, 5 s per partition up to 30 s in all, or 100 matches, whichever came first) — narrow the partitions, or give `from` — an offset a `read` window showed — to start further in."
         );
 
         // The whole log read and nothing in it: said plainly, without a ceiling.

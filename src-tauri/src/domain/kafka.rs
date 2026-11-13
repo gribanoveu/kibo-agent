@@ -68,6 +68,15 @@ pub struct Sasl {
     pub password: String,
 }
 
+/// The password is wiped wherever a login is let go — the store's list, the
+/// copy a client was made from, an edit's replaced one — not only where
+/// someone remembered to.
+impl Drop for Sasl {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.password);
+    }
+}
+
 /// Never the password: a `{:?}` of a connection is what a log line or a dump
 /// of a tool's arguments would print.
 impl std::fmt::Debug for Sasl {
@@ -139,12 +148,12 @@ impl Connection {
     /// Refused before a client is built, so a read-only cluster's only answer
     /// to a send is this sentence rather than a broker's error.
     pub fn producing(&self) -> Result<(), KafkaError> {
-        match self.read_only {
-            // The name as it stands, trimmed: whether it is empty is the
-            // form's question, not this one's.
-            true => Err(KafkaError::ReadOnly(self.name.trim().to_string())),
-            false => Ok(()),
+        // The name as it stands, trimmed: whether it is empty is the form's
+        // question, not this one's.
+        if self.read_only {
+            return Err(KafkaError::ReadOnly(self.name.trim().to_string()));
         }
+        Ok(())
     }
 }
 
@@ -196,13 +205,6 @@ impl PartitionView {
     /// are gone from both ends, so the difference is what is readable.
     pub fn stored(&self) -> i64 {
         (self.latest - self.earliest).max(0)
-    }
-
-    /// The window the page reads for "the last `count`": never before the
-    /// earliest offset still stored.
-    pub fn last(&self, count: i64) -> (i64, i64) {
-        let from = (self.latest - count.max(0)).max(self.earliest);
-        (from, self.latest)
     }
 }
 
@@ -472,9 +474,6 @@ pub struct LagView {
     /// number; a partition without a commit has no lag to speak of, and shows
     /// as no data rather than as zero.
     pub lag: Option<i64>,
-    /// A member holds this partition right now. A group that is all but dead
-    /// leaves committed offsets behind, and its lag keeps looking real.
-    pub active: bool,
 }
 
 /// Whether a listed group is one this page shows: a consumer group, or one
@@ -518,16 +517,13 @@ pub struct GroupView {
 
 impl GroupView {
     pub fn new(name: String, state: String, members: usize, lags_read: bool, lags: Vec<LagView>) -> Self {
-        let total_lag = match lags.iter().filter_map(|lag| lag.lag) {
-            total if total.clone().next().is_none() => None,
-            total => Some(total.sum()),
-        };
+        let total_lag = lags.iter().filter_map(|lag| lag.lag).reduce(|sum, lag| sum + lag);
         Self { name, state, members, lags_read, lags, total_lag }
     }
 }
 
 impl LagView {
-    pub fn new(group: &str, topic: &str, partition: i32, committed: Option<i64>, latest: i64, active: bool) -> Self {
+    pub fn new(group: &str, topic: &str, partition: i32, committed: Option<i64>, latest: i64) -> Self {
         Self {
             group: group.to_string(),
             topic: topic.to_string(),
@@ -535,7 +531,6 @@ impl LagView {
             committed,
             latest,
             lag: committed.map(|committed| (latest - committed).max(0)),
-            active,
         }
     }
 }
@@ -671,10 +666,10 @@ fn confluent(bytes: &[u8]) -> Option<(u32, &[u8])> {
 }
 
 fn cut(text: &str) -> (String, bool) {
-    match text.len() > TEXT_LIMIT {
-        true => (format!("{}…", &text[..floor_char(text, TEXT_LIMIT)]), true),
-        false => (text.to_string(), false),
+    if text.len() <= TEXT_LIMIT {
+        return (text.to_string(), false);
     }
+    (format!("{}…", &text[..floor_char(text, TEXT_LIMIT)]), true)
 }
 
 /// The last boundary at or below `at`, so a cut never lands inside a character.
@@ -691,11 +686,8 @@ fn floor_char(text: &str, at: usize) -> usize {
 /// byte is a tag, and tags are control bytes.
 fn printable(bytes: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(bytes).ok()?;
-    let awkward = text.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'));
-    match awkward {
-        true => None,
-        false => Some(text.to_string()),
-    }
+    let clean = !text.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'));
+    clean.then(|| text.to_string())
 }
 
 /// A value as the dump writes it between quotes: printable text stays as it
@@ -781,7 +773,7 @@ enum ProtoError {
 
 impl ProtoMessage {
     fn decode(bytes: &[u8]) -> Result<Self, ProtoError> {
-        let fields = decode_fields(bytes, 0, MAX_DEPTH)?;
+        let (fields, _) = decode_fields(bytes, 0, MAX_DEPTH, None)?;
         Ok(Self { fields })
     }
 
@@ -794,41 +786,10 @@ impl ProtoMessage {
     }
 }
 
-/// `None` for a field that ended its group: the end tag belongs to the field
-/// that opened it, not to this message.
-fn decode_fields(bytes: &[u8], at: usize, depth: usize) -> Result<Vec<ProtoField>, ProtoError> {
-    if depth == 0 {
-        return Err(ProtoError::TooDeep { max: MAX_DEPTH, at });
-    }
-    let mut fields = Vec::new();
-    let mut at = at;
-    while at < bytes.len() {
-        let tag_at = at;
-        let tag = varint(bytes, &mut at)?;
-        let number = field_number(tag, tag_at)?;
-        let wire = (tag & 0x7) as u8;
-        // An end tag closes a group where the group began; at message level it
-        // closes none.
-        if wire == 4 {
-            return Err(ProtoError::StrayEndGroup { at: tag_at });
-        }
-        fields.push(decode_field_with_tag(bytes, &mut at, number, wire, depth, tag_at)?);
-    }
-    Ok(fields)
-}
-
-/// A tag's field number, refused when protobuf has no such field: 0 does not
-/// exist, and anything past 2^29 - 1 is not a message but ordinary binary.
-fn field_number(tag: u64, at: usize) -> Result<u32, ProtoError> {
-    let number = tag >> 3;
-    match number {
-        0 => Err(ProtoError::ZeroField { at }),
-        number if number > u64::from(MAX_FIELD) => Err(ProtoError::FieldTooLarge { at, number }),
-        number => Ok(number as u32),
-    }
-}
-
-fn decode_group(bytes: &[u8], at: usize, depth: usize, number: u32, opened: usize) -> Result<(Vec<ProtoField>, usize), ProtoError> {
+/// The fields from `at` to the end of `bytes` — or, inside a group (`group`
+/// is its field number and where it opened), to its end tag, answering where
+/// that tag ended.
+fn decode_fields(bytes: &[u8], at: usize, depth: usize, group: Option<(u32, usize)>) -> Result<(Vec<ProtoField>, usize), ProtoError> {
     if depth == 0 {
         // A group has no length that could become bytes, so one nested past the
         // limit fails the dump instead of turning into a blob as a message does.
@@ -841,20 +802,34 @@ fn decode_group(bytes: &[u8], at: usize, depth: usize, number: u32, opened: usiz
     while at < bytes.len() {
         let tag_at = at;
         let tag = varint(bytes, &mut at)?;
-        let field = field_number(tag, tag_at)?;
+        let number = field_number(tag, tag_at)?;
         let wire = (tag & 0x7) as u8;
+        // An end tag closes the group it is inside; at message level it closes
+        // none.
         if wire == 4 {
-            return match field == number {
-                true => Ok((fields, at)),
-                false => Err(ProtoError::MismatchedGroup { at: tag_at, expected: number, found: field }),
+            return match group {
+                Some((open, _)) if open == number => Ok((fields, at)),
+                Some((open, _)) => Err(ProtoError::MismatchedGroup { at: tag_at, expected: open, found: number }),
+                None => Err(ProtoError::StrayEndGroup { at: tag_at }),
             };
         }
-        // Any other wire type: the group's own field repeats here, so its value
-        // is read the same way a message's would be. The tag was already read,
-        // so the value starts after it.
-        fields.push(decode_field_with_tag(bytes, &mut at, field, wire, depth, tag_at)?);
+        fields.push(decode_field_with_tag(bytes, &mut at, number, wire, depth, tag_at)?);
     }
-    Err(ProtoError::UnclosedGroup { at: opened })
+    match group {
+        Some((_, opened)) => Err(ProtoError::UnclosedGroup { at: opened }),
+        None => Ok((fields, at)),
+    }
+}
+
+/// A tag's field number, refused when protobuf has no such field: 0 does not
+/// exist, and anything past 2^29 - 1 is not a message but ordinary binary.
+fn field_number(tag: u64, at: usize) -> Result<u32, ProtoError> {
+    let number = tag >> 3;
+    match number {
+        0 => Err(ProtoError::ZeroField { at }),
+        number if number > u64::from(MAX_FIELD) => Err(ProtoError::FieldTooLarge { at, number }),
+        number => Ok(number as u32),
+    }
 }
 
 fn decode_field_with_tag(bytes: &[u8], at: &mut usize, number: u32, wire: u8, depth: usize, tag_at: usize) -> Result<ProtoField, ProtoError> {
@@ -871,13 +846,13 @@ fn decode_field_with_tag(bytes: &[u8], at: &mut usize, number: u32, wire: u8, de
             }
             let body = &bytes[*at..*at + length];
             *at += length;
-            match decode_fields(body, 0, depth - 1) {
-                Ok(fields) if !fields.is_empty() => ProtoValue::Message(fields),
+            match decode_fields(body, 0, depth - 1, None) {
+                Ok((fields, _)) if !fields.is_empty() => ProtoValue::Message(fields),
                 _ => ProtoValue::Blob(body.to_vec()),
             }
         }
         3 => {
-            let (fields, end) = decode_group(bytes, *at, depth - 1, number, tag_at)?;
+            let (fields, end) = decode_fields(bytes, *at, depth - 1, Some((number, tag_at)))?;
             *at = end;
             ProtoValue::Group(fields)
         }
@@ -925,12 +900,7 @@ fn render_fields(fields: &[ProtoField], depth: usize, out: &mut String) {
             ProtoValue::Fixed64(value) => out.push_str(&format!("{value}\n")),
             ProtoValue::Fixed32(value) => out.push_str(&format!("{value}\n")),
             ProtoValue::Blob(bytes) => out.push_str(&format!("\"{}\"\n", dump_string(bytes))),
-            ProtoValue::Message(fields) => {
-                out.push_str("{\n");
-                render_fields(fields, depth + 1, out);
-                out.push_str(&format!("{indent}}}\n"));
-            }
-            ProtoValue::Group(fields) => {
+            ProtoValue::Message(fields) | ProtoValue::Group(fields) => {
                 out.push_str("{\n");
                 render_fields(fields, depth + 1, out);
                 out.push_str(&format!("{indent}}}\n"));
@@ -999,14 +969,21 @@ pub struct ScanPage {
 
 /// What one key scan may cost, so that a topic of a million records is not
 /// read on a model's guess: records looked at, bytes of values, and time per
-/// partition — whichever comes first.
+/// partition up to [`SCAN_TIME_MOST`] in all — whichever comes first.
 pub const MAX_SCAN: usize = 20_000;
 pub const SCAN_BYTES: usize = 8 * 1024 * 1024;
 pub const SCAN_TIME: std::time::Duration = std::time::Duration::from_secs(5);
+/// A tool call the turn waits on: twenty partitions are not a hundred seconds.
+pub const SCAN_TIME_MOST: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long a scan of `partitions` may look.
+pub fn scan_time(partitions: usize) -> std::time::Duration {
+    (SCAN_TIME * partitions.max(1) as u32).min(SCAN_TIME_MOST)
+}
 
 /// Whether a scan has spent what it may.
 pub fn scan_over(scanned: usize, bytes: usize, spent: std::time::Duration, partitions: usize) -> bool {
-    scanned >= MAX_SCAN || bytes >= SCAN_BYTES || spent >= SCAN_TIME * partitions.max(1) as u32
+    scanned >= MAX_SCAN || bytes >= SCAN_BYTES || spent >= scan_time(partitions)
 }
 
 /// Whether a record's key is the one looked for. Compared as bytes: a key that
@@ -1029,7 +1006,7 @@ mod tests {
     use super::*;
 
     /// A scan stops at the first of its three ceilings, and the clock is per
-    /// partition: twenty of them are a hundred seconds of looking, not five.
+    /// partition up to a ceiling of its own: twenty of them are thirty seconds.
     #[test]
     fn a_scan_stops_at_the_first_of_its_ceilings() {
         let s = |scanned: usize, bytes: usize, seconds: u64, partitions: usize| {
@@ -1044,6 +1021,8 @@ mod tests {
         assert!(!s(0, 0, 5, 2), "the time is each partition's own");
         assert!(s(0, 0, 10, 2));
         assert!(s(0, 0, 5, 0), "no partition still means one's worth");
+        assert!(!s(0, 0, 29, 20));
+        assert!(s(0, 0, 30, 20), "twenty partitions stop at the ceiling, not at a hundred seconds");
     }
 
     /// A key is bytes and the model writes text: only the very same bytes
@@ -1432,21 +1411,20 @@ mod tests {
 
     #[test]
     fn lag_is_the_difference_and_is_unknown_without_a_commit() {
-        let row = LagView::new("g", "orders", 0, Some(2), 5, true);
+        let row = LagView::new("g", "orders", 0, Some(2), 5);
         assert_eq!(row.lag, Some(3));
-        assert!(row.active);
-        let behind = LagView::new("g", "orders", 1, Some(9), 4, false);
+        let behind = LagView::new("g", "orders", 1, Some(9), 4);
         assert_eq!(behind.lag, Some(0), "a commit past the end is not negative lag");
-        let never = LagView::new("g", "orders", 2, None, 7, false);
+        let never = LagView::new("g", "orders", 2, None, 7);
         assert_eq!(never.lag, None, "no commit is no data, not zero");
     }
 
     #[test]
     fn the_last_n_stops_at_the_earliest_offset_still_stored() {
         let partition = PartitionView { partition: 0, leader: Some(1), replicas: vec![1], in_sync: vec![1], earliest: 90, latest: 100 };
-        assert_eq!(partition.last(20), (90, 100));
-        assert_eq!(partition.last(5), (95, 100));
-        assert_eq!(partition.last(0), (100, 100));
+        assert_eq!(starting(None, partition.earliest, partition.latest, 20), 90);
+        assert_eq!(starting(None, partition.earliest, partition.latest, 5), 95);
+        assert_eq!(starting(None, partition.earliest, partition.latest, 0), 100);
         assert_eq!(partition.stored(), 10);
     }
 
@@ -1575,7 +1553,7 @@ mod tests {
     fn a_watermark_that_moved_backwards_is_not_negative_and_says_nothing_is_stored() {
         let partition = PartitionView { partition: 0, leader: None, replicas: vec![], in_sync: vec![], earliest: 100, latest: 90 };
         assert_eq!(partition.stored(), 0);
-        assert_eq!(partition.last(5), (100, 90));
+        assert_eq!(starting(None, partition.earliest, partition.latest, 5), 100);
         let topic = TopicView { name: "one".into(), internal: false, partitions: vec![partition] };
         assert_eq!(topic.describe(), "one — 1 partition, 0 records");
     }
@@ -1651,7 +1629,7 @@ mod tests {
 
     #[test]
     fn a_group_without_a_commit_has_no_lag_rather_than_none_at_all() {
-        let never = GroupView::new("g".into(), "Empty".into(), 0, true, vec![LagView::new("g", "t", 0, None, 500, false)]);
+        let never = GroupView::new("g".into(), "Empty".into(), 0, true, vec![LagView::new("g", "t", 0, None, 500)]);
         assert_eq!(never.total_lag, None, "no commit is no data, not caught up");
 
         let some = GroupView::new(
@@ -1660,9 +1638,9 @@ mod tests {
             2,
             true,
             vec![
-                LagView::new("g", "t", 0, Some(90), 100, true),
-                LagView::new("g", "t", 1, Some(30), 100, true),
-                LagView::new("g", "t", 2, Some(900), 100, true),
+                LagView::new("g", "t", 0, Some(90), 100),
+                LagView::new("g", "t", 1, Some(30), 100),
+                LagView::new("g", "t", 2, Some(900), 100),
             ],
         );
         assert_eq!(some.total_lag, Some(10 + 70), "a commit past the end is no negative lag");

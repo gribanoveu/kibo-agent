@@ -15,6 +15,7 @@ use crate::services::kafka::KafkaLive;
 use super::blocking;
 
 type Clients<'a> = State<'a, Arc<KafkaClients>>;
+type Live<'a> = State<'a, Arc<KafkaLive>>;
 
 #[tauri::command]
 pub async fn kafka_connections() -> Result<Vec<ConnectionView>, String> {
@@ -22,13 +23,8 @@ pub async fn kafka_connections() -> Result<Vec<ConnectionView>, String> {
 }
 
 #[tauri::command]
-pub async fn kafka_connection_save(
-    connection: Connection,
-    clients: Clients<'_>,
-    live: tauri::State<'_, std::sync::Arc<KafkaLive>>,
-) -> Result<Vec<ConnectionView>, String> {
+pub async fn kafka_connection_save(connection: Connection, clients: Clients<'_>, live: Live<'_>) -> Result<Vec<ConnectionView>, String> {
     let clients = clients.inner().clone();
-    let live = live.inner().clone();
     // Reads of the old settings would keep reporting the old cluster under the
     // new ones: they end with the change.
     live.stop_all();
@@ -36,15 +32,11 @@ pub async fn kafka_connection_save(
 }
 
 #[tauri::command]
-pub async fn kafka_connection_delete(
-    id: String,
-    clients: Clients<'_>,
-    live: tauri::State<'_, std::sync::Arc<KafkaLive>>,
-) -> Result<Vec<ConnectionView>, String> {
+pub async fn kafka_connection_delete(id: String, clients: Clients<'_>, live: Live<'_>) -> Result<Vec<ConnectionView>, String> {
     let clients = clients.inner().clone();
     // Its reads end with it: a consumer holding a cluster the user just deleted
     // from this computer is not something to leave behind.
-    live.inner().stop_all();
+    live.stop_all();
     blocking(move || kafka::delete(&clients, &id)).await
 }
 
@@ -63,8 +55,6 @@ pub async fn kafka_topics(connection: String, name: Option<String>, page: Option
     blocking(move || kafka::topics(&clients, &connection, name.as_deref(), page.unwrap_or(0), refresh.unwrap_or(false))).await
 }
 
-/// A page of a topic's messages — `spec` names the partitions, the offset and
-/// how many; its ceilings are the domain's.
 /// The cluster's consumer groups: state, members and lag per partition.
 #[tauri::command]
 pub async fn kafka_groups(connection: String, clients: Clients<'_>) -> Result<GroupList, String> {
@@ -72,6 +62,8 @@ pub async fn kafka_groups(connection: String, clients: Clients<'_>) -> Result<Gr
     blocking(move || kafka::groups(&clients, &connection)).await
 }
 
+/// A page of a topic's messages — `spec` names the partitions, the offset and
+/// how many; its ceilings are the domain's.
 #[tauri::command]
 pub async fn kafka_messages(connection: String, spec: ReadSpec, clients: Clients<'_>) -> Result<ReadPage, String> {
     let clients = clients.inner().clone();
@@ -86,11 +78,11 @@ pub async fn kafka_live_start(
     spec: LiveSpec,
     channel: tauri::ipc::Channel<LiveBatch>,
     clients: Clients<'_>,
-    live: tauri::State<'_, std::sync::Arc<kafka::KafkaLive>>,
+    live: Live<'_>,
 ) -> Result<String, String> {
     let clients = clients.inner().clone();
     let live = live.inner().clone();
-    let sink: crate::domain::kafka::LiveSink = std::sync::Arc::new(move |batch| {
+    let sink: crate::domain::kafka::LiveSink = Arc::new(move |batch| {
         // A closed channel is a window that reloaded or closed: the read ends,
         // or it would poll a cluster forever with nowhere to put the answer.
         channel.send(batch).is_ok()
@@ -102,8 +94,8 @@ pub async fn kafka_live_start(
 
 /// Ends a live read. One already ended is not an error.
 #[tauri::command]
-pub fn kafka_live_stop(id: String, live: tauri::State<'_, std::sync::Arc<KafkaLive>>) {
-    live.inner().stop(&id);
+pub fn kafka_live_stop(id: String, live: Live<'_>) {
+    live.stop(&id);
 }
 
 #[tauri::command]
