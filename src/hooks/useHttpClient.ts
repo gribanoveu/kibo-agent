@@ -141,14 +141,6 @@ export function useHttpClient(historyShown = false) {
     }
   }, []);
 
-  // A draft arrives from a chat, and goes with it, on `http:changed`: read once listening,
-  // so that one landing in between is in it.
-  useEffect(() => {
-    const listening = onHttpChanged(() => void readDrafts());
-    void listening.then(() => readDrafts());
-    return () => void listening.then((stop) => stop());
-  }, [readDrafts]);
-
   // What a script wrote. Variables alone: the tree holds edits not saved yet.
   // ponytail: reads every collection for the one that changed; a command for the
   // variables alone when a send's pause shows on many collections.
@@ -161,6 +153,18 @@ export function useHttpClient(historyShown = false) {
       setProblem(`The variables did not load: ${e}`);
     }
   }, [reloadEnvironments]);
+
+  // A draft arrives from a chat, and goes with it, on `http:changed`: read once listening,
+  // so that one landing in between is in it. So do the variables an agent's send wrote —
+  // the environment's form saves over what the page last read.
+  useEffect(() => {
+    const listening = onHttpChanged(() => {
+      void readDrafts();
+      void reloadVariables();
+    });
+    void listening.then(() => readDrafts());
+    return () => void listening.then((stop) => stop());
+  }, [readDrafts, reloadVariables]);
 
   // The page's writes, one after another in the order made: a rename right after
   // adding goes after the add, and two saves of one request land in their order.

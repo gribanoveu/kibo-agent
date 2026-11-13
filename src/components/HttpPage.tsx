@@ -1987,6 +1987,31 @@ const toSave = (d: Draft): Environment => ({
   variables: d.variables.map(({ kept, shown: _, revealed, ...v }) => (kept && (v.value === "" || v.value === revealed) ? { ...v, value: SECRET_MASK } : v)),
 });
 
+/** The rows as the form opens them: a saved secret's field empty, `kept` behind it. */
+const opened = (e: Environment): Draft => ({
+  ...e,
+  variables: e.variables.map((v): Row => (v.secret && v.value === SECRET_MASK ? { ...v, value: "", kept: true } : v)),
+});
+
+/**
+ * The form's rows after the backend changed under it — a script's `pm.environment.set`, a save:
+ * a row the user has not touched since `was` is as `now` has it, one the backend added
+ * comes in, and what the user typed stays.
+ */
+const rebased = (draft: Draft, was: Draft, now: Draft): Draft => {
+  const same = (a: Row, b: Row | undefined) => b !== undefined && a.value === b.value && a.secret === b.secret && a.enabled === b.enabled && a.kept === b.kept;
+  const before = new Map(was.variables.map((v) => [v.key, v]));
+  const after = new Map(now.variables.map((v) => [v.key, v]));
+  const variables = draft.variables.flatMap((v) => {
+    if (!same(v, before.get(v.key))) return [v];
+    const fresh = after.get(v.key);
+    return fresh ? [fresh] : [];
+  });
+  const mine = new Set(draft.variables.map((v) => v.key));
+  const added = now.variables.filter((v) => !before.has(v.key) && !mine.has(v.key));
+  return { ...draft, variables: [...variables, ...added] };
+};
+
 const AGENT_ACCESS = [
   { value: "off", label: "Off", hint: "the agent does not know it is here" },
   { value: "readOnly", label: "Read only", hint: "GET, HEAD and OPTIONS to your collections' hosts, with no card; it reads the values that are not secret" },
@@ -2011,13 +2036,20 @@ function EnvironmentForm({
   // A saved secret's field starts empty — typing replaces it — never `•••` to type after. `kept` says
   // a sealed value is behind the row: left empty, it goes back as the mask, which keeps the value —
   // and is refused when the row was renamed away from it, rather than saved empty.
-  const [draft, setDraft] = useState<Draft>(() => ({
-    ...environment,
-    variables: environment.variables.map((v): Row => (v.secret && v.value === SECRET_MASK ? { ...v, value: "", kept: true } : v)),
-  }));
+  const [draft, setDraft] = useState<Draft>(() => opened(environment));
   const [said, setSaid] = useState<{ error: boolean; text: string } | null>(null);
   // What was last sent, as text: a field left with nothing changed saves nothing.
   const sent = useRef(JSON.stringify(toSave(draft)));
+  // The environment as the backend last said. A save is the whole of it, so what a script
+  // wrote since the form opened is taken in — or the next save would write over it.
+  const base = useRef(environment);
+  useEffect(() => {
+    const was = base.current;
+    if (was === environment) return;
+    base.current = environment;
+    setDraft((d) => rebased(d, opened(was), opened(environment)));
+    sent.current = JSON.stringify(toSave(opened(environment)));
+  }, [environment]);
   const put = (i: number, patch: Partial<Row>) => setDraft((d) => ({ ...d, variables: d.variables.map((v, j) => (j === i ? { ...v, ...patch } : v)) }));
   // Only a secret saved under the name the row still has: its value is what the eye asks for.
   const sealed = new Set(environment.variables.filter((s) => s.secret).map((s) => s.key));

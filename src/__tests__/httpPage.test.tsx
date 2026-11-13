@@ -41,6 +41,8 @@ const ENTRY: HttpHistoryEntry = {
 };
 
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
+/** The environment as the backend keeps it: saved by the form, written by a script. */
+let stage: Environment = structuredClone(STAGE);
 let holdSends = false;
 /** The collection's scripts as the backend says, turned on and off by `http_scripts_set`. */
 let states: HttpScriptState[] = [];
@@ -94,7 +96,7 @@ mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     if (command === "http_collection_list") return Promise.resolve([{ id: "c", file: structuredClone(FILE), error: null }]);
-    if (command === "http_environment_list") return Promise.resolve({ environments: [structuredClone(STAGE)], globals: [] });
+    if (command === "http_environment_list") return Promise.resolve({ environments: [structuredClone(stage)], globals: [] });
     if (command === "http_history_list") return Promise.resolve([ENTRY]);
     if (command === "http_scripts") return Promise.resolve(structuredClone(states));
     if (command === "http_script_save" && scriptSaves) return new Promise((done) => scriptSaves!.push(() => done(null)));
@@ -142,7 +144,9 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "http_environment_secret") return Promise.resolve("hunter2");
     if (command === "http_environment_save") {
       const env = args!.environment as Environment;
-      return env.trustedCert === "junk" ? Promise.reject("the certificate: no certificate in it") : Promise.resolve(null);
+      if (env.trustedCert === "junk") return Promise.reject("the certificate: no certificate in it");
+      stage = { ...env, variables: env.variables.map((v) => (v.secret ? { ...v, value: "•••" } : v)) };
+      return Promise.resolve(null);
     }
     return Promise.resolve(null);
   },
@@ -183,6 +187,7 @@ async function shown(tab?: string) {
 beforeEach(() => {
   localStorage.clear();
   calls = [];
+  stage = structuredClone(STAGE);
   holdSends = false;
   states = [];
   scriptSaves = null;
@@ -824,6 +829,42 @@ describe("the HTTP page", () => {
     expect((called("http_environment_save")[0]!.environment as Environment).variables[1].value).toBe("hunter3");
     await new Promise((r) => setTimeout(r, 20));
     expect([value().value, value().type]).toEqual(["hunter3", "text"]);
+  });
+
+  test("what a script writes while the form is open is kept as the form saves; what was typed stays", async () => {
+    stage.variables.push({ key: "orderId", value: "1", secret: false, enabled: true });
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    const value = (i: number) => (screen.getAllByLabelText("Value") as HTMLInputElement[])[i];
+    const var_ = (key: string, value: string) => ({ key, value, secret: false, enabled: true });
+    // An agent's send ran a script that set a variable: the form shows it, and has nothing to save.
+    stage = { ...stage, variables: [STAGE.variables[0], STAGE.variables[1], var_("orderId", "7")] };
+    act(() => told.forEach((tell) => tell()));
+    await waitFor(() => expect(value(2).value).toBe("7"));
+    fireEvent.focusOut(value(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called("http_environment_save")).toEqual([]);
+
+    fireEvent.change(value(0), { target: { value: "https://mine.test" } });
+    // Another, while a field is being typed in: it sets the one typed in and writes one more.
+    stage = { ...stage, variables: [var_("baseUrl", "https://script.test"), STAGE.variables[1], var_("orderId", "7"), var_("session", "s1")] };
+    act(() => told.forEach((tell) => tell()));
+    await waitFor(() => expect(screen.getAllByLabelText("Value").length).toBe(4));
+    expect([value(0).value, value(2).value, value(3).value]).toEqual(["https://mine.test", "7", "s1"]);
+    fireEvent.focusOut(value(0));
+    await waitFor(() => expect(called("http_environment_save").length).toBe(1));
+    expect((called("http_environment_save")[0]!.environment as Environment).variables).toEqual([
+      var_("baseUrl", "https://mine.test"),
+      { key: "token", value: "•••", secret: true, enabled: true },
+      var_("orderId", "7"),
+      var_("session", "s1"),
+    ]);
+    // Read back as saved, nothing is left to save.
+    await new Promise((r) => setTimeout(r, 20));
+    fireEvent.focusOut(value(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called("http_environment_save").length).toBe(1);
   });
 
   test("a variable turned off is saved at once", async () => {
