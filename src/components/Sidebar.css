@@ -387,6 +387,12 @@
   gap: 2px;
   padding-right: 4px;
 }
+/* The same ⋮ the chat rows wear: same size, same right edge, the dots land
+   on the same line down the column. */
+.chat-folder-head .chat-menu-button {
+  width: 24px;
+  height: 24px;
+}
 .chat-folder-toggle {
   display: flex;
   align-items: center;
