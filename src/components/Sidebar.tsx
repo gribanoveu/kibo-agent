@@ -8,7 +8,6 @@ import {
   CircleCheck,
   CodeXml,
   FolderInput,
-  FolderPlus,
   GitBranch,
   Info,
   Keyboard,
@@ -355,29 +354,15 @@ export function Sidebar({
         {(chats.length > 0 || groups.length > 0) && (
           <div className="group-head">
             <span>Chats</span>
-            <div className="group-head-actions">
-              <button
-                type="button"
-                className="iconbtn"
-                title="New folder"
-                aria-label="New folder"
-                onClick={() => {
-                  setNaming({ group: null, name: "" });
-                  setNameError(null);
-                }}
-              >
-                <FolderPlus size={14} />
-              </button>
-              <Dropdown
-                label={FILTERS.find((f) => f.value === filter)?.label}
-                title="Which chats to list"
-                options={FILTERS}
-                value={filter}
-                onPick={(value) => setFilter(value as Filter)}
-                below
-                right
-              />
-            </div>
+            <Dropdown
+              label={FILTERS.find((f) => f.value === filter)?.label}
+              title="Which chats to list"
+              options={FILTERS}
+              value={filter}
+              onPick={(value) => setFilter(value as Filter)}
+              below
+              right
+            />
           </div>
         )}
         {/* With folders alive below, their Empty lines are the state — a
@@ -474,39 +459,29 @@ export function Sidebar({
       </Modal>
 
       <Modal title={`Move “${moving?.title ?? ""}” to`} open={moving !== null} onClose={() => setMoving(null)}>
-        <div className="chat-move-list">
-          <button
-            type="button"
-            onClick={() => {
-              if (moving) onMoveChat(moving.id, null);
-              setMoving(null);
-            }}
-          >
-            No folder
-          </button>
-          {groups.map((group) => (
-            <button
-              key={group.id}
-              type="button"
-              onClick={() => {
-                if (moving) onMoveChat(moving.id, group.id);
-                setMoving(null);
-              }}
-            >
-              {group.name}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="chat-move-new"
-            onClick={() => {
+        <Dropdown
+          label="Pick a folder"
+          title="Which folder holds the chat"
+          heading="Move to"
+          options={[
+            { value: "", label: "No folder" },
+            ...groups.map((group) => ({ value: group.id, label: group.name })),
+            { value: "__new__", label: "New folder…" },
+          ]}
+          value=""
+          below
+          onPick={(value) => {
+            if (value === "__new__") {
+              // The move dialog stays open beneath the name dialog: the
+              // folder being made is made for this chat.
               setNaming({ group: null, name: "" });
               setNameError(null);
-            }}
-          >
-            New folder…
-          </button>
-        </div>
+              return;
+            }
+            if (moving) onMoveChat(moving.id, value === "" ? null : value);
+            setMoving(null);
+          }}
+        />
       </Modal>
 
       <Modal

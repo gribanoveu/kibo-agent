@@ -377,19 +377,10 @@
   color: var(--text-faint);
 }
 
-/* "New folder" beside the filter in the list's head. */
-.group-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.group-head-actions .iconbtn {
-  width: 24px;
-  height: 24px;
-}
-
 /* A folder's heading on the day's sticky line: the collapse toggle with the
-   name and count, and its own menu — always shown, a folder is not a hover. */
+   name and count, and its own menu — always shown, a folder is not a hover.
+   The toggle keeps the day's padding, so a folder's name sits on the same
+   left edge as Today and Pinned above it. */
 .chat-folder-head {
   display: flex;
   align-items: center;
@@ -402,7 +393,7 @@
   gap: 6px;
   flex: 1;
   min-width: 0;
-  padding: 0 4px;
+  padding: 0;
   border: 0;
   background: none;
   color: inherit;
@@ -410,6 +401,9 @@
   text-transform: inherit;
   letter-spacing: inherit;
   cursor: pointer;
+}
+.chat-folder-toggle:hover {
+  color: var(--text);
 }
 .chat-folder-toggle svg {
   flex: none;
@@ -431,32 +425,6 @@
   padding: 4px 12px 6px;
   color: var(--text-faint);
   font-size: var(--fs-sm);
-}
-
-/* The move dialog: no folder, then each folder, then a new one — the pick
-   is the move, so a folder is never made without a chat going into it. */
-.chat-move-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 220px;
-}
-.chat-move-list button {
-  padding: 6px 10px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: none;
-  color: var(--text);
-  font-size: var(--fs-md);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.chat-move-list button:hover {
-  background: var(--bg-hover);
-}
-.chat-move-list .chat-move-new {
-  color: var(--text-dim);
 }
 
 /* The folder-name field and the refusal, kept in the dialog. */
