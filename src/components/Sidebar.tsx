@@ -144,9 +144,9 @@ export function Sidebar({
   const [filter, setFilter] = useState<Filter>("active");
   const [query, setQuery] = useState("");
   const [deleting, setDeleting] = useState<ChatSummary | null>(null);
-  const [moving, setMoving] = useState<ChatSummary | null>(null);
-  /** A folder being named: `group` set is a rename, unset is a new one. */
-  const [naming, setNaming] = useState<{ group: ChatGroup | null; name: string } | null>(null);
+  /** A folder being named: `group` set is a rename, unset a new one; a new
+      one made from a chat's Move to folder carries `chat` into it. */
+  const [naming, setNaming] = useState<{ group: ChatGroup | null; name: string; chat: ChatSummary | null } | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<ChatGroup | null>(null);
   // A folder shut by id, remembered per list: collapse is about the view,
@@ -223,9 +223,24 @@ export function Sidebar({
         items={[
           {
             id: "move",
-            label: "Move to folder…",
+            label: "Move to folder",
             icon: <FolderInput size={14} />,
-            onSelect: () => setMoving(chat),
+            onSelect: () => {},
+            // The folders are the menu's second level — picking one is the
+            // move, and a folder is never made without the chat going in.
+            submenu: [
+              { id: "no-folder", label: "No folder", onSelect: () => onMoveChat(chat.id, null) },
+              ...groups.map((group) => ({ id: group.id, label: group.name, onSelect: () => onMoveChat(chat.id, group.id) })),
+              {
+                id: "new-folder",
+                label: "New folder…",
+                divided: true,
+                onSelect: () => {
+                  setNaming({ group: null, name: "", chat });
+                  setNameError(null);
+                },
+              },
+            ],
           },
           // Pin is the working view's action; on an archived row it would
           // change a state no list shows until the chat is back.
@@ -289,10 +304,9 @@ export function Sidebar({
       return;
     }
     setNaming(null);
-    // A folder made from the move dialog is made for the chat being moved.
-    if (!naming.group && moving) {
-      onMoveChat(moving.id, id ?? null);
-      setMoving(null);
+    // A folder made from a chat's Move to folder is made for that chat.
+    if (!naming.group && naming.chat) {
+      onMoveChat(naming.chat.id, id ?? null);
     }
   };
 
@@ -403,7 +417,7 @@ export function Sidebar({
                         label: "Rename…",
                         icon: <Pencil size={14} />,
                         onSelect: () => {
-                          setNaming({ group, name: group.name });
+                          setNaming({ group, name: group.name, chat: null });
                           setNameError(null);
                         },
                       },
@@ -456,32 +470,6 @@ export function Sidebar({
           <b>{deleting?.title}</b> and its whole transcript will be gone for good. Archive it instead to keep it out of
           the list.
         </p>
-      </Modal>
-
-      <Modal title={`Move “${moving?.title ?? ""}” to`} open={moving !== null} onClose={() => setMoving(null)}>
-        <Dropdown
-          label="Pick a folder"
-          title="Which folder holds the chat"
-          heading="Move to"
-          options={[
-            { value: "", label: "No folder" },
-            ...groups.map((group) => ({ value: group.id, label: group.name })),
-            { value: "__new__", label: "New folder…" },
-          ]}
-          value=""
-          below
-          onPick={(value) => {
-            if (value === "__new__") {
-              // The move dialog stays open beneath the name dialog: the
-              // folder being made is made for this chat.
-              setNaming({ group: null, name: "" });
-              setNameError(null);
-              return;
-            }
-            if (moving) onMoveChat(moving.id, value === "" ? null : value);
-            setMoving(null);
-          }}
-        />
       </Modal>
 
       <Modal

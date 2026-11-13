@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { MoreVertical } from "lucide-react";
+import { ChevronLeft, ChevronRight, MoreVertical } from "lucide-react";
 import "./ChatMenu.css";
 import { matches } from "../lib/shortcuts";
 
@@ -18,6 +18,9 @@ export type ChatMenuItem = {
   disabled?: boolean;
   /** Starts a new group: a line above this row. */
   divided?: boolean;
+  /** A second level — "Move to folder" and its folders: the row opens these
+      instead of acting, with a back row above them. */
+  submenu?: ChatMenuItem[];
   onSelect: () => void;
 };
 
@@ -31,6 +34,9 @@ export type ChatMenuItem = {
  */
 export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
   const [open, setOpen] = useState(false);
+  // The levels drilled into: the last is what the menu shows. Picking from a
+  // submenu acts and closes, like picking from the top level.
+  const [trail, setTrail] = useState<ChatMenuItem[][]>([]);
   const wrap = useRef<HTMLDivElement>(null);
 
   // Dismissed the way every other menu in the app is — an outside press or
@@ -38,18 +44,30 @@ export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+      if (!wrap.current?.contains(e.target as Node)) {
+        setOpen(false);
+        setTrail([]);
+      }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (matches(e, "close")) setOpen(false);
+      if (!matches(e, "close")) return;
+      e.preventDefault();
+      if (trail.length > 0) {
+        setTrail((was) => was.slice(0, -1));
+      } else {
+        setOpen(false);
+      }
     };
     document.addEventListener("pointerdown", onDown);
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("pointerdown", onDown);
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
     };
-  }, [open]);
+  }, [open, trail.length]);
+
+  const shown = trail.length > 0 ? trail[trail.length - 1] : items;
+  const back = trail.length > 0 ? "Back" : null;
 
   return (
     <div className="chat-menu-wrap" ref={wrap}>
@@ -59,13 +77,26 @@ export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
         title="More"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (open) setTrail([]);
+          setOpen((v) => !v);
+        }}
       >
         <MoreVertical size={15} />
       </button>
       {open && (
         <div className="chat-menu" role="menu">
-          {items.map((item) => (
+          {back !== null && (
+            <button type="button" role="menuitem" className="chat-menu-item chat-menu-back" onClick={() => setTrail((was) => was.slice(0, -1))}>
+              <span className="chat-menu-icon">
+                <ChevronLeft size={14} />
+              </span>
+              <span className="chat-menu-text">
+                <span>{back}</span>
+              </span>
+            </button>
+          )}
+          {shown.map((item) => (
             <button
               key={item.id}
               type="button"
@@ -73,7 +104,12 @@ export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
               className={`chat-menu-item${item.divided ? " divided" : ""}`}
               disabled={item.disabled}
               onClick={() => {
+                if (item.submenu) {
+                  setTrail((was) => [...was, item.submenu!]);
+                  return;
+                }
                 setOpen(false);
+                setTrail([]);
                 item.onSelect();
               }}
             >
@@ -83,6 +119,7 @@ export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
                 {item.hint && <span className="hint">{item.hint}</span>}
               </span>
               {item.shortcut && <kbd className="chat-menu-shortcut" aria-hidden>{item.shortcut}</kbd>}
+              {item.submenu && <ChevronRight className="chat-menu-sub" size={13} aria-hidden />}
             </button>
           ))}
         </div>

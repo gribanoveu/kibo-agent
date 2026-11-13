@@ -287,26 +287,23 @@ describe("the chat list", () => {
       sidebar({ move: (id, group) => moves.push([id, group]) }, "dark", {}, rows(), groupList);
 
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
-      const dialog = () => screen.getByRole("dialog", { name: /Move .+ to/ });
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder…" }));
-      fireEvent.click(within(dialog()).getByTitle("Which folder holds the chat"));
-      fireEvent.click(within(dialog()).getByRole("option", { name: "No folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "No folder" }));
       expect(moves).toEqual([["a", null]]);
 
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder…" }));
-      fireEvent.click(within(dialog()).getByTitle("Which folder holds the chat"));
-      fireEvent.click(within(dialog()).getByRole("option", { name: "launch" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "launch" }));
       expect(moves).toEqual([
         ["a", null],
         ["a", "g2"],
       ]);
     });
 
-    /// A folder made from the move dialog is made for the chat being moved:
+    /// A folder made from the move menu is made for the chat being moved:
     /// created, then the chat goes into it.
-    test("a new folder from the move dialog takes the chat", async () => {
+    test("a new folder made from the move menu takes the chat", async () => {
       const moves: [string, string | null][] = [];
       const created: string[] = [];
       sidebar(
@@ -324,11 +321,9 @@ describe("the chat list", () => {
       );
 
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
-      const dialog = () => screen.getByRole("dialog", { name: /Move .+ to/ });
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder…" }));
-      fireEvent.click(within(dialog()).getByTitle("Which folder holds the chat"));
-      fireEvent.click(within(dialog()).getByRole("option", { name: "New folder…" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "New folder…" }));
       fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "hotfix" } });
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -342,11 +337,9 @@ describe("the chat list", () => {
     test("a refused name keeps the dialog open with the error", async () => {
       sidebar({ createGroup: async () => ({ error: 'a folder named "release" already exists' }) }, "dark", {}, rows(), groupList);
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
-      const dialog = () => screen.getByRole("dialog", { name: /Move .+ to/ });
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder…" }));
-      fireEvent.click(within(dialog()).getByTitle("Which folder holds the chat"));
-      fireEvent.click(within(dialog()).getByRole("option", { name: "New folder…" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "New folder…" }));
       fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "release" } });
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
 

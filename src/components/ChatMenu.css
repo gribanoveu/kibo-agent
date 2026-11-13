@@ -91,3 +91,16 @@
   font-size: var(--fs-xs);
   color: var(--text-faint);
 }
+/* A row that opens a second level carries a chevron where a shortcut would sit. */
+.chat-menu-sub {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-faint);
+}
+/* The drilled-in level's way back — above the rows, where the heading would be. */
+.chat-menu-back {
+  color: var(--text-faint);
+}
+.chat-menu-back + .chat-menu-item {
+  margin-top: 0;
+}

@@ -98,10 +98,8 @@ describe("move a chat into a folder made for it", () => {
 
     const row = screen.getByText("the chat").closest(".chat-row") as HTMLElement;
     fireEvent.click(within(row).getByTitle("More"));
-    fireEvent.click(within(row).getByRole("menuitem", { name: "Move to folder…" }));
-    const dialog = screen.getByRole("dialog", { name: /Move .+ to/ });
-    fireEvent.click(within(dialog).getByTitle("Which folder holds the chat"));
-    fireEvent.click(within(dialog).getByRole("option", { name: "New folder…" }));
+    fireEvent.click(within(row).getByRole("menuitem", { name: "Move to folder" }));
+    fireEvent.click(within(row).getByRole("menuitem", { name: "New folder…" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "release" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
