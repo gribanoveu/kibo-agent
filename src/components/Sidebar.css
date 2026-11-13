@@ -387,6 +387,12 @@
   gap: 2px;
   padding-right: 4px;
 }
+/* The heading is sticky with a z-index — a stacking context — so an open
+   menu inside it would still sink under the next day's sticky heading.
+   While the menu is open, the heading steps above its neighbours. */
+.chat-folder-head:has(.chat-menu) {
+  z-index: 2;
+}
 /* The same ⋮ the chat rows wear: same size, same right edge, the dots land
    on the same line down the column. */
 .chat-folder-head .chat-menu-button {
