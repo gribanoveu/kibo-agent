@@ -431,18 +431,6 @@
   color: var(--text-faint);
   font-weight: 400;
 }
-/* A section heading carrying its own mark — the pin over Pinned — reads
-   as one line with the folder headings below. */
-.chat-day-marked {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.chat-day-marked svg {
-  flex: none;
-  color: var(--text-faint);
-}
-
 .chat-folder-empty {
   padding: 4px 12px 6px;
   color: var(--text-faint);
