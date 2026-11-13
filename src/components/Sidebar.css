@@ -3,7 +3,7 @@
 .sidebar {
   width: var(--sidebar-width, 248px);
   flex: 0 1 auto;
-  min-width: 180px;
+  min-width: 228px;
   position: relative;
   background: var(--bg-box);
   border-radius: var(--radius-panel);
@@ -268,6 +268,12 @@
 .chat .chat-activity {
   color: var(--text-faint);
 }
+/* The pin is a filing mark like the archive icon, standing at the row's
+   right edge — the title flexes, the pin stays put. */
+.chat .chat-pin {
+  margin-left: auto;
+  color: var(--text-faint);
+}
 .chat .chat-activity-running {
   color: var(--accent);
   animation: chat-activity-spin 0.9s linear infinite;
@@ -369,6 +375,90 @@
 }
 .chat-row.archived > .chat:not(:hover):not(.active) {
   color: var(--text-faint);
+}
+
+/* A folder's heading on the day's sticky line: the collapse toggle with the
+   name and count, and its own menu — always shown, a folder is not a hover.
+   The toggle keeps the day's padding, so a folder's name sits on the same
+   left edge as Today and Pinned above it. */
+.chat-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+}
+/* The same ⋮ the chat rows wear: same size, same right edge, the dots land
+   on the same line down the column. */
+.chat-folder-head .chat-menu-button {
+  width: 24px;
+  height: 24px;
+}
+.chat-folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.chat-folder-toggle:hover {
+  color: var(--text);
+}
+.chat-folder-toggle svg {
+  flex: none;
+  color: var(--text-faint);
+}
+/* The collapse chevron stands at the row's end, past the count. */
+.chat-folder-toggle .chat-folder-chev {
+  margin-left: auto;
+  transition: transform 0.15s ease;
+}
+.chat-folder-toggle .chat-folder-chev.chat-folder-open {
+  transform: rotate(90deg);
+}
+.chat-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-folder-count {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.chat-folder-empty {
+  padding: 4px 12px 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+
+/* The folder-name field and the refusal, kept in the dialog. */
+.sidebar-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.sidebar-field input {
+  height: var(--control);
+  padding: 0 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-box);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-family: inherit;
+}
+.sidebar-field-error {
+  margin: 8px 0 0;
+  color: var(--red);
+  font-size: var(--fs-sm);
 }
 
 .sidebar-delete-text {

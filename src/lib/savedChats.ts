@@ -16,10 +16,21 @@ export type ChatSummary = {
   branchedFrom?: string | null;
   /** Filed away: shown under the sidebar's "Archived" filter, not in the list. */
   archived: boolean;
+  /** Held above the list, in the "Pinned" group ahead of the days. */
+  pinned?: boolean;
+  /** The folder holding the chat — a ChatGroup id; absent for unfiled chats and rows saved before folders. */
+  group?: string | null;
   /** Who answers in a Chat mode conversation; absent for the agent's and for chats saved before rows kept it. */
   role?: ChatRoleId | null;
   /** The git branch the chat works on — its folder's when last saved; null outside a repository and for chats saved before rows kept it. */
   gitBranch?: string | null;
+};
+
+/** A folder the sidebar files chats under — a theme of work, not a date. */
+export type ChatGroup = {
+  id: string;
+  name: string;
+  position: number;
 };
 
 /**
@@ -120,6 +131,41 @@ export async function moveChatToWorktree(id: string): Promise<string> {
 export async function setChatArchived(id: string, archived: boolean): Promise<void> {
   requireBackend();
   return invoke("chat_set_archived", { id, archived });
+}
+
+/** Holds the chat above the list in its own "Pinned" group, or lets it sink back to its day. */
+export async function setChatPinned(id: string, pinned: boolean): Promise<void> {
+  requireBackend();
+  return invoke("chat_set_pinned", { id, pinned });
+}
+
+/** The chat folders of a list, in the user's order. `workspace: null` is Chat mode's shared set; no backend: none. */
+export async function listChatGroups(workspace: string | null): Promise<ChatGroup[]> {
+  if (!inTauri()) return [];
+  return invoke<ChatGroup[]>("chat_group_list", { workspace });
+}
+
+/** Makes a folder at the end of the list's folders; the backend refuses a name another folder of the same list carries. */
+export async function createChatGroup(workspace: string | null, name: string): Promise<ChatGroup> {
+  requireBackend();
+  return invoke<ChatGroup>("chat_group_create", { workspace, name });
+}
+
+export async function renameChatGroup(workspace: string | null, id: string, name: string): Promise<void> {
+  requireBackend();
+  return invoke("chat_group_rename", { workspace, id, name });
+}
+
+/** Removes the folder; its chats stay, filed under no folder. */
+export async function deleteChatGroup(workspace: string | null, id: string): Promise<void> {
+  requireBackend();
+  return invoke("chat_group_delete", { workspace, id });
+}
+
+/** Moves the chat into the folder `group`, or out to no folder with `null`. */
+export async function setChatGroup(id: string, group: string | null): Promise<void> {
+  requireBackend();
+  return invoke("chat_set_group", { id, group });
 }
 
 export async function deleteChat(id: string): Promise<void> {
