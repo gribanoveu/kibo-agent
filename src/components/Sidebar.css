@@ -3,7 +3,7 @@
 .sidebar {
   width: var(--sidebar-width, 248px);
   flex: 0 1 auto;
-  min-width: 180px;
+  min-width: 228px;
   position: relative;
   background: var(--bg-box);
   border-radius: var(--radius-panel);
