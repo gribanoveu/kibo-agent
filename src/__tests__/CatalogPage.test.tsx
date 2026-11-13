@@ -86,6 +86,26 @@ describe("the catalog page", () => {
     expect((screen.getByRole("button", { name: "Install No force push" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  test("a card whose catalog has a newer version wears a dot on its icon", async () => {
+    answer = [
+      withItems(
+        entry({ id: "review", kind: "skill", name: "Code review", state: "update", rev: "2", installedRev: "1" }),
+        entry({ id: "triage", kind: "skill", name: "Triage", state: "installed", installedRev: "1" }),
+        entry({ id: "notes", kind: "skill", name: "Notes", state: "changed", rev: "2", installedRev: "1" }),
+        entry({ id: "retro", kind: "skill", name: "Retro", state: "changed", installedRev: "1" }),
+      ),
+    ];
+    render(<CatalogPage openPane={() => {}} />);
+    await screen.findByRole("button", { name: "Code review" });
+    const dot = (name: string) => screen.getByRole("button", { name }).querySelector(".catalog-card-dot");
+    expect(dot("Code review")).not.toBeNull();
+    expect(dot("Triage")).toBeNull();
+    // Changed here, and the catalog has a newer rev: an update waits, as the dot says.
+    expect(dot("Notes")).not.toBeNull();
+    // Changed here at the catalog's own rev: nothing newer to take.
+    expect(dot("Retro")).toBeNull();
+  });
+
   test("a tab lists one kind", async () => {
     answer = [own];
     render(<CatalogPage openPane={() => {}} />);

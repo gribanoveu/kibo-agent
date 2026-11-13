@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-13 A dot on a catalog card's icon when the catalog has a newer version of what is installed — skills, servers, runbooks, commands and hooks alike; changed-here entries wear it too, and the details' Update is where it points
+
 - 2026-11-13 A helper run — a review, an explore — stands in the chat as a card of its own, like the background process's: what it was asked, the step it is on, how it stands in the badge — a click unfolds its steps, and a settled one its answer, with the run in the Agents tab a link away
 
 - 2026-11-13 The knowledge base is gone, and with it `/analyze`: the Knowledge page, the four tools `knowledgeWrite`, `knowledgeSearch`, `knowledgeRead` and `knowledgeRelations`, the `## Knowledge` prompt block and the `knowledge` feature in the Catalog. Notes the agent keeps are `remember`, as before

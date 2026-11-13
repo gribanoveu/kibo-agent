@@ -117,6 +117,8 @@ function Card({ entry, icon: Icon, selected, onOpen, busy, onInstall }: { entry:
   const { item, source } = entry;
   const role = item.role && `For the ${roleName(item.role)} role`;
   const working = sameEntry(busy, keyOf(entry));
+  // What the details' Update would write: the rev this source installed is not its anymore.
+  const updateReady = item.installedRev !== null && item.installedRev !== item.rev;
   const open = (e: KeyboardEvent) => {
     if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
       e.preventDefault();
@@ -136,6 +138,7 @@ function Card({ entry, icon: Icon, selected, onOpen, busy, onInstall }: { entry:
     >
       <div className={`catalog-card-ico ${item.kind}`}>
         <Icon size={16} />
+        {updateReady && <span className="catalog-card-dot" aria-hidden="true" />}
       </div>
       <div className="catalog-card-body">
         <h3>{item.name}</h3>
