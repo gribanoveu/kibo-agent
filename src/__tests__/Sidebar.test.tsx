@@ -288,13 +288,13 @@ describe("the chat list", () => {
 
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "To folder" }));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "No folder" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "To folder" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "No folder" }));
       expect(moves).toEqual([["a", null]]);
 
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "To folder" }));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "launch" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "To folder" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "launch" }));
       expect(moves).toEqual([
         ["a", null],
         ["a", "g2"],
@@ -322,8 +322,8 @@ describe("the chat list", () => {
 
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "To folder" }));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "New folder…" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "To folder" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
       fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "hotfix" } });
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -338,8 +338,8 @@ describe("the chat list", () => {
       sidebar({ createGroup: async () => ({ error: 'a folder named "release" already exists' }) }, "dark", {}, rows(), groupList);
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "To folder" }));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "New folder…" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "To folder" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
       fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "release" } });
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -373,8 +373,8 @@ describe("the chat list", () => {
       pickFilter("Archived");
       const row = screen.getByText("filed away").closest(".chat-row") as HTMLElement;
       fireEvent.click(within(row).getByTitle("More"));
-      expect(within(row).queryByRole("menuitem", { name: "Pin" })).toBeNull();
-      expect(within(row).getByRole("menuitem", { name: "Unarchive" })).toBeTruthy();
+      expect(screen.queryByRole("menuitem", { name: "Pin" })).toBeNull();
+      expect(screen.getByRole("menuitem", { name: "Unarchive" })).toBeTruthy();
     });
 
     test("a folder is renamed and deleted from its own menu", async () => {      const renamed: [string, string][] = [];
@@ -395,13 +395,13 @@ describe("the chat list", () => {
 
       const headOf = (name: string) => screen.getByText(name).closest(".chat-folder-head") as HTMLElement;
       fireEvent.click(within(headOf("release")).getByTitle("More"));
-      fireEvent.click(within(headOf("release")).getByRole("menuitem", { name: "Rename…" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
       fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "launch-13" } });
       fireEvent.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(renamed).toEqual([["g1", "launch-13"]]));
 
       fireEvent.click(within(headOf("launch")).getByTitle("More"));
-      fireEvent.click(within(headOf("launch")).getByRole("menuitem", { name: "Delete…" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
       fireEvent.click(screen.getByRole("button", { name: "Delete" }));
       expect(deleted).toEqual(["g2"]);
     });
