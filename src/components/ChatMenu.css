@@ -17,8 +17,8 @@
   top: calc(100% + 6px);
   /* Anchored to the trigger's right edge: it sits at the end of the header. */
   right: 0;
-  min-width: 230px;
-  max-width: 320px;
+  min-width: 190px;
+  max-width: 280px;
   background: var(--bg-menu);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

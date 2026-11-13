@@ -118,7 +118,7 @@ export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
             return;
           }
           const button = wrap.current?.getBoundingClientRect();
-          setPos(button ? { top: button.bottom + 6, left: button.right - 230 } : null);
+          setPos(button ? { top: button.bottom + 6, left: button.right - 190 } : null);
           setOpen(true);
         }}
       >
