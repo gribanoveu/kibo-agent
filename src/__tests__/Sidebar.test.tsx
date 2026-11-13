@@ -288,12 +288,12 @@ describe("the chat list", () => {
 
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "To folder" }));
       fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "No folder" }));
       expect(moves).toEqual([["a", null]]);
 
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "To folder" }));
       fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "launch" }));
       expect(moves).toEqual([
         ["a", null],
@@ -322,7 +322,7 @@ describe("the chat list", () => {
 
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "To folder" }));
       fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "New folder…" }));
       fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "hotfix" } });
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -338,7 +338,7 @@ describe("the chat list", () => {
       sidebar({ createGroup: async () => ({ error: 'a folder named "release" already exists' }) }, "dark", {}, rows(), groupList);
       const rowOf = (title: string) => screen.getByText(title).closest(".chat-row") as HTMLElement;
       fireEvent.click(within(rowOf("in release")).getByTitle("More"));
-      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "Move to folder" }));
+      fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "To folder" }));
       fireEvent.click(within(rowOf("in release")).getByRole("menuitem", { name: "New folder…" }));
       fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "release" } });
       fireEvent.click(screen.getByRole("button", { name: "Create" }));

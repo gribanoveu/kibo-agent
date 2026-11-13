@@ -224,7 +224,7 @@ export function Sidebar({
         items={[
           {
             id: "move",
-            label: "Move to folder",
+            label: "To folder",
             icon: <FolderInput size={14} />,
             onSelect: () => {},
             // The folders are the menu's second level — picking one is the
