@@ -126,7 +126,7 @@ impl Feature {
             Feature::LayoutCorrection => Manifest {
                 id: "layout-correction",
                 name: "Keyboard layout correction",
-                description: "The message boxes notice Russian or English typed in the other keyboard layout, including a wrong fragment in mixed prose, and offer the likely text. \
+                description: "The message boxes notice Russian or English typed in the other keyboard layout, including the wrong words in mixed prose, and offer the likely text. \
                     Nothing changes until you click Fix or press Cmd/Ctrl+F; ordinary Undo restores what you typed. On macOS and Windows, an optional switch also selects the corrected text's dominant installed layout.",
                 enabled_by_default: false,
                 tools: &[],

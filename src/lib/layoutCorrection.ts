@@ -1,43 +1,22 @@
-import { detectAll } from "tinyld";
+import { LAYOUT_MODELS } from "./layoutModel";
 
-export type LayoutCorrection = {
-  corrected: string;
-  changed: boolean;
-  scoreOrig: number;
-  scoreSwap: number;
-  needsCorrection: boolean;
-};
+export type LayoutCorrection = { corrected: string; needsCorrection: boolean };
 
-const EN = ["`qwertyuiop[]", "asdfghjkl;'", "zxcvbnm,."].join("");
-const RU = ["ёйцукенгшщзхъ", "фывапролджэ", "ячсмитьбю"].join("");
-const pairs: [string, string][] = [];
-for (let i = 0; i < EN.length; i++) {
-  pairs.push([EN[i], RU[i]]);
-  if (EN[i] !== EN[i].toUpperCase()) pairs.push([EN[i].toUpperCase(), RU[i].toUpperCase()]);
-}
-// These punctuation marks occupy different number/symbol keys in the two layouts.
-pairs.push(["?", ","], ["/", "."], ["$", ";"], ["&", "?"], ["@", "\""], ["#", "№"], ["^", ":"]);
+// The same physical keys, unshifted then shifted, on QWERTY and on Russian ЙЦУКЕН.
+const EN = "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?@#$^&|";
+const RU = "ёйцукенгшщзхъфывапролджэячсмитьбю.ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,\"№;:?/";
+const toRussian = new Map(Array.from(EN, (en, i) => [en, RU[i]]));
+const toEnglish = new Map(Array.from(RU, (ru, i) => [ru, EN[i]]));
 
-const toRussian = new Map<string, string>();
-const toEnglish = new Map<string, string>();
-for (const [en, ru] of pairs) {
-  toRussian.set(en, ru);
-  toEnglish.set(ru, en);
-}
+type Lang = keyof typeof LAYOUT_MODELS;
+const OTHER: Record<Lang, Lang> = { en: "ru", ru: "en" };
 
-const VOWELS = new Set([..."aeiouаеёиоуыэюя"]);
-const LETTERS = /^[A-Za-zА-Яа-яЁё]$/;
-const LANGUAGE = { en: "en", ru: "ru" } as const;
-
-type Script = keyof typeof LANGUAGE;
-
-function scriptOf(text: string): Script | null {
-  let script: Script | null = null;
+function scriptOf(text: string): Lang | null {
+  let script: Lang | null = null;
   for (const char of text) {
     if (!/\p{L}/u.test(char)) continue;
-    if (!LETTERS.test(char)) return null;
-    const own: Script = /[A-Za-z]/.test(char) ? "en" : "ru";
-    if (script && script !== own) return null;
+    const own: Lang | null = /[A-Za-z]/.test(char) ? "en" : /[А-Яа-яЁё]/.test(char) ? "ru" : null;
+    if (!own || (script && script !== own)) return null;
     script = own;
   }
   return script;
@@ -61,140 +40,157 @@ export function swapLayout(text: string) {
   return Array.from(text, (char) => table.get(char) ?? char).join("");
 }
 
-function shape(text: string) {
-  const letters = Array.from(text.toLowerCase()).filter((char) => /\p{L}/u.test(char));
-  const vowels = letters.filter((char) => VOWELS.has(char)).length;
-  let run = 0;
-  let longestRun = 0;
-  for (const char of letters) {
-    run = VOWELS.has(char) ? 0 : run + 1;
-    longestRun = Math.max(longestRun, run);
-  }
-  return { letters: letters.length, ratio: letters.length ? vowels / letters.length : 0, longestRun };
-}
+const models = Object.fromEntries(
+  Object.entries(LAYOUT_MODELS).map(([lang, { letters, median, table }]) => [
+    lang,
+    {
+      median,
+      size: letters.length + 1,
+      index: new Map(Array.from(letters, (char, i) => [char, i + 1])),
+      table: Uint8Array.from(atob(table), (char) => char.charCodeAt(0)),
+      words: new RegExp(`[${letters}]+`, "g"),
+    },
+  ]),
+) as Record<Lang, { median: number; size: number; index: Map<string, number>; table: Uint8Array; words: RegExp }>;
 
-/** TinyLD supplies the n-gram part; the two shape rules catch pronounceable-looking garbage it accepts. */
-function naturalness(text: string, script: Script) {
-  const { ratio, longestRun } = shape(text);
-  const ngrams = detectAll(text).find((result) => result.lang === LANGUAGE[script])?.accuracy ?? 0;
-  const vowels = ratio >= 0.3 && ratio <= 0.6 ? 1 : -Math.min(Math.abs(ratio - 0.3), Math.abs(ratio - 0.6)) * 8;
-  const consonants = longestRun > 4 ? 0.6 + (longestRun - 5) * 0.1 : 0;
-  return ngrams + vowels - consonants;
-}
-
-// A few common and technical tokens are too sparse for a general language
-// model. They are intentional words, not an invitation to turn `json` into `оыщт`.
-const INTENTIONAL_EN = new Set(
-  `api async await bar baz bun class cli csh css function git grpc html http https javascript json kubectl mailto most npm sdk sql ssh stdin stdout stderr string tcp then toml test typescript udp xml yaml foo`
-    .split(" "),
-);
-
-const garbage = (text: string) => {
-  const script = scriptOf(text);
-  const ngrams = script ? (detectAll(text).find((result) => result.lang === LANGUAGE[script])?.accuracy ?? 0) : 0;
-  // A plausible English original is intentional in its own right. The floor is
-  // below `ltkf` (0.125), so the real wrong-layout phrase still gets corrected.
-  if (script === "en" && (INTENTIONAL_EN.has(text.toLowerCase()) || ngrams >= 0.15)) return false;
-  const { ratio, longestRun } = shape(text);
-  if (ratio < 0.3 || ratio > 0.6 || longestRun > 4) return true;
-  // The full model rejects vowel-shaped Russian noise that TinyLD-light rated
-  // as highly as real prose. English needs no floor: short words such as
-  // "hello" have a low score there even when they are the right correction.
-  return script === "ru" && ngrams < 0.05;
+// A word has no `;` `,` `.` `[` inside — those keys are ж б ю х on the other layout —
+// save a hyphen and an English contraction, and does not open with one either.
+const STRAY_MARK = 3;
+const hasStrayMark = (text: string, lang: Lang) => {
+  const inner = text.replace(/^\P{L}+|\P{L}+$/gu, "");
+  return /^[[\]{}<>`~;:,.]/.test(text) || /[^\p{L}-]/u.test(lang === "en" ? inner.replace(/'(?:t|s|re|ve|ll|d|m)$/i, "") : inner);
 };
 
-const excluded = (text: string) => text.trim().length < 3 || /^\s*\//.test(text);
-
-const unchanged = (text: string): LayoutCorrection => ({ corrected: text, changed: false, scoreOrig: 0, scoreSwap: 0, needsCorrection: false });
-
-function detectWhole(text: string): LayoutCorrection {
-  if (excluded(text)) return unchanged(text);
-  const script = scriptOf(text);
-  if (!script) return unchanged(text);
-  const corrected = swapLayout(text);
-  const scoreOrig = naturalness(text, script);
-  const scoreSwap = naturalness(corrected, script === "en" ? "ru" : "en");
-  // A whole-phrase swap must not swallow an intentional word beside a garbage one.
-  const originalWords = text.match(/\p{L}+/gu) ?? [];
-  const correctedWords = corrected.match(/\p{L}+/gu) ?? [];
-  const whollyWrong = originalWords.every(garbage) && correctedWords.every((word) => !garbage(word));
-  // A two-letter function word makes a short phrase too ambiguous to rewrite ("nj gkj;t" → "то позже").
-  const ambiguous = correctedWords.some((word) => word.length <= 2);
-  const needsCorrection = corrected !== text && whollyWrong && !ambiguous && scoreSwap - scoreOrig >= 0.45;
-  return { corrected, changed: corrected !== text, scoreOrig, scoreSwap, needsCorrection };
+/**
+ * Bits per letter above a typical dictionary word: about 0 for a real word, several
+ * for keyboard noise. A word still being typed is scored as a prefix — no end.
+ */
+function strangeness(text: string, lang: Lang, finished: boolean) {
+  const { median, size, index, table, words } = models[lang];
+  const found = text.toLowerCase().match(words) ?? [];
+  let bits = 0;
+  let steps = 0;
+  found.forEach((word, n) => {
+    const ids = [0, 0, ...Array.from(word, (char) => index.get(char) ?? 0)];
+    if (finished || n < found.length - 1) ids.push(0);
+    for (let i = 2; i < ids.length; i++) bits += table[(ids[i - 2] * size + ids[i - 1]) * size + ids[i]] / 8;
+    steps += ids.length - 2;
+  });
+  if (!steps) return 0;
+  return bits / steps - median + (hasStrayMark(text, lang) ? STRAY_MARK : 0);
 }
 
-type Word = { from: number; to: number; script: Script | null };
+// Words of three letters or fewer are too short for the model ("ctx" reads as "сеч"):
+// they take their neighbours' side, and alone only these common ones count.
+const SHORT: Record<Lang, Set<string>> = {
+  ru: new Set(
+    `а б в во ж же и из к ко ли о об от у я с со бы не ни но да ну он мы вы ты то та те её ее их им ей ему она оно они это эти тот как так там тут вот все всё уже ещё еще был мог для без при над под про изо до за его мне мой моя моё мое наш ваш кто где чем кем тем раз два три нет ага ок чё что сам вся ней нём нем ним них тех том той ими оба обе нас вам вас нам или дай иди уж вон год вид дом час мир код баг лог тег ход шаг тип ой эх ах лол`.split(" "),
+  ),
+  en: new Set(
+    `a i am an as at be by do go he if in is it me my no of oh ok on or so to up us we the and for are but not you all any can had her was one our out day get has him his how man new now old see two way who did its let put say she too use yes yet vs ago add why run fix bug try got log app api cli css sql git npm url ui ux id pr ci cd ide dev env tmp src lib bin etc ctx msg cfg err req res img btn div nav pls thx lol omg wtf btw idk tbh imo may via per own off end few far set lot big top key row map tab box max min sum raw web ask cut fit hit`.split(" "),
+  ),
+};
 
-/** In mixed prose, correct only the worst same-script span, not intentional words beside it. */
-function detectFragment(text: string): LayoutCorrection {
-  const words: Word[] = Array.from(text.matchAll(/\p{L}+/gu), (match) => ({
-    from: match.index ?? 0,
-    to: (match.index ?? 0) + match[0].length,
-    script: scriptOf(match[0]),
-  }));
-  let best: { from: number; to: number; result: LayoutCorrection; gain: number } | null = null;
-  for (let first = 0; first < words.length; first++) {
-    if (!words[first].script) continue;
-    // ponytail: spans stop at eight words to bound detector calls; raise it if longer wrong-layout phrases matter.
-    for (let last = first; last < Math.min(words.length, first + 8) && words[last].script === words[first].script; last++) {
-      const from = words[first].from;
-      const to = words[last].to;
-      const result = detectWhole(text.slice(from, to));
-      const gain = result.scoreSwap - result.scoreOrig;
-      if (result.needsCorrection && gain > (best?.gain ?? 0)) best = { from, to, result, gain };
-    }
+// Bits per letter by which the typed word must be stranger than its swap. Tuned on the
+// repository's Russian and English docs: 1.5 offers on 0.2% of real lines, 2 on 0.01%.
+const MARGIN = 2;
+
+type Verdict = "flip" | "keep" | "unsure";
+/** `lean`: an unsure word that lends a run of other unsure words its support for a swap. */
+type Token = { from: number; to: number; lang: Lang | null; verdict: Verdict; lean: boolean };
+
+function judge(token: string, lang: Lang, finished: boolean): Omit<Token, "from" | "to" | "lang"> {
+  const swapped = Array.from(token, (char) => (lang === "en" ? toRussian : toEnglish).get(char) ?? char).join("");
+  const own = token.toLowerCase().replace(/\P{L}/gu, "");
+  const theirs = swapped.toLowerCase().replace(/\P{L}/gu, "");
+  // `pyf.` is four letters: the full stop is «ю» on the other layout.
+  const letters = Math.max(own.length, theirs.length);
+  // Capitals are abbreviations (HTTP, CSS), not prose to judge letter by letter.
+  if (letters <= 3 || (own.length > 1 && token === token.toUpperCase())) {
+    const common = SHORT[lang].has(own);
+    // A common word there, with no letter lost to a bracket («Хэш» is not «{'i»).
+    const theirsCommon = letters <= 3 && theirs.length >= own.length && SHORT[OTHER[lang]].has(theirs);
+    // «fix» beside a wrong-layout word stays «fix»; «vs» is «мы» as well, so it waits.
+    if (common && !theirsCommon) return { verdict: "keep", lean: false };
+    return { verdict: "unsure", lean: theirsCommon };
   }
-  if (!best) return unchanged(text);
-  return {
-    ...best.result,
-    corrected: `${text.slice(0, best.from)}${best.result.corrected}${text.slice(best.to)}`,
-  };
-}
-
-function detectMixed(text: string): LayoutCorrection {
-  const whole = detectWhole(text);
-  // Do not carve a plausible word out of an ambiguous short phrase either.
-  const ambiguous = whole.changed && (whole.corrected.match(/\p{L}+/gu)?.some((word) => word.length <= 2) ?? false);
-  if (ambiguous) return whole;
-  // If intentional words rule out a whole swap, only the wrong span may still be corrected.
-  return whole.needsCorrection ? whole : detectFragment(text);
+  // A word still being typed may be finished or a prefix; the smaller gap of the two
+  // decides, so neither «оши» (→ «ошибка») nor a finished «идут» turns into English.
+  const gap = (done: boolean) => strangeness(token, lang, done) - strangeness(swapped, OTHER[lang], done);
+  const delta = finished ? gap(true) : Math.min(gap(true), gap(false));
+  if (delta >= MARGIN) return { verdict: "flip", lean: true };
+  if (-delta >= MARGIN) return { verdict: "keep", lean: false };
+  return { verdict: "unsure", lean: delta >= MARGIN / 2 };
 }
 
 type Span = { from: number; to: number };
 
-// URLs include their paths; a mention is protected after punctuation too. Bare
-// domains cover the links people actually paste, not only http(s) and www.
+// Code in backticks (one still open too), links, email, mentions and file names stay as
+// typed. A backtick inside a word is «ё» (`dc\`` is «всё»), so code opens a word and closes
+// one. A bare domain needs a known ending: `k.lb` is «люди» on the wrong layout, not a host.
 const PROTECTED =
-  /`[^`]*`|\b(?:https?:\/\/|mailto:|www\.)\S*|[^\s@]+@[^\s@]+\.[^\s@]+|@[\w-]+|\b(?:[\w-]+\.)+[A-Za-z]{2,63}(?::\d+)?(?:\/\S*)?/gi;
+  /(?<!\S)`[^`]*(?:`(?!\p{L})|$)|\b(?:https?:\/\/|mailto:|www\.)\S*|[^\s@]+@[^\s@]+\.[^\s@]+|@[\w-]+|\b(?:[\w-]+\.)+(?:com|org|net|io|dev|ru|app|ai|co|me|sh|so|gg|xyz|info|ts|tsx|js|jsx|mjs|cjs|json|md|rs|toml|ya?ml|css|html|py|go|txt|lock|env|log)\b(?::\d+)?(?:\/\S*)?/giu;
 
-function protectedSpans(text: string): Span[] {
-  return Array.from(text.matchAll(PROTECTED), (match) => ({ from: match.index ?? 0, to: (match.index ?? 0) + match[0].length }));
-}
+/**
+ * Code in all but name: digits, snake_case, paths, flags, operators, and capitals run
+ * into lower case (DPDFNet, zTXt). Plain camelCase needs no rule: the model keeps it.
+ */
+const CODE = /[0-9_=|\\]|::|->|\p{Lu}{2}\p{Ll}|\p{L}\/\p{L}|^-/u;
 
-/** Mask protected tokens during detection, then put their exact text back at the same indices. */
-function maskProtected(text: string, spans: Span[]): string {
-  const chars = text.split("");
-  for (const { from, to } of spans) {
-    for (let at = from; at < to; at++) if (chars[at] !== "\n") chars[at] = " ";
-  }
-  return chars.join("");
-}
-
-function restoreProtected(corrected: string, original: string, spans: Span[]): string {
-  let restored = corrected;
-  for (let at = spans.length - 1; at >= 0; at--) {
-    const { from, to } = spans[at];
-    restored = `${restored.slice(0, from)}${original.slice(from, to)}${restored.slice(to)}`;
-  }
-  return restored;
-}
-
+/**
+ * Finds runs of words typed on the wrong layout. Each word of four letters or more is
+ * judged by the letter model; shorter and undecided ones follow the nearest decided
+ * word of their run — a run being same-script words with nothing protected between.
+ */
 export function detectLayoutCorrection(text: string): LayoutCorrection {
-  if (excluded(text)) return unchanged(text);
-  const spans = protectedSpans(text);
-  const result = detectMixed(maskProtected(text, spans));
-  return { ...result, corrected: restoreProtected(result.corrected, text, spans) };
+  const unchanged = { corrected: text, needsCorrection: false };
+  if (text.trim().length < 3) return unchanged;
+  const guarded: Span[] = Array.from(text.matchAll(PROTECTED), (m) => ({ from: m.index ?? 0, to: (m.index ?? 0) + m[0].length }));
+  const finishedText = /\s$/.test(text);
+
+  const tokens: Token[] = [];
+  for (const match of text.matchAll(/\S+/g)) {
+    const from = match.index ?? 0;
+    const to = from + match[0].length;
+    const word = match[0];
+    if (!/\p{L}/u.test(word)) continue; // punctuation alone neither joins nor breaks a run
+    const lang = scriptOf(word);
+    const isProtected = !lang || CODE.test(word) || guarded.some((s) => s.from < to && from < s.to);
+    if (isProtected) {
+      tokens.push({ from, to, lang: null, verdict: "keep", lean: false });
+      continue;
+    }
+    tokens.push({ from, to, lang, ...judge(word, lang, finishedText || to < text.length) });
+  }
+
+  const flips: Span[] = [];
+  for (let start = 0; start < tokens.length; ) {
+    const lang = tokens[start].lang;
+    let end = start + 1;
+    while (end < tokens.length && lang && tokens[end].lang === lang) end++;
+    const run = tokens.slice(start, end);
+    start = end;
+    if (!lang) continue;
+    const decided = run.map((t, i) => ({ i, verdict: t.verdict })).filter((d) => d.verdict !== "unsure");
+    // A run of short words alone ("ye lf" — «ну да») needs three letters: «b» in a list
+    // of «a, b, c» is a letter, not «и».
+    const runLetters = text.slice(run[0].from, run[run.length - 1].to).match(/\p{L}/gu)?.length ?? 0;
+    run.forEach((token, i) => {
+      let verdict = token.verdict;
+      if (verdict === "unsure") {
+        const left = [...decided].reverse().find((d) => d.i < i)?.verdict;
+        const right = decided.find((d) => d.i > i)?.verdict;
+        if (!decided.length) verdict = runLetters >= 3 && run.every((t) => t.lean) ? "flip" : "keep";
+        else if (left && right && left !== right) verdict = token.lean ? "flip" : "keep";
+        else verdict = left ?? right ?? "keep";
+      }
+      if (verdict === "flip") flips.push(token);
+    });
+  }
+  if (!flips.length) return unchanged;
+  let corrected = text;
+  for (const { from, to } of flips.reverse()) corrected = `${corrected.slice(0, from)}${swapLayout(text.slice(from, to))}${corrected.slice(to)}`;
+  return { corrected, needsCorrection: true };
 }
 
 export type LayoutCorrectionMetrics = { shown: number; accepted: number };
