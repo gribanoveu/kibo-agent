@@ -29,6 +29,10 @@ const STACK: usize = 1 << 20;
 /// yields is only counted at its end: until then its lines wait in `out`.
 const CONSOLE_LINES: usize = 500;
 const CONSOLE_LINE: usize = 4096;
+/// Values a console line is revived to at most: a row shared from many places is
+/// written out at each, so a table of a few hundred characters can stand for
+/// billions of them — and reviving runs here, past the script's time limit.
+const CONSOLE_VALUES: usize = 10_000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -90,6 +94,8 @@ impl Sandbox {
         let runtime = Runtime::new().map_err(failed)?;
         runtime.set_memory_limit(MEMORY);
         runtime.set_max_stack_size(STACK);
+        // Booting is the sandbox's own work, not a script's: it has the default's time
+        // whatever a run is given — a run's `whole` can be shorter than the boot takes.
         let until = Arc::new(Mutex::new(Instant::now() + LIMITS.whole));
         let watched = until.clone();
         runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > *watched.lock().unwrap_or_else(PoisonError::into_inner))));
@@ -270,7 +276,8 @@ fn test_result(assertion: &Value) -> TestResult {
 
 fn console_line(message: &Value) -> ConsoleLine {
     let table: Vec<Value> = message[3].as_str().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_default();
-    let args = table.first().map(|root| revive(&table, root, 0)).unwrap_or_default();
+    let mut left = CONSOLE_VALUES;
+    let args = table.first().map(|root| revive(&table, root, 0, &mut left)).unwrap_or_default();
     let args = args.as_array().map(Vec::as_slice).unwrap_or_default();
     let mut text = args.iter().map(|a| text_of(Some(a))).collect::<Vec<_>>().join(" ");
     if text.len() > CONSOLE_LINE {
@@ -286,17 +293,24 @@ fn console_line(message: &Value) -> ConsoleLine {
 
 /// A console's arguments out of `teleport-javascript`: one table, the first row the
 /// root, and inside a row a string is the number of the row that holds the value.
-fn revive(table: &[Value], row: &Value, depth: usize) -> Value {
+/// Each value written out takes one of `left`; past them, and past a depth of 16, `[…]`.
+fn revive(table: &[Value], row: &Value, depth: usize, left: &mut usize) -> Value {
     if depth > 16 {
         return Value::String("[…]".into());
     }
-    let reference = |v: &Value| match v.as_str().and_then(|at| at.parse::<usize>().ok()).and_then(|at| table.get(at)) {
-        Some(Value::String(text)) => Value::String(text.clone()),
-        Some(found) => revive(table, found, depth + 1),
-        None => v.clone(),
+    let mut reference = |v: &Value| {
+        if *left == 0 {
+            return Value::String("[…]".into());
+        }
+        *left -= 1;
+        match v.as_str().and_then(|at| at.parse::<usize>().ok()).and_then(|at| table.get(at)) {
+            Some(Value::String(text)) => Value::String(text.clone()),
+            Some(found) => revive(table, found, depth + 1, left),
+            None => v.clone(),
+        }
     };
     match row {
-        Value::Array(items) => Value::Array(items.iter().map(reference).collect()),
+        Value::Array(items) => Value::Array(items.iter().map(&mut reference).collect()),
         Value::Object(fields) => Value::Object(fields.iter().map(|(key, v)| (key.clone(), reference(v))).collect()),
         other => other.clone(),
     }
@@ -552,6 +566,29 @@ pm.sendRequest('https://down.test/', (err, res) => { pm.environment.set('why', e
         let ran = sandbox().run("prerequest", code, "r", context(), &mut no_requests).unwrap();
         assert!(ran.console[0].text.ends_with("я…"), "{}", ran.console[0].text.len());
         assert!(ran.console[1].text.contains("[…]"), "{}", ran.console[1].text);
+    }
+
+    #[test]
+    fn a_console_line_of_a_shared_row_is_revived_to_its_limit() {
+        // Sixteen levels of eight references to the level below: 8^16 values written out
+        // from a table of eighteen rows, as `teleport-javascript` sends a DAG.
+        let mut table = vec![json!(["1"])];
+        table.extend((2..=17).map(|next| json!(vec![next.to_string(); 8])));
+        table.push(json!("v"));
+        let started = Instant::now();
+        let line = console_line(&json!([null, null, "log", serde_json::to_string(&table).unwrap()]));
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        assert_eq!(line.text.chars().count(), CONSOLE_LINE + 1, "cut as any long line");
+        // Revived, it is the limit's values and `[…]` for the rest.
+        let mut left = CONSOLE_VALUES;
+        let revived = revive(&table, &table[0], 0, &mut left).to_string();
+        assert_eq!(left, 0);
+        assert!(revived.contains("[…]"));
+        assert!(revived.matches("\"v\"").count() < CONSOLE_VALUES, "{}", revived.matches("\"v\"").count());
+        // A table within the limit is revived whole, a row shared or not.
+        let small = json!([["1", "1"], {"a": "2"}, "v"]);
+        let line = console_line(&json!([null, null, "log", serde_json::to_string(&small).unwrap()]));
+        assert_eq!(line.text, r#"{"a":"v"} {"a":"v"}"#);
     }
 
     #[test]
