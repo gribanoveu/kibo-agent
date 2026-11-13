@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AppWindow, MessagesSquare, MousePointerClick, SendHorizontal, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
@@ -190,14 +190,34 @@ export function PlainChat({
   }, [pointed]);
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
   // The box fits what is in it, wherever it came from.
-  useEffect(() => {
+  const fit = useCallback(() => {
     const el = input.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
     el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
-  }, [draft]);
+  }, []);
+
+  useEffect(() => {
+    fit();
+  }, [draft, fit]);
+
+  // The column's width moves with the layout (IDE layout): a wrapped line keeps
+  // its second line, a freed one keeps the paid-for height, until the text
+  // changes — the width itself is what re-fits the box.
+  useEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    let width = el.clientWidth;
+    const sized = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fit();
+    });
+    sized.observe(el);
+    return () => sized.disconnect();
+  }, [fit]);
 
   return (
     <>

@@ -128,14 +128,14 @@ describe("room for the panels", () => {
   /// sidebar, the chat and the side panel side by side; at its default, all.
   test("the smallest window holds the viewer beside the rail, or the side panel beside the sidebar", () => {
     expect(roomFor({ rail: true, viewer: true, dock: false, frame: 2 })).toBe(940);
-    expect(roomFor({ rail: false, viewer: false, dock: true, frame: 2 })).toBe(882);
-    expect(roomFor({ rail: false, viewer: false, dock: false, frame: 2 })).toBe(612);
+    expect(roomFor({ rail: false, viewer: false, dock: true, frame: 2 })).toBe(930);
+    expect(roomFor({ rail: false, viewer: false, dock: false, frame: 2 })).toBe(660);
   });
 
   test("the default window holds every panel; narrower, the sidebar's rail or the side panel gives way", () => {
-    expect(roomFor({ rail: false, viewer: true, dock: true, frame: 2 })).toBe(1332);
+    expect(roomFor({ rail: false, viewer: true, dock: true, frame: 2 })).toBe(1380);
     expect(roomFor({ rail: true, viewer: true, dock: true, frame: 2 })).toBe(1210);
-    expect(roomFor({ rail: false, viewer: true, dock: false, frame: 0 })).toBe(1060);
+    expect(roomFor({ rail: false, viewer: true, dock: false, frame: 0 })).toBe(1108);
   });
 
   /// No sidebar there, rail or not, nor the gap after it: the tree, the file

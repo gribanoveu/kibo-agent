@@ -64,10 +64,6 @@ export const LABELS: Record<string, string> = {
   review: "Review",
   explore: "Explore",
   remember: "Memory",
-  knowledgeWrite: "Knowledge",
-  knowledgeSearch: "Knowledge search",
-  knowledgeRead: "Knowledge doc",
-  knowledgeRelations: "Knowledge links",
   kubeList: "Kube list",
   kubeGet: "Kube get",
   kubeEvents: "Events",
@@ -290,62 +286,6 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(args.url) ?? "",
         meta: block.result === undefined ? undefined : cut ? "part of the page" : undefined,
         detail: page.url === undefined ? "" : `${str(page.title) ?? ""}\n${str(page.url) ?? ""}\n\n${str(page.content) ?? ""}`,
-      };
-    }
-
-    // The documents by id once kept; while the call is written, how many.
-    // The open row shows them as the model wrote them.
-    case "knowledgeWrite": {
-      const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
-      const documents = strings(args.documents);
-      const written = strings(result.written);
-      const deleted = strings(result.deleted);
-      const domains = strings(result.newDomains);
-      return {
-        name,
-        arg: written.length ? written.join(", ") : `${documents.length} ${documents.length === 1 ? "document" : "documents"}`,
-        meta: [deleted.length ? `${deleted.length} deleted` : "", domains.length ? `new: ${domains.join(", ")}` : ""].filter(Boolean).join(" · ") || undefined,
-        detail: documents.join("\n\n"),
-      };
-    }
-
-    // The hits as the model got them: id, title, section, the passage.
-    case "knowledgeSearch": {
-      const hits = Array.isArray(result.hits) ? (result.hits as Json[]) : [];
-      return {
-        name,
-        arg: str(args.query) ?? "",
-        meta: block.result === undefined ? undefined : `${hits.length} ${hits.length === 1 ? "document" : "documents"}`,
-        detail: hits
-          .map(
-            (h) =>
-              `${str(h.id) ?? ""}  ${str(h.title) ?? ""}${str(h.section) ? ` § ${str(h.section)}` : ""}${h.stale === true ? " — stale" : ""}\n${str(h.text) ?? ""}`,
-          )
-          .join("\n\n"),
-      };
-    }
-
-    // Who is on each side of the contract asked about, as the model got it.
-    case "knowledgeRelations": {
-      const relations = Array.isArray(result.relations) ? (result.relations as Json[]) : [];
-      const entity = str(args.entity)?.trim();
-      const repo = str(args.repo)?.trim();
-      return {
-        name,
-        arg: [entity, repo && `in ${repo}`].filter(Boolean).join(" "),
-        meta: block.result === undefined ? undefined : `${relations.length} ${relations.length === 1 ? "document" : "documents"}`,
-        detail: relations.map((r) => `${str(r.kind) ?? ""}: ${str(r.name) ?? ""}  ${str(r.side) ?? ""}  ${str(r.id) ?? ""}  ${str(r.title) ?? ""}`).join("\n"),
-      };
-    }
-
-    // The document, or the section of it, the model read.
-    case "knowledgeRead": {
-      const section = str(args.section)?.trim();
-      return {
-        name,
-        arg: `${str(args.id) ?? ""}${section ? ` § ${section}` : ""}`,
-        meta: [str(result.domain), result.stale === true ? "stale" : undefined].filter(Boolean).join(" · ") || undefined,
-        detail: str(result.text) ?? "",
       };
     }
 
@@ -643,7 +583,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     // A settled review is a card of its own (`lib/finding.ts`), so this is the
     // row while it runs; a failed one takes the branch above, with its error.
     case "review": {
-      const steps = block.output.split("\n").filter(Boolean).map(helperStep);
+      const steps = block.output.split("\n").filter(Boolean).map(describeHelperStep);
       const under = steps[steps.length - 1];
       return {
         name,
@@ -799,7 +739,7 @@ export function describeActive(block: Extract<Block, { kind: "tool" }>): string 
 }
 
 /** A helper's step as the folded line says a call: `readFile src/a.rs` → `Reading src/a.rs`. */
-function helperStep(line: string): string {
+export function describeHelperStep(line: string): string {
   const gap = line.indexOf(" ");
   const label = toolLabel(gap < 0 ? line : line.slice(0, gap));
   return [ACTIVE_VERBS[label] ?? label, gap < 0 ? "" : line.slice(gap + 1)].filter(Boolean).join(" ");

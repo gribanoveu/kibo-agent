@@ -6,8 +6,8 @@ Agent и Analyst. Plan убирается, Ask заменяется на Analyst
 пишет Agent по просьбе и предлагает кнопкой Implement. Выбранный режим запоминается.
 
 Analyst сделан режимом `ConversationMode`, а не ролью `ChatRole`: роль живёт в Chat mode без
-папки, а аналитику нужны открытый репозиторий, индекс, `semanticSearch`, git-инструменты и
-база знаний, то есть `Place::Folder`.
+папки, а аналитику нужны открытый репозиторий, индекс, `semanticSearch` и git-инструменты,
+то есть `Place::Folder`.
 
 Работа опирается на PR #82 (выбор режима в панели `ComposerSettings.tsx`), влитый 2026-11-06.
 
@@ -55,7 +55,7 @@ Analyst сделан режимом `ConversationMode`, а не ролью `Chat
 
 ### 2. Инструменты Analyst: чтение, helper, память, доска, MCP
 
-`base_tools()` плюс `Explore`, `Remember`, `Board`, `Mcp`, `ToolSearch`. Без `KnowledgeWrite`,
+`base_tools()` плюс `Explore`, `Remember`, `Board`, `Mcp`, `ToolSearch`. Без
 `todo`, `writePlan`, `offer` и `runCommand`.
 
 `Mcp` помечен `is_mutating`, потому что про чужой инструмент ничего не известно. Он остаётся
@@ -70,15 +70,11 @@ Confluence и трекеры живут в MCP. Отсюда:
   с Agent. Иначе Analyst предлагал бы MCP, а серверы не запускались бы;
 - переключатель одобрения в Analyst остаётся. С Auto вызовы MCP идут без карточки, как в Agent.
 
-Следствие решения про `KnowledgeWrite`: `/analyze` пишет в базу знаний и ведёт чеклист, поэтому
-в Analyst недоступен, меню говорит переключиться на Agent. Абзац `knowledge_block` сам перестаёт
-предлагать запись: он спрашивает `offers`.
-
 ### 3. С `toolSearch` Analyst ничего не теряет с первого шага
 
 Сейчас в Ask `toolSearch` нет, и всё объявлено сразу. В Analyst ждать поиска начнут `gitBlame`,
 `readTerminal`, `board` и `mongo`. Всё нужное для первого шага загружено сразу: `readFile`,
-`grep`, `listFiles`, `semanticSearch`, `gitLog`, `gitDiff`, `gitStatus`, база знаний, `explore`,
+`grep`, `listFiles`, `semanticSearch`, `gitLog`, `gitDiff`, `gitStatus`, `explore`,
 `remember`, `skill`, веб. Промпт ни одного из четырёх ждущих не называет, абзац Analyst тоже не
 назовёт. Описание `toolSearch` перечисляет их, так что цена — один раунд.
 
@@ -179,8 +175,7 @@ AN-1.
   `services/turn_setup.rs` (`mcp_for_turn`), `services/features.rs` (места: Agent, Analyst).
 - `commands/chat.rs` — `chat_set_mode` с записью, чтение режима, `next_request_frame`; регистрация в
   `lib.rs` и старт `AgentState` там же.
-- Фронт: `lib/chat.ts`, `lib/offer.ts`, `lib/slashCommands.ts` (`askMode` уходит, `/analyze` требует
-  Agent), `hooks/useBackendSetting.ts`, `App.tsx`, `OfferCards.tsx`, `ChatPanel.tsx`, `PlanPanel.tsx`,
+- Фронт: `lib/chat.ts`, `lib/offer.ts`, `lib/slashCommands.ts` (`askMode` уходит), `hooks/useBackendSetting.ts`, `App.tsx`, `OfferCards.tsx`, `ChatPanel.tsx`, `PlanPanel.tsx`,
   комментарий в `ComposerSettings.tsx`.
 
 ## Нарезка
@@ -215,7 +210,7 @@ MCP в Analyst, хотя Auto и «Always allow» её снимают; испр�
 Analyst, MCP в `mcp_for_turn` и `next_request_frame`, `plan-handoff` уходит, `next_prompt`, места в
 Catalog, `slashCommands`, подписи в `chat.ts`, таблица в `AGENTS.md`, правка тестов, которые стояли
 на Plan (`llm_chat`, `context_compaction`, `turn_setup`, `prompt`, `features`, фронт).
-Тесты: Analyst не предлагает ничего мутирующего, кроме MCP; нет `runCommand`, `knowledgeWrite`,
+Тесты: Analyst не предлагает ничего мутирующего, кроме MCP; нет `runCommand`,
 `todo`; серверы запускаются в Analyst и не запускаются в Review; вызов MCP в Analyst идёт через
 карточку; `gitBlame` находится через `toolSearch`; `chat_set_mode` не принимает `review` и `plan`.
 

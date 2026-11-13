@@ -38,7 +38,6 @@ use crate::domain::turn::{
 use crate::services::ai_tools::preview;
 use crate::services::llm_chat::{self, SteeringQueue, Turn, TurnError};
 use crate::services::context_compaction;
-use crate::domain::review::ReviewDesk;
 use crate::services::mcp_questions::McpQuestions;
 use crate::services::mcp_servers::McpServers;
 use crate::domain::mcp::McpAnswer;
@@ -654,7 +653,6 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, worksp
     let shell = crate::infra::shells::for_commands();
     let today = crate::services::llm_chat::today();
     let features = crate::services::features::enabled();
-    let knowledge = root.and_then(|root| crate::services::knowledge::overview_offered(&features, root));
     context_compaction::request_frame(
         &TurnContext {
             mode,
@@ -668,7 +666,6 @@ fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, worksp
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
             mcp_servers: mcp.notes(),
-            knowledge: knowledge.as_ref(),
         },
         &mcp,
         crate::services::web_search::is_on(WebSearchPlace::Agent),
@@ -880,52 +877,6 @@ pub(super) fn kafka_servers_of<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<dyn
     Some(Arc::new(crate::services::kafka::Servers(Arc::clone(&clients))))
 }
 
-/// The knowledge base's search. `None` without the index — and without an
-/// app directory, where the base would be.
-pub(super) fn knowledge_searcher_of<R: Runtime>(app: &AppHandle<R>) -> Option<CodeSearchFn> {
-    let base = crate::infra::knowledge_store::KnowledgeStore::open().ok()?;
-    Some(app.try_state::<Arc<WorkspaceIndex>>()?.knowledge_searcher(base.dir().to_path_buf()))
-}
-
-/// `/review`: the open folder's working tree against `HEAD`, read by a
-/// helper with a context of its own (`llm_chat::review`). What it reads is
-/// decided here (`domain::review::select`). `handed`: its findings go on to
-/// the agent in the same turn, which runs in the chip's mode — what pressing
-/// the agent's offer of a review means; otherwise the report is the user's.
-#[tauri::command]
-pub async fn review_start<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, Arc<AgentState>>,
-    turn_id: String,
-    chat_id: String,
-    messages: Vec<LlmMessage>,
-    todos: Vec<Task>,
-    plan: Option<String>,
-    handed: bool,
-) -> Result<ChatStreamOutcome, String> {
-    let state = state.inner().clone();
-    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
-    let diff_workspace = workspace.clone();
-    let files = tauri::async_runtime::spawn_blocking(move || crate::infra::git_changes::review_diffs(&diff_workspace))
-        .await
-        .map_err(|e| format!("reading the change failed: {e}"))?
-        .map_err(|e| e.to_string())?;
-    let (kept, excluded) = crate::domain::review::select(files);
-    if kept.is_empty() {
-        return Err(crate::domain::review::nothing_to_review(excluded.len()));
-    }
-    let brief = crate::domain::review::review_message(&kept, &excluded, llm_session::reply_language());
-    let desk = Arc::new(ReviewDesk::new(kept));
-    let session = state.session(&chat_id);
-    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
-    session.cancel.store(false, Ordering::SeqCst);
-    session.begin_turn(state.mode());
-    run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
-        llm_chat::review(turn, messages, todos, &brief, desk, handed)
-    })
-    .await
-}
-
 /// Assembles a turn and runs it on a blocking thread.
 ///
 /// The processes and helpers a turn of `chat_id` starts through: recorded as
@@ -984,7 +935,6 @@ where
     );
     let handles = FolderHandles {
         search: searcher_of(&app, &workspace),
-        knowledge: knowledge_searcher_of(&app),
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
         processes,
@@ -1419,46 +1369,6 @@ mod tests {
                 None,
             ));
             assert!(matches!(outcome, Ok(ChatStreamOutcome::Cancelled(_))), "{outcome:?}");
-        });
-    }
-
-    /// `/review` runs under its own chat's handle: a fresh review clears its
-    /// own chat's leftover stop, and no other chat's.
-    #[test]
-    fn a_review_runs_under_its_own_chats_handle() {
-        crate::testing::with_app_dir("cmd-chat-review-own", || {
-            crate::testing::spending_provider("Nothing wrong.", 10, 2);
-            let root = temp_dir("cmd-chat-review").canonicalize().unwrap();
-            std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
-            let repo = git2::Repository::init(&root).unwrap();
-            let mut index = repo.index().unwrap();
-            index.add_path(std::path::Path::new("a.rs")).unwrap();
-            index.write().unwrap();
-            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
-            let sig = git2::Signature::now("T", "t@example.com").unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[]).unwrap();
-            std::fs::write(root.join("a.rs"), "fn a() { 1 }\n").unwrap();
-
-            let state = state();
-            *state.workspace.lock().unwrap() = Some(root);
-            let app = tauri::test::mock_app();
-            app.manage(Arc::clone(&state));
-            state.session("c1").cancel.store(true, Ordering::SeqCst);
-            state.session("c2").cancel.store(true, Ordering::SeqCst);
-
-            let outcome = tauri::async_runtime::block_on(review_start(
-                app.handle().clone(),
-                app.state(),
-                "tr".into(),
-                "c1".into(),
-                vec![LlmMessage::user("/review")],
-                Vec::new(),
-                None,
-                false,
-            ));
-            assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "the cleared stop lets it run: {outcome:?}");
-            assert!(!state.session("c1").cancel.load(Ordering::SeqCst), "its own chat's stop is the one cleared");
-            assert!(state.session("c2").cancel.load(Ordering::SeqCst), "another chat's stop is not the review's to clear");
         });
     }
 

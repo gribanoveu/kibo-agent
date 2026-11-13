@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { type ChatSummary, deleteChat, listChats, setChatArchived } from "../lib/savedChats";
+import { type ChatSummary, deleteChat, listChats, setChatArchived, setChatGroup, setChatPinned } from "../lib/savedChats";
 
 /**
  * The sidebar's list of saved conversations.
@@ -38,5 +38,21 @@ export function useChatHistory(workspace: string | null) {
     [refresh],
   );
 
-  return { chats, refresh, remove, archive };
+  const pin = useCallback(
+    async (id: string, pinned: boolean) => {
+      await setChatPinned(id, pinned);
+      refresh();
+    },
+    [refresh],
+  );
+
+  const move = useCallback(
+    async (id: string, groupId: string | null) => {
+      await setChatGroup(id, groupId);
+      refresh();
+    },
+    [refresh],
+  );
+
+  return { chats, refresh, remove, archive, pin, move };
 }

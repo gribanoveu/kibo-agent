@@ -17,8 +17,8 @@
   top: calc(100% + 6px);
   /* Anchored to the trigger's right edge: it sits at the end of the header. */
   right: 0;
-  min-width: 230px;
-  max-width: 320px;
+  min-width: 190px;
+  max-width: 280px;
   background: var(--bg-menu);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -90,4 +90,17 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-faint);
+}
+/* A row that opens a second level carries a chevron where a shortcut would sit. */
+.chat-menu-sub {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-faint);
+}
+/* The drilled-in level's way back — above the rows, where the heading would be. */
+.chat-menu-back {
+  color: var(--text-faint);
+}
+.chat-menu-back + .chat-menu-item {
+  margin-top: 0;
 }

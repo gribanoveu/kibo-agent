@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- 2026-11-13 The message box keeps its height across the IDE layout switch: a line that wrapped while the chat was narrow is re-measured when the column widens — no keystroke needed to shrink the box back — and a line that wraps on the way in shows both rows at once
+
+- 2026-11-13 A dot on a catalog card's icon when the catalog has a newer version of what is installed — skills, servers, runbooks, commands and hooks alike; changed-here entries wear it too, and the details' Update is where it points
+
+- 2026-11-13 A helper run — a review, an explore — stands in the chat as a card of its own, like the background process's: what it was asked, the step it is on, how it stands in the badge — a click unfolds its steps, and a settled one its answer, with the run in the Agents tab a link away
+
+- 2026-11-13 The knowledge base is gone, and with it `/analyze`: the Knowledge page, the four tools `knowledgeWrite`, `knowledgeSearch`, `knowledgeRead` and `knowledgeRelations`, the `## Knowledge` prompt block and the `knowledge` feature in the Catalog. Notes the agent keeps are `remember`, as before
+
+- 2026-11-12 A review is an instrument of the agent, not a turn of its own: `/review` and the suggestion button send an ordinary message, the agent calls `review` itself — `from` and `to` naming the range, the chat's own commits found after a commit — and the review's card tells the whole story: the reviewer's steps, the budget note, the range it read and what it found, findings kept even when the review is stopped or runs out of rounds
+- 2026-11-12 File chats under folders of their own: Move to folder on a chat's row opens a picker of the folders — No folder and New folder when the right one isn't there yet — and rename and delete sit on the folder's heading; a deleted folder leaves its chats in the list, and folders fold away with their state remembered
+- 2026-11-12 Pin a chat from its row's menu and the sidebar holds it in its own Pinned group above the days, a small pin at the row's right edge; unpin and it sinks back to its day
+- 2026-11-12 The plan opens in a sheet over the chat — ⌘3, or "Review the plan" — instead of taking the column's width, so the chat keeps its width and the plan is read on the room it needs
+- 2026-11-12 The sidebar's Agent and Chat switch keeps its white raised pill, with the icon inside it in a muted accent instead of the full one, and the segment under the pointer shows a faint pill where it used to give nothing
+- 2026-11-12 The sidebar's chat search follows the panel's width when it is dragged narrow, instead of running past its right edge
 - 2026-11-11 Kafka: an edited connection asks the cluster again, a refresh asks the broker once, and a failed save says why where you pressed Save
 - 2026-11-11 See a Kafka cluster's consumer groups with their lag, partition by partition, and what a group has not committed
 - 2026-11-11 Follow a Kafka topic live: the messages that arrive land in the table as they happen, without a consumer group

@@ -194,35 +194,22 @@ export type BuiltInState = {
   folder: boolean;
   /** Agent mode, the one that writes files. */
   agentMode: boolean;
-  /** The knowledge base is turned on in the Catalog; without it there is no `/analyze`. */
-  knowledge: boolean;
 };
 
 /** What each of the app's own commands does when run. */
 export type BuiltInActions = {
   compact: () => void;
   fork: () => void;
-  review: (handed: boolean) => void;
+  review: (args: string) => void;
   init: (args: string) => void;
-  analyze: (args: string) => void;
   trust: () => void;
 };
 
 const NOT_NOW = "Not while a turn is running";
 
-/** `/review`'s argument that hands the findings to the agent to go through, rather than to the user. */
-export const HAND_TO_AGENT = "send-result-to-agent";
-
 /** The app's own `/` commands, each with why it cannot run now when it cannot. */
 export function builtInCommands(state: BuiltInState, run: BuiltInActions): SlashCommand[] {
-  const { busy, started, folder, agentMode, knowledge } = state;
-  const analyze: SlashCommand = {
-    name: "analyze",
-    hint: "Document this repository in the knowledge base: its services, endpoints, topics, tables, algorithms",
-    argumentHint: "[focus] [--domain <id>]",
-    unavailable: busy ? NOT_NOW : !folder ? "Open a folder first" : !agentMode ? "Switch to Agent mode — it writes to the knowledge base" : undefined,
-    run: (args) => run.analyze(args),
-  };
+  const { busy, started, folder, agentMode } = state;
   return [
     {
       name: "compact",
@@ -238,10 +225,10 @@ export function builtInCommands(state: BuiltInState, run: BuiltInActions): Slash
     },
     {
       name: "review",
-      hint: "Review the uncommitted changes for bugs in a subagent, and list what it finds",
-      argumentHint: `[${HAND_TO_AGENT}]`,
+      hint: "Review the change with the review tool, in a helper of its own, and list what it finds",
+      argumentHint: "[from]",
       unavailable: busy ? NOT_NOW : !folder ? "Open a folder first" : undefined,
-      run: (args) => run.review(args.trim() === HAND_TO_AGENT),
+      run: (args) => run.review(args),
     },
     {
       name: "init",
@@ -250,7 +237,6 @@ export function builtInCommands(state: BuiltInState, run: BuiltInActions): Slash
       unavailable: busy ? NOT_NOW : !agentMode ? "Switch to Agent mode — it writes files" : undefined,
       run: (args) => run.init(args),
     },
-    ...(knowledge ? [analyze] : []),
     {
       name: "trust",
       hint: "Trust this folder with its own skills and / commands, or stop trusting it",

@@ -69,8 +69,6 @@ pub enum TurnSetupError {
 pub struct FolderHandles {
     /// The open folder's search, for `semanticSearch`.
     pub search: Option<CodeSearchFn>,
-    /// The knowledge base's, for `knowledgeSearch`.
-    pub knowledge: Option<CodeSearchFn>,
     /// The index's model, which web search reads pages with.
     pub embeddings: Option<Arc<dyn EmbeddingProvider>>,
     pub mcp_servers: Option<Arc<McpServers>>,
@@ -132,6 +130,10 @@ pub fn run_in_folder(
         })?;
     let mcp = mcp_for_turn(app.mcp_servers.as_deref(), folder.mode, workspace, folder.cancelled);
     let worktree_of = crate::infra::git_head::worktree_of(workspace);
+    // What this chat's first save saw — a review's base once the tree is
+    // clean. One column, and a chat without the marker is a fact, not an
+    // error: the review then reads the branch against its upstream.
+    let chat_head = crate::infra::chat_store::head_at_start(folder.chat_id).ok().flatten();
     // Read each turn, as the chat's is: a search turned on in Settings is
     // there for the next answer.
     let web = match app.embeddings.as_ref() {
@@ -142,10 +144,9 @@ pub fn run_in_folder(
     let board = app.board.filter(|_| features.is_on(Feature::Board));
     let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
     let kafka = app.kafka.filter(|_| features.is_on(Feature::Kafka));
-    let knowledge_overview = crate::services::knowledge::overview_offered(&features, workspace);
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
     let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
-    let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), knowledge: knowledge_overview.clone(), parallel });
+    let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), parallel });
 
     let turn = Turn {
         events: folder.events,
@@ -165,14 +166,13 @@ pub fn run_in_folder(
         shell: &shell,
         shell_described: &shell_described,
         search: app.search,
-        knowledge: app.knowledge,
-        knowledge_overview: knowledge_overview.as_ref(),
         skills: &skills,
         rules: &rules,
         frozen: Some(&frozen),
         log_call: &log_call,
         plan: folder.plan,
         worktree_of: worktree_of.as_deref(),
+        chat_head: chat_head.as_deref(),
         mcp: &mcp,
         hooks: &hooks,
         processes: app.processes,
@@ -217,8 +217,6 @@ pub struct ChatTurnInput<'a> {
     /// The Kafka connections; `None` where the app has none.
     pub kafka: Option<Arc<dyn KafkaServers>>,
     pub embeddings: Arc<dyn EmbeddingProvider>,
-    /// The knowledge base's search; `None` where the app has none.
-    pub knowledge: Option<CodeSearchFn>,
     pub approval: ApprovalPolicy,
     pub events: &'a ChatEventSink,
     pub cancelled: &'a (dyn Fn() -> bool + Sync),
@@ -263,7 +261,6 @@ pub fn run_in_chat(
     let mongo = chat.mongo.filter(|_| features.is_on(Feature::Mongodb));
     let kafka = chat.kafka.filter(|_| features.is_on(Feature::Kafka));
     let deepseek = web_search::deepseek_for(&features, &chat.embeddings);
-    let knowledge = chat.knowledge.filter(|_| features.is_on(Feature::Knowledge));
     let turn = plain_chat::ChatTurn {
         session: &session,
         role: chat.role,
@@ -281,7 +278,6 @@ pub fn run_in_chat(
         mongo,
         kafka,
         deepseek,
-        knowledge,
         features,
     };
     Ok(run(&turn)?)
@@ -322,10 +318,10 @@ mod tests {
     use crate::domain::tools::ToolName;
     use crate::testing::temp_dir;
 
-    /// A chat's turn is given the board, the knowledge base's search,
-    /// MongoDB and Kafka only while their features are on, as the agent's is.
+    /// A chat's turn is given the board, MongoDB and Kafka only while their
+    /// features are on, as the agent's is.
     #[test]
-    fn a_chat_turn_gets_the_board_the_knowledge_base_and_the_databases_only_while_they_are_on() {
+    fn a_chat_turn_gets_the_board_and_the_databases_only_while_they_are_on() {
         crate::testing::with_app_dir("turn-setup-chat", || {
             let mut settings = crate::infra::settings_store::load().unwrap();
             settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
@@ -348,11 +344,9 @@ mod tests {
             }
             let events: ChatEventSink = Arc::new(|_| {});
             let no = || false;
-            let search: crate::domain::tools::CodeSearchFn = Arc::new(|_, _, _, _| Err("not searched in this test".into()));
             let handed = |on: bool| {
                 crate::infra::settings_store::update(|s| {
                     s.features.insert("board".into(), on);
-                    s.features.insert("knowledge".into(), on);
                     s.features.insert("mongodb".into(), on);
                     s.features.insert("kafka".into(), on);
                 })
@@ -366,14 +360,13 @@ mod tests {
                     mongo: Some(Arc::new(crate::services::mongo::Servers(Arc::default()))),
                     kafka: Some(Arc::new(crate::services::kafka::Servers(Arc::default()))),
                     embeddings: Arc::new(NoModel),
-                    knowledge: Some(search.clone()),
                     approval: ApprovalPolicy::default(),
                     events: &events,
                     cancelled: &no,
                 };
                 let mut seen = None;
                 run_in_chat(chat, |turn| {
-                    seen = Some((turn.board.is_some(), turn.knowledge.is_some(), turn.mongo.is_some(), turn.kafka.is_some()));
+                    seen = Some((turn.board.is_some(), turn.mongo.is_some(), turn.kafka.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
                         todos: Vec::new(),
@@ -384,8 +377,8 @@ mod tests {
                 .unwrap();
                 seen.expect("run was called")
             };
-            assert_eq!(handed(false), (false, false, false, false));
-            assert_eq!(handed(true), (true, true, true, true));
+            assert_eq!(handed(false), (false, false, false));
+            assert_eq!(handed(true), (true, true, true));
         });
     }
 
@@ -427,7 +420,6 @@ mod tests {
                     mongo: None,
                     kafka: None,
                     embeddings: Arc::new(NoModel),
-                    knowledge: None,
                     approval: ApprovalPolicy::default(),
                     events: &events,
                     cancelled: &no,
@@ -517,7 +509,6 @@ mod tests {
                 mongo: None,
                 kafka: None,
                 embeddings: Arc::new(NoModel),
-                knowledge: None,
                 approval: ApprovalPolicy::default(),
                 events: &events,
                 cancelled: &no,
@@ -531,6 +522,80 @@ mod tests {
 
             assert_eq!(crate::testing::chat_tokens("folder-chat"), 12);
             assert_eq!(crate::testing::chat_tokens("plain-chat"), 24);
+        });
+    }
+
+    /// A folder turn carries its chat's start marker — the fact a review
+    /// diffs from once the tree is clean. A chat saved without one hands the
+    /// turn `None`, not an error.
+    #[test]
+    fn a_turn_learns_the_head_its_chat_started_at() {
+        crate::testing::with_app_dir("turn-setup-chat-head", || {
+            let mut settings = crate::infra::settings_store::load().unwrap();
+            settings.llm.providers = vec![crate::domain::settings::ProviderConfig {
+                id: "local".into(),
+                base_url: "https://local.example/v1".into(),
+                model: Some("qwen".into()),
+                ..Default::default()
+            }];
+            crate::infra::settings_store::save(&settings).unwrap();
+            crate::infra::llm_credentials_store::save_api_key("local", "sk").unwrap();
+
+            let dir = temp_dir("turn-setup-chat-head-repo");
+            let repo = git2::Repository::init(&dir).unwrap();
+            std::fs::write(dir.join("f.txt"), "root").unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("f.txt")).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+            let head = repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap().to_string();
+
+            let root = dir.display().to_string();
+            let blocks = serde_json::json!([]);
+            for (chat, workspace) in [("marked", root.as_str()), ("unmarked", "/no/repo/here")] {
+                crate::infra::chat_store::save(
+                    chat,
+                    workspace,
+                    &[crate::domain::llm::LlmMessage::user("hi")],
+                    &blocks,
+                    &[],
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            }
+
+            let events: ChatEventSink = Arc::new(|_| {});
+            let (no, none, zero) = (|| false, Vec::new, || 0);
+            let mut seen = Vec::new();
+            for chat in ["marked", "unmarked"] {
+                let folder = FolderTurn {
+                    chat_id: chat,
+                    workspace: &dir,
+                    mode: ConversationMode::Agent,
+                    approval: ApprovalPolicy::default(),
+                    plan: None,
+                    events: &events,
+                    cancelled: &no,
+                    take_steering: &none,
+                    notes_typed: &zero,
+                    parallel: &Vec::<String>::new,
+                    worktree_base: None,
+                };
+                run_in_folder(folder, FolderHandles::default(), |turn| {
+                    seen.push(turn.chat_head.map(str::to_string));
+                    Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
+                        result: Default::default(),
+                        todos: Vec::new(),
+                        history: Vec::new(),
+                        limit_reached: None,
+                    }))
+                })
+                .unwrap();
+            }
+            assert_eq!(seen, vec![Some(head), None]);
         });
     }
 
@@ -579,7 +644,7 @@ mod tests {
                     assert_eq!(turn.session.provider_id, "local");
                     assert_eq!(turn.approval.git_aliases.get("pf").map(String::as_str), Some("push --force"));
                     assert_eq!(turn.plan, Some("the plan"));
-                    assert!(turn.frozen.is_some_and(|f| f.rules[..] == *turn.rules && f.knowledge.as_ref() == turn.knowledge_overview), "the folder's turn is frozen");
+                    assert!(turn.frozen.is_some_and(|f| f.rules[..] == *turn.rules), "the folder's turn is frozen");
                     assert!(matches!(turn.place, Place::Folder { mode: ConversationMode::Analyst, web: None, .. }));
                     seen = Some((turn.board.is_some(), turn.mongo.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
@@ -629,7 +694,7 @@ mod tests {
     #[test]
     fn a_chat_keeps_the_files_its_first_turn_read() {
         use crate::domain::project_rules::RuleFile;
-        let read = |text: &str| Frozen { rules: vec![RuleFile::new("AGENTS.md", text)], knowledge: None, parallel: None };
+        let read = |text: &str| Frozen { rules: vec![RuleFile::new("AGENTS.md", text)], parallel: None };
         let (one, two) = (temp_dir("frozen-one"), temp_dir("frozen-two"));
         assert_eq!(*frozen_for("frozen-chat", &one, read("first")), read("first"));
         assert_eq!(*frozen_for("frozen-chat", &one, read("edited")), read("first"), "the chat's own is kept");

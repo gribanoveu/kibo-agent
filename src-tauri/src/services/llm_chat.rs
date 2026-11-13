@@ -194,22 +194,15 @@ pub struct Turn<'a> {
     /// Search of the open folder's index, for `semanticSearch`; `None` when
     /// the folder has none, and the tool says so to the model.
     pub search: Option<CodeSearchFn>,
-    /// Search of the knowledge base, for `knowledgeSearch`; `None` where the
-    /// app has none.
-    pub knowledge: Option<CodeSearchFn>,
-    /// What the knowledge base has, for the prompt; `None` while the feature
-    /// is off. Read once per turn, as the skills are.
-    pub knowledge_overview: Option<&'a crate::domain::knowledge::Overview>,
     /// The open folder's skills and the user's, listed in the prompt for
     /// `skill` to load. Read once per turn, so the prompt does not change
     /// between its rounds.
     pub skills: &'a [Skill],
     /// The open folder's instruction files, read once per turn like the skills.
     pub rules: &'a [RuleFile],
-    /// The rules and the knowledge base's overview as the chat's first turn
-    /// read them, which the prompt keeps saying; what changed since reaches
-    /// the model through the history ([`restore_standing`]). `None` says
-    /// [`Turn::rules`] and [`Turn::knowledge_overview`] in the prompt.
+    /// The rules as the chat's first turn read them, which the prompt keeps
+    /// saying; what changed since reaches the model through the history
+    /// ([`restore_standing`]). `None` says [`Turn::rules`] in the prompt.
     pub frozen: Option<&'a Frozen>,
     /// Where each settled call's redacted record goes — the log on disk in
     /// the app, a list in a test. A port rather than a direct write so that
@@ -223,6 +216,10 @@ pub struct Turn<'a> {
     /// The main working tree, when the open folder is a worktree of it —
     /// said in the prompt, so the model keeps out of the user's checkout.
     pub worktree_of: Option<&'a std::path::Path>,
+    /// The commit `HEAD` pointed at when this chat was first saved; `None`
+    /// for a chat without the marker. A review reads it as its base when
+    /// the working tree is clean (`domain::review`'s table, rule 3).
+    pub chat_head: Option<&'a str>,
     /// The connected MCP servers' tools. Read once per turn, like the
     /// skills: the tools a model was shown must not change between rounds.
     pub mcp: &'a McpTools,
@@ -258,8 +255,7 @@ pub struct Turn<'a> {
 }
 
 /// The part of a folder's prompt that the files behind it can change in the
-/// middle of a chat: the instruction files, the memory among them, and the
-/// knowledge base's overview.
+/// middle of a chat: the instruction files, the memory among them.
 ///
 /// Kept as the chat's first turn read it. The system prompt comes first in
 /// every request, so a change to it is a cache miss on the whole
@@ -270,7 +266,6 @@ pub struct Turn<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frozen {
     pub rules: Vec<RuleFile>,
-    pub knowledge: Option<crate::domain::knowledge::Overview>,
     /// The shared-tree warning as this chat's first turn saw it.
     pub parallel: Option<String>,
 }
@@ -660,11 +655,11 @@ fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: 
         let used = crate::domain::review::Budget { rounds: round - 1, weight: state.budget_used };
         let limit = crate::domain::review::Budget { rounds: limits.rounds, weight: limits.budget };
         if let Some(said) = crate::domain::review::wrap_up(used, limit, &state.history) {
-            state.history.push(note(turn, said));
+            state.history.push(note(turn, said.clone()));
             events.emit(
                 round,
                 Some(format!("wrap-up:{round}")),
-                ChatEventPayload::WrapUpReminded { rounds: round - 1, tokens: pass.spent },
+                ChatEventPayload::WrapUpReminded { rounds: round - 1, tokens: pass.spent, text: said },
             );
         }
     }
@@ -1044,13 +1039,13 @@ fn execute_call(
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
     let explore = |args: &crate::domain::tools::ExploreArgs| run_explore(turn, args, history, &output);
+    let review_run = |args: &crate::domain::tools::ReviewArgs| run_review_tool(turn, args, &output);
     let check = |prompt: &str, text: &str| check_with(turn.session, prompt, text);
     let ask = |server: &str, question: &crate::domain::mcp::McpQuestion| ask_user(turn, round, &call.id, server, question);
     let deps = ToolDeps {
         shell: turn.shell.clone(),
         output: Some(output.clone()),
         search: turn.search.clone().map(|search| crate::services::search_rerank::reranking(search, Arc::new(turn.session.clone()))),
-        knowledge: turn.knowledge.clone(),
         skills: turn.skills.to_vec(),
         mcp: turn.mcp.clone(),
         cancelled: Some(turn.cancelled),
@@ -1061,6 +1056,7 @@ fn execute_call(
         terminals: turn.terminals.clone(),
         review: turn.review.clone(),
         explore: Some(&explore),
+        review_run: Some(&review_run),
         check: Some(&check),
         kube: pinned_cluster(turn),
         runbooks: match turn.place {
@@ -1083,6 +1079,7 @@ fn execute_call(
             Place::Folder { worktree_base, .. } => worktree_base,
             Place::Chat { .. } => None,
         },
+        chat_head: turn.chat_head,
         waiting: match turn.place {
             Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),
             Place::Chat { .. } => Vec::new(),
@@ -1261,7 +1258,7 @@ fn side_by_side(
     early
 }
 
-/// `remember`'s and `knowledgeWrite`'s check: `text` alone under `prompt`, to
+/// `remember`'s check: `text` alone under `prompt`, to
 /// the turn's model with no tools and no history, as a chat's name is asked
 /// for (`services::chat_title`). The verdict is SAVE or REFUSE either way.
 fn check_with(session: &LlmSession, prompt: &str, text: &str) -> Result<(), String> {
@@ -1325,6 +1322,14 @@ fn run_helper(
                 });
                 agents.step(id, step);
             }
+            // The budget note is the card's own line, not a notice in the
+            // chat: it belongs where the review's steps are.
+            ChatEventPayload::WrapUpReminded { text, .. } => {
+                progress(CommandEvent {
+                    stream: crate::domain::command_exec::OutputStream::Stdout,
+                    chunk: format!("{text}\n"),
+                });
+            }
             ChatEventPayload::ContextUsage(usage) => agents.spent(id, &usage),
             _ => {}
         })
@@ -1364,9 +1369,6 @@ fn run_helper(
         take_steering: &no_steering,
         notes_typed: &|| 0,
         search: turn.search.clone(),
-        // A helper looks up what another repository's agent wrote, as the calling turn would.
-        knowledge: turn.knowledge.clone(),
-        knowledge_overview: turn.knowledge_overview,
         skills: turn.skills,
         rules: turn.rules,
         // A fork's prompt is the calling turn's, for the cache; a helper's
@@ -1375,6 +1377,9 @@ fn run_helper(
         log_call: turn.log_call,
         plan: None,
         worktree_of: turn.worktree_of,
+        // A helper's base is its brief's, not its own: a review's marker is
+        // the calling turn's fact.
+        chat_head: None,
         mcp,
         hooks: turn.hooks,
         // The calling turn's to report when they end.
@@ -1504,92 +1509,110 @@ fn helper_reads(steps: &[String]) -> Vec<String> {
     read
 }
 
-/// What a review's bubble stands for in the history, however it was started.
-const REVIEW_MESSAGE: &str = "/review";
-
-/// `/review`: the uncommitted change (`desk`, its opening message `brief`)
-/// read by a helper in Review mode, with a context of its own — not the chat
-/// that wrote the change, nor its plan or checklist. Its report is a card in
-/// the turn, and the history keeps it for the conversation that goes on.
-///
-/// `handed`: the findings go on to the agent in the same turn, to fix or
-/// dismiss each — what pressing the agent's offer of a review means.
-/// Otherwise they are the user's, and the turn ends with the report.
-pub fn review(
-    turn: &Turn,
-    history: Vec<LlmMessage>,
-    todos: Vec<Task>,
-    brief: &str,
-    desk: Arc<crate::domain::review::ReviewDesk>,
-    handed: bool,
-) -> Result<ChatStreamOutcome, TurnError> {
-    // As at any turn's start: a note queued after the last one is not this one's.
-    let _ = (turn.take_steering)();
-    let events = Events::new(turn.events, 0);
-    // Its own id: the window finds a card by id across the whole chat, and a
-    // second review would otherwise land on the first one's.
-    let id = format!("review-{}", uuid::Uuid::new_v4());
-    let call = LlmToolCall { id: id.clone(), name: "review".to_string(), arguments: "{}".to_string() };
-    report_call(&events, 0, &call);
-    let progress = command_output_sink(turn.events, 0, &id);
-    let reviewed = run_review(turn, brief, desk, handed, &progress);
-    match &reviewed {
-        Ok(result) => report_result(&events, 0, &id, Some(result), None, Vec::new()),
-        Err(e) => report_result(&events, 0, &id, None, Some(&e.to_string()), Vec::new()),
-    }
-    // `/review` on every way out: it is the bubble's message, which a branch
-    // or a rewind finds the bubble by.
-    let mut state = State { history, round: 0, budget_used: 0, todos, reads: ReadFiles::default(), written_plan: None };
-    state.history.push(LlmMessage::user(REVIEW_MESSAGE));
-    if (turn.cancelled)() {
-        return Ok(ChatStreamOutcome::Cancelled(ended(state, ChatStreamResult::default())));
-    }
-    let report = match reviewed {
-        Ok(result) => for_model(&result),
-        Err(e) => {
-            state.history.push(LlmMessage::assistant(format!("[The review failed: {e}]")));
-            return Ok(ChatStreamOutcome::Done(ended(state, ChatStreamResult::default())));
-        }
-    };
-    if !handed {
-        state.history.push(LlmMessage::assistant(report));
-        return Ok(ChatStreamOutcome::Done(ended(state, ChatStreamResult::default())));
-    }
-    state.history.push(LlmMessage::user(format!(
-        "[A review of the uncommitted change, by a helper that saw none of this conversation:]\n\n{report}\n\n\
-         Go through each finding: fix it if it is real, dismiss it if it is not, and say in your answer which you fixed, which you dismissed, and why."
-    )));
-    run(turn, state, events.last_seq(), None)
-}
-
 /// The review helper: Review mode over `desk`, under the chat's approval —
-/// what would ask is refused (`preflight`), since a helper has no card. Its
-/// findings are what `reportFinding` kept, whatever became of its answer.
+/// what would ask is refused (`preflight`), since a helper has no card.
+///
+/// Whatever becomes of the run, its findings are the result: the round
+/// ceiling, a stop, a call that would have asked, a provider failure — each
+/// ends with what `reportFinding` had kept, marked with why the review did
+/// not finish (`docs/49-review-as-a-tool.md`, R-6). Nothing a review found
+/// is thrown away with the run.
 fn run_review(
     turn: &Turn,
     brief: &str,
     desk: Arc<crate::domain::review::ReviewDesk>,
-    handed: bool,
+    range: crate::domain::review::ReviewRange,
     progress: &CommandSink,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
+    enum Close {
+        Clean,
+        Rounds,
+        Stopped,
+        Failed(String),
+    }
     let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress)?;
-    let (state, text) = match outcome {
-        Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => {
-            (AgentState::Done, Ok(format!("{}\n\n(The review ran out of rounds before it finished.)", done.result.text.trim())))
-        }
-        Ok(ChatStreamOutcome::Done(done)) => (AgentState::Done, Ok(done.result.text)),
-        Ok(ChatStreamOutcome::Cancelled(_)) => (AgentState::Stopped, Err("the review was stopped before it finished".to_string())),
+    let (state, answer, close) = match outcome {
+        Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => (AgentState::Done, Some(done.result.text), Close::Rounds),
+        Ok(ChatStreamOutcome::Done(done)) => (AgentState::Done, Some(done.result.text), Close::Clean),
+        Ok(ChatStreamOutcome::Cancelled(_)) => (AgentState::Stopped, None, Close::Stopped),
         Ok(ChatStreamOutcome::PendingApproval(_)) => {
-            let reason = "the review asked for a call that needs approval".to_string();
-            (AgentState::Failed { reason: reason.clone() }, Err(reason))
+            let reason = "it asked for a call that needs approval, and a review runs on its own with nobody to ask".to_string();
+            (AgentState::Failed { reason: reason.clone() }, None, Close::Failed(reason))
         }
-        Err(e) => (AgentState::Failed { reason: e.to_string() }, Err(e.to_string())),
+        Err(e) => (AgentState::Failed { reason: e.to_string() }, None, Close::Failed(e.to_string())),
     };
-    agents.finish(id, state, text.as_ref().ok().cloned());
+    agents.finish(id, state, answer.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string));
     let tokens = agents.get(id).map(|run| run.tokens).unwrap_or_default();
-    text.map(|text| ToolResult::Reviewed { findings: desk.findings(), text: text.trim().to_string(), agent: id, tokens, handed })
-        .map_err(crate::domain::tools::ToolError::Command)
+    // The card's last line says what was read and what came of it, a cut
+    // short included — the reader should not have to open the result to know.
+    let findings = desk.findings();
+    let verdict = match findings.len() {
+        0 => "no findings".to_string(),
+        1 => "1 finding".to_string(),
+        n => format!("{n} findings"),
+    };
+    let mut line = format!("{} — {verdict}", range.description());
+    let note = |what: &str| format!("(The review {what}.)");
+    let text = match close {
+        Close::Clean => answer.unwrap_or_default().trim().to_string(),
+        Close::Rounds => {
+            line.push_str(" — ran out of rounds before it finished");
+            format!("{}\n\n{}", answer.unwrap_or_default().trim(), note("ran out of rounds before it finished"))
+        }
+        Close::Stopped => {
+            line.push_str(" — stopped before it finished");
+            note("was stopped before it finished")
+        }
+        Close::Failed(reason) => {
+            line.push_str(&format!(" — failed: {reason}"));
+            note(&format!("failed: {reason}"))
+        }
+    };
+    progress(CommandEvent { stream: crate::domain::command_exec::OutputStream::Stdout, chunk: format!("{line}\n") });
+    Ok(ToolResult::Reviewed { findings, text: text.trim().to_string(), range: range.description(), agent: id, tokens })
+}
+
+/// `review` (the tool): the range `from`..`to` — planned against this turn's
+/// folder and its chat's start marker — read by a helper in Review mode.
+/// The helper's findings are the call's result; the calling turn goes on
+/// with them in the same round, nothing handed sideways.
+fn run_review_tool(
+    turn: &Turn,
+    args: &crate::domain::tools::ReviewArgs,
+    progress: &CommandSink,
+) -> Result<ToolResult, crate::domain::tools::ToolError> {
+    // The turn's folder, never the app's global one: a chat working in a
+    // worktree reviews the worktree (`docs/49-review-as-a-tool.md`).
+    let scope = turn.place.scope().ok_or_else(|| crate::domain::tools::ToolError::NoFolder("review".to_string()))?;
+    let facts = crate::infra::git_changes::review_facts(scope.root(), args.to.as_deref(), turn.chat_head)
+        .map_err(|e| crate::domain::tools::ToolError::Git(e.to_string()))?;
+    let planned = crate::domain::review::plan(args.from.as_deref(), args.to.as_deref(), &facts)
+        .map_err(|e| crate::domain::tools::ToolError::Command(e.to_string()))?;
+    let files = crate::infra::git_changes::review_diffs(scope.root(), planned.from.as_deref(), planned.to.as_deref())
+        .map_err(|e| crate::domain::tools::ToolError::Git(e.to_string()))?;
+    let (kept, excluded) = crate::domain::review::select(files);
+    if kept.is_empty() {
+        // An empty answer to a range the caller named is a different refusal
+        // from "the tree is clean": the ends met, and only the caller can
+        // widen them.
+        let why = if args.from.is_some() || args.to.is_some() {
+            crate::domain::review::empty_range()
+        } else {
+            crate::domain::review::nothing_to_review(excluded.len())
+        };
+        return Err(crate::domain::tools::ToolError::Command(why));
+    }
+    let range = crate::domain::review::ReviewRange {
+        root: scope.root().display().to_string(),
+        from: planned.from.clone().unwrap_or_else(|| "HEAD".to_string()),
+        to: planned.to.clone().unwrap_or_else(|| "working tree".to_string()),
+        files: kept.len(),
+        excluded,
+    };
+    let brief = crate::domain::review::review_message(&kept, &range, crate::services::llm_session::reply_language(), args.focus.as_deref());
+    let desk = Arc::new(crate::domain::review::ReviewDesk::new(kept));
+    run_review(turn, &brief, desk, range, progress)
 }
 
 /// One line of a helper's progress: the tool, and what it was pointed at.
@@ -1920,9 +1943,9 @@ pub fn today() -> String {
 
 /// What a request in the open folder is told before the conversation.
 fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode, today: &'a str) -> prompt::TurnContext<'a> {
-    let (rules, knowledge) = match turn.frozen {
-        Some(frozen) => (&frozen.rules[..], frozen.knowledge.as_ref()),
-        None => (turn.rules, turn.knowledge_overview),
+    let rules = match turn.frozen {
+        Some(frozen) => &frozen.rules[..],
+        None => turn.rules,
     };
     prompt::TurnContext {
         mode,
@@ -1935,7 +1958,6 @@ fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: ConversationMode
         parallel: turn.frozen.and_then(|frozen| frozen.parallel.as_deref()),
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),
-        knowledge,
     }
 }
 
@@ -2037,8 +2059,7 @@ fn standing_note(name: &str, now: Option<&str>) -> String {
 /// ([`Frozen`]) until a note has followed it — and otherwise leaves it alone.
 /// The latest note, not any: a file put back as it was is a change too.
 fn restore_standing(history: &mut Vec<LlmMessage>, turn: &Turn) {
-    let (Some(frozen), Some(mode)) = (turn.frozen, turn.place.mode()) else { return };
-    let knowledge = |overview: Option<&crate::domain::knowledge::Overview>| overview.map(|o| prompt::knowledge_block(o, mode));
+    let (Some(frozen), Some(_mode)) = (turn.frozen, turn.place.mode()) else { return };
     let parallel = match turn.place {
         Place::Folder { parallel, .. } => prompt::parallel_block(&parallel()),
         Place::Chat { .. } => None,
@@ -2046,7 +2067,6 @@ fn restore_standing(history: &mut Vec<LlmMessage>, turn: &Turn) {
     let parts = [
         ("Project instructions", prompt::rules_block(&frozen.rules), prompt::rules_block(turn.rules)),
         ("Memory", prompt::memory_block(&frozen.rules), prompt::memory_block(turn.rules)),
-        ("Knowledge", knowledge(frozen.knowledge.as_ref()), knowledge(turn.knowledge_overview)),
         ("Parallel sessions", frozen.parallel.clone(), parallel),
     ];
     for (name, was, now) in parts {
@@ -2475,14 +2495,12 @@ mod tests {
     }
 
     impl LlmProvider for Scripted {
-        /// Only compaction and the checks of `remember` and `knowledgeWrite`
-        /// get here: the loop itself always streams. A check passes what it
+        /// Only compaction and the check of `remember` gets here: the loop
+        /// itself always streams. A check passes what it
         /// is shown unless that says "approve".
         fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
             let note = request.messages.last().and_then(|m| m.content.clone()).unwrap_or_default();
-            let checking = [crate::domain::project_rules::MEMORY_CHECK_PROMPT, crate::domain::knowledge::KNOWLEDGE_CHECK_PROMPT]
-                .iter()
-                .any(|prompt| request.messages[0].content.as_deref() == Some(*prompt));
+            let checking = request.messages[0].content.as_deref() == Some(crate::domain::project_rules::MEMORY_CHECK_PROMPT);
             self.summaries.lock().unwrap().push(request);
             let reply = match (checking, note.contains("approve")) {
                 (true, false) => "SAVE",
@@ -2571,7 +2589,6 @@ mod tests {
         steering: Arc<SteeringQueue>,
         search: Option<CodeSearchFn>,
         skills: Vec<Skill>,
-        knowledge_overview: Option<crate::domain::knowledge::Overview>,
         rules: Vec<RuleFile>,
         frozen: Option<Frozen>,
         logged: Arc<Mutex<Vec<ToolCallLogEntry>>>,
@@ -2628,7 +2645,6 @@ mod tests {
             steering,
             search: None,
             skills: Vec::new(),
-            knowledge_overview: None,
             rules: Vec::new(),
             frozen: None,
             logged: Arc::new(Mutex::new(Vec::new())),
@@ -2693,8 +2709,6 @@ mod tests {
                 take_steering: &take_steering,
                 notes_typed: &notes_typed,
                 search: self.search.clone(),
-                knowledge: None,
-                knowledge_overview: self.knowledge_overview.as_ref(),
                 shell: &shell,
                 shell_described: &self.shell_described,
                 skills: &self.skills,
@@ -2703,6 +2717,7 @@ mod tests {
                 log_call: &log_call,
                 plan: self.plan.as_deref(),
                 worktree_of: self.worktree_of.as_deref(),
+                chat_head: None,
                 mcp: &self.mcp,
                 hooks: &self.hooks,
                 processes: self.processes.clone(),
@@ -4636,13 +4651,13 @@ mod tests {
         let requests = h.provider.requests();
         let offered: &[LlmToolDefinition] = &requests[0].tools;
         // Every built-in one but a review's own, the features' — the board,
-        // DeepSeek's two, the knowledge base's four, MongoDB's and Kafka's — the Kubernetes role's and the
+        // DeepSeek's two, MongoDB's and Kafka's — the Kubernetes role's and the
         // Prototype role's `present`; MCP tools come from servers, and none
         // is connected. Those waiting for `toolSearch` are found with it.
         let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
         assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
         // And `toolSearch`, which is there for them.
-        assert_eq!(offered.len(), ToolName::ALL.len() - 13 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+        assert_eq!(offered.len(), ToolName::ALL.len() - 9 - ChatRole::Kubernetes.tools().len() - waiting + 1);
     }
 
     /// A write in the loop says what it did to the file, for a rewind; a
@@ -5928,7 +5943,7 @@ mod tests {
     fn a_changed_file_is_a_note_once_and_the_prompt_stays_as_the_chat_began() {
         let mut h = harness("standing-changed", vec![asks(vec![wants("r1", "listFiles", r#"{"path":"."}"#)]), text("done"), text("again")]);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], parallel: None });
 
         let first = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("fix it")], vec![])).expect("finishes"));
         let mut history = first.clone();
@@ -5943,7 +5958,7 @@ mod tests {
         let notes = notes_of(&second, "Project instructions");
         assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("### AGENTS.md\n\nRun bun test."), "{}", notes[0]);
-        assert!(notes_of(&second, "Memory").is_empty() && notes_of(&second, "Knowledge").is_empty(), "only what changed is said");
+        assert!(notes_of(&second, "Memory").is_empty(), "only what changed is said");
         assert!(requests[0].messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Run bun test."))), "the first request is told");
         // Each request extends the last: the note sits where the first turn put it.
         assert_eq!(&second[..first.len()], &first[..]);
@@ -5955,7 +5970,7 @@ mod tests {
         let second = "second".to_string();
         let mut h = harness("standing-parallel", vec![text("one"), text("two"), text("three"), text("four")]);
         h.parallel = vec![first.clone()];
-        h.frozen = Some(Frozen { rules: Vec::new(), knowledge: None, parallel: prompt::parallel_block(&h.parallel) });
+        h.frozen = Some(Frozen { rules: Vec::new(), parallel: prompt::parallel_block(&h.parallel) });
 
         let one = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
         h.parallel = vec![second.clone()];
@@ -5991,7 +6006,7 @@ mod tests {
         let rules = vec![RuleFile::new("AGENTS.md", "Run cargo test.")];
         let mut h = harness("standing-back", vec![text("done"), text("done"), text("done")]);
         h.rules = rules.clone();
-        h.frozen = Some(Frozen { rules: rules.clone(), knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: rules.clone(), parallel: None });
 
         let quiet = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
         assert!(notes_of(&quiet, "Project instructions").is_empty(), "{quiet:?}");
@@ -6015,7 +6030,7 @@ mod tests {
     fn a_shortened_file_is_not_taken_for_the_longer_note() {
         let mut h = harness("standing-shortened", vec![text("done")]);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], parallel: None });
         let longer = standing_note("Project instructions", Some(&prompt::rules_block(&[RuleFile::new("AGENTS.md", "Run bun test.\n\nThen lint.")]).unwrap()));
 
         let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user(longer), LlmMessage::user("go")], vec![])).expect("finishes"));
@@ -6035,7 +6050,7 @@ mod tests {
         );
         h.session.context_limit = Some(90_000);
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], parallel: None });
         std::fs::write(h.root.join("big.txt"), "x".repeat(40_000)).unwrap();
 
         h.run(|turn| stream(turn, long_conversation(), vec![])).expect("turn");
@@ -6051,22 +6066,18 @@ mod tests {
         assert_eq!(retry.iter().filter(|m| says(m)).count(), 1, "{retry:?}");
     }
 
-    /// The knowledge base's overview is frozen with the rules: a document
-    /// written mid-chat is a note, and a part that is gone says so.
+    /// A part of the prompt that is gone says so: a memory file removed
+    /// mid-chat is a note, not a prompt that changed silently.
     #[test]
-    fn a_written_document_is_a_knowledge_note_and_a_lost_memory_says_gone() {
+    fn a_lost_memory_says_gone() {
         use crate::domain::project_rules::MEMORY_NAME;
-        let overview = |repo: &str| crate::domain::knowledge::Overview { repo: repo.into(), ..Default::default() };
-        let mut h = harness("standing-knowledge", vec![text("done")]);
-        h.knowledge_overview = Some(overview("tax-api-now"));
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new(MEMORY_NAME, "- k8s is OrbStack")], knowledge: Some(overview("tax-api")), parallel: None });
+        let mut h = harness("standing-gone", vec![text("done")]);
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new(MEMORY_NAME, "- k8s is OrbStack")], parallel: None });
 
         let history = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
 
         let request = &h.provider.requests()[0];
-        assert!(system_says(request, "`tax-api` in the base") && system_says(request, "k8s is OrbStack"), "the prompt moved");
-        let knowledge = notes_of(&history, "Knowledge");
-        assert!(knowledge.len() == 1 && knowledge[0].contains("`tax-api-now` in the base"), "{knowledge:?}");
+        assert!(system_says(request, "k8s is OrbStack"), "the prompt moved");
         let memory = notes_of(&history, "Memory");
         assert!(memory.len() == 1 && memory[0].contains("Gone: the section no longer applies.\n[End of Memory.]"), "{memory:?}");
     }
@@ -6435,6 +6446,143 @@ mod tests {
         assert!(wrap_ups(&one).is_empty(), "102 of 250 is not yet");
     }
 
+    /// The review card's output carries the whole story: the reviewer's
+    /// steps, the budget note when one was given, and a closing line saying
+    /// what was read and what came of it — no chat notice needed.
+    #[test]
+    fn the_review_card_output_tells_what_it_read_and_spent() {
+        let heavy = |n: u32| asks((0..34).map(|i| wants(&format!("g{n}-{i}"), "grep", &format!(r#"{{"pattern":"p{n}x{i}"}}"#))).collect());
+        let mut h = harness(
+            "card-wrap-up",
+            vec![asks(vec![wants("r1", "review", "{}")]), found("f1"), heavy(1), heavy(2), text("One real problem."), text("Will fix it.")],
+        );
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 60, budget: 250, parallel: 3 };
+        h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+
+        let chunks: Vec<String> = h
+            .events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                ChatEventPayload::CommandOutput { id, chunk, .. } if id == "r1" => Some(chunk),
+                _ => None,
+            })
+            .collect();
+        let output = chunks.join("");
+        assert!(output.contains("reportFinding a.rs\n"), "the reviewer's steps are the card's lines: {output}");
+        assert!(output.contains("[Review budget] This review has used 82% of its budget"), "the budget note is a line of the card: {output}");
+        assert!(output.contains("· HEAD → working tree · 1 file reviewed — 1 finding"), "and a closing line says what was read: {output}");
+        assert!(!output.contains("ran out of rounds"), "the review finished inside its budget: {output}");
+    }
+
+    /// What a review runs with: the brief, the desk and the range, built from
+    /// a real change in `root` the way `run_review_tool` builds them.
+    fn review_parts(root: &std::path::Path) -> (String, Arc<crate::domain::review::ReviewDesk>, crate::domain::review::ReviewRange) {
+        let files = crate::infra::git_changes::review_diffs(root, None, None).unwrap();
+        let (kept, excluded) = crate::domain::review::select(files);
+        let range = crate::domain::review::ReviewRange {
+            root: root.display().to_string(),
+            from: "HEAD".into(),
+            to: "working tree".into(),
+            files: kept.len(),
+            excluded,
+        };
+        let brief = crate::domain::review::review_message(&kept, &range, None, None);
+        (brief, Arc::new(crate::domain::review::ReviewDesk::new(kept)), range)
+    }
+
+    /// A range the caller named with nothing between its ends is told apart
+    /// from a clean tree: the ends met, and only the caller can widen them.
+    #[test]
+    fn a_named_empty_range_says_so() {
+        let h = harness("tool-review-empty-range", vec![]);
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "one\n").unwrap();
+        let repo = git2::Repository::open(&h.root).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("a.rs")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "first", &tree, &[]).unwrap();
+        let err = h.run(|turn| {
+            let progress = command_output_sink(turn.events, 0, "r1");
+            run_review_tool(
+                turn,
+                &crate::domain::tools::ReviewArgs { from: Some("HEAD".into()), to: Some("HEAD".into()), focus: None },
+                &progress,
+            )
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("the range is empty — its ends match"), "{err}");
+        assert!(!err.to_string().contains("working tree matches HEAD"), "{err}");
+    }
+
+    /// Stopped mid-run, a review still reports what it had marked: the
+    /// findings are the result, the result says why there is no closing
+    /// answer, and the card's line says it was cut short. The cancel lands
+    /// at the second round's checkpoint: the first round's `reportFinding`
+    /// has run, the second has not.
+    #[test]
+    fn a_stopped_review_keeps_its_findings() {
+        let h = harness("review-partial-stop", vec![found("f1"), text("Never mind.")]);
+        h.cancel_at_poll(4);
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        let (brief, desk, range) = review_parts(&h.root);
+
+        let result = h.run(|turn| {
+            let progress = command_output_sink(turn.events, 0, "r1");
+            run_review(turn, &brief, desk, range, &progress)
+        });
+
+        let result = result.expect("a review result, never an error now");
+        let ToolResult::Reviewed { findings, text, .. } = result else { panic!("expected a review result") };
+        assert_eq!(findings.len(), 1, "what was marked before the stop is kept: {findings:?}");
+        assert_eq!(text, "(The review was stopped before it finished.)");
+        let line: String = h
+            .events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                ChatEventPayload::CommandOutput { id, chunk, .. } if id == "r1" => Some(chunk),
+                _ => None,
+            })
+            .collect();
+        assert!(line.contains("— 1 finding — stopped before it finished"), "{line}");
+    }
+
+    /// The round ceiling cuts a review off the same way: the findings are
+    /// the result, marked with the reason — the cap only bites while the
+    /// review still has calls to make.
+    #[test]
+    fn a_review_out_of_rounds_keeps_its_findings() {
+        let mut h = harness("review-partial-rounds", vec![found("f1"), text("Never answered.")]);
+        h.session.limits = crate::domain::settings::TurnLimits { rounds: 1, budget: 250, parallel: 3 };
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        let (brief, desk, range) = review_parts(&h.root);
+
+        let result = h.run(|turn| {
+            let progress = command_output_sink(turn.events, 0, "r1");
+            run_review(turn, &brief, desk, range, &progress)
+        });
+
+        let result = result.expect("a review result, never an error now");
+        let ToolResult::Reviewed { findings, text, .. } = result else { panic!("expected a review result") };
+        assert_eq!(findings.len(), 1, "the finding reported before the ceiling is kept: {findings:?}");
+        assert_eq!(text, "(The review ran out of rounds before it finished.)");
+        let line: String = h
+            .events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                ChatEventPayload::CommandOutput { id, chunk, .. } if id == "r1" => Some(chunk),
+                _ => None,
+            })
+            .collect();
+        assert!(line.contains("— 1 finding — ran out of rounds before it finished"), "{line}");
+    }
+
     // -------------------------------------------------------------- explore
 
     fn tool_names(request: &ChatRequest) -> Vec<String> {
@@ -6471,46 +6619,6 @@ mod tests {
             let path = crate::services::project_rules::memory_path(&h.root).unwrap();
             assert_eq!(std::fs::read_to_string(path).unwrap(), "- k8s is OrbStack\n");
         });
-    }
-
-    /// Documents are checked under the knowledge base's own prompt, which
-    /// says what they are — not memory's, which would judge them as a note.
-    #[test]
-    fn knowledge_documents_are_checked_under_their_own_prompt() {
-        crate::testing::with_app_dir("knowledge-loop", || {
-            let doc = "---\nid: overview\nkind: concept\ntitle: Overview\nconfidence: inferred\n---\n# Overview\n\nWhat this is.\n";
-            let arguments = serde_json::json!({ "documents": [doc] }).to_string();
-            let mut h = harness("knowledge-loop", vec![asks(vec![wants("k1", "knowledgeWrite", &arguments)]), text("done")]);
-            h.features = Features::all();
-            h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
-
-            let checks = h.provider.summaries.lock().unwrap().clone();
-            assert_eq!(checks.len(), 1);
-            assert_eq!(checks[0].messages[0].content.as_deref(), Some(crate::domain::knowledge::KNOWLEDGE_CHECK_PROMPT));
-            assert!(checks[0].messages[1].content.as_deref().is_some_and(|t| t.contains("# Overview")));
-            let back = tool_contents(&h.provider.requests()[1]);
-            assert!(back[0].starts_with("Saved to the knowledge base:"), "{back:?}");
-        });
-    }
-
-    /// What the knowledge base has is in the prompt of the turn and of its
-    /// helper — which reads the base but does not write it.
-    #[test]
-    fn the_knowledge_block_reaches_the_turn_and_its_helper() {
-        let mut h = harness(
-            "knowledge-block",
-            vec![asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]), text("X is nowhere"), text("done")],
-        );
-        h.knowledge_overview = Some(crate::domain::knowledge::Overview { repo: "tax-api".into(), ..Default::default() });
-        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
-        let requests = h.provider.requests();
-        let block = |request: &ChatRequest| {
-            request.messages.iter().filter(|m| m.role == LlmRole::System).find_map(|m| m.content.clone().filter(|c| c.starts_with("## Knowledge")))
-        };
-        let caller = block(&requests[0]).expect("the turn's prompt has it");
-        assert!(caller.contains("`knowledgeWrite`") && caller.contains("`tax-api` in the base"), "{caller}");
-        let helper = block(&requests[1]).expect("the helper's prompt has it");
-        assert!(!helper.contains("knowledgeWrite"), "{helper}");
     }
 
     /// The helper works in a conversation of its own, and the calling turn
@@ -6569,20 +6677,6 @@ mod tests {
         assert!(events.iter().all(|e| !matches!(&e.event, ChatEventPayload::Delta { delta } if delta.contains("X is in"))));
     }
 
-    /// The change `/review` reads: `a.rs`, its line 7 added.
-    fn review_desk() -> (String, Arc<crate::domain::review::ReviewDesk>) {
-        use crate::domain::review::{FileDiff, FileStatus, NewLine, ReviewDesk};
-        let file = FileDiff {
-            path: "a.rs".into(),
-            status: FileStatus::Modified,
-            binary: false,
-            patch: "@@ -6,0 +7 @@\n+let x = y / 0;".into(),
-            lines: vec![NewLine { hunk: 0, number: 7, added: true, text: "let x = y / 0;".into() }],
-        };
-        let brief = crate::domain::review::review_message(std::slice::from_ref(&file), &[], None);
-        (brief, Arc::new(ReviewDesk::new(vec![file])))
-    }
-
     fn found(id: &str) -> Step {
         asks(vec![wants(
             id,
@@ -6591,78 +6685,23 @@ mod tests {
         )])
     }
 
-    /// `/review` run by the user: a helper reads the change and nothing of the
-    /// chat — not what was said, its plan or its checklist — and its findings
-    /// are a card and the user's. The agent is not asked; the history keeps
-    /// the report for what the user says next.
+    /// Each review call is a card of its own, so a second one in the chat
+    /// does not land on the first; one the user stops cancels the turn.
     #[test]
-    fn a_review_is_a_helper_and_its_report_is_the_users() {
-        let mut h = harness("review-helper", vec![found("f1"), text("One real problem.")]);
-        h.plan = Some("# Plan\n\n1. it is safe".into());
-        let agents = Arc::new(crate::domain::agents::Agents::default());
-        h.agents = Some(Arc::clone(&agents));
-        let (brief, desk) = review_desk();
-        let todos = vec![Task { id: "1".into(), title: "make it race-free".into(), status: crate::domain::tools::TodoStatus::InProgress, note: None }];
-        let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done, it is safe")];
-
-        let outcome = h.run(|turn| review(turn, chat.clone(), todos.clone(), &brief, desk, false)).expect("turn");
-
-        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
-        let requests = h.provider.requests();
-        assert_eq!(requests.len(), 2, "the helper's two rounds, and no agent turn");
-        for request in &requests {
-            let said = |needle: &str| request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains(needle)));
-            assert!(!said("write the counter") && !said("it is safe") && !said("race-free"), "nothing of the chat");
-            assert!(said("This conversation: Review"));
-        }
-        assert_eq!(done.history[..2], chat[..]);
-        assert_eq!(done.todos, todos);
-        let kept = done.history[2..].iter().map(|m| (m.role, m.content.clone().unwrap_or_default())).collect::<Vec<_>>();
-        assert_eq!(kept[0], (LlmRole::User, "/review".to_string()));
-        assert!(kept[1].0 == LlmRole::Assistant && kept[1].1.contains("a.rs:7 — Divides by zero") && kept[1].1.contains("One real problem."), "{kept:?}");
-
-        let card = h.events().into_iter().find_map(|e| match e.event {
-            ChatEventPayload::ToolResult(r) if r.id.starts_with("review-") => r.result,
-            _ => None,
-        });
-        let Some(ToolResult::Reviewed { findings, text, agent, handed, .. }) = card else { panic!("expected a review card") };
-        assert_eq!((findings.len(), findings[0].start_line, text.as_str(), handed), (1, 7, "One real problem.", false));
-        assert_eq!(findings[0].severity, crate::domain::review::Severity::High);
-        assert!(kept[1].1.contains("[high] a.rs:7"), "{kept:?}");
-        assert_eq!(agents.list()[0].id, agent);
-        assert_eq!(agents.list()[0].state, crate::domain::agents::AgentState::Done);
-    }
-
-    /// Pressing the agent's offer: the same review, and then the agent goes
-    /// through the findings in the same turn — the chat back in front of it.
-    #[test]
-    fn a_handed_review_goes_on_to_the_agent_with_its_findings() {
-        let h = harness("review-handed", vec![found("f1"), text("One real problem."), text("Fixed the division.")]);
-        let (brief, desk) = review_desk();
-        let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done")];
-
-        let outcome = h.run(|turn| review(turn, chat.clone(), vec![], &brief, desk, true)).expect("turn");
-
-        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
-        assert_eq!(done.result.text, "Fixed the division.");
-        let agent = &h.provider.requests()[2];
-        let said = |needle: &str| agent.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains(needle)));
-        assert!(said("write the counter") && said("a.rs:7 — Divides by zero") && said("fix it if it is real"));
-        assert!(!said("This conversation: Review"), "the agent's own mode");
-        // The bubble's `/review`, which branches find it by, then the hand-off.
-        let asked: Vec<_> = done.history.iter().filter(|m| m.role == LlmRole::User).map(|m| m.content.clone().unwrap_or_default()).collect();
-        assert_eq!(asked[1], "/review");
-        assert!(asked[2].starts_with("[A review of the uncommitted change"), "{asked:?}");
-    }
-
-    /// Each review is a card of its own, so a second one in the chat does not
-    /// land on the first; a stopped one still leaves the bubble's message.
-    #[test]
-    fn each_review_has_its_own_card_and_leaves_its_message() {
-        let h = harness("review-twice", vec![text("Nothing."), text("Nothing again.")]);
-        let (brief, desk) = review_desk();
-        h.run(|turn| review(turn, vec![], vec![], &brief, Arc::clone(&desk), false)).expect("turn");
-        h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+    fn each_review_has_its_own_card() {
+        let h = harness(
+            "review-twice",
+            vec![
+                asks(vec![wants("r1", "review", "{}")]),
+                text("Nothing."),
+                asks(vec![wants("r2", "review", "{}")]),
+                text("Nothing again."),
+                text("Done."),
+            ],
+        );
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
         let ids: Vec<String> = h.events().into_iter().filter_map(|e| match e.event {
             ChatEventPayload::ToolCall(call) if call.name == "review" => Some(call.id),
             _ => None,
@@ -6672,19 +6711,10 @@ mod tests {
 
         let h = harness("review-stopped", vec![]);
         h.cancel_at_poll(1);
-        let (brief, desk) = review_desk();
-        let outcome = h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
-        let ChatStreamOutcome::Cancelled(done) = outcome else { panic!("expected cancelled") };
-        assert_eq!(done.history.last().and_then(|m| m.content.as_deref()), Some("/review"));
-    }
-
-    /// The Stop hooks are the turn's: a review helper finishing is not it.
-    #[test]
-    fn a_review_finishing_does_not_run_the_stop_hooks() {
-        let (h, inputs) = hooked(harness("review-stop", vec![text("Nothing.")]), hook("Stop", "", "check"), |_, _| (0, ""));
-        let (brief, desk) = review_desk();
-        h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
-        assert!(inputs.lock().unwrap().is_empty());
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        let outcome = h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+        assert!(matches!(outcome, ChatStreamOutcome::Cancelled(_)), "a stopped turn is cancelled");
     }
 
     /// A reviewer's command that would ask is refused, not paused on: the
@@ -6693,17 +6723,122 @@ mod tests {
     fn a_review_command_that_would_ask_is_refused() {
         let mut h = harness(
             "review-asks",
-            vec![asks(vec![wants("c1", "runCommand", r#"{"command":"touch built"}"#)]), text("Could not build.")],
+            vec![
+                asks(vec![wants("r1", "review", "{}")]),
+                asks(vec![wants("c1", "runCommand", r#"{"command":"touch built"}"#)]),
+                text("Could not build."),
+                text("Done."),
+            ],
         );
         h.approval = asking();
-        let (brief, desk) = review_desk();
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
 
-        let outcome = h.run(|turn| review(turn, vec![], vec![], &brief, desk, false)).expect("turn");
+        let outcome = h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
 
         assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
-        let back = tool_contents(&h.provider.requests()[1]);
+        let back = tool_contents(&h.provider.requests()[2]);
         assert!(back[0].contains("nobody to ask"), "{back:?}");
         assert!(!h.root.join("built").exists());
+    }
+
+    /// The `review` tool: the change in the turn's own folder, read by a
+    /// helper that saw none of the conversation — no history, plan or
+    /// checklist — and the findings are the call's result in the turn's
+    /// history, with the run recorded like an explore helper's.
+    #[test]
+    fn the_review_tool_reads_the_turns_change_and_reports_in_turn() {
+        let mut h = harness(
+            "tool-review",
+            vec![asks(vec![wants("r1", "review", r#"{"focus":"the division"}"#)]), found("f1"), text("One real problem."), text("Will fix it.")],
+        );
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = y / 0;\n").unwrap();
+        h.plan = Some("# Plan\n\n1. it is safe".into());
+        let agents = Arc::new(crate::domain::agents::Agents::default());
+        h.agents = Some(Arc::clone(&agents));
+        let todos = vec![Task { id: "1".into(), title: "make it race-free".into(), status: crate::domain::tools::TodoStatus::InProgress, note: None }];
+        let chat = vec![LlmMessage::user("write the counter"), LlmMessage::assistant("done, it is safe")];
+
+        let outcome = h.run(|turn| stream(turn, chat, todos)).expect("turn");
+
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.result.text, "Will fix it.");
+        // The helper's request is the brief alone: nothing of the chat.
+        let requests = h.provider.requests();
+        let helper = &requests[1];
+        for message in &helper.messages {
+            let content = message.content.as_deref().unwrap_or_default();
+            assert!(!content.contains("write the counter") && !content.contains("make it race-free") && !content.contains("1. it is safe"), "nothing of the chat: {content}");
+        }
+        let brief = helper.messages.last().and_then(|m| m.content.as_deref()).unwrap_or_default();
+        assert!(brief.contains("=== a.rs") && brief.contains("let x = y / 0;"), "{brief}");
+        assert!(brief.contains("pay particular attention to: the division"), "the focus is one line of the brief: {brief}");
+        // As the scope has it, canonical: on Windows a temp folder's short
+        // name (`RUNNER~1`) is not part of its long one, and a bare
+        // `canonicalize()` carries a `\\?\` prefix the scope's root does not.
+        let root = crate::infra::paths::canonicalize_plain(&h.root).unwrap();
+        assert!(brief.contains(&format!("Range: {} · HEAD → working tree · 1 file reviewed", root.display())), "{brief}");
+        // The findings are the result; the turn answers after them.
+        let reported: Vec<String> = done.history.iter().filter(|m| m.role == LlmRole::Tool).map(|m| m.content.clone().unwrap_or_default()).collect();
+        assert!(reported.iter().any(|text| text.contains("[high] a.rs:1") && text.contains("One real problem.")), "{reported:?}");
+        assert_eq!(agents.list().len(), 1);
+        assert_eq!(agents.list()[0].state, crate::domain::agents::AgentState::Done);
+    }
+
+    /// The symptom "the review works somewhere else": the tool reads the
+    /// turn's folder even when a neighbouring folder holds changes of its own.
+    #[test]
+    fn the_review_tool_reads_the_turns_folder_not_the_neighbours() {
+        let neighbour = temp_dir("tool-review-neighbour");
+        git2::Repository::init(&neighbour).unwrap();
+        std::fs::write(neighbour.join("theirs.rs"), "let theirs = 1;\n").unwrap();
+        let h = harness("tool-review-own-folder", vec![asks(vec![wants("r1", "review", "{}")]), text("Nothing wrong."), text("Noted.")]);
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("ours.rs"), "let ours = 2;\n").unwrap();
+
+        let outcome = h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.result.text, "Noted.");
+        let requests = h.provider.requests();
+        let brief = requests[1].messages.last().and_then(|m| m.content.as_deref()).unwrap_or_default();
+        assert!(brief.contains("=== ours.rs"), "{brief}");
+        assert!(!brief.contains("theirs.rs"), "the neighbour's change is not read: {brief}");
+    }
+
+    /// Where the tool is not offered, calling it is refused — a helper
+    /// cannot review, none inside a review either. Analyst, which promises
+    /// to change nothing, can: the review keeps that promise itself.
+    #[test]
+    fn the_review_tool_is_refused_where_it_is_not_offered() {
+        for (label, mode) in [("tool-review-in-explore", ConversationMode::Explore), ("tool-review-in-review", ConversationMode::Review)] {
+            let mut h = harness(label, vec![asks(vec![wants("r1", "review", "{}")]), text("Understood.")]);
+            git2::Repository::init(&h.root).unwrap();
+            std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
+            h.mode = mode;
+            let outcome = h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+            let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+            assert!(done.history.iter().any(|m| m.role == LlmRole::Tool), "{label}: the refusal is the call's result");
+            // No helper ran: no request carries the reviewer's brief, which
+            // always opens with the same line.
+            let has_brief = |request: &crate::domain::llm::ChatRequest| {
+                request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Review the change in this repository")))
+            };
+            assert!(!h.provider.requests().iter().any(has_brief), "{label}: no helper request");
+        }
+
+        let mut h = harness("tool-review-in-analyst", vec![asks(vec![wants("r1", "review", "{}")]), text("Nothing wrong."), text("Reported.")]);
+        git2::Repository::init(&h.root).unwrap();
+        std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
+        h.mode = ConversationMode::Analyst;
+        let outcome = h.run(|turn| stream(turn, vec![], vec![])).expect("turn");
+        let ChatStreamOutcome::Done(done) = outcome else { panic!("expected done") };
+        assert_eq!(done.result.text, "Reported.");
+        let has_brief = |request: &crate::domain::llm::ChatRequest| {
+            request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("Review the change in this repository")))
+        };
+        assert!(h.provider.requests().iter().any(has_brief), "the analyst's review helper ran");
     }
 
     /// The agent may search the web; its helpers may not — several run side
@@ -6746,7 +6881,7 @@ mod tests {
         h.features = Features::all();
         // Its prompt is the caller's frozen one, not the files as they are now.
         h.rules = vec![RuleFile::new("AGENTS.md", "Run bun test.")];
-        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], knowledge: None, parallel: None });
+        h.frozen = Some(Frozen { rules: vec![RuleFile::new("AGENTS.md", "Run cargo test.")], parallel: None });
         let h = with_server(h, 1);
         std::fs::write(h.root.join("a.rs"), "let x = 1;\n").unwrap();
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
