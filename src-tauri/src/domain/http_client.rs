@@ -235,10 +235,7 @@ pub struct AgentPlan {
 /// An edited request's method, upper case, `GET` when it names none, and its address as written.
 fn method_and_url(request: &Value) -> (String, String) {
     let method = request.get("method").and_then(Value::as_str).map_or_else(|| "GET".to_string(), |m| m.trim().to_ascii_uppercase());
-    let url = match request.get("url") {
-        Some(Value::Object(url)) => super::postman::text_of(url.get("raw")),
-        other => super::postman::text_of(other),
-    };
+    let url = super::postman::raw_url(request.get("url"));
     (method, url)
 }
 

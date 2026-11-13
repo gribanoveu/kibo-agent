@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use super::http_client::{one_request, with_collections};
-use crate::domain::http_client::{credential_literals, DraftPlan, HttpError, Outcome, Outgoing, Scope, Variable, SECRET_MASK};
+use crate::domain::http_client::{credential_literals, DraftPlan, HttpError, Outcome, Outgoing, Prepared, Scope, Variable, SECRET_MASK};
 use crate::domain::http_draft::{draft_writes, fingerprint, hidden_named, masked_places, masked_strings, request_changes, AgentDraft, DraftReport, DraftSend, ScriptDraft, NOT_SENT};
 use crate::domain::http_scripts::{request_after, request_for_script, request_sent, response_for, ScriptVars};
 use crate::domain::postman::Collection;
@@ -25,12 +25,7 @@ pub(super) fn run(chat: &str, chat_title: &str, environment_id: &str, draft: &Ag
     }
     let environment = http_env_store::get(environment_id)?;
     let request_id = draft.request.trim();
-    let (plan, collection_id) = with_collections(|collections, globals, ids| {
-        environment.agent_draft(collections, globals, request_id).map(|plan| {
-            let id = ids[plan.collection].to_string();
-            (plan, id)
-        })
-    })??;
+    let (collection_id, plan) = with_collections(|collections, globals, ids| environment.agent_draft(collections, globals, request_id).map(|plan| (ids[plan.collection].to_string(), plan)))??;
     let mut collection = http_collections::get(&collection_id)?;
     let [globals, collection_vars, environment_vars] = plan.layers.clone();
     let local = draft.variables.iter().map(|(key, value)| Variable { key: key.clone(), value: value.clone(), secret: false, enabled: true }).collect();
@@ -51,11 +46,14 @@ pub(super) fn run(chat: &str, chat_title: &str, environment_id: &str, draft: &Ag
         let Outcome::Response { status, headers, elapsed_ms, .. } = &entry.outcome else {
             return Err(HttpError::BadExchange { exchange: entry.id.clone(), why: "it got no response; send again" });
         };
-        let body = entry.response_body.as_deref().unwrap_or_default();
+        // The send as History keeps it, and the collection's written credentials masked over
+        // it too: a send kept before they were masked on sending has them as written.
+        let sent = Prepared { sent: entry.request.clone(), shown: entry.request.clone() }.hidden(&mask()).shown;
+        let body = mask().hide(entry.response_body.as_deref().unwrap_or_default());
         report.exchange = Some(entry.id.clone());
-        report.ran_on = format!("{} {} → {status}", entry.request.method, entry.request.url);
-        report.masked = masked_places(&entry.request, &entry.outcome, entry.response_body.as_deref());
-        start.context(&request_sent(&entry.request), Some(&response_for(*status, headers, body.as_bytes(), *elapsed_ms)))
+        report.ran_on = format!("{} {} → {status}", sent.method, sent.url);
+        report.masked = masked_places(&sent, &entry.outcome, Some(&body));
+        start.context(&request_sent(&sent), Some(&response_for(*status, headers, body.as_bytes(), *elapsed_ms)))
     } else {
         start.context(&request_for_script(&saved), None)
     };

@@ -123,8 +123,13 @@ fn exchange(collection: &mut Collection, collection_id: &str, request_id: &str, 
     let name = environment.map(|e| e.name.clone());
     let written = collection.written_url(request_id).unwrap_or_default();
     let wrote = |literal: &String| scripts.agent.as_ref().is_some_and(|a| a.written.iter().any(|w| w.contains(literal.as_str())));
-    let literals: Vec<String> = credential_literals(&prepared.sent).into_iter().filter(|l| !wrote(l)).collect();
-    scripts.kept.extend(literals);
+    // A credential written into the collection by hand is the model's to read nowhere —
+    // its request, its send, a draft's run on it — whatever the name it goes under.
+    let mut literals = credential_literals(&prepared.sent);
+    if scripts.agent.is_some() {
+        literals.extend(collection.written_credentials(request_id)?);
+    }
+    scripts.kept.extend(literals.into_iter().filter(|l| !wrote(l)));
     scripts.after_response(&prepared, &outcome, &body);
     // What the test scripts learned counts too: a token they stored is a secret's value —
     // in history as well, where an agent's send is what a draft of it runs on (HC-11c).
@@ -381,7 +386,7 @@ impl<'a> Scripts<'a> {
 /// A script's `pm.sendRequest` filled in as the page sends one, and its address as written.
 pub(super) fn one_request(request: &Value, scope: &Scope) -> (String, Result<Prepared, HttpError>) {
     let request = request_after(&Value::Null, request);
-    let written = request.get("url").map(|u| u.get("raw").unwrap_or(u)).and_then(Value::as_str).unwrap_or_default().to_string();
+    let written = crate::domain::postman::raw_url(request.get("url"));
     let mut one = Collection::new("sub-request", "sub-request");
     let prepared = one.add(None, serde_json::json!({"id": "sub-request", "name": "sub-request", "request": request})).and_then(|_| one.prepare("sub-request", scope));
     (written, prepared)
@@ -430,10 +435,7 @@ impl HttpStands for Stands {
     /// call. History gets it signed by the chat; the request's last response stays the user's.
     fn send(&self, id: &str, send: &AgentSend) -> Result<AgentSent, HttpError> {
         let environment = http_env_store::get(id)?;
-        let (plan, collection_id) = with_collections(|collections, globals, ids| environment.agent_send(collections, globals, send).map(|plan| {
-            let id = ids[plan.collection].to_string();
-            (plan, id)
-        }))??;
+        let (collection_id, plan) = with_collections(|collections, globals, ids| environment.agent_send(collections, globals, send).map(|plan| (ids[plan.collection].to_string(), plan)))??;
         let request_id = send.request.trim();
         let mut collection = http_collections::get(&collection_id)?;
         let item = collection.item_mut(request_id).ok_or_else(|| HttpError::NoRequest(request_id.into()))?;
@@ -455,10 +457,7 @@ impl HttpStands for Stands {
     /// folder made or the template moved meanwhile counts.
     fn save(&self, id: &str, save: &AgentSave) -> Result<AgentSaved, HttpError> {
         let environment = http_env_store::get(id)?;
-        let (plan, collection_id) = with_collections(|collections, globals, ids| environment.agent_save(collections, globals, save).map(|plan| {
-            let id = ids[plan.collection].to_string();
-            (plan, id)
-        }))??;
+        let (collection_id, plan) = with_collections(|collections, globals, ids| environment.agent_save(collections, globals, save).map(|plan| (ids[plan.collection].to_string(), plan)))??;
         let place = change(&collection_id, |c| {
             let (parent, new_folder, place) = c.case_place(save.request.trim(), save.folder.as_deref())?;
             let parent = match new_folder {
@@ -2614,6 +2613,42 @@ mod tests {
             http_collections::add(&Collection::parse(&root.to_string()).unwrap()).unwrap();
             let sent = stands("c").0.send("stage", &agent("k")).unwrap();
             assert_eq!(body_of(&sent), "echo •••");
+        });
+    }
+
+    /// A key written into the collection's auth goes masked under whatever name it is
+    /// sent: in the reply, in History, and in a draft run on a send kept before it was a key.
+    #[test]
+    fn a_key_written_into_the_auth_is_masked_under_any_name() {
+        with_app_dir("http-stands-written-key", || {
+            let echo = "HTTP/1.1 200 OK\r\ncontent-length: 18\r\nconnection: close\r\n\r\n{\"k\":\"w1tt3n-k3y\"}";
+            let (port, _seen) = serve(vec![reply(echo), reply(echo)]);
+            open_stage(format!("http://127.0.0.1:{port}"), AgentAccess::ReadOnly);
+            let root = json!({
+                "info": {"name": "Keyed", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+                "item": [{"id": "list", "name": "List", "request": {"method": "GET", "url": "{{baseUrl}}/orders?appid=w1tt3n-k3y"}}]
+            });
+            let id = http_collections::add(&Collection::parse(&root.to_string()).unwrap()).unwrap();
+            crate::infra::chat_store::save_plain("c1", crate::domain::chat_role::ChatRole::Api, None, &[crate::domain::llm::LlmMessage::user("check")], &json!([])).unwrap();
+            let (stands, _) = stands("c1");
+            // Nothing marks it yet: the model reads it.
+            assert!(body_of(&stands.send("stage", &agent("list")).unwrap()).contains("w1tt3n-k3y"));
+
+            change(&id, |c| {
+                let auth = json!({"type": "apikey", "apikey": [{"key": "key", "value": "appid"}, {"key": "value", "value": "w1tt3n-k3y"}, {"key": "in", "value": "query"}]});
+                c.set_request("list", json!({"method": "GET", "url": "{{baseUrl}}/orders", "auth": auth}))
+            })
+            .unwrap();
+            let kept = stands.draft("stage", &drafted("test", "console.log(pm.request.url.toString() + ' ' + pm.response.text());")).unwrap();
+            let told = serde_json::to_string(&kept).unwrap();
+            assert!(!told.contains("w1tt3n-k3y") && kept.report.ran_on.contains("appid=•••"), "{told}");
+
+            let sent = stands.send("stage", &agent("list")).unwrap();
+            assert_eq!(body_of(&sent), "{\n  \"k\": \"•••\"\n}");
+            let history = http_collections::history().unwrap();
+            let entry = history.last().unwrap();
+            assert!(entry.request.url.ends_with("/orders?appid=•••"), "{}", entry.request.url);
+            assert!(!serde_json::to_string(entry).unwrap().contains("w1tt3n-k3y"));
         });
     }
 

@@ -342,10 +342,7 @@ impl Collection {
             request["method"] = method.to_ascii_uppercase().into();
         }
         if edits.path.is_some() || edits.query.is_some() {
-            let written = match request.get("url") {
-                Some(Value::Object(url)) => text_of(url.get("raw")),
-                other => text_of(other),
-            };
+            let written = raw_url(request.get("url"));
             let (host, path, query) = address_parts(&written);
             let path = edits.path.as_deref().map(agent_path).transpose()?.unwrap_or(path);
             let query = edits.query.as_deref().map_or(query, |q| q.trim().trim_start_matches('?').to_string());
@@ -415,11 +412,7 @@ impl Collection {
     /// A request's address as written, `{{baseUrl}}` and all: what history lists it by.
     pub fn written_url(&self, id: &str) -> Option<String> {
         let request = self.chain(id)?.last()?.get("request")?;
-        Some(match request.get("url") {
-            Some(Value::Object(url)) => text_of(url.get("raw")),
-            Some(url) => text_of(Some(url)),
-            None => text_of(Some(request)),
-        })
+        Some(raw_url(request.get("url").or(Some(request))))
     }
 
     /// A folder or request by id, to edit in place.
@@ -1258,6 +1251,14 @@ pub(crate) fn text_of(v: Option<&Value>) -> String {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(s)) => s.clone(),
         Some(other) => other.to_string(),
+    }
+}
+
+/// A request's address as written, `{{baseUrl}}` and all: `url` as text, or its `raw`.
+pub(crate) fn raw_url(url: Option<&Value>) -> String {
+    match url {
+        Some(Value::Object(u)) => text_of(u.get("raw")),
+        other => text_of(other),
     }
 }
 
