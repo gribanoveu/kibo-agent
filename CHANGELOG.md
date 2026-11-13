@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-13 A helper run — a review, an explore — stands in the chat as a card of its own, like the background process's: what it was asked, the step it is on, how it stands in the badge — a click unfolds its steps, and a settled one its answer, with the run in the Agents tab a link away
+
 - 2026-11-13 The knowledge base is gone, and with it `/analyze`: the Knowledge page, the four tools `knowledgeWrite`, `knowledgeSearch`, `knowledgeRead` and `knowledgeRelations`, the `## Knowledge` prompt block and the `knowledge` feature in the Catalog. Notes the agent keeps are `remember`, as before
 
 - 2026-11-12 A review is an instrument of the agent, not a turn of its own: `/review` and the suggestion button send an ordinary message, the agent calls `review` itself — `from` and `to` naming the range, the chat's own commits found after a commit — and the review's card tells the whole story: the reviewer's steps, the budget note, the range it read and what it found, findings kept even when the review is stopped or runs out of rounds

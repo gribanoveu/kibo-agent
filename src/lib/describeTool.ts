@@ -570,7 +570,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
     // A settled review is a card of its own (`lib/finding.ts`), so this is the
     // row while it runs; a failed one takes the branch above, with its error.
     case "review": {
-      const steps = block.output.split("\n").filter(Boolean).map(helperStep);
+      const steps = block.output.split("\n").filter(Boolean).map(describeHelperStep);
       const under = steps[steps.length - 1];
       return {
         name,
@@ -726,7 +726,7 @@ export function describeActive(block: Extract<Block, { kind: "tool" }>): string 
 }
 
 /** A helper's step as the folded line says a call: `readFile src/a.rs` → `Reading src/a.rs`. */
-function helperStep(line: string): string {
+export function describeHelperStep(line: string): string {
   const gap = line.indexOf(" ");
   const label = toolLabel(gap < 0 ? line : line.slice(0, gap));
   return [ACTIVE_VERBS[label] ?? label, gap < 0 ? "" : line.slice(gap + 1)].filter(Boolean).join(" ");

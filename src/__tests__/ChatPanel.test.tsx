@@ -728,7 +728,7 @@ describe("a background process started from the chat", () => {
   });
 });
 
-describe("a helper's explore row", () => {
+describe("a helper's explore card", () => {
   const explored = {
     kind: "tool",
     id: "e1",
@@ -740,14 +740,25 @@ describe("a helper's explore row", () => {
     output: "grep X\n",
   } as Block;
 
-  test("unfolds to its answer, with its run a click away in the sheet over the chat", () => {
+  test("stands as a card — the brief, what it did, a done badge — and unfolds to its answer", () => {
+    panel(state([explored]));
+    const card = document.querySelector(".subagent-card.done");
+    expect(card).toBeTruthy();
+    expect(screen.getByText("Where is X?")).toBeTruthy();
+    expect(screen.getByText(/1 step/)).toBeTruthy();
+    expect(screen.getByText("done")).toBeTruthy();
+    expect(screen.queryByText("X is in a.rs:1")).toBeNull();
+    fireEvent.click(screen.getByText("Where is X?"));
+    expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
+  });
+
+  test("its run is a click away in the sheet over the chat", () => {
     const opened: unknown[] = [];
     render(
       <ChatPanel workspace="/tmp/project" turn={state([explored])} onDecide={() => {}} onOpenRepo={() => {}} onOpenAgent={(agent) => opened.push(agent)} />,
     );
     expect(screen.queryByText("Show run")).toBeNull();
     fireEvent.click(screen.getByText("Where is X?"));
-    expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
     fireEvent.click(screen.getByText("Show run"));
     expect(opened).toEqual([{ id: 4, task: "Where is X?" }]);
     // Another run's opener: a click on it does not close the sheet it opens.
@@ -759,6 +770,39 @@ describe("a helper's explore row", () => {
     fireEvent.click(screen.getByText("Where is X?"));
     expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
     expect(screen.queryByText("Show run")).toBeNull();
+  });
+});
+
+describe("a review while it runs", () => {
+  const running = {
+    kind: "tool",
+    id: "r1",
+    round: 1,
+    name: "review",
+    arguments: "{}",
+    status: "running",
+    output: "runCommand bun test 2>&1 | tail -40\nreadFile src/a.rs\n",
+  } as Block;
+
+  test("is a card like a background process: the step under way, the count, a running badge", () => {
+    panel(state([running]));
+    expect(document.querySelector(".subagent-card.running")).toBeTruthy();
+    expect(screen.getByText("Review")).toBeTruthy();
+    expect(screen.getByText("Reading src/a.rs")).toBeTruthy();
+    expect(screen.getByText("2 steps")).toBeTruthy();
+    expect(screen.getByText("running")).toBeTruthy();
+    // A click unfolds the steps it has taken so far.
+    fireEvent.click(screen.getByText("Review"));
+    expect(screen.getByText(/Running bun test/)).toBeTruthy();
+  });
+
+  test("a failed one wears the amber badge and unfolds to the reason", () => {
+    const failed = { ...running, status: "failed", error: "review: stopped before it answered" } as Block;
+    panel(state([failed]));
+    expect(document.querySelector(".subagent-card.failed")).toBeTruthy();
+    expect(screen.getByText("failed")).toBeTruthy();
+    fireEvent.click(screen.getByText("Review"));
+    expect(screen.getByText("review: stopped before it answered")).toBeTruthy();
   });
 });
 

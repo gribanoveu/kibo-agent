@@ -146,12 +146,12 @@ describe("a review a subagent ran", () => {
     expect(screen.getByText(range)).toBeTruthy();
   });
 
-  /// A review that failed is still the turn's one piece of work: its row stands alone, not folded away.
+  /// A review that failed is still the turn's one piece of work: its card stands alone, not folded away.
   test("a failed review stays in sight", () => {
     const failed = { ...(card() as Tool), status: "failed" as const, result: undefined, error: "the review was stopped before it finished" };
     render(<Transcript turn={{ ...emptyTurn(), status: "done", blocks: [{ kind: "user", id: "u", text: "/review" }, failed] }} onDecide={() => {}} />);
     expect(document.querySelector(".tool-run")).toBeNull();
-    expect(document.querySelector(".tools")).toBeTruthy();
+    expect(document.querySelector(".subagent-card.failed")).toBeTruthy();
   });
 
   /// The findings are the user's to act on whenever they choose — Fix is on
