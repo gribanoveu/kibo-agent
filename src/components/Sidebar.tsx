@@ -7,6 +7,7 @@ import {
   ChevronRight,
   CircleCheck,
   CodeXml,
+  Folder,
   FolderInput,
   GitBranch,
   Info,
@@ -386,7 +387,10 @@ export function Sidebar({
         )}
         {pinnedRows.length > 0 && (
           <section>
-            <div className="chat-day">Pinned</div>
+            <div className="chat-day chat-day-marked">
+              <Pin size={12} aria-hidden />
+              <span>Pinned</span>
+            </div>
             {pinnedRows.map(chatRow)}
           </section>
         )}
@@ -406,9 +410,10 @@ export function Sidebar({
                     aria-expanded={!shut}
                     onClick={() => toggleFolder(group.id)}
                   >
-                    <ChevronRight size={12} className={shut ? undefined : "chat-folder-open"} aria-hidden />
+                    <Folder size={12} aria-hidden />
                     <span className="chat-folder-name">{group.name}</span>
                     <span className="chat-folder-count">{rows.length}</span>
+                    <ChevronRight size={12} className={shut ? "chat-folder-chev" : "chat-folder-chev chat-folder-open"} aria-hidden />
                   </button>
                   <ChatMenu
                     items={[
