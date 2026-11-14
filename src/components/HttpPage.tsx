@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
-import { Decoration, keymap, MatchDecorator, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
+import { Decoration, keymap, MatchDecorator, tooltips, ViewPlugin, type DecorationSet, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
-import { acceptCompletion, autocompletion, closeCompletion, moveCompletionSelection, type CompletionContext } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, closeCompletion, moveCompletionSelection, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import {
   Bot,
   ChevronDown,
@@ -903,10 +903,22 @@ function variableCompletion(values: ReadonlyMap<string, string>): Extension {
       })),
     };
   };
-  return [autocompletion({ override: [source], icons: false, defaultKeymap: false }), COMPLETION_KEYS];
+  return completionList(source);
 }
 
-/** An editor's list moved, picked and closed by the registry's keys, as a field's list is. */
+/**
+ * An editor's list of `source`: drawn into the page's body, where the editor's box does not
+ * cut it or what it says beside it, and moved, picked and closed by the registry's keys, as a
+ * field's list is.
+ */
+function completionList(source: (context: CompletionContext) => CompletionResult | null): Extension {
+  return [
+    autocompletion({ override: [source], icons: false, defaultKeymap: false, tooltipClass: () => "http-completions" }),
+    tooltips({ parent: document.body }),
+    COMPLETION_KEYS,
+  ];
+}
+
 const COMPLETION_KEYS = Prec.highest(
   keymap.of([
     {
@@ -937,7 +949,7 @@ function scriptCompletion(listen: "prerequest" | "test"): Extension {
       options: found.members.map((m) => ({ label: m.name, type: m.kind, detail: m.detail, info: m.info })),
     };
   };
-  return [autocompletion({ override: [source], icons: false, defaultKeymap: false }), COMPLETION_KEYS];
+  return completionList(source);
 }
 
 /**

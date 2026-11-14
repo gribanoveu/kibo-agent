@@ -1018,6 +1018,9 @@ describe("the HTTP page", () => {
     act(() => editor().dispatch({ changes: { from: 0, insert: "pm.response.to.have.st" }, selection: { anchor: 22 }, userEvent: "input.type" }));
     await waitFor(() => expect(offered()).toEqual(["status"]));
     expect(currentCompletions(editor().state)[0].detail).toBe("(code | reason)");
+    // Drawn in the page's body, where the editor's box does not cut it.
+    await waitFor(() => expect(document.querySelector(".cm-tooltip.http-completions")).not.toBeNull());
+    expect(document.querySelector(".cm-tooltip.http-completions")!.closest(".cm-editor")).toBeNull();
     await new Promise((done) => setTimeout(done, 100));
     act(() => {
       editor().contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));

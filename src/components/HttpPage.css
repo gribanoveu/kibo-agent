@@ -491,31 +491,36 @@
   text-align: right;
   color: var(--text-faint);
 }
-/* The same list in the body's editor, drawn by CodeMirror: the theme's colours, not its own. */
-.http-editor .cm-editor .cm-tooltip-autocomplete {
+/* The same list in an editor — the body's, a script's — drawn by CodeMirror into the page's
+   body (`completionList`), so no box cuts it: the theme's colours, not its own. Three classes
+   to stand over CodeMirror's own theme, whichever is loaded last. */
+.cm-tooltip.cm-tooltip-autocomplete.http-completions {
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-menu);
   box-shadow: var(--shadow-popover);
 }
-.http-editor .cm-editor .cm-tooltip-autocomplete > ul > li {
+.cm-tooltip.cm-tooltip-autocomplete.http-completions > ul {
+  font-family: var(--font-mono);
+}
+.cm-tooltip.cm-tooltip-autocomplete.http-completions > ul > li {
   padding: 5px 8px;
   border-radius: var(--radius-sm);
   color: var(--text);
   font-size: var(--fs-sm);
 }
-.http-editor .cm-editor .cm-tooltip-autocomplete > ul > li[aria-selected] {
+.cm-tooltip.cm-tooltip-autocomplete.http-completions > ul > li[aria-selected] {
   background: var(--bg-menu-hover);
   color: var(--text);
 }
-.http-editor .cm-editor .cm-completionDetail {
+.http-completions .cm-completionDetail {
   margin-left: 10px;
   color: var(--text-faint);
   font-style: normal;
 }
 /* What a script's `pm.*` name does, beside the list. */
-.http-editor .cm-editor .cm-tooltip.cm-completionInfo {
+.http-completions .cm-tooltip.cm-completionInfo {
   max-width: 320px;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -523,6 +528,7 @@
   background: var(--bg-menu);
   box-shadow: var(--shadow-popover);
   color: var(--text-dim);
+  font-family: var(--font-ui);
   font-size: var(--fs-sm);
 }
 .http-var-hidden {
