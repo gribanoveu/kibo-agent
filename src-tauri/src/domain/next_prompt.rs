@@ -1,5 +1,5 @@
 //! What a small local model is given to guess the user's next message, and
-//! how a finished turn is turned into it (`docs/20-next-prompt-suggestions.md`).
+//! how a finished turn is turned into it.
 //!
 //! The model is trained elsewhere, on pairs cut from Claude Code transcripts
 //! by `scripts/extract_next_prompt.py` in the minimind repository. **The input

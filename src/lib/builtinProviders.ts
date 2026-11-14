@@ -22,7 +22,7 @@ export type BuiltinProvider = CatalogEntry & Pick<ProviderConfig, "trustedCertPe
  * AlfaGen, the bank's own gateway. Its certificate is the `Alfa-Bank ST CA
  * Root` the gateway's chain leads to; the intermediate is not bundled because
  * the server sends it, and the leaf on it would be pinned to a certificate
- * that expires first (docs/47-alfagen-provider.md, decision 3).
+ * that expires first.
  */
 export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
   {
@@ -58,9 +58,8 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
  * ponytail: the certificate travels in `settings.json` inside the provider it
  * was picked for, so a new root from the bank needs the row picked again, or
  * the new PEM pasted into the Certificate card. The way past that ceiling is
- * an id in the config that the backend resolves against a file in the build
- * (docs/47-alfagen-provider.md, decision 4) — worth it only once a second
- * internal provider or a changed CA makes it so.
+ * an id in the config that the backend resolves against a file in the build —
+ * worth it only once a second internal provider or a changed CA makes it so.
  */
 export const KNOWN_PROVIDERS: BuiltinProvider[] = [
   ...BUILTIN_PROVIDERS,

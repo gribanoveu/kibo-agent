@@ -4,7 +4,7 @@
 Does not use third-party int8 reuploads. The revision is NOT pinned: HF_REVISION
 is "main" and is only recorded in parity.json, never passed to the download, so a
 rebuild takes whatever `main` is on that day. Upstream's docstring claimed
-otherwise (docs/07-upstream-findings.md, B-9). Pin it to a commit hash before the
+otherwise. Pin it to a commit hash before the
 next rebuild, and pass it through.
 """
 

@@ -5,7 +5,7 @@
 //! stopped with `stopProcess` or from the Terminal tab. Each lives until it
 //! exits, is stopped, the workspace changes, or the app quits — not the turn:
 //! a dev server the agent started has to be there when the next message
-//! asks it something. Decisions in `docs/06-port-plan.md`, stage 7.
+//! asks it something.
 //!
 //! The port is here and the processes are in `infra::background`, because
 //! `ToolDeps` carries it and `domain` does not reach into `infra`.

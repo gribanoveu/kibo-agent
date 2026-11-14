@@ -5,7 +5,7 @@ import { type ChatGroup, createChatGroup, deleteChatGroup, listChatGroups, renam
  * The sidebar's chat folders, one list per open folder (Chat mode shares
  * one). Read with the chat list and re-read on the same triggers — the
  * backend reports no event for folders, and the list's own refresh is the
- * signal (docs/54-chat-groups.md).
+ * signal.
  */
 export function useChatGroups(workspace: string | null) {
   const [groups, setGroups] = useState<ChatGroup[]>([]);

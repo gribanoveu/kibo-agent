@@ -5,8 +5,7 @@
 //! It stores the vectors too, one row per chunk and model, int8-quantized
 //! (260 bytes each). Upstream kept them in a separate `usearch` file per
 //! model and marked them in SQLite; the two could disagree after a crash, and
-//! did in the direction that loses data (`docs/07-upstream-findings.md`,
-//! B-11). One row cannot disagree with itself.
+//! did in the direction that loses data. One row cannot disagree with itself.
 //!
 //! The exception is `chunks_fts`, the full-text index behind keyword search.
 //! A full-text index *is* a copy of the text: there is no way to rank by term
@@ -18,8 +17,8 @@
 //!
 //! A saved chat is the user's own writing: losing one loses something nobody
 //! can reproduce, which is why `infra::chat_store` never deletes a row it
-//! cannot read and why a newer format there is left strictly alone
-//! (`docs/07-upstream-findings.md`, "чужой урок"). Nothing in this file is
+//! cannot read and why a newer format there is left strictly alone.
+//! Nothing in this file is
 //! like that. Every row can be rebuilt from the working tree, so a store that
 //! does not match what this build expects is thrown away and built again —
 //! including one written by a *newer* build, which a downgrade makes ordinary.

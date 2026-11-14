@@ -258,7 +258,7 @@ pub(super) fn helper_reads(steps: &[String]) -> Vec<String> {
 /// Whatever becomes of the run, its findings are the result: the round
 /// ceiling, a stop, a call that would have asked, a provider failure — each
 /// ends with what `reportFinding` had kept, marked with why the review did
-/// not finish (`docs/49-review-as-a-tool.md`, R-6). Nothing a review found
+/// not finish. Nothing a review found
 /// is thrown away with the run.
 pub(super) fn run_review(
     turn: &Turn,
@@ -326,7 +326,7 @@ pub(super) fn run_review_tool(
     progress: &CommandSink,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     // The turn's folder, never the app's global one: a chat working in a
-    // worktree reviews the worktree (`docs/49-review-as-a-tool.md`).
+    // worktree reviews the worktree.
     let scope = turn.place.scope().ok_or_else(|| crate::domain::tools::ToolError::NoFolder("review".to_string()))?;
     let facts = crate::infra::git_changes::review_facts(scope.root(), args.to.as_deref(), turn.chat_head)
         .map_err(|e| crate::domain::tools::ToolError::Git(e.to_string()))?;

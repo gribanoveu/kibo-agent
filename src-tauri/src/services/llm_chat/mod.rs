@@ -370,8 +370,7 @@ pub fn stream(
 /// Takes the checkpoint whole, exactly as [`ChatStreamOutcome::PendingApproval`]
 /// handed it over. Alfa Atlas takes its six fields apart into six parameters and
 /// relies on the front end to reassemble them — a forgotten field is then a
-/// silently reset round ceiling rather than a compile error (see
-/// `docs/07-upstream-findings.md`, B-4).
+/// silently reset round ceiling rather than a compile error.
 pub fn resume(
     turn: &Turn,
     checkpoint: PendingApproval,

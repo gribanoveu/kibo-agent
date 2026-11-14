@@ -133,7 +133,7 @@ pub struct Chunk {
 /// which slices `content[start..end]` — used to panic, taking the whole
 /// sync worker with it. It now skips the span silently instead, which turned
 /// a crash into a file that is indexed in part and searched as if the rest of
-/// it were not there (`docs/07-upstream-findings.md`, B-1).
+/// it were not there.
 ///
 /// So the anchors are put in order here and an anchor that cannot start a span
 /// is dropped, which makes a backwards span unconstructible rather than

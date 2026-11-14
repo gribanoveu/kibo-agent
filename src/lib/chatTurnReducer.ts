@@ -7,8 +7,8 @@ import type { ProcessInfo } from "./processes";
 //
 // Pure and free of React on purpose: what a turn looks like is decided here,
 // where it can be tested by feeding it events, and the components only render
-// what comes out. The block shapes follow the prototype
-// (`docs/prototype/atlas-cli.html`): a user bubble, the agent's prose, a list
+// what comes out. The block shapes:
+// a user bubble, the agent's prose, a list
 // of tool items with an expandable detail, and an approval card.
 
 export type ToolStatus = "running" | "done" | "failed";

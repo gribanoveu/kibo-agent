@@ -8,8 +8,7 @@
 //! fields it does not know — `type`, another client's own — are kept rather
 //! than dropped on the next save.
 //!
-//! Decisions behind this (names, approval, failure, weight, log) are in
-//! `docs/06-port-plan.md`, stage 7, "Решения по MCP".
+//! Decisions behind this cover names, approval, failure, weight and the log.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -394,8 +393,8 @@ pub enum McpError {
     NotRestarted,
 }
 
-/// 401 is how a server says it wants OAuth, which is not built yet
-/// (`docs/18-mcp-oauth.md`); a token in `headers` is what works today.
+/// 401 is how a server says it wants OAuth, which is not built yet;
+/// a token in `headers` is what works today.
 /// 405 to a POST is almost always the old HTTP+SSE transport's `/sse`
 /// endpoint, which takes only GET and is not supported.
 fn status_hint(status: u16) -> &'static str {
@@ -453,7 +452,7 @@ pub trait McpClient: Send + Sync {
     }
 
     /// `call_tool`, for a caller that can put the server's questions to the
-    /// user (`docs/23-mcp-extension.md`, M-8). `ask` blocks until the user
+    /// user. `ask` blocks until the user
     /// answers; the call's own timeout does not run meanwhile. A client that
     /// cannot carry a question never asks one.
     fn call_tool_asking(

@@ -10,7 +10,7 @@
 //!
 //! The constants below were set by the quality bench (F-5.13c,
 //! `services/search_bench.rs`, 67 questions over three repositories), not by
-//! taste; `docs/06-port-plan.md` has the numbers. Upstream's stem tier is not
+//! taste. Upstream's stem tier is not
 //! ported — the full-text index matches prefixes and weighs chunk names four
 //! to one. Its path tier came back as [`PATH_BOOST`].
 
