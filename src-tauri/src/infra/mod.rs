@@ -4,6 +4,7 @@ pub mod http_client;
 pub mod http_collections;
 pub mod http_cookies;
 pub mod http_env_store;
+pub mod postman_dynamic;
 pub mod postman_sandbox;
 pub mod master_key;
 pub mod runbooks_store;

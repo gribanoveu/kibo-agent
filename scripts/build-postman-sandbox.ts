@@ -23,6 +23,13 @@ writeFileSync(join(out, "bootcode.js"), bootcode);
 writeFileSync(join(out, "bridge-client.js"), require(join(folder("uvm"), "lib/bridge-client.js"))());
 copyFileSync(join(folder("flatted"), "min.js"), join(out, "flatted.js"));
 
+// Postman's dynamic variables, by name with Postman's description, from the
+// `postman-collection` the bootcode has: the `{{` hint lists them, and a Rust test
+// checks the sandbox makes each one.
+const dynamic = require(require.resolve("postman-collection/lib/superstring/dynamic-variables", { paths: [sandbox] }));
+const listed = Object.entries(dynamic as Record<string, { description: string }>).map(([name, { description }]) => ({ name, description }));
+writeFileSync(resolve(import.meta.dir, "../src/lib/postmanDynamic.json"), JSON.stringify(listed, null, 2) + "\n");
+
 for (const name of ["postman-sandbox", "uvm", "flatted"]) {
   const license = readdirSync(folder(name)).find((f) => /^licen[sc]e/i.test(f));
   if (!license) throw new Error(`${name} has no license file`);

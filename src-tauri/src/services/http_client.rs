@@ -1687,6 +1687,24 @@ mod tests {
         });
     }
 
+    /// `{{$randomEmail}}` and the rest of Postman's faker go out made, as the app wires them.
+    #[test]
+    fn postmans_random_values_are_made_as_the_request_goes() {
+        with_app_dir("http-send-faker", || {
+            crate::domain::http_client::make_dynamic_with(crate::infra::postman_dynamic::make);
+            let (port, seen) = serve_once("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+            let collection = shop();
+            let env = stage(format!("http://127.0.0.1:{port}"));
+            let edited = json!({"method": "GET", "url": "{{baseUrl}}/users?email={{$randomEmail}}", "header": [{"key": "X-Name", "value": "{{$randomFirstName}}"}], "auth": {"type": "noauth"}});
+            send(&collection, "order", Some(edited), Some(&env)).unwrap();
+            let wire = wire(&seen);
+            let line = wire.lines().next().unwrap();
+            assert!(line.starts_with("GET /users?email=") && (line.contains('@') || line.contains("%40")), "{wire}");
+            let name = wire.lines().find_map(|l| l.strip_prefix("x-name: ").or_else(|| l.strip_prefix("X-Name: "))).unwrap_or_default();
+            assert!(!name.is_empty() && !name.contains('{'), "{wire}");
+        });
+    }
+
     #[test]
     fn the_pages_edit_is_sent_and_the_stored_request_left_as_it_was() {
         with_app_dir("http-send-edited", || {

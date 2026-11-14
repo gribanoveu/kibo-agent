@@ -1,0 +1,474 @@
+[
+  {
+    "name": "$guid",
+    "description": "A v4 style guid"
+  },
+  {
+    "name": "$timestamp",
+    "description": "The current timestamp"
+  },
+  {
+    "name": "$isoTimestamp",
+    "description": "The current ISO timestamp at zero UTC"
+  },
+  {
+    "name": "$randomInt",
+    "description": "A random integer between 0 and 1000"
+  },
+  {
+    "name": "$randomPhoneNumber",
+    "description": "A random 10-digit phone number"
+  },
+  {
+    "name": "$randomPhoneNumberExt",
+    "description": "A random phone number with extension (12 digits)"
+  },
+  {
+    "name": "$randomLocale",
+    "description": "A random two-letter language code (ISO 639-1)"
+  },
+  {
+    "name": "$randomWords",
+    "description": "Some random words"
+  },
+  {
+    "name": "$randomFilePath",
+    "description": "A random file path"
+  },
+  {
+    "name": "$randomDirectoryPath",
+    "description": "A random directory path"
+  },
+  {
+    "name": "$randomCity",
+    "description": "A random city name"
+  },
+  {
+    "name": "$randomStreetName",
+    "description": "A random street name"
+  },
+  {
+    "name": "$randomStreetAddress",
+    "description": "A random street address (e.g. 1234 Main Street)"
+  },
+  {
+    "name": "$randomCountry",
+    "description": "A random country"
+  },
+  {
+    "name": "$randomCountryCode",
+    "description": "A random 2-letter country code (ISO 3166-1 alpha-2)"
+  },
+  {
+    "name": "$randomLatitude",
+    "description": "A random latitude coordinate"
+  },
+  {
+    "name": "$randomLongitude",
+    "description": "A random longitude coordinate"
+  },
+  {
+    "name": "$randomColor",
+    "description": "A random color"
+  },
+  {
+    "name": "$randomDepartment",
+    "description": "A random commerce category (e.g. electronics, clothing)"
+  },
+  {
+    "name": "$randomProductName",
+    "description": "A random product name (e.g. handmade concrete tuna)"
+  },
+  {
+    "name": "$randomProductAdjective",
+    "description": "A random product adjective (e.g. tasty, eco-friendly)"
+  },
+  {
+    "name": "$randomProductMaterial",
+    "description": "A random product material (e.g. steel, plastic, leather)"
+  },
+  {
+    "name": "$randomProduct",
+    "description": "A random product (e.g. shoes, table, chair)"
+  },
+  {
+    "name": "$randomCompanyName",
+    "description": "A random company name"
+  },
+  {
+    "name": "$randomCompanySuffix",
+    "description": "A random company suffix (e.g. Inc, LLC, Group)"
+  },
+  {
+    "name": "$randomCatchPhrase",
+    "description": "A random catchphrase"
+  },
+  {
+    "name": "$randomBs",
+    "description": "A random phrase of business speak"
+  },
+  {
+    "name": "$randomCatchPhraseAdjective",
+    "description": "A random catchphrase adjective"
+  },
+  {
+    "name": "$randomCatchPhraseDescriptor",
+    "description": "A random catchphrase descriptor"
+  },
+  {
+    "name": "$randomCatchPhraseNoun",
+    "description": "Randomly generates a catchphrase noun"
+  },
+  {
+    "name": "$randomBsAdjective",
+    "description": "A random business speak adjective"
+  },
+  {
+    "name": "$randomBsBuzz",
+    "description": "A random business speak buzzword"
+  },
+  {
+    "name": "$randomBsNoun",
+    "description": "A random business speak noun"
+  },
+  {
+    "name": "$randomDatabaseColumn",
+    "description": "A random database column name (e.g. updatedAt, token, group)"
+  },
+  {
+    "name": "$randomDatabaseType",
+    "description": "A random database type (e.g. tiny int, double, point)"
+  },
+  {
+    "name": "$randomDatabaseCollation",
+    "description": "A random database collation (e.g. cp1250_bin)"
+  },
+  {
+    "name": "$randomDatabaseEngine",
+    "description": "A random database engine (e.g. Memory, Archive, InnoDB)"
+  },
+  {
+    "name": "$randomDatePast",
+    "description": "A random past datetime"
+  },
+  {
+    "name": "$randomDateFuture",
+    "description": "A random future datetime"
+  },
+  {
+    "name": "$randomDateRecent",
+    "description": "A random recent datetime"
+  },
+  {
+    "name": "$randomMonth",
+    "description": "A random month"
+  },
+  {
+    "name": "$randomWeekday",
+    "description": "A random weekday"
+  },
+  {
+    "name": "$randomBankAccount",
+    "description": "A random 8-digit bank account number"
+  },
+  {
+    "name": "$randomBankAccountName",
+    "description": "A random bank account name (e.g. savings account, checking account)"
+  },
+  {
+    "name": "$randomCreditCardMask",
+    "description": "A random masked credit card number"
+  },
+  {
+    "name": "$randomPrice",
+    "description": "A random price between 0.00 and 1000.00"
+  },
+  {
+    "name": "$randomTransactionType",
+    "description": "A random transaction type (e.g. invoice, payment, deposit)"
+  },
+  {
+    "name": "$randomCurrencyCode",
+    "description": "A random 3-letter currency code (ISO-4217)"
+  },
+  {
+    "name": "$randomCurrencyName",
+    "description": "A random currency name"
+  },
+  {
+    "name": "$randomCurrencySymbol",
+    "description": "A random currency symbol"
+  },
+  {
+    "name": "$randomBitcoin",
+    "description": "A random bitcoin address"
+  },
+  {
+    "name": "$randomBankAccountIban",
+    "description": "A random 15-31 character IBAN (International Bank Account Number)"
+  },
+  {
+    "name": "$randomBankAccountBic",
+    "description": "A random BIC (Bank Identifier Code)"
+  },
+  {
+    "name": "$randomAbbreviation",
+    "description": "A random abbreviation"
+  },
+  {
+    "name": "$randomAdjective",
+    "description": "A random adjective"
+  },
+  {
+    "name": "$randomNoun",
+    "description": "A random noun"
+  },
+  {
+    "name": "$randomVerb",
+    "description": "A random verb"
+  },
+  {
+    "name": "$randomIngverb",
+    "description": "A random verb ending in “-ing”"
+  },
+  {
+    "name": "$randomPhrase",
+    "description": "A random phrase"
+  },
+  {
+    "name": "$randomAvatarImage",
+    "description": "A random avatar image"
+  },
+  {
+    "name": "$randomImageUrl",
+    "description": "A URL for a random image"
+  },
+  {
+    "name": "$randomAbstractImage",
+    "description": "A URL for a random abstract image"
+  },
+  {
+    "name": "$randomAnimalsImage",
+    "description": "A URL for a random animal image"
+  },
+  {
+    "name": "$randomBusinessImage",
+    "description": "A URL for a random stock business image"
+  },
+  {
+    "name": "$randomCatsImage",
+    "description": "A URL for a random cat image"
+  },
+  {
+    "name": "$randomCityImage",
+    "description": "A URL for a random city image"
+  },
+  {
+    "name": "$randomFoodImage",
+    "description": "A URL for a random food image"
+  },
+  {
+    "name": "$randomNightlifeImage",
+    "description": "A URL for a random nightlife image"
+  },
+  {
+    "name": "$randomFashionImage",
+    "description": "A URL for a random fashion image"
+  },
+  {
+    "name": "$randomPeopleImage",
+    "description": "A URL for a random image of a person"
+  },
+  {
+    "name": "$randomNatureImage",
+    "description": "A URL for a random nature image"
+  },
+  {
+    "name": "$randomSportsImage",
+    "description": "A URL for a random sports image"
+  },
+  {
+    "name": "$randomTransportImage",
+    "description": "A URL for a random transportation image"
+  },
+  {
+    "name": "$randomImageDataUri",
+    "description": "A random image data URI"
+  },
+  {
+    "name": "$randomEmail",
+    "description": "A random email address"
+  },
+  {
+    "name": "$randomExampleEmail",
+    "description": "A random email address from an “example” domain (e.g. ben@example.com)"
+  },
+  {
+    "name": "$randomUserName",
+    "description": "A random username"
+  },
+  {
+    "name": "$randomProtocol",
+    "description": "A random internet protocol"
+  },
+  {
+    "name": "$randomUrl",
+    "description": "A random URL"
+  },
+  {
+    "name": "$randomDomainName",
+    "description": "A random domain name (e.g. gracie.biz, trevor.info)"
+  },
+  {
+    "name": "$randomDomainSuffix",
+    "description": "A random domain suffix (e.g. .com, .net, .org)"
+  },
+  {
+    "name": "$randomDomainWord",
+    "description": "A random unqualified domain name (a name with no dots)"
+  },
+  {
+    "name": "$randomIP",
+    "description": "A random IPv4 address"
+  },
+  {
+    "name": "$randomIPV6",
+    "description": "A random IPv6 address"
+  },
+  {
+    "name": "$randomUserAgent",
+    "description": "A random user agent"
+  },
+  {
+    "name": "$randomHexColor",
+    "description": "A random hex value"
+  },
+  {
+    "name": "$randomMACAddress",
+    "description": "A random MAC address"
+  },
+  {
+    "name": "$randomPassword",
+    "description": "A random 15-character alpha-numeric password"
+  },
+  {
+    "name": "$randomLoremWord",
+    "description": "A random word of lorem ipsum text"
+  },
+  {
+    "name": "$randomLoremWords",
+    "description": "Some random words of lorem ipsum text"
+  },
+  {
+    "name": "$randomLoremSentence",
+    "description": "A random sentence of lorem ipsum text"
+  },
+  {
+    "name": "$randomLoremSlug",
+    "description": "A random lorem ipsum URL slug"
+  },
+  {
+    "name": "$randomLoremSentences",
+    "description": "A random 2-6 sentences of lorem ipsum text"
+  },
+  {
+    "name": "$randomLoremParagraph",
+    "description": "A random paragraph of lorem ipsum text"
+  },
+  {
+    "name": "$randomLoremParagraphs",
+    "description": "3 random paragraphs of lorem ipsum text"
+  },
+  {
+    "name": "$randomLoremText",
+    "description": "A random amount of lorem ipsum text"
+  },
+  {
+    "name": "$randomLoremLines",
+    "description": "1-5 random lines of lorem ipsum"
+  },
+  {
+    "name": "$randomFirstName",
+    "description": "A random first name"
+  },
+  {
+    "name": "$randomLastName",
+    "description": "A random last name"
+  },
+  {
+    "name": "$randomFullName",
+    "description": "A random first and last name"
+  },
+  {
+    "name": "$randomJobTitle",
+    "description": "A random job title (e.g. senior software developer)"
+  },
+  {
+    "name": "$randomNamePrefix",
+    "description": "A random name prefix (e.g. Mr., Mrs., Dr.)"
+  },
+  {
+    "name": "$randomNameSuffix",
+    "description": "A random name suffix (e.g. Jr., MD, PhD)"
+  },
+  {
+    "name": "$randomJobDescriptor",
+    "description": "A random job descriptor (e.g., senior, chief, corporate, etc.)"
+  },
+  {
+    "name": "$randomJobArea",
+    "description": "A random job area (e.g. branding, functionality, usability)"
+  },
+  {
+    "name": "$randomJobType",
+    "description": "A random job type (e.g. supervisor, manager, coordinator, etc.)"
+  },
+  {
+    "name": "$randomUUID",
+    "description": "A random 36-character UUID"
+  },
+  {
+    "name": "$randomBoolean",
+    "description": "A random boolean value (true/false)"
+  },
+  {
+    "name": "$randomWord",
+    "description": "A random word"
+  },
+  {
+    "name": "$randomAlphaNumeric",
+    "description": "A random alpha-numeric character"
+  },
+  {
+    "name": "$randomFileName",
+    "description": "A random file name (includes uncommon extensions)"
+  },
+  {
+    "name": "$randomCommonFileName",
+    "description": "A random file name"
+  },
+  {
+    "name": "$randomMimeType",
+    "description": "A random MIME type"
+  },
+  {
+    "name": "$randomCommonFileType",
+    "description": "A random, common file type (e.g., video, text, image, etc.)"
+  },
+  {
+    "name": "$randomCommonFileExt",
+    "description": "A random, common file extension (.doc, .jpg, etc.)"
+  },
+  {
+    "name": "$randomFileType",
+    "description": "A random file type (includes uncommon file types)"
+  },
+  {
+    "name": "$randomFileExt",
+    "description": "A random file extension (includes uncommon extensions)"
+  },
+  {
+    "name": "$randomSemver",
+    "description": "A random semantic version number"
+  }
+]

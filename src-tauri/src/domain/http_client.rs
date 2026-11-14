@@ -28,7 +28,7 @@ pub enum HttpError {
     NoSuchItem(String),
     #[error("not found in the collection, the environment or globals: {}", .0.join(", "))]
     UnknownVariables(Vec<String>),
-    #[error("{{{{{0}}}}} is a Postman dynamic variable not supported here")]
+    #[error("{{{{{0}}}}} is not one of Postman's dynamic variables, or it could not be made — `{{{{$` lists them")]
     UnsupportedDynamic(String),
     #[error("{{{{{0}}}}} refers to itself, or nests variables more than 10 deep")]
     VariableCycle(String),
@@ -777,7 +777,8 @@ impl Scope {
             out.shown.push_str(&text[at..whole.start()]);
             at = whole.end();
             let value = if let Some(dynamic) = name.strip_prefix('$') {
-                let v = dynamic_value(dynamic).ok_or_else(|| HttpError::UnsupportedDynamic(name.into()))?;
+                let more = || MORE_DYNAMIC.get().and_then(|make| make(dynamic));
+                let v = dynamic_value(dynamic).or_else(more).ok_or_else(|| HttpError::UnsupportedDynamic(name.into()))?;
                 Filled { shown: v.clone(), sent: v }
             } else if let Some(var) = self.vars.get(name) {
                 if path.iter().any(|p| p == name) || path.len() >= MAX_DEPTH {
@@ -805,7 +806,17 @@ impl Scope {
     }
 }
 
-/// Postman's dynamic variables Kibo makes; the rest of `{{$random…}}` is an error by name.
+/// The rest of Postman's dynamic variables — `{{$randomEmail}}` and on — made by Postman's
+/// own code, which the app hands in as it starts (`infra::postman_dynamic`). Not handed
+/// in — this module's tests — such a variable is an error by name.
+static MORE_DYNAMIC: std::sync::OnceLock<fn(&str) -> Option<String>> = std::sync::OnceLock::new();
+
+/// Where `{{$random…}}` past the few made here comes from: `make` gets the name without its `$`.
+pub fn make_dynamic_with(make: fn(&str) -> Option<String>) {
+    let _ = MORE_DYNAMIC.set(make);
+}
+
+/// Postman's dynamic variables made here, the ones a request most often has.
 fn dynamic_value(name: &str) -> Option<String> {
     let now = chrono::Utc::now();
     Some(match name {
@@ -1276,7 +1287,7 @@ mod tests {
         assert_eq!(filled.sent, filled.shown);
         let shape = Regex::new(r"^[0-9a-f-]{36} \d{10} \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z \d{1,4} [0-9a-f-]{36}$").unwrap();
         assert!(shape.is_match(&filled.sent), "{}", filled.sent);
-        assert_eq!(scope.fill("{{$randomBankAccount}}"), Err(HttpError::UnsupportedDynamic("$randomBankAccount".into())));
+        assert_eq!(scope.fill("{{$randomNothing}}"), Err(HttpError::UnsupportedDynamic("$randomNothing".into())));
     }
 
     #[test]

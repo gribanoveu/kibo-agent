@@ -88,6 +88,8 @@ fn open_launch(app: &tauri::AppHandle, files: Vec<std::path::PathBuf>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `{{$randomEmail}}` and the rest of Postman's dynamic variables, by Postman's own code.
+    domain::http_client::make_dynamic_with(infra::postman_dynamic::make);
     let builder = commands::meeting::register(commands::prototype::register(tauri::Builder::default()));
     // First, as the plugin requires: plugins start in the order they were
     // added, and a second launch must be turned away before anything else
