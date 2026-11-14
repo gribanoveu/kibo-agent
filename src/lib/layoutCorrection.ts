@@ -87,7 +87,7 @@ const SHORT: Record<Lang, Set<string>> = {
     `а б в во ж же и из к ко ли о об от у я с со бы не ни но да ну он мы вы ты то та те её ее их им ей ему она оно они это эти тот как так там тут вот все всё уже ещё еще был мог для без при над под про изо до за его мне мой моя моё мое наш ваш кто где чем кем тем раз два три нет ага ок чё что сам вся ней нём нем ним них тех том той ими оба обе нас вам вас нам или дай иди уж вон год вид дом час мир код баг лог тег ход шаг тип ой эх ах лол`.split(" "),
   ),
   en: new Set(
-    `a i am an as at be by do go he if in is it me my no of oh ok on or so to up us we the and for are but not you all any can had her was one our out day get has him his how man new now old see two way who did its let put say she too use yes yet vs ago add why run fix bug try got log app api cli css sql git npm url ui ux id pr ci cd ide dev env tmp src lib bin etc ctx msg cfg err req res img btn div nav pls thx lol omg wtf btw idk tbh imo may via per own off end few far set lot big top key row map tab box max min sum raw web ask cut fit hit`.split(" "),
+    `a i am an as at be by do go he if in is it me my no of oh ok on or so to up us we the and for are but not you all any can had her was one our out day get has him his how man new now old see two way who did its let put say she too use yes yet vs ago add why run fix bug try got log app api cli css sql git npm url ui ux id pr ci cd ide dev env tmp src lib bin etc ctx msg cfg err req res img btn div nav pls thx lol omg wtf btw idk tbh imo may via per own off end few far set lot big top key row map tab box max min sum raw web ask cut fit hit vue bun aws gcp pod jwt ssh tls dns vpn cpu gpu ram ssd orm`.split(" "),
   ),
 };
 
@@ -119,8 +119,10 @@ function judge(token: string, lang: Lang, finished: boolean): Omit<Token, "from"
   const gap = (done: boolean) => strangeness(token, lang, done) - strangeness(swapped, OTHER[lang], done);
   const delta = finished ? gap(true) : Math.min(gap(true), gap(false));
   if (delta >= MARGIN) return { verdict: "flip", lean: true };
-  if (-delta >= MARGIN) return { verdict: "keep", lean: false };
-  return { verdict: "unsure", lean: delta >= MARGIN / 2 };
+  // A word that reads at least as well as typed («bitbucket» beside `tcnm kb`) stays,
+  // whatever its neighbours turn into; only one closer to its swap is undecided.
+  if (delta >= 0) return { verdict: "unsure", lean: delta >= MARGIN / 2 };
+  return { verdict: "keep", lean: false };
 }
 
 type Span = { from: number; to: number };
