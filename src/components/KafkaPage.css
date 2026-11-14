@@ -1,0 +1,483 @@
+/* The Kafka page (KafkaPage.tsx): the connection in the bar, its topics under
+   it, and one topic's messages. Its own styles throughout — none borrowed. */
+
+/* The page's body, one column under its bar: the head and the search stay
+   where they are, and only what lists under them scrolls — the same shape as
+   the MongoDB page, where the tree and the documents move under a fixed head. */
+.kafka-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.kafka-main-head,
+.kafka-search,
+.kafka-ok,
+.kafka-error {
+  flex: none;
+}
+
+/* Turned pages under the list: their own row, never scrolled away with it. */
+.kafka-pager {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* The topics, the only part of that column that moves. */
+.kafka-topics {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* As the MongoDB page's head: the name, its address beside it, then what the
+   connection is and the button that asks the broker. */
+.kafka-main-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.kafka-connection-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+/* The name as a head: one line, the address fading out after it. */
+.kafka-title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Kafka page (KafkaPage.tsx): the connections on the left, the topics of
+   the open one on the right. Its own styles throughout — none borrowed. */
+
+/* The body's own height, split in two and never taller: a row track of
+   `minmax(0, 1fr)` is what lets both panes scroll inside the page instead of
+   growing it, which is what a page looked like with the row left `auto`. */
+.kafka-page {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  /* Whatever a row grows into, a pane never scrolls sideways under it: that
+     shift is what the connections looked like when one did. */
+  overflow-x: hidden;
+}
+
+.kafka-quiet,
+.kafka-error,
+.kafka-ok {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.kafka-error {
+  margin: 8px 0;
+  color: var(--red);
+  white-space: pre-wrap;
+}
+.kafka-ok {
+  margin: 8px 0;
+  color: var(--green);
+}
+.kafka-quiet {
+  color: var(--text-faint);
+}
+.kafka-warn {
+  color: var(--amber);
+}
+.kafka-mono {
+  font-family: var(--font-mono);
+}
+
+/* ---- connections */
+
+/* The MongoDB page's tree, to the pixel: the same panel, the same hugging of
+   its content, and the pane itself scrolling rather than a list inside it. */
+.kafka-icon-button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--control-sm);
+  height: var(--control-sm);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.kafka-icon-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.kafka-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.kafka-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 2px;
+  overflow: hidden;
+}
+.kafka-tag {
+  padding: 1px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.kafka-tag-agent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ---- the open connection */
+
+/* A column head stays while its rows move under it, over an opaque page so the
+   rows do not read through it. */
+.kafka-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel);
+}
+
+/* Both axes: a partition table is wider than a narrow window, and it scrolls
+   here rather than pushing the page wider. */
+.kafka-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-sm);
+  background: var(--bg-field);
+  color: var(--text-faint);
+}
+.kafka-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  outline: none;
+}
+
+/* ---- tables */
+
+.kafka-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.kafka-table th {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kafka-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+.kafka-topic {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.kafka-topic:hover {
+  text-decoration: underline;
+}
+.kafka-topic-icon {
+  margin-right: 4px;
+  color: var(--text-faint);
+  vertical-align: -1px;
+}
+
+/* ---- one topic */
+
+/* The panel itself does not scroll: its head and its tabs stay, and only the
+   tab's own body moves under them. */
+.kafka-topic-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+}
+.kafka-topic-head,
+.kafka-topic-panel > .tabs {
+  flex: none;
+}
+.kafka-topic-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.kafka-topic-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  background: var(--bg-panel);
+}
+.kafka-topic-name {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.kafka-section-title {
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.kafka-configs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+.kafka-config {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--fs-sm);
+}
+.kafka-config dt {
+  flex: 0 0 200px;
+  color: var(--text-faint);
+}
+.kafka-config dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---- the form */
+
+.kafka-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.kafka-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-sm);
+}
+.kafka-field > span {
+  color: var(--text-faint);
+}
+.kafka-field input {
+  padding: 6px 8px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-sm);
+  background: var(--bg-field);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+.kafka-field input.kafka-mono {
+  font-family: var(--font-mono);
+}
+.kafka-field input:focus {
+  border-color: var(--border-box-focus);
+  outline: none;
+}
+.kafka-indent {
+  margin-left: 22px;
+}
+.kafka-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+/* ---- messages */
+
+.kafka-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+.kafka-message-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.kafka-partitions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.kafka-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.kafka-chip:hover:not(:disabled) {
+  border-color: var(--border-field);
+  color: var(--text);
+}
+.kafka-chip.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.kafka-offset {
+  width: 100px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-sm);
+  background: var(--bg-field);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.kafka-table tr.on td {
+  background: var(--bg-active);
+}
+.kafka-key {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kafka-message {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+}
+.kafka-message-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+}
+.kafka-value {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xs);
+  background: var(--bg-field);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.kafka-value.kafka-mono {
+  font-family: var(--font-mono);
+}
+.kafka-spacer {
+  flex: 1;
+}
+
+/* A window too narrow for two panes: the connections go over the topics. */
+
+/* Deleting a connection sits in its settings, away from Save, in the colour of
+   what it does. */
+.kafka-delete {
+  margin-right: auto;
+  color: var(--red);
+}
+
+/* ---- sending */
+
+.kafka-headers {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kafka-field-label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.kafka-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+.kafka-header-row input {
+  padding: 4px 8px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-sm);
+  background: var(--bg-field);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+}
+.kafka-field textarea {
+  padding: 6px 8px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-sm);
+  background: var(--bg-field);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* ---- groups */
+
+.kafka-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}

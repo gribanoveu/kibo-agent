@@ -350,6 +350,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         questions: None,
         board: None,
         mongo: None,
+        kafka: None,
         deepseek: None,
         features: Default::default(),
         fork: false,

@@ -87,6 +87,7 @@ export const LABELS: Record<string, string> = {
   deepseekFetch: "DeepSeek page",
   board: "Board",
   mongo: "MongoDB",
+  kafka: "Kafka",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -314,6 +315,18 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       return {
         name,
         arg: [str(args.op) ?? "collections", where, str(args.filter) ?? str(args.pipeline)].filter(Boolean).join(" "),
+        meta: str(result.summary),
+        detail: str(result.text) ?? "",
+      };
+    }
+
+    // A topic found or read: `read orders on Local key "user-1"`.
+    case "kafka": {
+      const topic = str(args.topic) ?? str(args.name);
+      const where = [topic, str(args.connection) && `on ${str(args.connection)}`, str(args.key) && `key "${str(args.key)}"`].filter(Boolean).join(" ");
+      return {
+        name,
+        arg: [str(args.op) ?? "topic", where, num(args.from) !== undefined && `from ${num(args.from)}`].filter(Boolean).join(" "),
         meta: str(result.summary),
         detail: str(result.text) ?? "",
       };

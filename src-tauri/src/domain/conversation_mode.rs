@@ -109,6 +109,9 @@ fn base_tools() -> HashSet<ToolName> {
         // The MongoDB connections the user opened to the agent, read, while
         // the feature is on: a question about data is asked beside the code.
         ToolName::Mongo,
+        // The Kafka connections the user opened to the agent, read, while the
+        // feature is on: what a service publishes is part of how it behaves.
+        ToolName::Kafka,
     ]
     .into_iter()
     .collect()

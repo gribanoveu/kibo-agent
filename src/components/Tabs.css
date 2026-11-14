@@ -23,7 +23,9 @@
   font-size: var(--fs-sm);
   cursor: pointer;
 }
-.tab:hover:not(:disabled) {
+/* The chosen one does not answer a hover: its own fill is the darker of the
+   two, and a lighter one over it reads as the choice being lost. */
+.tab:hover:not(.active):not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
 }

@@ -177,6 +177,9 @@ pub fn run() {
         .manage(std::sync::Arc::new(services::dictation::Dictation::default()))
         // The MongoDB page's clients, one per connection string, kept.
         .manage(std::sync::Arc::new(infra::mongo_client::MongoClients::default()))
+        // The Kafka page's pools, one per saved connection, kept.
+        .manage(std::sync::Arc::new(infra::kafka_client::KafkaClients::default()))
+        .manage(std::sync::Arc::new(services::kafka::KafkaLive::default()))
         // The index of the open folder, and the one embedding model every
         // folder shares. Built in `setup` because the model's location is
         // Tauri's to know: the resource directory of the installed app.
@@ -417,6 +420,17 @@ pub fn run() {
             commands::features::features_set_layout_switch,
             commands::features::features_delete_data,
             commands::keyboard_layout::keyboard_layout_set,
+            commands::kafka::kafka_connections,
+            commands::kafka::kafka_connection_save,
+            commands::kafka::kafka_connection_delete,
+            commands::kafka::kafka_connection_check,
+            commands::kafka::kafka_topics,
+            commands::kafka::kafka_topic,
+            commands::kafka::kafka_messages,
+            commands::kafka::kafka_groups,
+            commands::kafka::kafka_produce,
+            commands::kafka::kafka_live_start,
+            commands::kafka::kafka_live_stop,
             commands::mongo::mongo_connections,
             commands::mongo::mongo_connection_save,
             commands::mongo::mongo_connection_delete,

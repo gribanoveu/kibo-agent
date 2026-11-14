@@ -871,6 +871,12 @@ pub(super) fn mongo_servers_of<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<dyn
     Some(Arc::new(crate::services::mongo::Servers(Arc::clone(&clients))))
 }
 
+/// The Kafka page's clients, as the agent's `kafka` tool reads through them.
+pub(super) fn kafka_servers_of<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<dyn crate::domain::kafka::KafkaServers>> {
+    let clients = app.try_state::<Arc<crate::infra::kafka_client::KafkaClients>>()?;
+    Some(Arc::new(crate::services::kafka::Servers(Arc::clone(&clients))))
+}
+
 /// Assembles a turn and runs it on a blocking thread.
 ///
 /// The processes and helpers a turn of `chat_id` starts through: recorded as
@@ -941,6 +947,7 @@ where
             .try_state::<Arc<crate::infra::board_store::Board>>()
             .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
         mongo: mongo_servers_of(&app),
+        kafka: kafka_servers_of(&app),
     };
 
     tauri::async_runtime::spawn_blocking(move || {

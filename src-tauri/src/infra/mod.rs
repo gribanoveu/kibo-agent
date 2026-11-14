@@ -63,5 +63,7 @@ pub mod microphone;
 pub mod recording_access;
 pub mod voices_store;
 pub mod mongo_store;
+pub mod kafka_store;
+pub mod kafka_client;
 pub mod mongo_client;
 pub mod keyboard_layout;

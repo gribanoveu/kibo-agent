@@ -18,6 +18,13 @@
 - 2026-11-12 The plan opens in a sheet over the chat — ⌘3, or "Review the plan" — instead of taking the column's width, so the chat keeps its width and the plan is read on the room it needs
 - 2026-11-12 The sidebar's Agent and Chat switch keeps its white raised pill, with the icon inside it in a muted accent instead of the full one, and the segment under the pointer shows a faint pill where it used to give nothing
 - 2026-11-12 The sidebar's chat search follows the panel's width when it is dragged narrow, instead of running past its right edge
+- 2026-11-11 Kafka: an edited connection asks the cluster again, a refresh asks the broker once, and a failed save says why where you pressed Save
+- 2026-11-11 See a Kafka cluster's consumer groups with their lag, partition by partition, and what a group has not committed
+- 2026-11-11 Follow a Kafka topic live: the messages that arrive land in the table as they happen, without a consumer group
+- 2026-11-11 Refresh a Kafka cluster's topic list by hand, so a topic made a moment ago appears now instead of at the end of the cache's two minutes
+- 2026-11-11 Send a message to a Kafka topic from its page: a key, headers and a text value, at a partition of your choice or wherever the producer puts it, with the partition and offset it landed at
+- 2026-11-10 A Kafka topic's messages are read from its page: pick the partitions, the last 20, 50 or 100, or any offset — then open one to see its key, headers and value as JSON, text or a raw protobuf dump by field number, with a word when a big value was cut
+- 2026-11-10 A Kafka page: connections to a cluster, sealed on this computer like the API keys, with the topics it holds — partitions, replicas, in-sync copies, watermarks and the configs that matter — found by part of a name; open it from the Catalog, where it is off until chosen
 - 2026-11-08 The Agent and Chat message boxes can notice Russian or English typed in the other keyboard layout, even a wrong fragment beside intentional words in mixed prose, and offer a Fix button or ⌘/Ctrl+F correction, with the caret and ordinary Undo kept; on macOS and Windows the feature's optional Catalog switch also selects the corrected text's dominant installed layout — turn Keyboard layout correction on in the Catalog
 - 2026-11-08 A review says what it is doing while it runs — the file it reads, the command it runs — instead of standing as a bare icon, and a helper's steps in the Agents tab and its sheet carry the app's own tool names
 - 2026-11-08 The Catalog shows eight cards of each kind under All before "Show all", which opens that kind's tab with the whole list; MCP servers sit right under Skills

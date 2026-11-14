@@ -124,7 +124,7 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
         ToolResult::Reviewed { findings, text, range, .. } => reviewed(findings, text, range),
-        ToolResult::Kube { text, .. } | ToolResult::Mongo { text, .. } => text.clone(),
+        ToolResult::Kube { text, .. } | ToolResult::Mongo { text, .. } | ToolResult::Kafka { text, .. } => text.clone(),
         ToolResult::WebResults { hits } => web_results(hits),
         ToolResult::WebPage { page } => web_page(page),
         ToolResult::ToolsFound { tools } => found_tools(tools),

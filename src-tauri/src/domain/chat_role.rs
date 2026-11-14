@@ -122,6 +122,8 @@ impl ChatRole {
                 ToolName::Board,
                 // Reads, while the user has MongoDB on.
                 ToolName::Mongo,
+                // Reads, while the user has Kafka on.
+                ToolName::Kafka,
             ],
             // Reads only (K-3); changes arrive with backups and undo, K-5.
             ChatRole::Kubernetes => &[
@@ -390,7 +392,7 @@ mod tests {
     use super::*;
 
     /// The assistant talks, searches the web, keeps the board and reads
-    /// MongoDB — nothing it has writes there. The Kubernetes role's tools
+    /// MongoDB and Kafka — nothing it has writes there. The Kubernetes role's tools
     /// are the cluster's and the web's — none reaches a file — and the ones
     /// that change it are listed here by name: a new one is a decision, not a
     /// side effect.
@@ -404,7 +406,8 @@ mod tests {
                 ToolName::DeepseekSearch,
                 ToolName::DeepseekFetch,
                 ToolName::Board,
-                ToolName::Mongo
+                ToolName::Mongo,
+                ToolName::Kafka
             ]
         );
         let tools = ChatRole::Kubernetes.tools();

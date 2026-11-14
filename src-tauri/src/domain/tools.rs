@@ -100,6 +100,9 @@ pub enum ToolName {
     /// The MongoDB connections the user opened to the agent, read: their
     /// collections, documents, counts, aggregations, indexes (`docs/44-mongodb.md`, M-8).
     Mongo,
+    /// The Kafka connections the user opened to the agent, read: topics and a
+    /// window of their records (`docs/54-kafka.md`, K-9).
+    Kafka,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -168,6 +171,7 @@ impl ToolName {
         ToolName::DeepseekFetch,
         ToolName::Board,
         ToolName::Mongo,
+        ToolName::Kafka,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -224,6 +228,7 @@ impl ToolName {
             ToolName::DeepseekFetch => "deepseekFetch",
             ToolName::Board => "board",
             ToolName::Mongo => "mongo",
+            ToolName::Kafka => "kafka",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -375,6 +380,8 @@ impl ToolName {
             | ToolName::Board
             // Reads; a pipeline that would write is refused before the server.
             | ToolName::Mongo
+            // Reads; a consumer without a group leaves nothing in the cluster.
+            | ToolName::Kafka
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
@@ -402,7 +409,9 @@ impl ToolName {
             | ToolName::DeepseekSearch
             | ToolName::DeepseekFetch
             // A server asked, nothing left open after it.
-            | ToolName::Mongo => true,
+            | ToolName::Mongo
+            // A topic read, no group and no commit: nothing left behind.
+            | ToolName::Kafka => true,
             ToolName::WriteFile
             | ToolName::EditFile
             | ToolName::Delete
@@ -480,6 +489,8 @@ impl ToolName {
             | ToolName::ToolSearch
             | ToolName::Board
             | ToolName::Mongo
+            // Read, and nothing committed: a read leaves no trace.
+            | ToolName::Kafka
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
             | ToolName::Skill
@@ -610,6 +621,8 @@ impl ToolName {
             ToolName::DeepseekSearch | ToolName::DeepseekFetch => 2,
             // A request or two to a server; a search by name, one per database.
             ToolName::Mongo => 2,
+            // A request or two to a broker; a key scan is all of them.
+            ToolName::Kafka => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,
@@ -794,14 +807,14 @@ mod tests {
     #[test]
     fn what_waits_for_tool_search_is_these() {
         let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo]);
+        assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::Kafka]);
     }
 
     #[test]
     fn all_is_complete() {
         assert_eq!(
             ToolName::ALL.len(),
-            50,
+            51,
             "a variant was added or removed — update ALL and this count together"
         );
         let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -1223,6 +1236,8 @@ pub struct ToolDeps<'a> {
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads; `None` while the feature is off.
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
+    /// The Kafka connections `kafka` reads; `None` while the feature is off.
+    pub kafka: Option<std::sync::Arc<dyn crate::domain::kafka::KafkaServers>>,
     /// The app's own tools this turn offers through `toolSearch` only.
     pub waiting: Vec<crate::domain::llm::LlmToolDefinition>,
     /// Other turns in this checkout, for the worktree offer.
@@ -1459,6 +1474,8 @@ pub enum ToolError {
     #[error(transparent)]
     Mongo(#[from] crate::domain::mongo::MongoError),
     #[error(transparent)]
+    Kafka(#[from] crate::domain::kafka::KafkaError),
+    #[error(transparent)]
     Prototype(#[from] crate::domain::prototype::PrototypeError),
     /// A tool of a feature the user has off — called from memory of a turn
     /// when it was on.
@@ -1537,6 +1554,7 @@ pub enum ToolCall {
     DeepseekFetch(WebFetchArgs),
     Board(BoardArgs),
     Mongo(MongoArgs),
+    Kafka(KafkaArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -1592,6 +1610,7 @@ impl ToolCall {
             ToolCall::DeepseekFetch(_) => ToolName::DeepseekFetch,
             ToolCall::Board(_) => ToolName::Board,
             ToolCall::Mongo(_) => ToolName::Mongo,
+            ToolCall::Kafka(_) => ToolName::Kafka,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -1867,6 +1886,9 @@ pub enum ToolResult {
     /// `mongo`: what was read, already shaped for the model, and a few words
     /// for the row in the transcript.
     Mongo { text: String, summary: String },
+    /// `kafka`: what was read — a topic's card, or a window of messages —
+    /// already shaped for the model, and a few words for the row.
+    Kafka { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
 }
@@ -1977,6 +1999,46 @@ pub enum MongoOp {
     Count,
     Aggregate,
     Indexes,
+}
+
+/// `kafka`. Flat as `mongo`'s: which fields go with which `op` is the tool's
+/// to check. `name` looks a topic up and `topic` reads one, so a search and a
+/// read never have to guess which was meant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KafkaArgs {
+    pub op: KafkaOp,
+    /// A connection's name, as the user named it on the Kafka page.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub connection: Option<String>,
+    /// For `topic`: a topic's whole name, or part of one. Absent lists all.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub name: Option<String>,
+    /// For `read`: the topic to read.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub topic: Option<String>,
+    /// For `read`: which partitions; empty is all of them, up to the tool's ceiling.
+    /// `None` is both absent and `null`, which models send for "all".
+    #[serde(default)]
+    pub partitions: Option<Vec<i32>>,
+    /// For `read`: the offset to start at; absent reads the last `count`.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_i64")]
+    pub from: Option<i64>,
+    /// For `read`: how many messages, up to 50.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_u32")]
+    pub count: Option<u32>,
+    /// For `read`: only records with this key. Kafka indexes nothing by key,
+    /// so this is a scan, bounded by the tool's ceilings.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum KafkaOp {
+    #[default]
+    Topic,
+    Read,
 }
 
 /// `webFetch`. `query` picks the passages of a long page.

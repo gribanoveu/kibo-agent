@@ -28,11 +28,12 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/deepseek_web.rs",
     "src/infra/catalog_http.rs",
     "src/infra/mongo_client.rs",
+    "src/infra/kafka_client.rs",
 ];
 
 /// What opening a connection looks like in Rust here.
 const RUST_NETWORK: &[&str] =
-    &["ureq::", "std::net::", "TcpStream", "UdpSocket", "reqwest::", "hyper::", "use kube::", " kube::", "(kube::", "k8s_openapi::", "use rmcp::", " rmcp::", "use mongodb::", " mongodb::", "(mongodb::"];
+    &["ureq::", "std::net::", "TcpStream", "UdpSocket", "reqwest::", "hyper::", "use kube::", " kube::", "(kube::", "k8s_openapi::", "use rmcp::", " rmcp::", "use mongodb::", " mongodb::", "(mongodb::", "use krafka::", " krafka::", "(krafka::"];
 
 /// And in the window. The CSP in `tauri.conf.json` refuses these at runtime
 /// too; this catches them before anyone has to wonder why a request failed.

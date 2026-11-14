@@ -36,6 +36,9 @@ pub enum SecretPurpose {
     /// The MongoDB page's saved connections (`infra::mongo_store`): their
     /// URIs carry the passwords.
     MongoConnections,
+    /// The Kafka page's saved connections (`infra::kafka_store`): their SASL
+    /// passwords.
+    KafkaConnections,
     /// A second purpose, so the suite can prove the one property that needs
     /// two to exist: that a blob restamped as another purpose and opened as
     /// that purpose still fails. Compiled out of release builds — by the time
@@ -50,6 +53,7 @@ impl SecretPurpose {
             SecretPurpose::ProviderApiKey => b"provider-api-key",
             SecretPurpose::KubeBackup => b"kube-backup",
             SecretPurpose::MongoConnections => b"mongo-connections",
+            SecretPurpose::KafkaConnections => b"kafka-connections",
             #[cfg(test)]
             SecretPurpose::Other => b"something-else",
         }

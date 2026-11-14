@@ -7,8 +7,10 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::domain::features::Feature;
+use crate::infra::kafka_client::KafkaClients;
 use crate::infra::mongo_client::MongoClients;
 use crate::services::features::{self, FeatureView};
+use crate::services::kafka::KafkaLive;
 use crate::services::dictation::Dictation;
 use crate::services::meeting_notes::MeetingNotes;
 
@@ -22,23 +24,35 @@ pub fn features_list() -> Vec<FeatureView> {
 
 /// Takes effect from the next turn: a running one keeps what it started with.
 #[tauri::command]
-pub fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Result<Vec<FeatureView>, String> {
-    features::set(&id, on).map_err(|e| e.to_string())?;
-    // Off, its clients go: each keeps a pool and a heartbeat to the user's servers. Off the main
-    // thread: the lock waits on a client being made, which can be an SRV lookup.
-    if !on && id == Feature::Mongodb.manifest().id {
-        let mongo = app.state::<Arc<MongoClients>>().inner().clone();
-        tauri::async_runtime::spawn_blocking(move || mongo.forget_all());
-    }
-    // A kill and a wait for the recognition process: off the main thread.
+pub async fn features_set<R: Runtime>(app: AppHandle<R>, id: String, on: bool) -> Result<Vec<FeatureView>, String> {
+    // The manifest file, its clients' pools and the recognition process are all
+    // waits: one thread for the lot, and the window keeps drawing.
+    let mongo = app.state::<Arc<MongoClients>>().inner().clone();
+    let kafka = app.state::<Arc<KafkaClients>>().inner().clone();
+    let live = app.state::<Arc<KafkaLive>>().inner().clone();
     let notes = app.state::<Arc<MeetingNotes>>().inner().clone();
     let dictation = app.state::<Arc<Dictation>>().inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        notes.feature_set(&id, on);
-        dictation.feature_set(&id, on);
-    });
+    let applied = id.clone();
+    let views = super::blocking(move || {
+        features::set(&applied, on)?;
+        // Off, its clients go: each keeps a pool and a heartbeat to the user's
+        // servers, and Kafka's reads keep a consumer on a cluster nobody is
+        // watching any more.
+        if !on && applied == Feature::Mongodb.manifest().id {
+            mongo.forget_all();
+        }
+        if !on && applied == Feature::Kafka.manifest().id {
+            kafka.forget_all();
+            live.stop_all();
+        }
+        // A kill and a wait for the recognition process.
+        notes.feature_set(&applied, on);
+        dictation.feature_set(&applied, on);
+        Ok::<Vec<FeatureView>, crate::domain::features::FeatureError>(features::list())
+    })
+    .await?;
     let _ = app.emit(FEATURES_EVENT, ());
-    Ok(features::list())
+    Ok(views)
 }
 
 /// Whether the model gets the feature's tools, from the next turn. Its page
@@ -59,14 +73,33 @@ pub fn features_set_layout_switch<R: Runtime>(app: AppHandle<R>, on: bool) -> Re
 }
 
 #[tauri::command]
-pub fn features_delete_data(id: String, mongo: tauri::State<'_, Arc<MongoClients>>) -> Result<Vec<FeatureView>, String> {
-    features::delete_data(&id)?;
-    // Its clients were made from the connections just deleted; off the main thread, as in `features_set`.
-    if id == Feature::Mongodb.manifest().id {
-        let mongo = mongo.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || mongo.forget_all());
-    }
-    Ok(features::list())
+pub async fn features_delete_data(
+    id: String,
+    mongo: tauri::State<'_, Arc<MongoClients>>,
+    kafka: tauri::State<'_, Arc<KafkaClients>>,
+    live: tauri::State<'_, Arc<KafkaLive>>,
+) -> Result<Vec<FeatureView>, String> {
+    // A file removed, and the clients made from what was in it: off the main
+    // thread, as in `features_set`.
+    let mongo = mongo.inner().clone();
+    let kafka = kafka.inner().clone();
+    let live = live.inner().clone();
+    let removed = id.clone();
+    let views = super::blocking(move || {
+        features::delete_data(&removed)?;
+        if removed == Feature::Mongodb.manifest().id {
+            mongo.forget_all();
+        }
+        if removed == Feature::Kafka.manifest().id {
+            kafka.forget_all();
+            // Its reads hold a consumer and a password for a cluster whose
+            // connections were just deleted.
+            live.stop_all();
+        }
+        Ok::<Vec<FeatureView>, String>(features::list())
+    })
+    .await?;
+    Ok(views)
 }
 
 #[cfg(test)]

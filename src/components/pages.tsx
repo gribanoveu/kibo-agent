@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
-import { AudioLines, Database, FolderOpen, SquareKanban, Store } from "lucide-react";
+import type { ComponentType, ReactNode } from "react";
+import { AudioLines, Database, FolderOpen, Radio, SquareKanban, Store } from "lucide-react";
 import { ArtifactsPage } from "./ArtifactsPage";
 import { BoardPage } from "./BoardPage";
 import { CatalogPage } from "./CatalogPage";
 import { MeetingsPage } from "./MeetingsPage";
+import { KafkaPage } from "./KafkaPage";
 import { MongoPage } from "./MongoPage";
 import type { AsideTab } from "../types";
 import "./pages.css";
@@ -29,7 +30,8 @@ export type PageDef = {
   label: string;
   /** The row's tooltip, read on the rail where the label is hidden. */
   title: string;
-  icon: typeof Store;
+  /** Drawn at the rail's size: a lucide icon, or a brand mark of the same shape. */
+  icon: ComponentType<{ size?: number }>;
   /** The panes' column stays beside the page (MCP, Skills…), in either mode;
       without it the page takes everything right of the sidebar. */
   dock: boolean;
@@ -52,6 +54,7 @@ export const PAGES = [
   { id: "board", label: "Board", title: "Board — what the Assistant keeps for later", icon: SquareKanban, dock: false, feature: "board", Component: BoardPage },
   { id: "meetings", label: "Meetings", title: "Meetings — a call's recording made into notes", icon: AudioLines, dock: false, feature: "meeting-notes", Component: MeetingsPage },
   { id: "mongodb", label: "MongoDB", title: "MongoDB — your servers' databases, collections and documents", icon: Database, dock: false, feature: "mongodb", keep: true, Component: MongoPage },
+  { id: "kafka", label: "Kafka", title: "Kafka — your clusters' topics and messages, their consumer groups and their lag", icon: Radio, dock: false, feature: "kafka", Component: KafkaPage },
   { id: "artifacts", label: "Artifacts", title: "Artifacts — meetings and prototypes, as folders", icon: FolderOpen, dock: false, Component: ArtifactsPage },
 ] as const satisfies readonly PageDef[];
 

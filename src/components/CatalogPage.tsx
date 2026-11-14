@@ -1,5 +1,6 @@
 import { useState, type ComponentType, type KeyboardEvent } from "react";
 import { DeepSeekIcon } from "./DeepSeekIcon";
+import { KafkaIcon } from "./KafkaIcon";
 import { MongoIcon } from "./MongoIcon";
 import { Steps } from "./Steps";
 import {
@@ -60,6 +61,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   "meeting-notes": AudioLines,
   "voice-memory": Users,
   mongodb: MongoIcon,
+  kafka: KafkaIcon,
   "voice-input": Mic,
   "layout-correction": Keyboard,
 };
