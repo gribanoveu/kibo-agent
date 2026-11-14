@@ -61,11 +61,11 @@ Dependency direction points inward: `commands → services → domain`, and `inf
 
 Don't pre-build all four layers for something trivial. Introduce a trait boundary when there's a real second implementation (e.g. a test double) or a use-case spanning multiple infra calls — not speculatively.
 
-The AI-agent tool surface lives in `domain/tools.rs` (tool identity, loop cost, the approval gate) and `services/ai_tools/` (one module per tool under `tools/`, plus path resolution, argument parsing and previews). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the chat panel drives it from the UI. Adding a tool touches more places than one would like, so each is held by the compiler or a test, and the few held by neither only change how a call looks:
+The AI-agent tool surface lives in `domain/tools/` (tool identity and loop cost in `mod.rs`, the approval gate in `approval.rs`, calls, results, errors and arguments beside them) and `services/ai_tools/` (one module per tool under `tools/`, plus path resolution, argument parsing and previews). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the chat panel drives it from the UI. Adding a tool touches more places than one would like, so each is held by the compiler or a test, and the few held by neither only change how a call looks:
 
 | Place | Held by |
 |---|---|
-| `ToolName` variant and its row in `ToolName::ALL` (`domain/tools.rs`) | test `all_is_complete` (the count) |
+| `ToolName` variant and its row in `ToolName::ALL` (`domain/tools/mod.rs`) | test `all_is_complete` (the count) |
 | `wire_name`, `loop_weight`, `is_mutating`, `rewind_sees`, `runs_alongside` on `ToolName` | compiler — exhaustive `match`, no wildcard; test `what_runs_alongside_never_writes` |
 | `loads_up_front` on `ToolName` — a wildcard on purpose: an unlisted tool, a new one included, waits for `toolSearch` in Agent and Analyst and costs a request nothing until found; list it only if it is needed from the first step or the prompt names it | test `what_waits_for_tool_search_is_these` |
 | `ToolCall` / `ToolResult` variants, a module under `services/ai_tools/tools/`, its arm in `dispatch`, its text in `model_text.rs` | compiler |

@@ -2,7 +2,7 @@
   "name": "kibo-agent",
   "private": true,
   "license": "GPL-3.0-only",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "type": "module",
   "scripts": {
     "dev": "bun scripts/build-prototype-libs.ts && vite",
@@ -48,7 +48,6 @@
     "react-dom": "^19.1.0",
     "shiki": "^4.4.3",
     "streamdown": "^2.5.0",
-    "tinyld": "1.3.4",
     "xml-formatter": "^3.7.0"
   },
   "devDependencies": {
@@ -61,6 +60,8 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
+    "dictionary-en": "4.0.0",
+    "dictionary-ru": "3.0.0",
     "postman-sandbox": "6.9.0",
     "typescript": "~6.0.3",
     "vite": "^8.0.16"

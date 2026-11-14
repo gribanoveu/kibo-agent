@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use super::chat::AgentState;
+use super::agent_state::AgentState;
 use crate::domain::file_tree::FolderListing;
 use crate::domain::file_write::FileSave;
 use crate::infra::{file_tree, file_write};
