@@ -46,11 +46,15 @@ if [[ $bare =~ ^(https?)://([^/@]+@)?([^/]+)(/.*)?/scm/([^/]+)/([^/]+)$ ]]; then
 elif [[ $bare =~ ^ssh://([^@/]+@)?([^/:]+)(:([0-9]+))?/(.+)/([^/]+)$ ]]; then
   HOST=${BASH_REMATCH[2]}; PROJECT=${BASH_REMATCH[5]}; SLUG=${BASH_REMATCH[6]}
   GUESS="https://$HOST"; KIND="ssh, port ${BASH_REMATCH[4]:-22}"
-elif [[ $bare =~ ^([^@/]+@)?([^/:]+):(.+)/([^/]+)$ ]]; then
+elif [[ $bare =~ ^([^@/]+@)?([^/:]+):([^/].*)/([^/]+)$ ]]; then
+  # ([^/].*) and not (.+): a URL like https://host/a/b must not pass for a
+  # scp-like remote, or 'https' becomes the host and every request goes nowhere.
   HOST=${BASH_REMATCH[2]}; PROJECT=${BASH_REMATCH[3]}; SLUG=${BASH_REMATCH[4]}
   GUESS="https://$HOST"; KIND="scp-like ssh"
 else
-  echo "  the remote has no shape this script knows — set BITBUCKET_URL and fix PROJECT/SLUG by hand"; exit 1
+  echo "  the remote is not a clone from a Bitbucket server — run the probe in one:"
+  echo "    $REMOTE"
+  echo "  (an https clone needs /scm/PROJECT/REPO; set BITBUCKET_URL if the web host differs)"; exit 1
 fi
 BASE=${BITBUCKET_URL:-$GUESS}; BASE=${BASE%/}
 note "remote: $KIND; project=$PROJECT slug=$SLUG; base guessed=$GUESS used=$BASE"
@@ -78,26 +82,57 @@ json() { jq -r "$1" "$OUT/$2.json" 2>/dev/null; }
 # --------------------------------------------------------------------- 2. TLS
 step "2. TLS"
 port=$(sed -nE 's#^https://[^/:]+:([0-9]+).*#\1#p' <<<"$BASE"); port=${port:-443}
-if [[ $BASE == https://* ]]; then
+tls_verify() { # $1 — the trust file, checked the way the app will check it
+  local args
+  args=(-CAfile "$1")
+  [[ -s $inters ]] && args+=(-untrusted "$inters")
+  openssl verify "${args[@]}" "$leaf" >/dev/null 2>&1
+}
+if [[ $BASE != https://* ]]; then
+  note "TLS: none — the base URL is http"
+elif ! command -v openssl >/dev/null; then
+  note "TLS: not checked — no openssl here, and curl cannot answer this on macOS"
+else
   echo "  chain the server sends (s: subject, i: issuer):"
   openssl s_client -connect "$BASE_HOST:$port" -servername "$BASE_HOST" -showcerts </dev/null 2>/dev/null \
     | grep -E '^ *[0-9]+ s:|^ +i:' | sed 's/^/    /'
-  # The app trusts the public roots or the PEM given to it — never the macOS
-  # keychain, which this system curl does consult. So: public roots only.
-  if curl -sS -o /dev/null --cacert /etc/ssl/cert.pem "$BASE/rest/api/latest/application-properties" 2>/dev/null; then
-    note "TLS: passes with public roots only — no PEM needed"
+  # Verified with `openssl verify`, never with `curl --cacert`: curl on macOS is
+  # built with SecureTransport and consults the keychain, so it answers yes for
+  # any certificate the user has installed system-wide — and "no PEM needed" is
+  # then exactly the wrong answer for a corporate server.
+  chain=$OUT/tls-chain.pem; leaf=$OUT/tls-leaf.pem; inters=$OUT/tls-inter.pem
+  openssl s_client -connect "$BASE_HOST:$port" -servername "$BASE_HOST" -showcerts </dev/null 2>/dev/null \
+    | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' >"$chain"
+  certs=$(grep -c 'BEGIN CERTIFICATE' "$chain")
+  awk '/BEGIN CERTIFICATE/{n++} n==1' "$chain" >"$leaf"
+  : >"$inters"
+  i=2
+  while [[ $i -le $certs ]]; do
+    one=$OUT/tls-one.pem
+    awk -v want="$i" '/BEGIN CERTIFICATE/{n++} n==want' "$chain" >"$one"
+    if [[ -s $one ]]; then
+      subj=$(openssl x509 -in "$one" -noout -subject | sed 's/^subject=//')
+      issu=$(openssl x509 -in "$one" -noout -issuer | sed 's/^issuer=//')
+      [[ $subj == "$issu" ]] || cat "$one" >>"$inters"  # a self-signed root is not an intermediate
+    fi
+    i=$((i+1))
+  done
+  if [[ ! -s $leaf ]]; then
+    note "TLS: nothing answered on $BASE_HOST:$port"
   else
-    note "TLS: fails with public roots only — the server needs its CA as a PEM"
-  fi
-  if [[ -n ${BITBUCKET_CA:-} ]]; then
-    if curl -sS -o /dev/null --cacert "$BITBUCKET_CA" "$BASE/rest/api/latest/application-properties" 2>/dev/null; then
-      note "TLS: passes with BITBUCKET_CA alone — that PEM is the one for the form"
+    if tls_verify /etc/ssl/cert.pem; then
+      note "TLS: validates against the public roots alone — no PEM needed"
     else
-      note "TLS: fails even with BITBUCKET_CA — wrong or incomplete PEM (the root, not the server's own cert?)"
+      note "TLS: does not validate against the public roots — the server needs its CA as a PEM"
+    fi
+    if [[ -n ${BITBUCKET_CA:-} ]]; then
+      if tls_verify "$BITBUCKET_CA"; then
+        note "TLS: validates with BITBUCKET_CA alone — that PEM is the one for the form"
+      else
+        note "TLS: fails even with BITBUCKET_CA — wrong or incomplete PEM (the root, not the server's own cert?)"
+      fi
     fi
   fi
-else
-  note "TLS: none — the base URL is http"
 fi
 
 # ----------------------------------------------------- 3. Bitbucket, no token
