@@ -444,6 +444,63 @@
   color-scheme: dark;
 }
 
+/* Frost. Ember behind frozen glass: on macOS the desktop shows through the
+   window, blurred and darkened by the system's HUD material (useTheme turns it
+   on), and every surface is a tint over it rather than a colour of its own —
+   the window and the panels dark and see-through, what rises on them a breath
+   of ice-blue white. Where the system draws no glass (Windows, a browser) the
+   window gets a dark ground of its own under the same tints, below. Text is
+   lifted a step over Ember's, since what is under it moves; the accent is ice,
+   9:1 on a panel. What floats over the panels — menus, sheets, dialogs — is
+   denser and blurs what it covers, so it reads over text. */
+[data-theme="frost"] {
+  /* The dark of the glass is the window's, laid once (below): a surface that
+     repeats its parent's colour — a sidebar on the window, a sticky heading on
+     the sidebar — would add a layer each time, so the ground ones are nearly
+     clear and the chat's page only a shade darker than what is round it. */
+  --bg-app: transparent;
+  --bg-window: transparent;
+  --bg-panel: rgba(4, 6, 10, 0.22);
+  --bg-panel-soft: rgba(200, 225, 255, 0.05);
+  --bg-hover: rgba(200, 225, 255, 0.09);
+  --bg-active: rgba(200, 225, 255, 0.15);
+  --bg-bubble: rgba(200, 225, 255, 0.07);
+
+  --border: rgba(200, 225, 255, 0.14);
+  --border-soft: rgba(200, 225, 255, 0.08);
+  --window-border: rgba(200, 225, 255, 0.18);
+
+  --text: #e6edf5;
+  --text-dim: #b4c0cf;
+  --text-faint: #9aa7b8;
+
+  --accent: #7cc8ff;
+  --accent-contrast: #06121c;
+  --green: #5fe0a0;
+  --red: #ff6b7a;
+  --amber: #ffd166;
+  --purple: #c9a2ff;
+
+  --term-black: #5a6270;
+  --term-red: #ec8079;
+  --term-green: #62d29a;
+  --term-yellow: #e0b35f;
+  --term-blue: #6ba4e6;
+  --term-magenta: #b39bff;
+  --term-cyan: #5fc7d4;
+  --term-white: var(--text-dim);
+  --term-bright-black: var(--text-faint);
+  --term-bright-red: #f4a19b;
+  --term-bright-green: #8ae3b4;
+  --term-bright-yellow: #f0cc85;
+  --term-bright-blue: #92bdf0;
+  --term-bright-magenta: #cbb8ff;
+  --term-bright-cyan: #8adbe4;
+  --term-bright-white: var(--text);
+
+  color-scheme: dark;
+}
+
 :root {
   /* Corners, after macOS: the window's panels are square and joined edge to
      edge by a hairline gutter, drawn in the border colour behind them
@@ -526,6 +583,68 @@
   --border-field: transparent;
   /* What stands up off a tray. */
   --shadow-raised: 0 1px 2px color-mix(in srgb, var(--text) 12%, transparent);
+}
+
+/* Frost's floating glass: a tint as thin as the panels' would leave a menu's
+   text over the chat's. */
+[data-theme="frost"] {
+  /* The title bar, the side columns and the message box at rest are the
+     window's glass itself. */
+  --bg-box: transparent;
+  --bg-menu: rgba(28, 34, 46, 0.86);
+  --bg-menu-hover: rgba(200, 225, 255, 0.12);
+}
+[data-theme="frost"] .window {
+  background: rgba(12, 16, 24, 0.5);
+}
+/* The hairlines between the panels are the window's ground showing through
+   their gaps (App.css): under clear panels that ground would tint them all, so
+   it goes, and the page draws its edge round itself into the gaps instead. */
+[data-theme="frost"] .body {
+  background: transparent;
+}
+[data-theme="frost"] .main {
+  box-shadow: 0 0 0 var(--gutter) var(--border-soft);
+}
+/* No system glass under it — Windows, a browser: a dark ground with a cold
+   light in it, so the tint has something to be glass over. */
+[data-theme="frost"] .window:not(.native-frame) {
+  background:
+    linear-gradient(rgba(12, 16, 24, 0.5), rgba(12, 16, 24, 0.5)),
+    radial-gradient(ellipse at 15% 0%, #1d3350, transparent 60%),
+    radial-gradient(ellipse at 95% 100%, #262a44, transparent 55%),
+    #0b1018;
+}
+/* What floats: it blurs what it covers. */
+[data-theme="frost"]
+  :is(
+    .modal,
+    .page-sheet,
+    [role="dialog"],
+    [role="menu"],
+    [role="listbox"]
+  ) {
+  -webkit-backdrop-filter: blur(28px) saturate(1.5);
+  backdrop-filter: blur(28px) saturate(1.5);
+}
+/* The headings that stay put while a list scrolls under them: clear at rest,
+   blurring what passes beneath. A plain blur, no saturation: on macOS WebKit's backdrop takes in the
+   system's glass too, and a saturated copy of it read as a lighter band. */
+[data-theme="frost"] :is(.group-head, .chat-day, .meeting-cap, .meeting-card-head, .provider-foot) {
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+/* Under the system's glass WebKit draws any backdrop as a flat grey band,
+   whatever is behind the window, so the sidebar's headings drop it there — and
+   with it staying put, or the rows would scroll through their words. */
+[data-theme="frost"] .native-frame :is(.group-head, .chat-day) {
+  position: relative;
+  top: auto;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+[data-theme="frost"] :is(.modal, .page-sheet) {
+  background: rgba(20, 26, 36, 0.82);
 }
 
 /* The type scale. Five steps, not a size per component: monospace is for

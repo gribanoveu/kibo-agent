@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { setWindowTheme } from "../lib/window";
+import { setWindowGlass, setWindowTheme } from "../lib/window";
 
 /** Each palette in src/styles/tokens.css, and whether it is light or dark. */
 export const SCHEMES = {
@@ -11,6 +11,7 @@ export const SCHEMES = {
   basalt: "dark",
   iris: "dark",
   fjord: "dark",
+  frost: "dark",
 } as const;
 export type Theme = keyof typeof SCHEMES;
 export type Scheme = (typeof SCHEMES)[Theme];
@@ -24,6 +25,7 @@ export const THEME_LABELS: Record<Theme, string> = {
   basalt: "Basalt",
   iris: "Iris",
   fjord: "Fjord",
+  frost: "Frost",
 };
 
 /** The palettes on one side, in the order they are offered. */
@@ -85,6 +87,9 @@ export function useTheme() {
       const side = sideOf(choice);
       document.documentElement.dataset.theme = choice[side];
       document.documentElement.dataset.scheme = side;
+      // Frost is see-through: the system's blur goes under the window only
+      // while it shows, since the other palettes paint over it anyway.
+      void setWindowGlass(choice[side] === "frost");
     };
     apply();
     // The window's edge in the app's side, not the system's. Under "system"

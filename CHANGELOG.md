@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-14 Frost, a dark theme of frozen glass: on macOS the desktop shows through the window, blurred
+
 ## v0.13.0 — 2026-11-14
 
 - 2026-11-13 Keyboard layout correction notices far more of what was typed on the wrong layout — whole phrases with short words like «я не знаю», English typed on the Russian layout, every wrong word in mixed prose — and stops offering to "fix" abbreviations (src, ctx), file paths, Russian loanwords and a word still being typed
