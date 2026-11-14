@@ -1,11 +1,12 @@
 # PR текущей ветки из Bitbucket Data Center — в панели Changes
 
-План, предложен 2026-11-14. Функция `bitbucket` в Catalog: над списком изменений в панели
+План, предложен 2026-11-14. Функция `pull-requests` в Catalog: над списком изменений в панели
 Changes — полоска pull request'а текущей ветки с self-hosted Bitbucket Data Center: заголовок,
 состояние, ревьюеры и их решения, сборки по HEAD-коммиту, можно ли мержить и почему нет;
 кнопки Create PR, Approve / Unapprove, Merge, Open in browser. У каждого сервера — свой
 доверенный сертификат (корпоративный CA). Отдельным пунктом агент получает читающий
-инструмент `bitbucketPr`: тот же PR и те же сборки. Образец — то, как Claude
+инструмент `pullRequestStatus`: тот же PR и те же сборки. Снаружи имена нейтральные, Bitbucket —
+только в адаптере, чтобы GitLab, Gitea или GitHub потом стали ещё одним адаптером (решение 9). Образец — то, как Claude
 desktop показывает PR с GitHub. Работа кончается тем, что пользователь видит и ведёт свой PR,
 не открывая браузер.
 
@@ -70,8 +71,8 @@ Self-hosted адрес может ничего не говорить: `git.corp.
 ### 2. Только Data Center, API 1.0 (`/rest/api/latest`)
 
 Cloud — другой API (`api.bitbucket.org/2.0`), другая авторизация, другая модель ревьюеров.
-Один адаптер под то, чем пользуются. Trait `BitbucketApi` в `domain/` нужен ради тестового
-двойника сервиса, а не ради Cloud; Cloud станет второй реализацией, если понадобится.
+Один адаптер под то, чем пользуются. Trait `CodeHost` в `domain/` нужен ради тестового
+двойника сервиса; Cloud, GitLab или Gitea станут второй реализацией, если понадобятся (решение 9).
 
 Запросы этапа 1:
 
@@ -91,7 +92,7 @@ Cloud — другой API (`api.bitbucket.org/2.0`), другая автори�
 
 Personal HTTP access token Data Center, заголовок `Authorization: Bearer`. Права: `REPO_READ`
 на чтение и approve, `REPO_WRITE` на create и merge — форма говорит об этом, а 401/403 на
-кнопке объясняются этим же текстом. Хранилище — `bitbucket_servers.enc` по образцу
+кнопке объясняются этим же текстом. Хранилище — `code_hosts.enc` по образцу
 `mongo_store`: окно видит адрес, псевдонимы хостов и «токен задан», но не сам токен.
 
 Отвергнуто: логин и пароль (basic auth) — пароль от SSO в файле; OAuth — нужна регистрация
@@ -104,9 +105,9 @@ Personal HTTP access token Data Center, заголовок `Authorization: Beare
 достучится, а у десктопа его нет. Поэтому:
 
 - Опрашивает **бэкенд**, как `infra/background.rs` и `services/mcp_servers.rs`: команда
-  `bitbucket_watch(root)` / `bitbucket_unwatch`, пока полоска смонтирована. Раз в 30 с, раз в
+  `pull_request_watch(root)` / `pull_request_unwatch`, пока полоска смонтирована. Раз в 30 с, раз в
   10 с, пока есть сборка `INPROGRESS`. Снимок сравнивается с прошлым, и событие
-  `bitbucket:changed { root }` уходит только при разнице — фронтенд перечитывает, как
+  `pull-requests:changed { root }` уходит только при разнице — фронтенд перечитывает, как
   везде. `ponytail:` у таймера: потолок — нагрузка на сервер при многих окнах, выход —
   вебхук через relay, если он когда-то появится.
 - Сразу, без ожидания тика: при монтировании, при `onFolderChanged` (смена ветки, коммит,
@@ -154,44 +155,74 @@ Approve скрыт у автора (сервер всё равно откаже�
 
 ### 8. Агент читает PR и сборки — отдельным инструментом, только чтение
 
-Решено 2026-11-14: отдельный пункт плана, этап BB-6. Инструмент `bitbucketPr { branch? }`
+Решено 2026-11-14: отдельный пункт плана, этап BB-6. Инструмент `pullRequestStatus { branch? }`
 отдаёт то же, что видит полоска: PR ветки (по умолчанию текущей), ревьюеров и их решения,
 сборки HEAD-коммита с именами, состояниями и ссылками, `canMerge` и вето. Логов сборок в
 Bitbucket нет — они в CI; агент получает ссылку и может прочитать её `webFetch`, если CI
 отдаёт страницу.
 
 Только чтение: создавать PR и мержить агент не может — это кнопки человека. Поэтому инструмент
-немутирующий и предлагается в Agent и в Analyst; принадлежит функции `bitbucket` и выключен
+немутирующий и предлагается в Agent и в Analyst; принадлежит функции `pull-requests` и выключен
 вместе с ней; не грузится сразу (`loads_up_front` — нет), находится через `toolSearch`.
 Читает он через тот же сервис, что и полоска: одна правда, один токен, тот же отказ, если
 remote не сопоставлен серверу.
 
 Отвергнуто: отдать агенту `runCommand` с `curl` — токен пришлось бы показать модели.
 
+### 9. Снаружи — нейтральные имена, Bitbucket — только в адаптере
+
+Решено 2026-11-14. Общий механизм под любой хост сейчас не строится: общее у хостов —
+только то, что видит пользователь (PR ветки, ревьюеры, CI, можно ли мержить, четыре кнопки),
+а внутри у каждого своё — распознавание сервера, две системы CI у GitHub против pipeline у
+GitLab и build status у Bitbucket, approve без unapprove у GitHub, свои стратегии merge.
+Модель, придуманная по одному хосту, при втором всё равно перекроится; правильная появится
+со вторым настоящим адаптером (`AGENTS.md`: слой — под реальную вторую реализацию).
+
+Но то, что потом переименовывается миграцией или ломает старые данные, называется
+нейтрально сразу — это ничего не стоит:
+
+| Было | Стало | Почему сейчас |
+|---|---|---|
+| функция `bitbucket` | `pull-requests` | id — ключ в `settings.json`; переименование — миграция |
+| инструмент `bitbucketPr` | `pullRequestStatus` | имя видят модель, лог вызовов и старые чаты. Не `pullRequest`: так уже называется вид `offer`, и модель их спутает |
+| канал `bitbucket:changed` | `pull-requests:changed` | имя закреплено тестом и копией во фронтенде |
+| `bitbucket_servers.enc`, `SecretPurpose::BitbucketServers` | `code_hosts.enc`, `SecretPurpose::CodeHosts` | файл и назначение ключа — на диске у пользователя |
+| `BitbucketApi`, `BitbucketError`, `BitbucketEventSink` | `CodeHost`, `CodeHostError`, `PullRequestEventSink` | trait нужен и так — ради двойника; имя ничего не стоит |
+
+Bitbucket остаётся в одном месте: `infra/bitbucket_client.rs` (разбор remote с `/scm/`, пути
+API, JSON → нейтральный снимок) и распознавание сервера в форме. Скрипт пробы — тоже его.
+
+Чего нет: поля `kind` у записи сервера и перечисления хостов с одним вариантом. Второй хост
+добавит `kind` с `#[serde(default)]` = Bitbucket, и старый файл прочтётся как был. Нет и
+реестра провайдеров, и общего «распознать любой хост».
+
 ## Слои
 
-- `domain/bitbucket.rs` — чистое: `RepoCoords` (хост, project, slug) из канонического remote,
-  подсказка базового адреса, выбор сервера по хосту и псевдонимам, `PrSnapshot` (PR, ревьюеры,
-  сборки, mergeability, «я — автор»), правила кнопок, разница снимков; `BitbucketError`
-  (`thiserror`: нет сервера, не Bitbucket, 401/403 с правами, 409, сеть); trait `BitbucketApi`;
-  `BitbucketEventSink` с одним `BitbucketChanged { root }`.
-- `infra/bitbucket_store.rs` — серверы под мастер-ключом, `SecretPurpose::BitbucketServers`.
-- `infra/bitbucket_client.rs` — `ureq` через `http_agent::build_agent`, реализация `BitbucketApi`;
-  текущий пользователь — из ответа сервера (как именно — проба BB-0).
-- `services/bitbucket.rs` — снимок для папки, действия, подключение (проба, проверка клона,
-  псевдоним), наблюдатель с таймером; наружу — через sink.
-- `commands/bitbucket.rs` — `bitbucket_servers`, `bitbucket_server_save/delete`,
-  `bitbucket_detect`, `bitbucket_pr`, `bitbucket_create/approve/merge`, `bitbucket_watch/unwatch`;
+- `domain/code_host.rs` — чистое и нейтральное: сервер (адрес, псевдонимы хостов, PEM),
+  выбор сервера по хосту remote и псевдонимам, `PrSnapshot` (PR, ревьюеры, сборки,
+  mergeability, «я — автор»), правила кнопок, разница снимков; `CodeHostError` (`thiserror`:
+  нет сервера, не тот хост, TLS, 401/403 с правами, 409, сеть); trait `CodeHost`;
+  `PullRequestEventSink` с одним `PullRequestChanged { root }`.
+- `infra/code_host_store.rs` — серверы под мастер-ключом, `SecretPurpose::CodeHosts`.
+- `infra/bitbucket_client.rs` — всё, что про Bitbucket: разбор remote (`/scm/`, контекстный
+  путь, SSH с портом) и подсказка базового адреса — чистыми функциями с тестами; `ureq` через
+  `http_agent::build_agent`; JSON Data Center → `PrSnapshot`; реализация `CodeHost`. Текущий
+  пользователь — из ответа сервера (как именно — проба BB-0).
+- `services/pull_requests.rs` — снимок для папки, действия, подключение (проба, проверка
+  клона, псевдоним), наблюдатель с таймером; наружу — через sink.
+- `commands/pull_requests.rs` — `code_hosts`, `code_host_save/delete`, `code_host_detect`,
+  `pull_request`, `pull_request_create/approve/merge`, `pull_request_watch/unwatch`;
   всё сетевое — `async` через `commands::blocking`, модуль — в список медленных
-  `architecture.rs`; канал `bitbucket:changed` — `pub const` с тестом.
-- Фронт: `src/lib/bitbucket.ts` (обёртки и `onBitbucketChanged`), `src/hooks/useBitbucketPr.ts`
-  (`useLiveRead` + watch на время жизни), `src/components/PrStrip.tsx` + `.css`,
-  `BitbucketConnect.tsx` (форма в `Modal`), список серверов — в Settings.
-- Функция `bitbucket` в `domain/features.rs`, `data: Some("bitbucket_servers.enc")`,
-  `tools: &[ToolName::BitbucketPr]`.
-- Инструмент `bitbucketPr` (BB-6) — все места из таблицы в `AGENTS.md`: `ToolName` и
+  `architecture.rs`; канал `pull-requests:changed` — `pub const` с тестом.
+- Фронт: `src/lib/pullRequests.ts` (обёртки и `onPullRequestChanged`),
+  `src/hooks/usePullRequest.ts` (`useLiveRead` + watch на время жизни),
+  `src/components/PrStrip.tsx` + `.css`, `CodeHostConnect.tsx` (форма в `Modal`, пока —
+  форма Bitbucket), список серверов — в Settings.
+- Функция `pull-requests` в `domain/features.rs`, `data: Some("code_hosts.enc")`,
+  `tools: &[ToolName::PullRequestStatus]`.
+- Инструмент `pullRequestStatus` (BB-6) — все места из таблицы в `AGENTS.md`: `ToolName` и
   `ALL`, флаги (немутирующий, `runs_alongside`, `rewind_sees` — нет), `ToolCall`/`ToolResult`,
-  модуль `services/ai_tools/tools/bitbucket_pr.rs`, `DEFINITIONS`, `parse.rs`, редакция в
+  модуль `services/ai_tools/tools/pull_request_status.rs`, `DEFINITIONS`, `parse.rs`, редакция в
   `tool_call_log.rs`, наборы Agent и Analyst, `ACCOUNTED` в `rewind.ts`, `describeTool.ts` и
   иконка в `ChatPanel.tsx`.
 
@@ -252,20 +283,20 @@ remote не сопоставлен серверу.
 одному серверу, не выбирает «первый»; автор не может approve; merge закрыт при
 `conflicted` или вето; одинаковые снимки — не изменение.
 
-**BB-2. Хранилище и клиент.** `bitbucket_store` по образцу `mongo_store` (токен не уходит в
+**BB-2. Хранилище и клиент.** `code_host_store` по образцу `mongo_store` (токен не уходит в
 вид, PEM — уходит: он не секрет), клиент поверх `http_agent` с PEM сервера. Тесты: круг
 записи и чтения запечатанного списка; разбор ответов сервера по сохранённым JSON из BB-0;
-401/403/409 становятся своими вариантами `BitbucketError`, а не строкой; клиент с PEM
+401/403/409 становятся своими вариантами `CodeHostError`, а не строкой; клиент с PEM
 доверяет самоподписанному серверу и не доверяет без него (как тесты `http_agent.rs`); TLS-отказ
 — свой вариант ошибки, а не «не Bitbucket».
 
 **BB-3. Сервис, команды, событие.** Снимок, действия, подключение с проверкой `links.clone`,
 наблюдатель (тик, ускорение при `INPROGRESS`, событие только при разнице, остановка по
-unwatch). Тесты на двойнике `BitbucketApi`: снимок собирается из четырёх ответов; merge с 409
+unwatch). Тесты на двойнике `CodeHost`: снимок собирается из четырёх ответов; merge с 409
 перечитывает, а не повторяет; псевдоним хоста запоминается только при совпадении клона;
 наблюдатель молчит, пока снимок тот же; после unwatch запросов нет. Имя канала — тест.
 
-**BB-4. Полоска и подключение.** `PrStrip` во всех состояниях решения 5, `BitbucketConnect`
+**BB-4. Полоска и подключение.** `PrStrip` во всех состояниях решения 5, `CodeHostConnect`
 с полем сертификата (`Certificate` вынесен из `ProviderSettings.tsx`, провайдеры на нём же),
 серверы в Settings, функция в Catalog. Тесты (`bun test`): каждое состояние рисует своё;
 Create PR неактивна, пока ветки нет на сервере; Merge неактивен с причиной; подтверждение
@@ -276,7 +307,7 @@ Create PR неактивна, пока ветки нет на сервере; Me
 сервер Bitbucket и когда: проба без токена — по кнопке; с токеном — только на добавленный
 сервер).
 
-**BB-6. Агент читает PR и сборки.** Инструмент `bitbucketPr` из решения 8 во всех местах
+**BB-6. Агент читает PR и сборки.** Инструмент `pullRequestStatus` из решения 8 во всех местах
 таблицы `AGENTS.md`, текст результата в `model_text.rs` — коротко: строка PR, ревьюеры,
 сборки строкой на каждую, вето. Тесты: тесты контракта инструмента по `ToolName::ALL`;
 выключенная функция убирает инструмент из хода; remote без сервера — понятный отказ, а не
@@ -290,7 +321,9 @@ Create PR неактивна, пока ветки нет на сервере; Me
 
 ## Вне плана
 
-- **Bitbucket Cloud** — когда понадобится: вторая реализация `BitbucketApi`.
+- **Bitbucket Cloud, GitLab, Gitea, GitHub** — когда понадобятся: ещё одна реализация
+  `CodeHost` в `infra/`, своё распознавание сервера и поле `kind` у записи (решение 9).
+  Для github.com может хватить уже установленного `gh`.
 - **Push из полоски** — не делаем (решено 2026-11-14), см. решение 5.
 - **Список всех PR репозитория, комментарии, дифф PR, inline-комментарии в коде** — своя
   страница, своя фича.
