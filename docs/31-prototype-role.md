@@ -8,7 +8,7 @@
 ## Суть
 
 Роль устроена так же, как Kubernetes ([21-kubernetes-mode.md](21-kubernetes-mode.md)) и
-API-тестировщик ([28-api-tester-role.md](28-api-tester-role.md)): **промпт роли + свой
+API-тестировщик (`28-api-tester-role.md`): **промпт роли + свой
 набор инструментов**. Нового в ней три вещи:
 
 1. **Папка на чат** — окружение, где модель пишет файлы теми же `writeFile`/`editFile`,

@@ -58,8 +58,8 @@ pub struct Restored {
     pub before: Option<u32>,
 }
 
-/// `prototype.json` beside the chat's `files/` and `versions/`
-/// (`docs/38-artifacts.md`): what the prototype is called and which page is
+/// `prototype.json` beside the chat's `files/` and `versions/`:
+/// what the prototype is called and which page is
 /// it, as of the last `present` — the folder named without reading the chat.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

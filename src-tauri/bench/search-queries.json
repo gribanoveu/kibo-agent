@@ -399,33 +399,30 @@
         },
         {
           "lang": "ru",
-          "q": "почему в продукте нет CLI",
+          "q": "какие данные уходят провайдеру модели",
           "expect": [
             {
-              "path": "docs/01-vision.md"
+              "path": "docs/08-data-policy.md"
             }
           ],
           "answer": "docs"
         },
         {
           "lang": "en",
-          "q": "known bugs found in the upstream app",
+          "q": "how tests are checked by breaking the code on purpose",
           "expect": [
             {
-              "path": "docs/07-upstream-findings.md"
+              "path": "docs/11-mutation-testing.md"
             }
           ],
           "answer": "docs"
         },
         {
           "lang": "ru",
-          "q": "что нельзя потерять при переносе индексного слоя",
+          "q": "чем продукт отличается от других агентов",
           "expect": [
             {
-              "path": "docs/06-port-plan.md"
-            },
-            {
-              "path": "docs/05-gaps.md"
+              "path": "docs/09-product.md"
             }
           ],
           "answer": "docs"

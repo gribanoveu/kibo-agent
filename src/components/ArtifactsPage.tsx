@@ -32,7 +32,7 @@ const when = (rfc3339: string) =>
   });
 
 /**
- * What the app made, as folders (docs/38-artifacts.md): a kind, its
+ * What the app made, as folders: a kind, its
  * collections — a meeting, a prototype — and their files, as a file manager
  * lists them. A click picks a row, a double click opens it, the crumbs
  * go back up; a file picked opens in the panel on the right. A row's

@@ -1,4 +1,4 @@
-//! The Artifacts page (`docs/38-artifacts.md`): what the app made, as folders —
+//! The Artifacts page: what the app made, as folders —
 //! a kind, a collection of that kind (a meeting, a prototype), its files.
 //!
 //! The rules live here: how a file opens, the order things are listed in, and

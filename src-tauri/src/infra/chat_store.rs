@@ -236,7 +236,7 @@ pub fn exists(id: &str) -> Result<bool, ChatError> {
 
 /// What the chat is called in the list — the model's name for it first —
 /// or `None` when there is no such chat: what names a prototype shown before
-/// it had a `prototype.json` (`docs/38-artifacts.md`).
+/// it had a `prototype.json`.
 pub fn title(id: &str) -> Result<Option<String>, ChatError> {
     chat_record::check_id(id)?;
     open()?

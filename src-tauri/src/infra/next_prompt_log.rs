@@ -1,5 +1,4 @@
-//! The next-prompt journal: the `suggestions` table in `chats.db`
-//! (`docs/20-next-prompt-suggestions.md`).
+//! The next-prompt journal: the `suggestions` table in `chats.db`.
 //!
 //! One row per finished turn: the model input exactly as built, and what the
 //! user sent next. It never leaves the machine; the user exports it to train

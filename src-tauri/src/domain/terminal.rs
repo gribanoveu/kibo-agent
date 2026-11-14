@@ -6,7 +6,7 @@
 //! The agent reaches them through [`UserTerminals`]: it reads what a screen
 //! shows and types a command into one, never more.
 //!
-//! The shells are in `infra::terminal`; decisions in `docs/15-terminal.md`.
+//! The shells are in `infra::terminal`.
 
 use std::collections::VecDeque;
 use std::sync::Arc;

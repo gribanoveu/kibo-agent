@@ -347,8 +347,8 @@ pub enum ChatEventPayload {
     /// also goes to the review card's output, so the reader sees it where
     /// the work is, not as a notice away from it.
     WrapUpReminded { rounds: u32, tokens: u64, text: String },
-    /// An MCP server asks the user something in the middle of call `call`
-    /// (`docs/23-mcp-extension.md`, M-8). The call waits until
+    /// An MCP server asks the user something in the middle of call `call`.
+    /// The call waits until
     /// `chat_answer_mcp_question` answers `id`, or Stop.
     ///
     /// Outside the turn's sequence, like `CommandOutput`: it is sent from
