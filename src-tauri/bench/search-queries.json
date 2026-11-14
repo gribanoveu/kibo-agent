@@ -145,7 +145,7 @@
           "q": "refuse to overwrite a file that changed on disk after the agent read it",
           "expect": [
             {
-              "path": "src-tauri/src/domain/tools.rs",
+              "path": "src-tauri/src/domain/tools/read_files.rs",
               "name": "ReadFiles"
             }
           ]
@@ -155,7 +155,7 @@
           "q": "запретить запись в файл, изменившийся после чтения",
           "expect": [
             {
-              "path": "src-tauri/src/domain/tools.rs",
+              "path": "src-tauri/src/domain/tools/read_files.rs",
               "name": "ReadFiles"
             }
           ],

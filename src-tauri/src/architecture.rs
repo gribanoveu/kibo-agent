@@ -105,15 +105,18 @@ fn code_lines(path: &Path) -> Vec<String> {
 }
 
 /// Every `.rs` file under `src/<dir>`, as its path under `src/` and its code.
-/// A `tests/` folder is a `#[cfg(test)] mod tests;` split into files
-/// (`services/llm_chat/tests/`), and is left out like the inline one.
+/// A `tests.rs` file or a `tests/` folder is a `#[cfg(test)] mod tests;` moved
+/// out of its module (`domain/tools/tests.rs`, `services/llm_chat/tests/`),
+/// and is left out like the inline one.
 fn sources(dir: &str) -> Vec<(String, Vec<String>)> {
     let src = crate_dir().join("src");
     let mut paths = Vec::new();
     files(&src.join(dir), &["rs"], &mut paths);
     paths
         .into_iter()
-        .filter(|path| !path.strip_prefix(&src).unwrap().components().any(|c| c.as_os_str() == "tests"))
+        .filter(|path| {
+            !path.strip_prefix(&src).unwrap().components().any(|c| c.as_os_str() == "tests" || c.as_os_str() == "tests.rs")
+        })
         .map(|path| {
             let relative = path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
             let code = code_lines(&path);
