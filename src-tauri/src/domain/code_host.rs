@@ -22,6 +22,39 @@ pub enum CodeHostError {
     /// than inventing a guess.
     #[error("{0} does not name a project and a repository on a server")]
     UnreadableRemote(String),
+    /// The server answered, and not with a yes: the status and its own words,
+    /// cut short. The variants after it are the ones the strip acts on.
+    #[error("the server answered {0}: {1}")]
+    Http(u16, String),
+    #[error("the token was refused — it may have expired or been revoked; a new one goes in Settings")]
+    Unauthorized,
+    #[error("the token may read but not do this — merge and create need Repository write")]
+    Forbidden,
+    /// The optimistic lock of [`PullRequest::version`]: someone else changed the
+    /// pull request first, and the strip reads it again rather than repeating
+    /// what it sent.
+    #[error("the pull request changed while this was sent — it was read again")]
+    Conflict,
+    /// The app trusts the public roots or the PEM a server carries, never a
+    /// keychain, so a corporate server says this on the first request.
+    #[error("the server's certificate is not trusted — the server in Settings needs its CA as a PEM: {0}")]
+    Tls(String),
+    #[error("the server's answer is not what was asked for: {0}")]
+    BadAnswer(String),
+    #[error("{0}")]
+    Network(String),
+    #[error("no server is configured for {0} — add one in Settings")]
+    NoServer(String),
+    /// The server is there and has no token yet: telling the user to add the
+    /// server again is how a form loses them.
+    #[error("the server \"{0}\" has no token — add one in Settings")]
+    NoToken(String),
+    /// A token goes over TLS or nowhere; `http` is allowed only to this machine,
+    /// where a test's own server listens.
+    #[error("{0} is not https — a token goes over TLS or nowhere; fix the address in Settings")]
+    Insecure(String),
+    #[error("{0}")]
+    Store(String),
 }
 
 fn unreadable(url: &str) -> CodeHostError {
@@ -266,6 +299,40 @@ pub fn alias_to_remember(server: &CodeHostServer, remote: &RemoteRepo) -> Option
     } else {
         Some(remote.host.clone())
     }
+}
+
+// ------------------------------------------------------------- what is asked
+
+/// One request's worth of what a server needs: where it is, the repository in
+/// it, and the token. Not `Serialize` — the token is in here, and only
+/// `infra::code_host_store` ever reads it back off the disk.
+pub struct Call<'a> {
+    pub server: &'a CodeHostServer,
+    pub token: &'a str,
+    pub remote: &'a RemoteRepo,
+}
+
+/// What a strip asks of a server, in words that name no host: the reads the
+/// snapshot is assembled from, and the three actions its buttons send.
+/// `infra::bitbucket_client` implements it; a test's own double stands in for
+/// it where the service is tested (BB-3).
+pub trait CodeHost: Send + Sync {
+    /// The repository's clone links — the membership check of decision 1, which
+    /// the domain does with [`canonical_remote`], not this.
+    fn clone_links(&self, call: &Call) -> Result<Vec<String>, CodeHostError>;
+    /// The slug of the user the token belongs to.
+    fn me(&self, call: &Call) -> Result<String, CodeHostError>;
+    fn default_branch(&self, call: &Call) -> Result<String, CodeHostError>;
+    /// The commit the branch points at, when the branch is on the server at
+    /// all — `None` is exactly the "push the branch first" of decision 5.
+    fn branch_commit(&self, call: &Call, branch: &str) -> Result<Option<String>, CodeHostError>;
+    fn pull_request(&self, call: &Call, branch: &str) -> Result<Option<PullRequest>, CodeHostError>;
+    fn merge_check(&self, call: &Call, id: u64) -> Result<MergeCheck, CodeHostError>;
+    fn builds(&self, call: &Call, commit: &str) -> Result<Vec<Build>, CodeHostError>;
+    /// `false` takes an approval back; `me` is the reviewer's slug, from [`CodeHost::me`].
+    fn approve(&self, call: &Call, pr: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError>;
+    fn merge(&self, call: &Call, pr: &PullRequest) -> Result<(), CodeHostError>;
+    fn create(&self, call: &Call, from: &str, to: &str, title: &str) -> Result<PullRequest, CodeHostError>;
 }
 
 // ------------------------------------------------------------------ the strip
