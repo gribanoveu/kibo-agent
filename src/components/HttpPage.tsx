@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { Page, PageSheet } from "./Page";
 import { CodeEditor } from "./CodeEditor";
+import { pmCompletions } from "../lib/pmCompletions";
 import { Dropdown } from "./Dropdown";
 import { Switch } from "./Switch";
 import { Modal } from "./Modal";
@@ -847,7 +848,14 @@ function MovePicker({ places, value, onPick }: { places: MovePlace[]; value: str
 }
 
 /** What a variable is said to be on hover: its value, or that nothing in scope has it. */
-const variableTitle = (name: string, value: string | null) => (value === null ? `{{${name}}} is not set in the environment or the collection` : `{{${name}}} = ${value}`);
+const variableTitle = (name: string, value: string | null) =>
+  name.startsWith("$")
+    ? value === null
+      ? `{{${name}}} is not one of Postman's dynamic variables`
+      : `{{${name}}}: ${value}, made as the request is sent`
+    : value === null
+      ? `{{${name}}} is not set in the environment or the collection`
+      : `{{${name}}} = ${value}`;
 
 /** `{{variables}}` in an editor, found or not, their value on hover. */
 function variableMarks(values: ReadonlyMap<string, string>): Extension {
@@ -895,23 +903,41 @@ function variableCompletion(values: ReadonlyMap<string, string>): Extension {
       })),
     };
   };
-  return [
-    autocompletion({ override: [source], icons: false, defaultKeymap: false }),
-    Prec.highest(
-      keymap.of([
-        {
-          any: (view, e) =>
-            matches(e, "httpVarNext")
-              ? moveCompletionSelection(true)(view)
-              : matches(e, "httpVarPrev")
-                ? moveCompletionSelection(false)(view)
-                : matches(e, "httpVarPick")
-                  ? acceptCompletion(view)
-                  : matches(e, "close") && closeCompletion(view),
-        },
-      ]),
-    ),
-  ];
+  return [autocompletion({ override: [source], icons: false, defaultKeymap: false }), COMPLETION_KEYS];
+}
+
+/** An editor's list moved, picked and closed by the registry's keys, as a field's list is. */
+const COMPLETION_KEYS = Prec.highest(
+  keymap.of([
+    {
+      any: (view, e) =>
+        matches(e, "httpVarNext")
+          ? moveCompletionSelection(true)(view)
+          : matches(e, "httpVarPrev")
+            ? moveCompletionSelection(false)(view)
+            : matches(e, "httpVarPick")
+              ? acceptCompletion(view)
+              : matches(e, "close") && closeCompletion(view),
+    },
+  ]),
+);
+
+/**
+ * What a script's own editor offers as it is typed: Postman's `pm.*` (`pmApi.json`), what a
+ * script running at `listen` has — the response only after it — each with its arguments and what it does.
+ */
+function scriptCompletion(listen: "prerequest" | "test"): Extension {
+  const source = (context: CompletionContext) => {
+    const before = context.state.sliceDoc(Math.max(0, context.pos - 2000), context.pos);
+    const found = pmCompletions(before, listen);
+    if (!found) return null;
+    return {
+      from: context.pos - (before.length - found.from),
+      validFor: /^[\w$]*$/,
+      options: found.members.map((m) => ({ label: m.name, type: m.kind, detail: m.detail, info: m.info })),
+    };
+  };
+  return [autocompletion({ override: [source], icons: false, defaultKeymap: false }), COMPLETION_KEYS];
 }
 
 /**
@@ -931,6 +957,11 @@ function VarInput({ values, value, className, ...field }: InputHTMLAttributes<HT
   const typing = caret === null || dismissed ? null : variableAt(value, caret);
   const hints = typing ? variableHints(values, typing.typed) : [];
   const picked = hints[Math.min(active, hints.length - 1)];
+  // The hint the keys moved to stays in sight: `{{$` lists a hundred.
+  const pickedAt = picked ? hints.indexOf(picked) : -1;
+  useEffect(() => {
+    if (pickedAt >= 0) document.getElementById(`${id}-${pickedAt}`)?.scrollIntoView({ block: "nearest" });
+  }, [id, pickedAt]);
   // The caret a pick leaves, set once React has put the new text in.
   const after = useRef<number | null>(null);
   useLayoutEffect(() => {
@@ -1595,6 +1626,7 @@ function ScriptsView({
   const current = scripts.find((script) => script.id === shown) ?? scripts[0];
   const owner = current.state ? levelOf(collection, current.state.item)?.kind : "request";
   const type = (code: string) => onEdit(current.listen, code);
+  const suggested = useMemo(() => scriptCompletion(current.listen), [current.listen]);
   const waiting = current.own ? drafts.filter((d) => d.listen === current.listen) : NO_DRAFTS;
   return (
     <div className="http-form">
@@ -1648,7 +1680,14 @@ function ScriptsView({
         </div>
       )}
       <div className="http-code-box http-code-box-fill">
-        <CodeEditor key={current.id} text={current.text} language="javascript" label={current.label} onChange={current.own ? type : undefined} />
+        <CodeEditor
+          key={current.id}
+          text={current.text}
+          language="javascript"
+          label={current.label}
+          onChange={current.own ? type : undefined}
+          extensions={current.own ? suggested : undefined}
+        />
       </div>
       <Modal
         title={`Turn on the scripts of “${collection.name}”?`}

@@ -514,6 +514,17 @@
   color: var(--text-faint);
   font-style: normal;
 }
+/* What a script's `pm.*` name does, beside the list. */
+.http-editor .cm-editor .cm-tooltip.cm-completionInfo {
+  max-width: 320px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-menu);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
 .http-var-hidden {
   -webkit-text-fill-color: transparent;
 }

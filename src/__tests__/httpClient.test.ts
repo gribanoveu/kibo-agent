@@ -123,6 +123,16 @@ describe("the list a {{ opens", () => {
     expect(variableHints(values, "id").map((h) => h.name)).toEqual(["id", "userId", "orderId"]);
     expect(variableHints(values, "ID").map((h) => h.name)).toEqual(["id", "userId", "orderId"]);
     expect(variableHints(values, "")).toHaveLength(4);
+    // A `$` typed lists Postman's dynamic ones instead, by what each makes.
+    const all = variableHints(values, "$");
+    expect(all.length).toBeGreaterThan(100);
+    expect(all.every((h) => h.name.startsWith("$"))).toBe(true);
+    expect(all).toContainEqual({ name: "$randomEmail", value: "A random email address" });
+    expect(variableHints(values, "$randomUU")).toEqual([{ name: "$randomUUID", value: "A random 36-character UUID" }]);
+    expect(variableHints(values, "$uuid").map((h) => h.name)).toEqual(["$randomUUID"]);
+    // Typed with a `$`, only those; typed without, only the scope's.
+    expect(variableHints(new Map([["randomSeed", "4"]]), "$random").every((h) => h.name.startsWith("$"))).toBe(true);
+    expect(variableHints(values, "email")).toEqual([]);
     expect(variableHints(values, "tok")).toEqual([{ name: "token", value: "•••" }]);
     expect(variableHints(new Map([["xorder", "1"], ["Order", "2"]]), "or").map((h) => h.name)).toEqual(["Order", "xorder"]);
   });
@@ -290,7 +300,7 @@ describe("http client rules", () => {
       { text: "/o/" },
       { text: "{{ id }}", variable: { name: "id", value: "42" } },
       { text: "?t=" },
-      { text: "{{$guid}}", variable: { name: "$guid", value: "made as the request is sent" } },
+      { text: "{{$guid}}", variable: { name: "$guid", value: "A v4 style guid" } },
       { text: "&x=" },
       { text: "{{nope}}", variable: { name: "nope", value: null } },
       { text: "!" },
@@ -298,6 +308,8 @@ describe("http client rules", () => {
     expect(variableParts("no variables {here}", values)).toEqual([{ text: "no variables {here}" }]);
     expect(variableParts("", values)).toEqual([]);
     expect(variableValue("old", values)).toBeNull();
+    // A dynamic one Postman does not have is found nowhere: the send refuses it by name.
+    expect(variableValue("$randomNothing", values)).toBeNull();
   });
 
   test("a response keeps every digit; XML is indented, text left as it came", () => {

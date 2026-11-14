@@ -957,6 +957,17 @@ describe("the HTTP page", () => {
     expect(options()).toEqual(["{{orderId}}9", "{{baseUrl}}https://stage.test", "{{token}}•••"]);
     fireEvent.change(address, { target: { value: "{{to" } });
     expect(options()).toEqual(["{{token}}•••"]);
+    // Postman's dynamic ones once a `$` is typed, each by what it makes.
+    fireEvent.change(address, { target: { value: "{{$randomEm" } });
+    expect(options()).toEqual(["{{$randomEmail}}A random email address"]);
+    // A hundred of them: the one the keys move to is scrolled into sight.
+    const scrolled = spyOn(HTMLElement.prototype, "scrollIntoView");
+    fireEvent.change(address, { target: { value: "{{$" } });
+    for (let i = 0; i < 12; i++) fireEvent.keyDown(address, { key: "ArrowDown", code: "ArrowDown" });
+    expect((scrolled.mock.contexts.at(-1) as unknown as HTMLElement).getAttribute("aria-selected")).toBe("true");
+    expect((scrolled.mock.contexts.at(-1) as unknown as HTMLElement).textContent).toBe(screen.getAllByRole("option")[12].textContent);
+    scrolled.mockRestore();
+    fireEvent.keyDown(address, { key: "Escape", code: "Escape" });
     fireEvent.keyDown(address, { key: "Escape", code: "Escape" });
     expect(options()).toEqual([]);
 
@@ -990,6 +1001,28 @@ describe("the HTTP page", () => {
     fireEvent.change(address, { target: { value: "{{" } });
     fireEvent.blur(address);
     expect(options()).toEqual([]);
+  });
+
+  test("a script's own editor offers pm's names as they are typed — the response after it only — and a pick puts one in", async () => {
+    await shown("r2");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    const segments = within(screen.getByRole("tablist", { name: "Scripts, in the order they run" }));
+    const editor = () => EditorView.findFromDOM(document.querySelector(".http-code-box .cm-editor") as HTMLElement)!;
+    const offered = () => currentCompletions(editor().state).map((c) => c.label);
+    fireEvent.click(segments.getByRole("tab", { name: "Pre-request" }));
+    act(() => editor().dispatch({ changes: { from: 0, insert: "pm." }, selection: { anchor: 3 }, userEvent: "input.type" }));
+    await waitFor(() => expect(offered()).toContain("environment"));
+    expect(offered()).not.toContain("response");
+
+    fireEvent.click(segments.getByRole("tab", { name: "Post-response" }));
+    act(() => editor().dispatch({ changes: { from: 0, insert: "pm.response.to.have.st" }, selection: { anchor: 22 }, userEvent: "input.type" }));
+    await waitFor(() => expect(offered()).toEqual(["status"]));
+    expect(currentCompletions(editor().state)[0].detail).toBe("(code | reason)");
+    await new Promise((done) => setTimeout(done, 100));
+    act(() => {
+      editor().contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(editor().state.doc.toString()).toBe("pm.response.to.have.status");
   });
 
   test("a {{ in the body lists the same variables, and the registry's key puts one in", async () => {

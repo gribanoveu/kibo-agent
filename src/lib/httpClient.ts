@@ -4,6 +4,7 @@
 // request it came from, so what it does not edit stays as it was (decision 2).
 
 import { formatJson, formatXml, stripJsonComments } from "./formatText";
+import postmanDynamic from "./postmanDynamic.json";
 
 /** Any method a file names — `PURGE`, `PROPFIND` — goes; these are the ones offered. */
 export type HttpMethod = string;
@@ -94,10 +95,15 @@ export function shownValues(vars: Map<string, EnvVariable>): Map<string, string>
 /** `{{name}}`, as Postman writes a variable: the name is group 1. */
 export const VARIABLE = /\{\{\s*([^{}\s]+)\s*\}\}/g;
 
-/** What `{{name}}` stands for: its value, Postman's dynamic `{{$…}}` made as it is sent — or null, found nowhere. */
+/**
+ * Postman's dynamic variables, `$randomEmail` to Postman's description of it: made as
+ * the request is sent. Written by `scripts/build-postman-sandbox.ts` from the sandbox's own list.
+ */
+export const DYNAMIC: ReadonlyMap<string, string> = new Map(postmanDynamic.map((d) => [d.name, d.description]));
+
+/** What `{{name}}` stands for: its value, what Postman's dynamic `{{$…}}` makes — or null, found nowhere. */
 export function variableValue(name: string, values: ReadonlyMap<string, string>): string | null {
-  if (name.startsWith("$")) return "made as the request is sent";
-  return values.get(name) ?? null;
+  return (name.startsWith("$") ? DYNAMIC.get(name) : values.get(name)) ?? null;
 }
 
 /** A `{{` being typed before the caret: where it starts, and what of the name is typed after it. */
@@ -106,12 +112,18 @@ export function variableAt(text: string, caret: number): { from: number; typed: 
   return m ? { from: m.index, typed: m[1] } : null;
 }
 
-/** The variables in scope for what is typed: names that start with it first, then those that hold it. */
+/**
+ * The variables in scope for what is typed: names that start with it first, then those that
+ * hold it. Once a `$` is typed, Postman's dynamic `$…` instead, each by what it makes — as Postman lists them.
+ */
 export function variableHints(values: ReadonlyMap<string, string>, typed: string): { name: string; value: string }[] {
-  const all = [...values].map(([name, value]) => ({ name, value }));
-  const low = typed.toLowerCase();
-  const starts = all.filter((v) => v.name.toLowerCase().startsWith(low));
-  return [...starts, ...all.filter((v) => !starts.includes(v) && v.name.toLowerCase().includes(low))];
+  const listed = typed.startsWith("$") ? [...DYNAMIC] : [...values];
+  const all = listed.map(([name, value]) => ({ name, value }));
+  // `$uuid` finds `$randomUUID`: the `$` is where the name is, not part of what is looked for.
+  const bare = (name: string) => name.replace(/^\$/, "").toLowerCase();
+  const low = bare(typed);
+  const starts = all.filter((v) => bare(v.name).startsWith(low));
+  return [...starts, ...all.filter((v) => !starts.includes(v) && bare(v.name).includes(low))];
 }
 
 /**

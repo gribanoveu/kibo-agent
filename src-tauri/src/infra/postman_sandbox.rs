@@ -356,6 +356,50 @@ mod tests {
         assert_eq!(ran.result["request"]["header"], json!([{"key": "X-Trace", "value": "Orders"}]));
     }
 
+    /// What the script editor offers after `pm.` (`src/lib/pmApi.json`) is there in this
+    /// sandbox, in each script it is offered in — checked where each type is first reached
+    /// (`at`): `VariableScope` at `pm.environment`, not again at the other scopes.
+    #[test]
+    fn what_the_editor_suggests_is_in_the_sandbox() {
+        let mut api: Value = serde_json::from_str(include_str!("../../../src/lib/pmApi.json")).unwrap();
+        // Two that are not there, a member and a global: the check has to find them missing.
+        for (kind, decoy) in [("Pm", "nothingHere"), ("global", "nothingGlobal")] {
+            api[kind]["members"].as_array_mut().unwrap().push(json!({"name": decoy}));
+        }
+        let mut checks = [String::new(), String::new()];
+        let mut listed = 0;
+        for (type_name, kind) in api.as_object().unwrap() {
+            for member in kind["members"].as_array().unwrap() {
+                let name = member["name"].as_str().unwrap();
+                let only = member["only"].as_str().or(kind["only"].as_str());
+                let present = match kind["at"].as_str() {
+                    Some(at) => format!("{:?} in ({at})", name),
+                    None => format!("typeof {name} !== 'undefined'"),
+                };
+                for (i, listen) in ["test", "prerequest"].into_iter().enumerate() {
+                    if only.is_none_or(|only| only == listen) {
+                        checks[i] += &format!("pm.test('{listen} {type_name}.{name}', () => {{ if (!({present})) throw new Error('not there'); }});\n");
+                        listed += 1;
+                    }
+                }
+            }
+        }
+        // A request with all a script can find on one, and a response as a send hands it over.
+        let mut context = context();
+        context["request"] = json!({"url": "https://a.test/x", "method": "POST", "body": {"mode": "raw", "raw": "{}"}, "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "t"}]}});
+        context["response"] = crate::domain::http_scripts::response_for(200, &[], b"{}", 3);
+        let mut ran: Vec<TestResult> = Vec::new();
+        for (listen, code) in [("test", &checks[0]), ("prerequest", &checks[1])] {
+            let run = sandbox().run(listen, code, "r", context.clone(), &mut no_requests).unwrap();
+            assert_eq!(run.error, None, "{listen}");
+            ran.extend(run.tests);
+        }
+        assert_eq!(ran.len(), listed);
+        let mut missing: Vec<&str> = ran.iter().filter(|t| !t.passed).map(|t| t.name.as_str()).collect();
+        missing.sort();
+        assert_eq!(missing, ["prerequest Pm.nothingHere", "prerequest global.nothingGlobal", "test Pm.nothingHere", "test global.nothingGlobal"]);
+    }
+
     #[test]
     fn tests_pass_and_fail_by_name_and_the_console_is_kept() {
         let mut context = context();

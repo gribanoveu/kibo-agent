@@ -1,0 +1,254 @@
+{
+  "global": {
+    "at": null,
+    "members": [
+      { "name": "pm", "kind": "property", "type": "Pm", "info": "Postman's scripting API" },
+      { "name": "console", "kind": "property", "type": "Console", "info": "Lines for the Tests tab" },
+      { "name": "require", "kind": "method", "detail": "(name)", "info": "A library: lodash, moment, uuid, crypto-js, ajv, chai, cheerio, xml2js…" },
+      { "name": "postman", "kind": "property", "type": "Legacy", "info": "The old API — pm.* does all of it" }
+    ]
+  },
+  "Pm": {
+    "at": "pm",
+    "members": [
+      { "name": "environment", "kind": "property", "type": "VariableScope", "info": "The active environment's variables" },
+      { "name": "collectionVariables", "kind": "property", "type": "VariableScope", "info": "The collection's variables" },
+      { "name": "globals", "kind": "property", "type": "VariableScope", "info": "Global variables" },
+      { "name": "variables", "kind": "property", "type": "VariableScope", "info": "Every scope, the narrowest winning; set() is for this run only" },
+      { "name": "request", "kind": "property", "type": "Request", "info": "The request about to go, or that went" },
+      { "name": "response", "kind": "property", "type": "Response", "only": "test", "info": "The response that came back" },
+      { "name": "cookies", "kind": "property", "type": "CookieList", "info": "Cookies of the request's domain" },
+      { "name": "info", "kind": "property", "type": "Info", "info": "Which request and which script is running" },
+      { "name": "execution", "kind": "property", "type": "Execution", "info": "What runs next" },
+      { "name": "test", "kind": "method", "type": "Test", "detail": "(name, fn)", "info": "A named test: passes unless fn throws" },
+      { "name": "expect", "kind": "method", "type": "Chai", "detail": "(value)", "info": "A chai assertion on value" },
+      { "name": "sendRequest", "kind": "method", "detail": "(request, (err, response) => {})", "info": "Sends another request from the script" }
+    ]
+  },
+  "VariableScope": {
+    "at": "pm.environment",
+    "members": [
+      { "name": "get", "kind": "method", "detail": "(key)", "info": "The variable's value" },
+      { "name": "set", "kind": "method", "detail": "(key, value)", "info": "Sets the variable, kept after the send" },
+      { "name": "unset", "kind": "method", "detail": "(key)", "info": "Removes the variable" },
+      { "name": "has", "kind": "method", "detail": "(key)", "info": "Whether the variable is there" },
+      { "name": "clear", "kind": "method", "detail": "()", "info": "Removes every variable here" },
+      { "name": "toObject", "kind": "method", "detail": "()", "info": "Every variable as { key: value }" },
+      { "name": "replaceIn", "kind": "method", "detail": "(template)", "info": "The text with its {{variables}} filled in, {{$randomEmail}} too" }
+    ]
+  },
+  "Info": {
+    "at": "pm.info",
+    "members": [
+      { "name": "eventName", "kind": "property", "info": "\"prerequest\" or \"test\"" },
+      { "name": "requestName", "kind": "property", "info": "The request's name" }
+    ]
+  },
+  "Request": {
+    "at": "pm.request",
+    "members": [
+      { "name": "url", "kind": "property", "type": "Url", "info": "The address" },
+      { "name": "method", "kind": "property", "info": "GET, POST…" },
+      { "name": "headers", "kind": "property", "type": "PropertyList", "info": "The headers" },
+      { "name": "body", "kind": "property", "type": "Body", "info": "The body" },
+      { "name": "auth", "kind": "property", "info": "The auth, as Postman writes it" },
+      { "name": "addHeader", "kind": "method", "detail": "({ key, value })", "info": "Adds a header" },
+      { "name": "upsertHeader", "kind": "method", "detail": "({ key, value })", "info": "Sets a header, replacing one of that name" },
+      { "name": "removeHeader", "kind": "method", "detail": "(key)", "info": "Removes a header" },
+      { "name": "getHeaders", "kind": "method", "detail": "()", "info": "The headers as { key: value }" },
+      { "name": "addQueryParams", "kind": "method", "detail": "([{ key, value }])", "info": "Adds query parameters" },
+      { "name": "removeQueryParams", "kind": "method", "detail": "(keys)", "info": "Removes query parameters" }
+    ]
+  },
+  "Url": {
+    "at": "pm.request.url",
+    "members": [
+      { "name": "protocol", "kind": "property", "info": "http or https" },
+      { "name": "host", "kind": "property", "info": "The host, in parts" },
+      { "name": "port", "kind": "property", "info": "The port, if written" },
+      { "name": "path", "kind": "property", "info": "The path, in parts" },
+      { "name": "query", "kind": "property", "type": "PropertyList", "info": "The query parameters" },
+      { "name": "variables", "kind": "property", "type": "PropertyList", "info": "The :path variables" },
+      { "name": "toString", "kind": "method", "detail": "()", "info": "The whole address" },
+      { "name": "getHost", "kind": "method", "detail": "()", "info": "The host" },
+      { "name": "getPath", "kind": "method", "detail": "()", "info": "The path" },
+      { "name": "getQueryString", "kind": "method", "detail": "()", "info": "The query, without ?" },
+      { "name": "getPathWithQuery", "kind": "method", "detail": "()", "info": "The path and the query" },
+      { "name": "update", "kind": "method", "detail": "(url)", "info": "Replaces the address" }
+    ]
+  },
+  "PropertyList": {
+    "at": "pm.request.headers",
+    "members": [
+      { "name": "get", "kind": "method", "detail": "(key)", "info": "The value by its key" },
+      { "name": "has", "kind": "method", "detail": "(key)", "info": "Whether the key is there" },
+      { "name": "add", "kind": "method", "detail": "({ key, value })", "info": "Adds one" },
+      { "name": "upsert", "kind": "method", "detail": "({ key, value })", "info": "Adds one, or replaces the one with its key" },
+      { "name": "remove", "kind": "method", "detail": "(key)", "info": "Removes one" },
+      { "name": "each", "kind": "method", "detail": "(fn)", "info": "Calls fn with each" },
+      { "name": "filter", "kind": "method", "detail": "(fn)", "info": "Those fn keeps" },
+      { "name": "find", "kind": "method", "detail": "(fn)", "info": "The first fn keeps" },
+      { "name": "map", "kind": "method", "detail": "(fn)", "info": "fn of each" },
+      { "name": "all", "kind": "method", "detail": "()", "info": "Every one, as an array" },
+      { "name": "count", "kind": "method", "detail": "()", "info": "How many" },
+      { "name": "toObject", "kind": "method", "detail": "()", "info": "As { key: value }" }
+    ]
+  },
+  "Body": {
+    "at": "pm.request.body",
+    "members": [
+      { "name": "mode", "kind": "property", "info": "raw, urlencoded, formdata…" },
+      { "name": "raw", "kind": "property", "info": "The text of a raw body" },
+      { "name": "urlencoded", "kind": "property", "type": "PropertyList", "info": "A urlencoded body's fields" },
+      { "name": "formdata", "kind": "property", "type": "PropertyList", "info": "A form-data body's fields" },
+      { "name": "update", "kind": "method", "detail": "({ mode, raw })", "info": "Replaces the body" },
+      { "name": "isEmpty", "kind": "method", "detail": "()", "info": "Whether the body has nothing" }
+    ]
+  },
+  "Response": {
+    "at": "pm.response",
+    "only": "test",
+    "members": [
+      { "name": "code", "kind": "property", "info": "The status code: 200" },
+      { "name": "status", "kind": "property", "info": "The status text: OK" },
+      { "name": "headers", "kind": "property", "type": "PropertyList", "info": "The headers" },
+      { "name": "responseTime", "kind": "property", "info": "Milliseconds it took" },
+      { "name": "size", "kind": "method", "detail": "()", "info": "Its size in bytes: { body, header, total }" },
+      { "name": "json", "kind": "method", "detail": "()", "info": "The body read as JSON" },
+      { "name": "text", "kind": "method", "detail": "()", "info": "The body as text" },
+      { "name": "to", "kind": "property", "type": "ResponseTo", "info": "Assertions on the response" }
+    ]
+  },
+  "ResponseTo": {
+    "at": "pm.response.to",
+    "only": "test",
+    "members": [
+      { "name": "have", "kind": "property", "type": "Have", "info": "pm.response.to.have.status(200)…" },
+      { "name": "be", "kind": "property", "type": "Be", "info": "pm.response.to.be.ok…" },
+      { "name": "not", "kind": "property", "type": "ResponseTo", "info": "The assertion after it, turned around" }
+    ]
+  },
+  "Have": {
+    "at": "pm.response.to.have",
+    "only": "test",
+    "members": [
+      { "name": "status", "kind": "method", "detail": "(code | reason)", "info": "The status is this: 200 or \"OK\"" },
+      { "name": "header", "kind": "method", "detail": "(key, value?)", "info": "The header is there, with this value if given" },
+      { "name": "body", "kind": "method", "detail": "(text | regexp?)", "info": "The body is this, or matches it" },
+      { "name": "jsonBody", "kind": "method", "detail": "(path?, value?)", "info": "The body is JSON, with this path and value if given" },
+      { "name": "jsonSchema", "kind": "method", "detail": "(schema)", "info": "The body is valid against the JSON schema" }
+    ]
+  },
+  "Be": {
+    "at": "pm.response.to.be",
+    "only": "test",
+    "members": [
+      { "name": "ok", "kind": "property", "info": "200" },
+      { "name": "success", "kind": "property", "info": "2xx" },
+      { "name": "accepted", "kind": "property", "info": "202" },
+      { "name": "info", "kind": "property", "info": "1xx" },
+      { "name": "redirection", "kind": "property", "info": "3xx" },
+      { "name": "clientError", "kind": "property", "info": "4xx" },
+      { "name": "serverError", "kind": "property", "info": "5xx" },
+      { "name": "error", "kind": "property", "info": "4xx or 5xx" },
+      { "name": "badRequest", "kind": "property", "info": "400" },
+      { "name": "unauthorized", "kind": "property", "info": "401" },
+      { "name": "forbidden", "kind": "property", "info": "403" },
+      { "name": "notFound", "kind": "property", "info": "404" },
+      { "name": "rateLimited", "kind": "property", "info": "429" }
+    ]
+  },
+  "CookieList": {
+    "at": "pm.cookies",
+    "members": [
+      { "name": "get", "kind": "method", "detail": "(name)", "info": "The cookie's value" },
+      { "name": "has", "kind": "method", "detail": "(name)", "info": "Whether the cookie is there" },
+      { "name": "toObject", "kind": "method", "detail": "()", "info": "Every cookie as { name: value }" }
+    ]
+  },
+  "Execution": {
+    "at": "pm.execution",
+    "members": [
+      { "name": "setNextRequest", "kind": "method", "detail": "(name | null)", "info": "The request a run goes to next; null ends it" },
+      { "name": "skipRequest", "kind": "method", "detail": "()", "only": "prerequest", "info": "The request does not go" },
+      { "name": "location", "kind": "property", "info": "Where in the collection this runs" }
+    ]
+  },
+  "Test": {
+    "at": "pm.test",
+    "members": [
+      { "name": "skip", "kind": "method", "detail": "(name, fn)", "info": "A test listed as skipped" },
+      { "name": "index", "kind": "method", "detail": "()", "info": "How many tests ran before this one" }
+    ]
+  },
+  "Chai": {
+    "at": "pm.expect(1)",
+    "members": [
+      { "name": "to", "kind": "property", "type": "Chai", "info": "Reads on: expect(x).to…" },
+      { "name": "be", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "been", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "is", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "that", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "which", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "and", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "has", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "have", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "with", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "at", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "of", "kind": "property", "type": "Chai", "info": "Reads on" },
+      { "name": "not", "kind": "property", "type": "Chai", "info": "The assertion after it, turned around" },
+      { "name": "deep", "kind": "property", "type": "Chai", "info": "Compares by content, not identity" },
+      { "name": "nested", "kind": "property", "type": "Chai", "info": "property and include read a.b[0] paths" },
+      { "name": "own", "kind": "property", "type": "Chai", "info": "Own properties only" },
+      { "name": "any", "kind": "property", "type": "Chai", "info": "keys: at least one" },
+      { "name": "all", "kind": "property", "type": "Chai", "info": "keys: every one" },
+      { "name": "a", "kind": "method", "type": "Chai", "detail": "(type)", "info": "Of this type: \"string\", \"number\", \"object\", \"array\"…" },
+      { "name": "an", "kind": "method", "type": "Chai", "detail": "(type)", "info": "Of this type" },
+      { "name": "include", "kind": "method", "type": "Chai", "detail": "(value)", "info": "Holds the value: substring, item, subset" },
+      { "name": "equal", "kind": "method", "type": "Chai", "detail": "(value)", "info": "=== value" },
+      { "name": "eql", "kind": "method", "type": "Chai", "detail": "(value)", "info": "Equal by content" },
+      { "name": "above", "kind": "method", "type": "Chai", "detail": "(n)", "info": "> n" },
+      { "name": "least", "kind": "method", "type": "Chai", "detail": "(n)", "info": ">= n" },
+      { "name": "below", "kind": "method", "type": "Chai", "detail": "(n)", "info": "< n" },
+      { "name": "most", "kind": "method", "type": "Chai", "detail": "(n)", "info": "<= n" },
+      { "name": "within", "kind": "method", "type": "Chai", "detail": "(low, high)", "info": "low <= x <= high" },
+      { "name": "oneOf", "kind": "method", "type": "Chai", "detail": "(list)", "info": "One of the list" },
+      { "name": "property", "kind": "method", "type": "Chai", "detail": "(name, value?)", "info": "Has the property, with this value if given" },
+      { "name": "lengthOf", "kind": "method", "type": "Chai", "detail": "(n)", "info": "Its length is n" },
+      { "name": "match", "kind": "method", "type": "Chai", "detail": "(regexp)", "info": "Matches the regexp" },
+      { "name": "string", "kind": "method", "type": "Chai", "detail": "(text)", "info": "Holds the text" },
+      { "name": "keys", "kind": "method", "type": "Chai", "detail": "(…keys)", "info": "Has exactly these keys" },
+      { "name": "members", "kind": "method", "type": "Chai", "detail": "(list)", "info": "Has the same items, in any order" },
+      { "name": "instanceOf", "kind": "method", "type": "Chai", "detail": "(Class)", "info": "instanceof Class" },
+      { "name": "closeTo", "kind": "method", "type": "Chai", "detail": "(n, delta)", "info": "Within delta of n" },
+      { "name": "satisfy", "kind": "method", "type": "Chai", "detail": "(fn)", "info": "fn(x) is true" },
+      { "name": "throw", "kind": "method", "type": "Chai", "detail": "(error?)", "info": "Calling it throws" },
+      { "name": "ok", "kind": "property", "type": "Chai", "info": "Truthy" },
+      { "name": "true", "kind": "property", "type": "Chai", "info": "=== true" },
+      { "name": "false", "kind": "property", "type": "Chai", "info": "=== false" },
+      { "name": "null", "kind": "property", "type": "Chai", "info": "=== null" },
+      { "name": "undefined", "kind": "property", "type": "Chai", "info": "=== undefined" },
+      { "name": "exist", "kind": "property", "type": "Chai", "info": "Neither null nor undefined" },
+      { "name": "empty", "kind": "property", "type": "Chai", "info": "\"\", [] or {}" }
+    ]
+  },
+  "Console": {
+    "at": "console",
+    "members": [
+      { "name": "log", "kind": "method", "detail": "(…values)", "info": "A line on the Tests tab" },
+      { "name": "info", "kind": "method", "detail": "(…values)", "info": "A line on the Tests tab" },
+      { "name": "warn", "kind": "method", "detail": "(…values)", "info": "A warning on the Tests tab" },
+      { "name": "error", "kind": "method", "detail": "(…values)", "info": "An error on the Tests tab" }
+    ]
+  },
+  "Legacy": {
+    "at": "postman",
+    "members": [
+      { "name": "setNextRequest", "kind": "method", "detail": "(name)", "info": "Old: pm.execution.setNextRequest" },
+      { "name": "setEnvironmentVariable", "kind": "method", "detail": "(key, value)", "info": "Old: pm.environment.set" },
+      { "name": "getEnvironmentVariable", "kind": "method", "detail": "(key)", "info": "Old: pm.environment.get" },
+      { "name": "setGlobalVariable", "kind": "method", "detail": "(key, value)", "info": "Old: pm.globals.set" },
+      { "name": "getGlobalVariable", "kind": "method", "detail": "(key)", "info": "Old: pm.globals.get" }
+    ]
+  }
+}
