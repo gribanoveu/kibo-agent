@@ -6,6 +6,9 @@
 //! stringly-typed errors are the right answer.
 
 pub mod chat;
+pub mod agent_state;
+pub mod approval;
+pub mod workspace;
 pub mod chat_events;
 pub mod plain_chat;
 pub mod prototype;

@@ -10,7 +10,7 @@ use crate::services::folder_trust;
 /// folder is open, or while the open one is not trusted. The built-in commands
 /// are the window's own and not listed.
 #[tauri::command]
-pub fn slash_commands_list(state: tauri::State<'_, Arc<super::chat::AgentState>>) -> Vec<CommandFile> {
+pub fn slash_commands_list(state: tauri::State<'_, Arc<super::agent_state::AgentState>>) -> Vec<CommandFile> {
     let workspace = state.workspace().ok();
     slash_commands_store::list(folder_trust::readable(workspace.as_deref()))
 }
