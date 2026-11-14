@@ -132,12 +132,56 @@ pub struct Environment {
     pub id: String,
     pub name: String,
     pub variables: Vec<Variable>,
-    /// PEM of the server's own certificate, or its CA's: a stand on a self-signed
-    /// certificate is trusted this way, never by turning the check off.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// PEM of the servers' own certificates, or their CAs': a stand on a self-signed
+    /// certificate is trusted this way, never by turning the check off. Each is a file
+    /// of its own (`infra::http_certs`), put together here by `http_env_store::get`;
+    /// never in the sealed store, nor from or to the window.
+    #[serde(skip)]
     pub trusted_cert: Option<String>,
     #[serde(default, skip_serializing_if = "AgentAccess::is_off")]
     pub agent: AgentAccess,
+}
+
+/// One of an environment's certificate files, as its form lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedCert {
+    pub name: String,
+    /// How many certificates are in it: a chain is one file.
+    pub certificates: usize,
+}
+
+/// Whether `der` is one DER SEQUENCE spanning all of it, as a certificate is. A file
+/// that is not PEM is read as binary DER and wrapped (`pemFromBytes`), so text or junk
+/// arrives looking like a certificate; it would only be pinned, never matched.
+// ponytail: the outline only, not X.509; parse it if a malformed sequence ever gets through.
+pub fn is_der_sequence(der: &[u8]) -> bool {
+    let [0x30, first, rest @ ..] = der else { return false };
+    let (length, body) = if first & 0x80 == 0 {
+        (usize::from(*first), rest)
+    } else {
+        let bytes = usize::from(first & 0x7f);
+        if bytes == 0 || bytes > 4 || rest.len() < bytes {
+            return false;
+        }
+        (rest[..bytes].iter().fold(0usize, |n, b| n << 8 | usize::from(*b)), &rest[bytes..])
+    };
+    length == body.len()
+}
+
+/// A name any of the three systems takes as a file: letters, digits, `-_. ` and
+/// spaces; the rest `_`; not a Windows device; "certificate" when nothing is left.
+pub fn cert_file_stem(name: &str) -> String {
+    let cleaned: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ' ') { c } else { '_' }).take(60).collect();
+    let trimmed = cleaned.trim_matches(|c| c == '.' || c == ' ');
+    let stem = if trimmed.is_empty() { "certificate".to_string() } else { trimmed.to_string() };
+    let lower = stem.split('.').next().unwrap_or("").to_lowercase();
+    let device = matches!(lower.as_str(), "con" | "prn" | "aux" | "nul") || (lower.len() == 4 && (lower.starts_with("com") || lower.starts_with("lpt")) && lower.as_bytes()[3].is_ascii_digit());
+    if device {
+        format!("{stem}_")
+    } else {
+        stem
+    }
 }
 
 /// How far the agent may go in an environment (decision 6): nowhere, until the

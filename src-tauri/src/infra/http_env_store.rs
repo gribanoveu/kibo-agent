@@ -13,6 +13,7 @@ use crate::domain::http_auth::Token;
 use crate::domain::http_client::{Environment, HttpError, Variable};
 use crate::domain::http_scripts::{apply, Change};
 use crate::infra::app_dir;
+use crate::infra::http_certs;
 use crate::infra::master_key;
 use crate::infra::secret_store::{self, SecretPurpose};
 
@@ -102,9 +103,10 @@ pub fn list() -> Result<Vec<Environment>, HttpError> {
     Ok(load()?.environments.iter().map(Environment::for_window).collect())
 }
 
-/// An environment whole, secrets and all, to send with. Never crosses the IPC boundary.
+/// An environment whole, secrets and certificates and all, to send with. Never crosses the IPC boundary.
 pub fn get(id: &str) -> Result<Environment, HttpError> {
-    load()?.environments.iter().find(|e| e.id == id).cloned().ok_or_else(|| HttpError::NoEnvironment(id.into()))
+    let environment = load()?.environments.iter().find(|e| e.id == id).cloned().ok_or_else(|| HttpError::NoEnvironment(id.into()))?;
+    Ok(Environment { trusted_cert: http_certs::bundle(id)?, ..environment })
 }
 
 /// The window's form saved over what is stored (`Environment::edited`): a
@@ -122,8 +124,12 @@ pub fn save_from_window(from_window: Environment) -> Result<(), HttpError> {
     save(&stored)
 }
 
-/// An environment that came in by Import, its values as they were in the file.
+/// An environment that came in by Import, its values as they were in the file; a
+/// certificate it carries is its first file.
 pub fn add(environment: Environment) -> Result<(), HttpError> {
+    if let Some(pem) = &environment.trusted_cert {
+        http_certs::add(&environment.id, "certificate", pem)?;
+    }
     let _held = writing();
     let mut stored = load()?;
     stored.environments.push(environment);
@@ -137,10 +143,15 @@ pub fn delete(id: &str) -> Result<(), HttpError> {
     let before = stored.environments.len();
     stored.environments.iter_mut().filter(|e| e.id == id).for_each(wipe);
     stored.environments.retain(|e| e.id != id);
-    if stored.environments.len() == before {
-        return Ok(());
+    if stored.environments.len() != before {
+        save(&stored)?;
     }
-    save(&stored)
+    // Its certificates go with it; a folder left by an environment gone before goes too.
+    // An id no folder can be named by has none.
+    match http_certs::delete_all(id) {
+        Err(HttpError::BadId(_)) => Ok(()),
+        done => done,
+    }
 }
 
 /// Globals whole, to send with.

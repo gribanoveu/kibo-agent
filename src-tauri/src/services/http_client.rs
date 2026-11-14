@@ -18,7 +18,7 @@ use crate::domain::postman::{environment_to_postman, read_import, script_hash, A
 use crate::infra::http_client::NoCookies;
 use crate::infra::http_cookies::StoredJar;
 use crate::infra::postman_sandbox::{Ran, Sandbox, LIMITS};
-use crate::infra::{chat_store, http_agent, http_client, http_collections, http_env_store, settings_store};
+use crate::infra::{chat_store, http_client, http_collections, http_env_store, settings_store};
 
 /// Sends a collection's request — `edited`, the page's unsaved `request`, in
 /// place of the stored one — into `environment`. What came back is on disk, as
@@ -864,15 +864,6 @@ pub fn environment_secret(id: &str, key: &str) -> Result<String, HttpError> {
     environment.variables.into_iter().find(|v| v.secret && v.key == key).map(|v| v.value).ok_or_else(|| HttpError::NoSecret(key.into()))
 }
 
-/// The form saved; an empty certificate is none. One that does not parse is
-/// refused here, rather than at every send as a stand that does not answer.
-pub fn save_environment(mut from_window: Environment) -> Result<(), HttpError> {
-    from_window.trusted_cert = from_window.trusted_cert.filter(|pem| !pem.trim().is_empty());
-    if let Some(pem) = &from_window.trusted_cert {
-        http_agent::parse_trusted_certs(pem).map_err(|e| HttpError::BadCertificate(e.0))?;
-    }
-    http_env_store::save_from_window(from_window)
-}
 
 #[cfg(test)]
 mod tests {
@@ -1571,16 +1562,24 @@ mod tests {
     }
 
     #[test]
-    fn a_certificate_that_does_not_parse_is_refused_and_an_empty_one_is_none() {
+    fn an_environments_certificates_are_its_files_never_the_windows_nor_the_sealed_stores() {
         use crate::infra::http_agent::tests::CA;
+        use crate::infra::http_certs;
         with_app_dir("http-env-cert", || {
-            let env = |cert: &str| Environment { id: "e".into(), name: "E".into(), variables: vec![], trusted_cert: Some(cert.into()), agent: Default::default() };
-            assert!(matches!(save_environment(env("not a certificate")), Err(HttpError::BadCertificate(_))));
-            assert!(matches!(http_env_store::get("e"), Err(HttpError::NoEnvironment(_))), "nothing saved");
-            save_environment(env("  \n")).unwrap();
-            assert_eq!(http_env_store::get("e").unwrap().trusted_cert, None);
-            save_environment(env(CA)).unwrap();
-            assert_eq!(http_env_store::get("e").unwrap().trusted_cert.as_deref(), Some(CA));
+            let form: Environment = serde_json::from_value(json!({"id": "e", "name": "E", "variables": [], "trustedCert": "from the window"})).unwrap();
+            assert_eq!(form.trusted_cert, None, "the window does not set it");
+            http_env_store::save_from_window(form).unwrap();
+            assert_eq!(http_env_store::get("e").unwrap().trusted_cert, None, "none: the public roots");
+            http_certs::add("e", "ca", CA).unwrap();
+            let sent = http_env_store::get("e").unwrap();
+            assert_eq!(crate::infra::http_agent::parse_trusted_certs(sent.trusted_cert.as_deref().unwrap()).unwrap().len(), 1, "sent with it");
+            assert!(serde_json::to_string(&sent).unwrap().find("BEGIN CERTIFICATE").is_none(), "nor in what is written or listed");
+            http_env_store::delete("e").unwrap();
+            assert_eq!(http_certs::list("e").unwrap(), vec![], "gone with the environment");
+            http_certs::add("gone", "ca", CA).unwrap();
+            http_env_store::delete("gone").unwrap();
+            assert_eq!(http_certs::list("gone").unwrap(), vec![], "a folder left with no environment goes too");
+            http_env_store::delete("../not an id").unwrap();
         });
     }
 

@@ -8,9 +8,9 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::domain::http_client::{parse_curl, CookieRow, Environment, HistoryEntry, HttpChanged, HttpEventSink, ResponseView};
+use crate::domain::http_client::{parse_curl, CookieRow, Environment, HistoryEntry, HttpChanged, HttpEventSink, ResponseView, TrustedCert};
 use crate::domain::http_draft::{DraftShown, ScriptDraft};
-use crate::infra::{http_collections, http_cookies, http_env_store};
+use crate::infra::{http_certs, http_collections, http_cookies, http_env_store};
 use crate::services::http_client::{self, CollectionView, Environments, ImportedAs, ScriptState};
 
 use super::blocking;
@@ -112,7 +112,30 @@ pub async fn http_environment_list() -> Result<Environments, String> {
 /// The form's environment; a secret left masked or empty keeps its value, a new id is a new one.
 #[tauri::command]
 pub async fn http_environment_save(environment: Environment) -> Result<(), String> {
-    blocking(move || http_client::save_environment(environment)).await
+    blocking(move || http_env_store::save_from_window(environment)).await
+}
+
+/// The environment's certificate files, each with how many certificates it holds.
+#[tauri::command]
+pub async fn http_certs(environment: String) -> Result<Vec<TrustedCert>, String> {
+    blocking(move || http_certs::list(&environment)).await
+}
+
+/// A file read or text pasted in the form, kept as a file of its own; the name it got.
+#[tauri::command]
+pub async fn http_cert_add(environment: String, name: String, pem: String) -> Result<String, String> {
+    blocking(move || http_certs::add(&environment, &name, &pem)).await
+}
+
+#[tauri::command]
+pub async fn http_cert_delete(environment: String, name: String) -> Result<(), String> {
+    blocking(move || http_certs::delete(&environment, &name)).await
+}
+
+/// The certificate file at `dest`, a `.pem` path from the save dialog.
+#[tauri::command]
+pub async fn http_cert_export(environment: String, name: String, dest: String) -> Result<(), String> {
+    blocking(move || http_certs::export(&environment, &name, Path::new(&dest))).await
 }
 
 /// One saved secret's value, asked for by the form's eye button.

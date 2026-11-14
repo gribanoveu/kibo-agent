@@ -1,5 +1,6 @@
 pub mod llm_providers;
 pub mod http_agent;
+pub mod http_certs;
 pub mod http_client;
 pub mod http_collections;
 pub mod http_cookies;
