@@ -5,7 +5,7 @@ use crate::services::skills::{self, SkillsView};
 
 /// The open folder's skills and the user's; only the user's while no folder is open.
 #[tauri::command]
-pub fn skills_list(state: tauri::State<'_, std::sync::Arc<super::chat::AgentState>>) -> Result<SkillsView, String> {
+pub fn skills_list(state: tauri::State<'_, std::sync::Arc<super::agent_state::AgentState>>) -> Result<SkillsView, String> {
     skills::list(state.workspace().ok().as_deref()).map_err(|e| e.to_string())
 }
 
@@ -23,7 +23,7 @@ pub fn skills_set_enabled(name: String, enabled: bool) -> Result<(), String> {
 
 /// The open folder's instruction files; none while no folder is open.
 #[tauri::command]
-pub fn rules_list(state: tauri::State<'_, std::sync::Arc<super::chat::AgentState>>) -> Vec<crate::domain::project_rules::RuleListItem> {
+pub fn rules_list(state: tauri::State<'_, std::sync::Arc<super::agent_state::AgentState>>) -> Vec<crate::domain::project_rules::RuleListItem> {
     state.workspace().map(|root| crate::services::project_rules::list(&root)).unwrap_or_default()
 }
 

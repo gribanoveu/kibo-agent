@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use super::chat::AgentState;
+use super::agent_state::AgentState;
 use crate::domain::git_branches::{BranchRef, CheckoutOutcome, WorktreeState};
 use crate::domain::git_changes::{ChangeTotals, FileSide, FileView, GitChangesError, GitHistory, WorkingChanges};
 use crate::infra::file_watcher::FileWatcher;

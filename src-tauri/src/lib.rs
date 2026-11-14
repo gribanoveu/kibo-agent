@@ -166,7 +166,7 @@ pub fn run() {
         // One resident piece of state, shared by every command that has to
         // reach a turn while it runs. `Arc` because a turn runs on a blocking
         // thread that outlives the command call that started it.
-        .manage(std::sync::Arc::new(commands::chat::AgentState::restored()))
+        .manage(std::sync::Arc::new(commands::agent_state::AgentState::restored()))
         // The questions MCP servers are waiting on the user for.
         .manage(std::sync::Arc::new(services::mcp_questions::McpQuestions::default()))
         .manage(std::sync::Arc::new(commands::plain_chat::PlainChatState::default()))
@@ -253,10 +253,10 @@ pub fn run() {
             commands::artifacts::artifact_reveal,
             commands::viewer::viewer_text_scale_get,
             commands::viewer::viewer_text_scale_set,
-            commands::chat::workspace_open,
-            commands::chat::workspace_current,
-            commands::chat::workspace_branch,
-            commands::chat::workspace_worktree_of,
+            commands::workspace::workspace_open,
+            commands::workspace::workspace_current,
+            commands::workspace::workspace_branch,
+            commands::workspace::workspace_worktree_of,
             commands::git::git_changes,
             commands::git::git_totals,
             commands::git::git_stage,
@@ -274,9 +274,9 @@ pub fn run() {
             commands::files::file_write,
             commands::images::image_prepare,
             commands::images::image_prepare_file,
-            commands::chat::workspace_recent,
-            commands::chat::workspace_forget,
-            commands::chat::workspace_index_status,
+            commands::workspace::workspace_recent,
+            commands::workspace::workspace_forget,
+            commands::workspace::workspace_index_status,
             commands::chat::chat_start,
             commands::chat::chat_resume,
             commands::chat::chat_cancel,
@@ -287,13 +287,13 @@ pub fn run() {
             commands::chat::chat_branch_summary,
             commands::chat::chat_steer,
             commands::chat::chat_cancel_steer,
-            commands::chat::approval_always_allow,
-            commands::chat::approval_set_unattended,
-            commands::chat::approval_restore,
-            commands::chat::approval_remember_get,
-            commands::chat::approval_remember_set,
-            commands::chat::chat_set_mode,
-            commands::chat::chat_mode,
+            commands::approval::approval_always_allow,
+            commands::approval::approval_set_unattended,
+            commands::approval::approval_restore,
+            commands::approval::approval_remember_get,
+            commands::approval::approval_remember_set,
+            commands::approval::chat_set_mode,
+            commands::approval::chat_mode,
             commands::chat::next_prompt_log,
             commands::chat::next_prompt_sent,
             commands::chat::chat_context_usage,

@@ -82,7 +82,7 @@ src-tauri/src/
 
 ## 3.4 Состав `ResumePoint`
 
-Из Atlas ([services/llm_chat.rs](../src-tauri/src/services/llm_chat.rs)) — список
+Из Atlas ([services/llm_chat/](../src-tauri/src/services/llm_chat/mod.rs)) — список
 полей, который стоит воспроизвести, потому что каждое из них уже есть ответ на
 конкретный баг:
 

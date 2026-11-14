@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use super::chat::AgentState;
+use super::agent_state::AgentState;
 use crate::domain::terminal::{TerminalChanged, TerminalEventSink, TerminalInfo, TerminalOutputSink, TerminalSize};
 use crate::infra::terminal::Terminals;
 
