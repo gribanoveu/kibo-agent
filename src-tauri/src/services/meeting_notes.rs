@@ -324,8 +324,8 @@ pub fn rename_speaker(id: &str, speaker: usize, name: &str) -> Result<Meeting, M
     Ok(meeting)
 }
 
-/// Meeting `id` called `title` by the user: notes written again keep it
-/// (`docs/38-artifacts.md`). The title comes checked (`domain::artifacts::title`).
+/// Meeting `id` called `title` by the user: notes written again keep it.
+/// The title comes checked (`domain::artifacts::title`).
 pub fn rename_meeting(id: &str, title: &str) -> Result<Meeting, MeetingError> {
     let mut meeting = meeting_store::get(id)?;
     meeting.title = Some(title.to_string());

@@ -15,7 +15,7 @@ use crate::infra::chat_store;
 use crate::services::{chat_title, llm_session};
 
 use super::blocking;
-use super::chat::AgentState;
+use super::agent_state::AgentState;
 
 /// Chats of the open folder, newest first. No folder open is an empty list:
 /// there is nothing to be wrong about yet, and the sidebar already says so.
@@ -65,7 +65,7 @@ pub async fn chat_save(
         )
         .map_err(|e| e.to_string())?;
         if first {
-            super::chat::remember_new_chat(&state, &id);
+            super::approval::remember_new_chat(&state, &id);
         }
         Ok::<_, String>(summary)
     })

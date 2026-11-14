@@ -9,7 +9,7 @@
 //! corporate gateway's own window from the client side and answers "how much
 //! budget is left"; this answers "the request was refused, now what" — which
 //! is what a public API actually does to a long turn, and which Atlas does not
-//! handle at all (see `docs/06-port-plan.md`, F-1.13).
+//! handle at all.
 
 use std::time::Duration;
 

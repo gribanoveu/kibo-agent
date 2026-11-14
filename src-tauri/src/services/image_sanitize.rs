@@ -3,7 +3,7 @@
 //! one is encoded from them by us — so nothing of the original but its pixels
 //! survives: no EXIF (GPS, camera, a thumbnail of the uncropped shot), no XMP
 //! or IPTC, no ICC profile, no text chunks or comments, nothing appended after
-//! the image's end. See `docs/30-vision.md`, "Санация (CDR)".
+//! the image's end.
 //!
 //! PNG and JPEG only, decoded by `image`'s pure-Rust codecs — the crate is
 //! built with those two and no others.

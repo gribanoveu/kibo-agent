@@ -1,4 +1,4 @@
-//! The Artifacts page's folders (`docs/38-artifacts.md`): the meetings and the
+//! The Artifacts page's folders: the meetings and the
 //! presented prototypes, each a collection of files. No store of its own —
 //! each kind is read where it is kept, by a `match`, not a trait: there are
 //! two, and a third is a variant the compiler points at every place for.

@@ -3,8 +3,7 @@
 //! The protocol is the SDK's: both eras of it (a server of 2026-07-28 is asked
 //! `server/discover` and spoken to without a session; an older one gets the
 //! `initialize` handshake), request ids, the server's own requests. What is
-//! kept here is what the app decided for itself and the SDK does not know —
-//! `docs/22-rmcp-migration.md`, "Что нельзя потерять":
+//! kept here is what the app decided for itself and the SDK does not know:
 //!
 //! - a call waits no longer than the server's own timeout and sees the
 //!   turn's Stop within [`POLL`]; either way the server is told;
@@ -16,7 +15,7 @@
 //! - a server's question in the middle of a call reaches the user through the
 //!   caller, and the call's clock stops while the user answers — however the
 //!   question came: as a request of the server's own (before 2026-07-28) or
-//!   as an answer asking for input, the call then sent again (`docs/23-mcp-extension.md`, M-8).
+//!   as an answer asking for input, the call then sent again.
 //!
 //! `rmcp` is async on tokio and everything above `McpClient` is blocking, so
 //! each method is one `block_on` on Tauri's runtime — the same bridge as

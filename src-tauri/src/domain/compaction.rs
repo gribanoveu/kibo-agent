@@ -311,7 +311,7 @@ pub fn summary_message(summary: &str) -> LlmMessage {
 }
 
 /// What a branch summary says it is: the part of the conversation the user
-/// rewound away from (`docs/27-pi-ideas.md`, item 6). The files went back
+/// rewound away from. The files went back
 /// with it, which the model is told too — the summary is what was tried,
 /// not what is on disk.
 pub const BRANCH_SUMMARY_PREFIX: &str =

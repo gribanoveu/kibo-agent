@@ -20,7 +20,7 @@
 //!
 //! What it measures is `code_search::search` itself, the ranking the tool
 //! ships. The grid that chose its constants was a variant of the pipeline
-//! beside it; its results are in `docs/06-port-plan.md` (F-5.13c, F-5.13c-2).
+//! beside it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

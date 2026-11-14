@@ -1,4 +1,4 @@
-//! The Artifacts page (`docs/38-artifacts.md`): the meetings and prototypes as
+//! The Artifacts page: the meetings and prototypes as
 //! folders, read through `services::artifacts`. Nothing here is new state, so
 //! there is no channel of its own: the page re-reads on `meeting:event` and
 //! `chat:turn-event`, which already say when either changes.

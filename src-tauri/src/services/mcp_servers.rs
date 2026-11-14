@@ -5,7 +5,7 @@
 //! switched off, stops its server; a workspace that changes stops them all,
 //! because each runs in the workspace it was started for.
 //!
-//! **Failure** (decided in `docs/06-port-plan.md`, stage 7): a server that
+//! **Failure**: a server that
 //! stops in the middle of a turn fails the call it was on — never retried,
 //! the server may have done the thing — and is started again, once per turn,
 //! before the next call to it. The tool list the model was given stays as it

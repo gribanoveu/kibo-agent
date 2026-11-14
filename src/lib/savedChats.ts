@@ -100,8 +100,8 @@ export async function generateChatTitle(id: string): Promise<void> {
 }
 
 /**
- * Journals the turn `turnId` of chat `chatId` for the next-prompt model
- * (docs/20-next-prompt-suggestions.md). `user` is the message that started it
+ * Journals the turn `turnId` of chat `chatId` for the next-prompt model.
+ * `user` is the message that started it
  * as the transcript shows it. Returns the row's id, or `null` when there was
  * nothing to journal.
  */

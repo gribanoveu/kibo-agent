@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use crate::commands::chat::AgentState;
+use crate::commands::agent_state::AgentState;
 use crate::domain::mcp::{self, McpChanged, McpConfig, McpEventSink, McpServerItem};
 use crate::infra::mcp_config;
 use crate::services::mcp_servers::McpServers;

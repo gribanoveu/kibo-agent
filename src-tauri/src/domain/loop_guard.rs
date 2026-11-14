@@ -16,8 +16,7 @@
 //! and a second note would only cost another round. The weighted budget stays
 //! the ceiling; this is the nudge before it.
 //!
-//! The idea and the wording follow MiniMax Code's runaway guard
-//! (`docs/19-minimax-code-ideas.md`, § 2).
+//! The idea and the wording follow MiniMax Code's runaway guard.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;

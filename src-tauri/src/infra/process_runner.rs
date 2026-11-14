@@ -447,8 +447,7 @@ pub(crate) fn kill_tree(child: &mut Child) {
     // grandchild whose parent has already exited is not found — a job object
     // would catch those too. Written this way deliberately: an untested
     // `windows-sys` job object is a worse answer than a documented ceiling,
-    // and this is the upgrade path when Windows is a supported target
-    // (05-gaps §5.4).
+    // and this is the upgrade path when Windows is a supported target.
     let _ = Command::new("taskkill")
         .args(["/T", "/F", "/PID", &child.id().to_string()])
         .stdout(Stdio::null())
