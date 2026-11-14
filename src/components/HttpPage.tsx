@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { Page, PageSheet } from "./Page";
 import { CodeEditor } from "./CodeEditor";
-import { pmCompletions } from "../lib/pmCompletions";
+import { pmCompletions, pmVariableAt, type PmScope } from "../lib/pmCompletions";
 import { Dropdown } from "./Dropdown";
 import { Switch } from "./Switch";
 import { Modal } from "./Modal";
@@ -77,6 +77,7 @@ import {
   type MovePlace,
   variableAt,
   variableHints,
+  agentReference,
   variableParts,
   variableValue,
   withAuthParam,
@@ -202,6 +203,19 @@ export function HttpPage() {
           ]),
       ...(broken ? [] : [{ value: "rename", label: "Rename…", run: () => setRenaming({ kind: "rename", id: node.id, name: node.name }) }]),
       ...(node.kind === "collection" ? [] : [{ value: "move", label: "Move to…", run: () => setMoving({ id: node.id, name: node.name, to: null }) }]),
+      ...(node.kind === "request"
+        ? [
+            {
+              value: "copy-for-agent",
+              label: "Copy for the agent",
+              hint: "Its place and id, to paste into a chat",
+              run: () => {
+                const text = agentReference(http.collections, node.id);
+                if (text) navigator.clipboard.writeText(text).catch((e) => setFailed(`Not copied: ${e}`));
+              },
+            },
+          ]
+        : []),
       ...(node.kind === "collection" && !broken
         ? [{ value: "export", label: "Export", hint: "A Postman v2.1 collection file", run: () => void http.exportCollection(node.id).catch((e) => setFailed(`The collection was not exported: ${e}`)) }]
         : []),
@@ -938,9 +952,18 @@ const COMPLETION_KEYS = Prec.highest(
  * What a script's own editor offers as it is typed: Postman's `pm.*` (`pmApi.json`), what a
  * script running at `listen` has — the response only after it — each with its arguments and what it does.
  */
-function scriptCompletion(listen: "prerequest" | "test"): Extension {
+function scriptCompletion(listen: "prerequest" | "test", variables: Record<PmScope, ReadonlyMap<string, string>>): Extension {
   const source = (context: CompletionContext) => {
     const before = context.state.sliceDoc(Math.max(0, context.pos - 2000), context.pos);
+    // The name in `pm.environment.get('…`: that scope's variables, each by its value, a secret masked.
+    const named = pmVariableAt(before);
+    if (named) {
+      return {
+        from: context.pos - (before.length - named.from),
+        validFor: /^[^'"`\\\n]*$/,
+        options: [...variables[named.scope]].map(([name, value]) => ({ label: name, type: "variable", detail: value })),
+      };
+    }
     const found = pmCompletions(before, listen);
     if (!found) return null;
     return {
@@ -1164,6 +1187,15 @@ function RequestView({
   const size = stacked ? (height === null ? undefined : { height, maxHeight: "none" }) : width === null ? undefined : { width, flexBasis: "auto" };
   const resolved = useMemo(() => resolveRequest(collection, request, environment, "mask", globals), [collection, request, environment, globals]);
   const values = useMemo(() => shownValues(scope(collection, environment, globals)), [collection, environment, globals]);
+  const scoped = useMemo(
+    () => ({
+      environment: shownValues(scope(null, environment)),
+      collectionVariables: shownValues(scope(collection, null)),
+      globals: shownValues(scope(null, null, globals)),
+      variables: values,
+    }),
+    [collection, environment, globals, values],
+  );
   const valuesKey = JSON.stringify([...values]);
   // Keyed by what the values say, not by the map: typing makes a new map of the same values,
   // and new marks would have the editors draw every variable again.
@@ -1278,7 +1310,7 @@ function RequestView({
             {tab === "headers" && <PairsTable rows={request.headers} keyLabel="Header" values={values} onChange={(headers) => set({ headers })} />}
             {tab === "auth" && <AuthEditor auth={request.auth} inherited={effectiveAuth(collection, request.id)} values={values} onChange={(auth) => set({ auth })} />}
             {tab === "body" && <BodyEditor body={request.body} values={values} marks={typed} onChange={(body) => set({ body })} />}
-            {tab === "scripts" && <ScriptsView collection={collection} request={request.id} chain={chain} all={states} typed={typedScripts} onTurn={onTurnScripts} onEdit={onEditScript} drafts={drafts} onApplyDraft={onApplyDraft} onRejectDraft={onRejectDraft} />}
+            {tab === "scripts" && <ScriptsView collection={collection} request={request.id} chain={chain} all={states} typed={typedScripts} onTurn={onTurnScripts} onEdit={onEditScript} drafts={drafts} onApplyDraft={onApplyDraft} onRejectDraft={onRejectDraft} variables={scoped} />}
             {tab === "preview" && <PreviewView resolved={resolved} missing={missing} marks={marks} />}
           </div>
         </div>
@@ -1607,9 +1639,12 @@ function ScriptsView({
   drafts,
   onApplyDraft,
   onRejectDraft,
+  variables,
 }: {
   collection: Collection;
   request: string;
+  /** What `pm.environment.get('…` offers, by scope: each name by its value, a secret masked. */
+  variables: Record<PmScope, ReadonlyMap<string, string>>;
   /** What was typed into requests' own scripts, by `request\nlisten`: shown over what was read. */
   typed: Record<string, string>;
   /** This request's scripts, in the order they are listed. */
@@ -1638,7 +1673,9 @@ function ScriptsView({
   const current = scripts.find((script) => script.id === shown) ?? scripts[0];
   const owner = current.state ? levelOf(collection, current.state.item)?.kind : "request";
   const type = (code: string) => onEdit(current.listen, code);
-  const suggested = useMemo(() => scriptCompletion(current.listen), [current.listen]);
+  // Keyed by what the variables say: typing elsewhere makes new maps of the same values.
+  const variablesKey = JSON.stringify(Object.entries(variables).map(([scope, values]) => [scope, [...values]]));
+  const suggested = useMemo(() => scriptCompletion(current.listen, variables), [current.listen, variablesKey]);
   const waiting = current.own ? drafts.filter((d) => d.listen === current.listen) : NO_DRAFTS;
   return (
     <div className="http-form">

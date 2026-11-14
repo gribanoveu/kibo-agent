@@ -16,6 +16,7 @@ import {
   putVariable,
   variableAt,
   variableHints,
+  agentReference,
   queryOf,
   removeNode,
   renameNode,
@@ -390,6 +391,12 @@ describe("http client rules", () => {
     const basic = toCurl(resolveRequest(collection, { ...base, method: "GET", auth: { type: "basic", username: "me", password: "{{token}}" }, body: { mode: "none" } }, env, "name"));
     expect(basic).toContain("-u 'me:{{token}}'");
     expect(basic).not.toContain("Authorization");
+  });
+
+  test("a request handed to a chat is its place and its id, and nothing of its address", () => {
+    const name = findRequest([collection], "r1")!.request.name;
+    expect(agentReference([collection], "r1")).toBe(`HTTP request "API / Keys / ${name}" (id: r1)`);
+    expect(agentReference([collection], "nope")).toBeNull();
   });
 
   test("a node is renamed, added to or removed at any depth, with what it holds", () => {

@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
-import { currentCompletions } from "@codemirror/autocomplete";
+import { closeCompletion, currentCompletions } from "@codemirror/autocomplete";
 import type { HttpHistoryEntry, HttpResponseView, HttpScriptDraft, HttpScriptState } from "../lib/httpCommands";
 import type { Environment } from "../lib/httpClient";
 
@@ -305,6 +305,47 @@ describe("the HTTP page", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Health/ }));
     expect(row()?.className).toContain(" on");
     expect(JSON.parse(localStorage.getItem("http.expanded") ?? "null")).toEqual(["c"]);
+  });
+
+  test("a request's menu copies its place and id for a chat; a collection's has no such item", async () => {
+    const copied: string[] = [];
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => void copied.push(text) } });
+    await shown();
+    fireEvent.click(screen.getByText("Orders API"));
+    fireEvent.click(screen.getByLabelText("Actions for Health"));
+    await act(async () => fireEvent.click(screen.getByRole("option", { name: /Copy for the agent/ })));
+    expect(copied).toEqual(['HTTP request "Orders API / Health" (id: r2)']);
+    fireEvent.click(screen.getByLabelText("Actions for Orders API"));
+    expect(screen.queryByRole("option", { name: /Copy for the agent/ })).toBeNull();
+  });
+
+  test("a script's editor offers the names of the scope pm reads, each by its value, a secret masked", async () => {
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown("r2");
+    fireEvent.click(screen.getByRole("tab", { name: /Scripts/ }));
+    fireEvent.click(within(screen.getByRole("tablist", { name: "Scripts, in the order they run" })).getByRole("tab", { name: "Pre-request" }));
+    const editor = () => EditorView.findFromDOM(document.querySelector(".http-code-box .cm-editor") as HTMLElement)!;
+    const offered = () => currentCompletions(editor().state).map((c) => [c.label, c.detail]);
+    // Each line typed afresh: the list the last one opened is closed first, as a new line would leave it.
+    const typeIn = (text: string) =>
+      act(() => {
+        closeCompletion(editor());
+        editor().dispatch({ changes: { from: 0, to: editor().state.doc.length, insert: text }, selection: { anchor: text.length }, userEvent: "input.type" });
+      });
+    typeIn("pm.environment.get('");
+    await waitFor(() => expect(offered()).toEqual([["baseUrl", "https://stage.test"], ["token", "•••"]]));
+    typeIn("pm.collectionVariables.set(\"");
+    await waitFor(() => expect(offered()).toEqual([["orderId", "9"]]));
+    typeIn("pm.variables.has('");
+    await waitFor(() => expect(offered().map(([name]) => name)).toEqual(["baseUrl", "orderId", "token"]));
+    // A pick puts the name in, after the quote.
+    typeIn("pm.environment.get('ba");
+    await waitFor(() => expect(offered()).toEqual([["baseUrl", "https://stage.test"]]));
+    await new Promise((done) => setTimeout(done, 100));
+    act(() => {
+      editor().contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(editor().state.doc.toString()).toBe("pm.environment.get('baseUrl");
   });
 
   test("a request moves into a folder picked from its menu, with nowhere to go said", async () => {

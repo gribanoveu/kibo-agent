@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-14 A script's editor suggests the variable names of the scope it reads — `pm.environment.get('`, `pm.collectionVariables.set('`… — and an HTTP request's menu copies its place and id for pasting into a chat with the API role
 - 2026-11-14 Every Postman dynamic variable in an HTTP request — `{{$randomEmail}}`, `{{$randomFirstName}}` and the rest of the 118 — is made as Postman makes it when the request goes; `{{$` lists them with what each makes, and a script's own editor suggests `pm.*` as you type, with each method's arguments and what it does
 - 2026-11-13 The message box keeps its height across the IDE layout switch: a line that wrapped while the chat was narrow is re-measured when the column widens — no keystroke needed to shrink the box back — and a line that wraps on the way in shows both rows at once
 - 2026-11-13 A dot on a catalog card's icon when the catalog has a newer version of what is installed — skills, servers, runbooks, commands and hooks alike; changed-here entries wear it too, and the details' Update is where it points

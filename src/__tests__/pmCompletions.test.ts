@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pmCompletions } from "../lib/pmCompletions";
+import { pmCompletions, pmVariableAt } from "../lib/pmCompletions";
 
 const names = (before: string, listen: "prerequest" | "test" = "test") => pmCompletions(before, listen)?.members.map((m) => m.name) ?? null;
 
@@ -36,5 +36,21 @@ describe("what the script editor offers", () => {
     expect(names("foo.")).toBeNull();
     expect(names("pm.nothing.")).toBeNull();
     expect(names("pm.info.requestName.")).toBeNull();
+  });
+});
+
+describe("a variable's name in pm's get and set", () => {
+  test("which scope, and where the name starts, in either quote", () => {
+    expect(pmVariableAt("const t = pm.environment.get('to")).toEqual({ scope: "environment", from: "const t = pm.environment.get('".length });
+    expect(pmVariableAt('pm.collectionVariables.set("')).toEqual({ scope: "collectionVariables", from: 'pm.collectionVariables.set("'.length });
+    expect(pmVariableAt("pm.globals.unset( `a")?.scope).toBe("globals");
+    expect(pmVariableAt("pm.variables.has('x")?.scope).toBe("variables");
+  });
+
+  test("nothing once the string is closed, or for a method that takes no name", () => {
+    expect(pmVariableAt("pm.environment.get('token')")).toBeNull();
+    expect(pmVariableAt("pm.environment.get('token', ")).toBeNull();
+    expect(pmVariableAt("pm.environment.replaceIn('{{")).toBeNull();
+    expect(pmVariableAt("pm.response.json('")).toBeNull();
   });
 });

@@ -759,3 +759,12 @@ export function pretty(body: string, contentType: string): string {
   if (/xml/i.test(contentType)) return formatXml(body);
   return body;
 }
+
+/**
+ * A request as the user hands it to a chat: where it is, as the API role's tools name it,
+ * and the id they take — no address, which can hold a key written into it.
+ */
+export function agentReference(collections: Collection[], id: string): string | null {
+  const found = findRequest(collections, id);
+  return found && `HTTP request "${[...found.path, found.request.name].join(" / ")}" (id: ${id})`;
+}

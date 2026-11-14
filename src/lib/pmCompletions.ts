@@ -42,3 +42,15 @@ export function pmCompletions(before: string, listen: "prerequest" | "test"): { 
   const members = at.members.filter((x) => (x.only ?? at.only ?? listen) === listen);
   return { from: before.length - m[2].length, members };
 }
+
+/** The scopes a script reads a variable from by its name, as `pm` names them. */
+export type PmScope = "environment" | "collectionVariables" | "globals" | "variables";
+
+/**
+ * A variable's name being typed into `pm.environment.get('…` — and `set`, `unset`, `has`,
+ * of each scope — at the end of `before`: which scope, and where the name starts.
+ */
+export function pmVariableAt(before: string): { scope: PmScope; from: number } | null {
+  const m = /\bpm\.(environment|collectionVariables|globals|variables)\.(?:get|set|unset|has)\(\s*['"`]([^'"`\\\n]*)$/.exec(before);
+  return m ? { scope: m[1] as PmScope, from: before.length - m[2].length } : null;
+}
