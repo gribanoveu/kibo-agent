@@ -80,7 +80,7 @@ Cloud — другой API (`api.bitbucket.org/2.0`), другая автори�
 |---|---|
 | PR ветки | `GET …/pull-requests?at=refs/heads/{branch}&direction=OUTGOING&state=OPEN` |
 | Можно ли мержить | `GET …/pull-requests/{id}/merge` → `canMerge`, `conflicted`, `vetoes[]` |
-| Сборки | `GET …/commits/{sha}/builds`; на старом сервере — устаревший `/rest/build-status/latest/commits/{sha}` (выбор — по версии из `application-properties`, проба BB-0) |
+| Сборки | устаревший `GET /rest/build-status/latest/commits/{sha}`: новый `…/commits/{sha}/builds` на 8.19.26 отвечает 400 (проба BB-0), поэтому выбор — «не 200 → старый», а не по версии из `application-properties` |
 | Approve | `PUT …/pull-requests/{id}/participants/{userSlug}` `{status: APPROVED \| UNAPPROVED}` |
 | Merge | `POST …/pull-requests/{id}/merge?version={v}` — стратегия по умолчанию репозитория |
 | Create | `POST …/pull-requests` с `fromRef`/`toRef`; цель по умолчанию — default branch репозитория |
@@ -134,7 +134,10 @@ PR — про текущую ветку, а Changes — про то же: что
 Approve скрыт у автора (сервер всё равно откажет). Merge неактивен, пока `canMerge` ложно,
 и под ним — `vetoes[].summaryMessage` и «conflicts» как есть: это ровно то, что показывает
 веб-интерфейс Bitbucket. Merge и Create — через `Modal` с подтверждением (действие уходит на
-сервер и не отменяется кнопкой). Open — `openExternal` на `links.self` PR.
+сервер и не отменяется кнопкой). Open — `openExternal` на `links.self` PR
+(`…/projects/{KEY}/repos/…/pull-requests/{id}`; ключ проекта там в верхнем регистре, а в пути
+API — в нижнем, так что регистр сравнивается только при нормализации). Проба подтвердила: строки
+вето — готовые фразы сервера, а не наш текст, и приходят они на английском.
 
 ### 7. Свой CA у каждого сервера
 
@@ -331,9 +334,10 @@ HTTP access token на чтение. Прогон прошёл все шаги, 
 | 5 | `links.clone`: `ssh` и `http …/scm/…`; origin совпал с **ssh** | Принадлежность проверяется ссылками, но нормализация обязана снимать `/scm/` и схему: https-клон с `ssh`-origin иначе не сопоставится ни с одной ссылкой. Отдельный тест в BB-1 |
 | 6 | `X-AUSERNAME` есть, `applinks/whoami` 200, `users?filter=` → тот же slug | Slug берётся из заголовка ответа; `users` — сверка при подключении, а не в каждом снимке |
 | 7 | `/default-branch` → 200, `master` | Новый путь жив на 8.19; устаревший `/branches/default` — только фолбэк |
-| 8 | ветки на сервере **нет** | При том что локально `origin/…` есть. Ровно состояние «push the branch first» из решения 5 |
-| 9 | PR нет. Открытые: #153 `docs/wowtax-8238`, #151 `fix/nibdoc-1226`, #138, #137, #123 | Вопрос «находит ли фильтр PR по ветке с `/` в имени» **не отвечен** |
-| 10–11 | пропущены | Форма `merge` (`canMerge`, `conflicted`, `vetoes[].summaryMessage`) и путь сборок **неизвестны** |
+| 8 | На `fix/taxable-summary…` ветки на сервере нет, хотя локально `origin/…` есть. На `docs/wowtax-8238` — **находится** (`94beed9`) | Состояние «push the branch first» из решения 5; `branches?filterText=` с `/` в имени (закодирован как `%2F`) работает |
+| 9 | PR найден: #153, `version=6`, ревьюеры — двое, оба `UNAPPROVED`; автор — не текущий пользователь | Фильтр `at=refs/heads/{branch}` с `/` работает. В снимке — `id`, `version`, автор, ревьюеры со статусами. Approve у этого PR показать можно: пользователь не автор (решение 6) |
+| 10 | `canMerge=false`, `conflicted=false`, `outcome=CLEAN`; вето — три готовые английские строки: «Requires approvals», «Not all required builds are successful yet», «Include Code Quality detected missing project data» | Текст под Merge берётся из `vetoes[].summaryMessage` как есть, собирать нечего; конфликт — отдельный флаг, а не строка среди вето |
+| 11 | Новый `…/commits/{sha}/builds` → **400**, устаревший `/rest/build-status/latest/commits/{sha}` → **200**, оба с нулём сборок | Читать устаревший путь, а 400 считать недоступностью так же, как 404: выбор не по версии сервера |
 | 12 | `/rest/access-tokens/latest/users/{slug}` → **401** | Права токена через API не читаются: форма не может заранее проверить `REPO_WRITE` — 403 объясняется по факту |
 
 **Что это изменило в решениях.** Ничего не отменило. Два уточнения: решение 3 — проверки прав
@@ -346,14 +350,14 @@ SecureTransport и смотрит в Связку ключей. Проверка
 (`base=https://https`), потому что скрипт принял GitHub-remote за scp-подобный; такая форма
 теперь отвергается сразу.
 
-**Что осталось снять.** Шаги 8–11 на ветке, у которой есть PR, — иначе неизвестны поля снимка
-(BB-1), текст причин под Merge (решение 6) и какой путь сборок звать (BB-2, BB-3):
+**BB-0 закрыт.** Второй прогон — на ветке `docs/wowtax-8238`, у которой открыт PR #153, — снял
+шаги 8–11. Неизвестно ровно одно: как выглядят `values[]` сборок, когда CI что-то сообщил (на этом
+коммите их нет). Вид «сборки есть» пишется по документации поля и проверяется на первой же ветке
+со сборкой.
 
-```bash
-scripts/bitbucket-probe.sh docs/wowtax-8238
-```
-
-Обе ветки с открытыми PR содержат `/` в имени, так что этот прогон отвечает и на вопрос шага 9.
+Из ответов получаются JSON-фикстуры для BB-2 — снятые с сервера, а не написанные по документации.
+Они лежат в `$TMPDIR/bitbucket-probe/` вместе с именами и адресами, поэтому в репозиторий идут
+только после обезличивания.
 
 ## Вне плана
 
