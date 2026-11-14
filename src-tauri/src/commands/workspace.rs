@@ -15,10 +15,10 @@ use super::agent_state::AgentState;
 /// tool resolves later is measured against a real directory rather than
 /// against whatever spelling the caller used.
 ///
-/// Also makes it the indexed folder. The index opening is awaited — it reads
-/// what was embedded before, off the UI thread — and its first sync is not.
-/// An index that cannot open does not stop the folder opening: the reason
-/// arrives on `workspace-index:event`, and the agent works without search.
+/// The rest — stopping what ran in the old folder, the recent list, the
+/// index — is `services::folder_open::open`, awaited off the UI thread; the
+/// index's first sync is not awaited, and its failures arrive on
+/// `workspace-index:event`.
 #[tauri::command]
 pub async fn workspace_open(
     path: String,
@@ -41,28 +41,17 @@ pub async fn workspace_open(
         .workspace
         .lock()
         .map_err(|_| "workspace lock poisoned".to_string())? = Some(resolved.clone());
-    // A chat moved to its worktree must not stop the neighbouring chat's
-    // processes. Ordinary folder switches keep the old behaviour.
-    if keep_running != Some(true) {
-        if let Some(processes) = app.try_state::<Arc<Processes>>() {
-            processes.stop_all();
-        }
-        if let Some(terminals) = app.try_state::<Arc<crate::infra::terminal::Terminals>>() {
-            terminals.close_all();
-        }
-    }
-
     let shown = resolved.display().to_string();
-    // Only a convenience for the next launch: a folder that opened stays open
-    // even if the list could not be written.
-    if let Err(e) = crate::infra::recent_workspaces::record(&shown) {
-        eprintln!("recent folders not saved: {e}");
-    }
     super::git::watch_git(&app, &git_watch, &resolved, shown.clone());
     let index = Arc::clone(&index);
     let sink = index_event_sink(&app, shown.clone());
-    // Reported through the sink; see above.
-    let _ = tauri::async_runtime::spawn_blocking(move || index.open(&resolved, sink)).await;
+    let processes = app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes));
+    let terminals = app.try_state::<Arc<crate::infra::terminal::Terminals>>().map(|terminals| Arc::clone(&terminals));
+    let keep_running = keep_running == Some(true);
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        crate::services::folder_open::open(&resolved, keep_running, processes.as_deref(), terminals.as_deref(), &index, sink)
+    })
+    .await;
     Ok(shown)
 }
 

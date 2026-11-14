@@ -186,6 +186,42 @@ pub fn run_in_folder(
     Ok(run(&turn)?)
 }
 
+/// What the next turn in `workspace` will send in front of the conversation:
+/// the prompt parts and tools [`run_in_folder`] gathers, read the same way —
+/// but MCP servers only as they run now, since none is started to be
+/// measured, and the shell by name, since probing it runs it. Without a
+/// folder, the prompt a turn there would have.
+pub fn next_folder_frame(workspace: Option<&Path>, mode: ConversationMode, servers: Option<&McpServers>) -> crate::domain::compaction::RequestFrame {
+    let skills = skills::enabled_catalog(workspace).unwrap_or_default();
+    let rules = workspace.map(project_rules::load).unwrap_or_default();
+    let mcp = match (workspace, servers_for(servers, mode)) {
+        (Some(root), Some(servers)) => servers.running(root),
+        _ => McpTools::default(),
+    };
+    let worktree_of = workspace.and_then(crate::infra::git_head::worktree_of);
+    let shell = crate::infra::shells::for_commands();
+    let today = crate::services::llm_chat::today();
+    let features = features::enabled();
+    crate::services::context_compaction::request_frame(
+        &crate::domain::prompt::TurnContext {
+            mode,
+            workspace: workspace.unwrap_or(Path::new("")),
+            shell: &shell.program,
+            today: &today,
+            skills: &skills,
+            rules: &rules,
+            worktree_of: worktree_of.as_deref(),
+            parallel: None,
+            // Read like the rest of the frame: as the next turn will read it.
+            language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
+            mcp_servers: mcp.notes(),
+        },
+        &mcp,
+        web_search::is_on(WebSearchPlace::Agent),
+        &features,
+    )
+}
+
 /// The part of each chat's prompt its first turn in a folder read
 /// ([`Frozen`]), by chat and folder.
 // ponytail: in memory, so a restart freezes the files as they are then — one

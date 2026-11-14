@@ -23,8 +23,6 @@ use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::domain::compaction::{ContextUsage, RequestFrame};
 use crate::domain::image::ImagePart;
-use crate::domain::prompt::TurnContext;
-use crate::domain::settings::WebSearchPlace;
 use crate::domain::llm::{LlmMessage, LlmToolCall};
 use crate::domain::tools::{CodeSearchFn, Task, ToolPreview, ToolScope};
 use crate::domain::next_prompt::{self};
@@ -38,7 +36,6 @@ use crate::services::context_compaction;
 use crate::services::mcp_questions::McpQuestions;
 use crate::services::mcp_servers::McpServers;
 use crate::domain::mcp::McpAnswer;
-use crate::domain::mcp::McpTools;
 use crate::infra::background::Processes;
 use crate::services::llm_session;
 use crate::services::turn_setup::{self, FolderHandles, FolderTurn};
@@ -224,43 +221,11 @@ pub async fn chat_context_usage(
     .await
 }
 
-/// What the next turn will send in front of the conversation: the prompt
-/// parts and tools `run_off_the_event_loop` gathers, read the same way — but
-/// MCP servers only as they run now, since none is started to be measured,
-/// and the shell by name, since probing it runs it. Without an open folder,
-/// the prompt a turn there would have.
+/// What the next turn of the open window will send in front of the
+/// conversation ([`turn_setup::next_folder_frame`]), in the mode picked now.
 fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, workspace: Option<PathBuf>) -> RequestFrame {
-    let root = workspace.as_deref();
-    let mode = state.mode();
-    let skills = crate::services::skills::enabled_catalog(root).unwrap_or_default();
-    let rules = root.map(crate::services::project_rules::load).unwrap_or_default();
     let servers = app.try_state::<Arc<McpServers>>();
-    let mcp = match (root, crate::services::turn_setup::servers_for(servers.as_ref().map(|s| s.as_ref()), mode)) {
-        (Some(root), Some(servers)) => servers.running(root),
-        _ => McpTools::default(),
-    };
-    let worktree_of = root.and_then(crate::infra::git_head::worktree_of);
-    let shell = crate::infra::shells::for_commands();
-    let today = crate::services::llm_chat::today();
-    let features = crate::services::features::enabled();
-    context_compaction::request_frame(
-        &TurnContext {
-            mode,
-            workspace: root.unwrap_or(std::path::Path::new("")),
-            shell: &shell.program,
-            today: &today,
-            skills: &skills,
-            rules: &rules,
-            worktree_of: worktree_of.as_deref(),
-            parallel: None,
-            // Read like the rest of the frame: as the next turn will read it.
-            language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
-            mcp_servers: mcp.notes(),
-        },
-        &mcp,
-        crate::services::web_search::is_on(WebSearchPlace::Agent),
-        &features,
-    )
+    turn_setup::next_folder_frame(workspace.as_deref(), state.mode(), servers.as_ref().map(|s| s.as_ref()))
 }
 
 /// Journals the turn `turn_id` for the next-prompt model: its input, built
