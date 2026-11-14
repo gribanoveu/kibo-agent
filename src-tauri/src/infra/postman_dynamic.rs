@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use super::postman_sandbox::{Sandbox, LIMITS};
 
@@ -98,6 +98,7 @@ fn made(sandbox: &Sandbox, name: &str) -> Result<Option<String>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     /// Every name Postman lists, made by the sandbox: what the `{{` hint offers is sent.
     #[test]
