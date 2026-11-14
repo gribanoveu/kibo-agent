@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   Check,
+  ClipboardPaste,
   Columns2,
   Cookie,
   Copy,
@@ -14,6 +15,7 @@ import {
   Eye,
   EyeOff,
   FileCode2,
+  FileUp,
   FilePen,
   Folder,
   FolderOpen,
@@ -47,6 +49,8 @@ import { fileRows } from "../lib/diffRows";
 import { useHttpClient, type Sent } from "../hooks/useHttpClient";
 import { useCopied } from "../hooks/useCopied";
 import { useHttpCookies } from "../hooks/useHttpCookies";
+import { useHttpCerts } from "../hooks/useHttpCerts";
+import { pemFromBytes } from "../lib/providerForm";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStoredState } from "../hooks/useStoredState";
 import { formatJson, formatXml } from "../lib/formatText";
@@ -303,7 +307,7 @@ export function HttpPage() {
               onSave={http.saveEnvironment}
               onReveal={(key) => http.secretOf(editingEnv.id, key)}
               onExport={() => http.exportEnvironment(editingEnv.id)}
-              onDelete={() => setDeleting({ id: editingEnv.id, name: editingEnv.name, what: "Deletes the environment and its sealed secrets.", environment: true })}
+              onDelete={() => setDeleting({ id: editingEnv.id, name: editingEnv.name, what: "Deletes the environment, its sealed secrets and its certificate files.", environment: true })}
             />
           </PageSheet>
         ) : sheet?.kind === "history" ? (
@@ -2107,6 +2111,131 @@ const AGENT_ACCESS = [
   { value: "writesAsOtherTools", label: "Writes as other tools", hint: "reads with no card; a write asks as any change does — Always allow and Auto skip the card" },
 ];
 
+/**
+ * The certificates an environment trusts, a file each: loaded from files — several at
+ * once — or pasted, listed, exported and removed one by one. All of them are trusted
+ * together, instead of the public roots.
+ */
+function Certificates({ environment, onSaid }: { environment: string; onSaid: (said: { error: boolean; text: string }) => void }) {
+  const { certs, failed, add, remove, exportCert } = useHttpCerts(environment);
+  const file = useRef<HTMLInputElement>(null);
+  const [pasting, setPasting] = useState<{ name: string; pem: string } | null>(null);
+  const added = (named: string) => onSaid({ error: false, text: `Added ${named}.` });
+  const refused = (what: string) => (e: unknown) => onSaid({ error: true, text: `${what}: ${e}` });
+
+  const load = async (files: File[]) => {
+    for (const chosen of files) {
+      const name = chosen.name.replace(/\.[^.]*$/, "");
+      try {
+        added(await add(name, pemFromBytes(new Uint8Array(await chosen.arrayBuffer()))));
+      } catch (e) {
+        refused(`${chosen.name} not added`)(e);
+      }
+    }
+  };
+
+  return (
+    <section className="http-certs" aria-label="Certificates">
+      <div className="http-certs-head">
+        <span className="http-label">
+          <ShieldCheck size={13} /> Certificates
+        </span>
+        <span className="http-spacer" />
+        <button type="button" className="http-bar-button" onClick={() => file.current?.click()}>
+          <FileUp size={13} />
+          Load file…
+        </button>
+        <button type="button" className="http-bar-button" aria-pressed={!!pasting} onClick={() => setPasting(pasting ? null : { name: "", pem: "" })}>
+          <ClipboardPaste size={13} />
+          Paste
+        </button>
+        <input
+          ref={file}
+          type="file"
+          hidden
+          multiple
+          accept=".pem,.crt,.cer,.der"
+          data-testid="http-cert-file"
+          onChange={(e) => {
+            load(Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
+      </div>
+      {certs.length === 0 ? (
+        <p className="http-quiet">None — the server is checked against the public roots.</p>
+      ) : (
+        <ul className="http-cert-list">
+          {certs.map((c) => (
+            <li key={c.name}>
+              <span className="http-cert-name">{c.name}</span>
+              <span className="http-quiet">
+                {c.certificates} certificate{c.certificates === 1 ? "" : "s"}
+              </span>
+              <span className="http-spacer" />
+              <button
+                type="button"
+                className="http-icon-button"
+                title="Export as a .pem file"
+                aria-label={`Export ${c.name}`}
+                onClick={() => exportCert(c.name).catch(refused(`${c.name} not exported`))}
+              >
+                <Download size={13} />
+              </button>
+              <button type="button" className="http-icon-button" title="Remove" aria-label={`Remove ${c.name}`} onClick={() => remove(c.name).catch(refused(`${c.name} not removed`))}>
+                <Trash2 size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {pasting && (
+        <div className="http-cert-paste">
+          <input
+            className="http-input"
+            aria-label="Certificate name"
+            placeholder="Name — the stand's, say"
+            value={pasting.name}
+            onChange={(e) => setPasting({ ...pasting, name: e.target.value })}
+          />
+          <textarea
+            className="http-input http-mono http-cert"
+            rows={5}
+            spellCheck={false}
+            aria-label="Certificate PEM"
+            value={pasting.pem}
+            placeholder={"-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----"}
+            onChange={(e) => setPasting({ ...pasting, pem: e.target.value })}
+          />
+          <div className="http-actions">
+            <button
+              type="button"
+              className="http-bar-button"
+              disabled={!pasting.pem.trim()}
+              onClick={() =>
+                add(pasting.name, pasting.pem).then((named) => {
+                  added(named);
+                  setPasting(null);
+                }, refused("Not added"))
+              }
+            >
+              <Plus size={13} />
+              Add
+            </button>
+            <button type="button" className="http-bar-button" onClick={() => setPasting(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {failed && <p className="http-error">{failed}</p>}
+      <p className="http-quiet">
+        The stand's own certificate, if it is self-signed, or the CA that issued it — a chain can go whole. Each is a file of its own; all of them are trusted, instead of the public roots.
+      </p>
+    </section>
+  );
+}
+
 function EnvironmentForm({
   environment,
   onSave,
@@ -2281,19 +2410,7 @@ function EnvironmentForm({
         />
       </div>
 
-      <label className="http-field-row http-field-top">
-        <span className="http-label">
-          <ShieldCheck size={13} /> Certificate
-        </span>
-        <textarea
-          className="http-input http-mono http-cert"
-          rows={4}
-          spellCheck={false}
-          value={draft.trustedCert ?? ""}
-          placeholder="The stand's own certificate or its CA's, PEM — empty for the system's trust store"
-          onChange={(e) => setDraft({ ...draft, trustedCert: e.target.value })}
-        />
-      </label>
+      <Certificates environment={environment.id} onSaid={setSaid} />
 
       <p className="http-quiet">
         Saved as you leave a field. Sealed on this computer under the app's master key, as the API keys are. A secret shows only here, by its eye — leave it empty to keep it.

@@ -194,6 +194,32 @@ export async function saveHttpEnvironment(environment: Environment): Promise<voi
   return invoke("http_environment_save", { environment });
 }
 
+/** One of an environment's certificate files: its name, and how many certificates are in it. */
+export type TrustedCert = { name: string; certificates: number };
+
+/** The environment's certificate files, by name. All of them are trusted, instead of the public roots. */
+export async function listHttpCerts(environment: string): Promise<TrustedCert[]> {
+  requireBackend();
+  return invoke("http_certs", { environment });
+}
+
+/** A file read or text pasted, kept as a file of its own — its certificates only; the name it got. */
+export async function addHttpCert(environment: string, name: string, pem: string): Promise<string> {
+  requireBackend();
+  return invoke("http_cert_add", { environment, name, pem });
+}
+
+export async function deleteHttpCert(environment: string, name: string): Promise<void> {
+  requireBackend();
+  return invoke("http_cert_delete", { environment, name });
+}
+
+/** The certificate file at `dest`, a `.pem` path from the save dialog. */
+export async function exportHttpCert(environment: string, name: string, dest: string): Promise<void> {
+  requireBackend();
+  return invoke("http_cert_export", { environment, name, dest });
+}
+
 /** One saved secret's value, for the form's eye button — the lists keep `•••`. */
 export async function httpEnvironmentSecret(id: string, key: string): Promise<string> {
   requireBackend();

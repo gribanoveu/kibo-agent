@@ -62,8 +62,8 @@ export type Collection = { id: string; name: string; auth: Auth; variables: (Pai
 export type EnvVariable = { key: string; value: string; secret: boolean; enabled: boolean };
 /** How far the agent may go in an environment; absent is off. */
 export type AgentAccess = "off" | "readOnly" | "askForWrites" | "writesAsOtherTools";
-/** `trustedCert` is the PEM of the stand's own certificate or its CA's. */
-export type Environment = { id: string; name: string; variables: EnvVariable[]; trustedCert?: string; agent?: AgentAccess };
+/** Its certificates are files of their own, listed apart (`listHttpCerts`). */
+export type Environment = { id: string; name: string; variables: EnvVariable[]; agent?: AgentAccess };
 
 /** A request or a response as HTTP writes it: the first line, the headers, a blank line, the body. */
 export function asHttpText(first: string, headers: Pair[], body: string | null): string {

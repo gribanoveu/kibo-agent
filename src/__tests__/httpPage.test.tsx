@@ -51,6 +51,10 @@ let scriptSaves: (() => void)[] | null = null;
 let jar: { domain: string; path: string; name: string; expiresAt?: number | null }[] = [];
 /** The chats' drafts, as `http_drafts` lists them. */
 let drafts: HttpScriptDraft[] = [];
+/** The environment's certificate files, as the backend keeps them. */
+let certs: { name: string; pem: string }[] = [];
+/** Where the save dialog says; null is cancelled. */
+let savedTo: string | null = null;
 /** A chat's post-response draft of "Create order", run on a send of it. */
 const DRAFT: HttpScriptDraft = {
   collection: "c",
@@ -142,9 +146,22 @@ mock.module("@tauri-apps/api/core", () => ({
       return holdSends ? new Promise<HttpResponseView>(() => {}) : Promise.resolve(answer);
     }
     if (command === "http_environment_secret") return Promise.resolve("hunter2");
+    if (command === "http_certs") return Promise.resolve(certs.map((c) => ({ name: c.name, certificates: c.pem.split("-----BEGIN CERTIFICATE-----").length - 1 })));
+    if (command === "http_cert_add") {
+      // As the backend: what is no certificate is refused — a DER one's base64 starts `MII` — and a name taken is numbered.
+      const { name, pem } = args as { name: string; pem: string };
+      if (!pem.includes("\nMII")) return Promise.reject("the certificate: what is in it is not a certificate");
+      const stem = name || "certificate";
+      const named = certs.some((c) => c.name === stem) ? `${stem} 2` : stem;
+      certs.push({ name: named, pem });
+      return Promise.resolve(named);
+    }
+    if (command === "http_cert_delete") {
+      certs = certs.filter((c) => c.name !== args!.name);
+      return Promise.resolve(null);
+    }
     if (command === "http_environment_save") {
       const env = args!.environment as Environment;
-      if (env.trustedCert === "junk") return Promise.reject("the certificate: no certificate in it");
       stage = { ...env, variables: env.variables.map((v) => (v.secret ? { ...v, value: "•••" } : v)) };
       return Promise.resolve(null);
     }
@@ -155,6 +172,11 @@ mock.module("@tauri-apps/api/core", () => ({
 
 /** Who listens on `http:changed`: a test tells them the backend changed. */
 const told = new Set<() => void>();
+mock.module("@tauri-apps/plugin-dialog", () => ({
+  save: () => Promise.resolve(savedTo),
+  open: () => Promise.resolve(null),
+}));
+
 mock.module("@tauri-apps/api/event", () => ({
   listen: (_channel: string, handler: () => void) => {
     told.add(handler);
@@ -193,6 +215,8 @@ beforeEach(() => {
   scriptSaves = null;
   jar = [];
   drafts = [];
+  certs = [];
+  savedTo = null;
   answer = reported({});
 });
 
@@ -828,7 +852,7 @@ describe("the HTTP page", () => {
     expect(saved.variables[1]).toEqual({ key: "apiToken", value: "•••", secret: true, enabled: true });
   });
 
-  test("a saved secret is never in the form: left empty it is kept, and a bad certificate is said", async () => {
+  test("a saved secret is never in the form: left empty it is kept", async () => {
     localStorage.setItem("http.environment", JSON.stringify("stage"));
     await shown();
     fireEvent.click(screen.getByLabelText("Edit the environment"));
@@ -848,13 +872,48 @@ describe("the HTTP page", () => {
       { key: "baseUrl", value: "https://stage2.test", secret: false, enabled: true },
       { key: "token", value: "•••", secret: true, enabled: true },
     ]);
+  });
 
-    fireEvent.change(screen.getByPlaceholderText(/PEM/), { target: { value: "junk" } });
-    fireEvent.focusOut(screen.getByPlaceholderText(/PEM/));
-    expect(await screen.findByText("the certificate: no certificate in it")).toBeDefined();
-    // Refused, it is tried again as the field is next left, though nothing changed since.
-    fireEvent.focusOut(screen.getByPlaceholderText(/PEM/));
-    await waitFor(() => expect(called("http_environment_save").length).toBe(3));
+  test("certificates are files of their own: loaded, pasted, listed, exported and removed", async () => {
+    const PEM = "-----BEGIN CERTIFICATE-----\nMIIBAAAA\n-----END CERTIFICATE-----";
+    certs = [{ name: "old", pem: PEM }];
+    localStorage.setItem("http.environment", JSON.stringify("stage"));
+    await shown();
+    fireEvent.click(screen.getByLabelText("Edit the environment"));
+    expect(await screen.findByText("old")).toBeDefined();
+    expect(called("http_certs")).toEqual([{ environment: "stage" }]);
+
+    // Several files at once, each under its own name; one with no certificate in it is said.
+    const files = [new File([PEM + "\n" + PEM], "corp-ca.crt"), new File(["junk"], "notes.txt")];
+    fireEvent.change(screen.getByTestId("http-cert-file"), { target: { files } });
+    expect(await screen.findByText("corp-ca")).toBeDefined();
+    expect(screen.getByText("2 certificates")).toBeDefined();
+    expect(await screen.findByText("notes.txt not added: the certificate: what is in it is not a certificate")).toBeDefined();
+
+    // Pasted, under the name typed; nothing to add until there is text.
+    fireEvent.click(screen.getByRole("button", { name: "Paste" }));
+    const add = screen.getByRole("button", { name: "Add" }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Certificate name"), { target: { value: "old" } });
+    fireEvent.change(screen.getByLabelText("Certificate PEM"), { target: { value: PEM } });
+    fireEvent.click(add);
+    expect(await screen.findByText("old 2")).toBeDefined();
+    expect(screen.getByText("Added old 2.")).toBeDefined();
+    expect(screen.queryByLabelText("Certificate PEM")).toBeNull();
+    expect(called("http_cert_add").map((a) => a.name)).toEqual(["corp-ca", "notes", "old"]);
+
+    // The dialog cancelled, nothing goes out.
+    fireEvent.click(screen.getByLabelText("Export corp-ca"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(called("http_cert_export")).toEqual([]);
+    savedTo = "/exported/ca.pem";
+    fireEvent.click(screen.getByLabelText("Export corp-ca"));
+    await waitFor(() => expect(called("http_cert_export")).toEqual([{ environment: "stage", name: "corp-ca", dest: "/exported/ca.pem" }]));
+    fireEvent.click(screen.getByLabelText("Remove old"));
+    await waitFor(() => expect(screen.queryByText("old") === null).toBe(true));
+    expect(called("http_cert_delete")).toEqual([{ environment: "stage", name: "old" }]);
+    // None of it is in what the environment saves.
+    expect(called("http_environment_save").every((a) => !("trustedCert" in (a.environment as object)))).toBe(true);
   });
 
   test("a shown secret edited is saved as typed and stays shown", async () => {

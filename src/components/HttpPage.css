@@ -890,6 +890,55 @@
 .http-cert {
   resize: vertical;
 }
+.http-certs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.http-certs > .http-quiet,
+.http-certs > .http-error {
+  margin: 0;
+}
+.http-certs-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.http-certs-head .http-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.http-cert-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.http-cert-list > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+}
+.http-cert-list > li + li {
+  border-top: 1px solid var(--border);
+}
+.http-cert-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+.http-cert-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .http-kept {
   margin: 0;
   padding: 8px 10px;
