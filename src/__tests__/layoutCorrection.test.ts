@@ -73,6 +73,13 @@ describe("layout correction", () => {
     expect(offered("/plan ghbdtn")).toEqual({ corrected: "/plan привет", offered: true });
   });
 
+  test("a word that reads well as typed stays beside a wrong-layout one", () => {
+    const tech = "bitbucket gitlab jira docker kubernetes helm terraform nginx redis postgres kafka grafana webpack vite eslint typescript python golang tauri react vue svelte django flask kotlin gradle cargo pnpm yarn bun deno jest vitest playwright figma notion sentry vercel aws gcp lambda bucket cluster pod ingress frontend backend devops commit branch rebase release hotfix staging localhost endpoint payload webhook middleware schema migration proxy socket mutex async await promise callback struct trait enum macro";
+    for (const word of tech.split(" ")) {
+      expect(offered(`для ${word} tcnm kb`)).toEqual({ corrected: `для ${word} есть ли`, offered: true });
+    }
+  });
+
   test("short words follow the long ones, and alone need three letters of common words", () => {
     expect(offered("ye lf")).toEqual({ corrected: "ну да", offered: true });
     expect(offered("z yt")).toEqual({ corrected: "я не", offered: true });
