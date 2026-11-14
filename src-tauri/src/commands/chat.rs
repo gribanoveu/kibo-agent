@@ -11,452 +11,39 @@
 //! paused turn survive a reload, a crash, or being picked up by a different
 //! window. What *is* resident is only what a running turn needs to be reached
 //! from outside while it runs — and that is resident **per chat**: each
-//! chat's turns are reached through their own `SessionHandle`, so two chats'
+//! chat's turns are reached through their own `SessionHandle` (`agent_state`), so two chats'
 //! turns can run side by side without one's stop or steering note touching
 //! the other's.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
-use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::domain::compaction::{ContextUsage, RequestFrame};
 use crate::domain::image::ImagePart;
-use crate::domain::prompt::TurnContext;
-use crate::domain::conversation_mode::{ConversationMode, PickedMode};
-use crate::domain::settings::{RememberScope, WebSearchPlace};
 use crate::domain::llm::{LlmMessage, LlmToolCall};
-use crate::domain::tools::{ApprovalPolicy, CodeSearchFn, Task, ToolPreview, ToolScope};
-use crate::domain::next_prompt::{self, FinishedTurn, TurnFeatures};
+use crate::domain::tools::{CodeSearchFn, Task, ToolPreview, ToolScope};
+use crate::domain::next_prompt::{self};
 use crate::domain::turn::{
     ChatEventPayload, ChatEventSink, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, SteeringNote,
     ToolCallDecision,
 };
 use crate::services::ai_tools::preview;
-use crate::services::llm_chat::{self, SteeringQueue, Turn, TurnError};
+use crate::services::llm_chat::{self, Turn, TurnError};
 use crate::services::context_compaction;
 use crate::services::mcp_questions::McpQuestions;
 use crate::services::mcp_servers::McpServers;
 use crate::domain::mcp::McpAnswer;
-use crate::domain::mcp::McpTools;
 use crate::infra::background::Processes;
 use crate::services::llm_session;
 use crate::services::turn_setup::{self, FolderHandles, FolderTurn};
 use crate::services::workspace_index::WorkspaceIndex;
 
 use super::chat_events::chat_event_sink;
-use super::workspace_events::index_event_sink;
 
-/// What a running turn of one chat is reached through while it runs: its stop
-/// flag, the notes typed at it, and its side of the next-prompt journal. One
-/// per chat, so a chat's turn never shares any of this with another chat's.
-#[derive(Default)]
-pub(crate) struct SessionHandle {
-    /// One in-flight turn per chat, so one flag needs no turn id to
-    /// disambiguate. Reset by `chat_start` and deliberately *not* by
-    /// `chat_resume` — a stop pressed while an approval card was showing has
-    /// to survive until the resumed turn reads it.
-    cancel: AtomicBool,
-    steering: SteeringQueue,
-    /// The running turn's signals for the next-prompt journal. Resident
-    /// because a turn outlives one command: what came before a pause for
-    /// approval still counts after the resume.
-    next_prompt: Mutex<TurnFeatures>,
-    /// The last turn that ended, by id, until the window journals it. Apart
-    /// from the running one, so a queued message that starts the next turn
-    /// before that call arrives does not wipe it.
-    finished_turn: Mutex<Option<(String, FinishedTurn)>>,
-    /// Its own checkout while the turn runs: the mark and the root cannot
-    /// disagree because one lock holds both. Only turns in the same checkout
-    /// share files and a git index.
-    running_root: Mutex<Option<PathBuf>>,
-    /// A paused turn still owns the chat's history until its card is resumed.
-    paused: AtomicBool,
-}
-
-/// Counted while a chat's turn runs; clears itself on drop, however the turn
-/// ended — finished, paused, stopped, refused or lost to a panicked thread.
-pub(crate) struct RunningTurn(Arc<SessionHandle>);
-
-impl std::fmt::Debug for RunningTurn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RunningTurn")
-    }
-}
-
-impl Drop for RunningTurn {
-    fn drop(&mut self) {
-        *self.0.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-    }
-}
-
-impl SessionHandle {
-    fn is_running(&self) -> bool {
-        self.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_some()
-    }
-
-    // The next-prompt journal's side of a turn. A poisoned lock costs the
-    // journal one row, never the turn.
-
-    /// A fresh turn, in the mode it starts in. A resume is not one.
-    fn begin_turn(&self, mode: ConversationMode) {
-        if let Ok(mut features) = self.next_prompt.lock() {
-            *features = TurnFeatures::new(mode);
-        }
-    }
-
-    fn observe(&self, event: &ChatEventPayload) {
-        if let Ok(mut features) = self.next_prompt.lock() {
-            features.observe(event);
-        }
-    }
-
-    fn end_turn(&self, turn_id: String, outcome: &ChatStreamOutcome) {
-        let finished = self.next_prompt.lock().ok().and_then(|features| features.finish(outcome));
-        if let (Some(finished), Ok(mut slot)) = (finished, self.finished_turn.lock()) {
-            *slot = Some((turn_id, finished));
-        }
-    }
-
-    /// The finished turn if it is `turn_id`, once; another turn's stays put.
-    fn take_finished(&self, turn_id: &str) -> Option<FinishedTurn> {
-        let mut slot = self.finished_turn.lock().ok()?;
-        if slot.as_ref().is_some_and(|(id, _)| id == turn_id) {
-            slot.take().map(|(_, finished)| finished)
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct AgentState {
-    /// Each chat's handle, made on first ask. The workspace, the approval
-    /// policy and the mode stay shared: the folder is the window's, and the
-    /// policy and the chip are decisions about the conversation in it, not
-    /// about one chat's turn.
-    /// ponytail: handles are never pruned — the map grows by one entry per
-    /// chat touched in a window's run. An LRU is the way past that if a long
-    /// run ever shows it.
-    sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
-    workspace: Mutex<Option<PathBuf>>,
-    /// Grows as the user answers "always allow"; not persisted, because a
-    /// saved "never ask me" is a brake released a month ago and forgotten.
-    approval: Mutex<ApprovalPolicy>,
-    /// What the composer's panel says right now. Resident rather than sent
-    /// with each turn for the same reason as the approval policy: a paused
-    /// turn is resumed from a checkpoint that predates the choice, and a mode
-    /// threaded through both entry points would have to be re-sent correctly
-    /// by the caller at the one moment it is easiest to forget. Kept in the
-    /// settings as well: this is the copy turns read, that is the one that
-    /// outlives the app.
-    mode: Mutex<PickedMode>,
-}
-
-impl AgentState {
-    /// The state a window starts with: the mode picked last, read here so a
-    /// turn does not depend on the window having asked. Settings that cannot
-    /// be read leave the default, which still asks before it writes.
-    pub fn restored() -> Self {
-        let mode = crate::infra::settings_store::load().map(|s| s.conversation_mode).unwrap_or_default();
-        Self { mode: Mutex::new(mode), ..Self::default() }
-    }
-
-    /// The handle `chat_id`'s turns are reached through, made on first ask.
-    pub(crate) fn session(&self, chat_id: &str) -> Arc<SessionHandle> {
-        let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        Arc::clone(sessions.entry(chat_id.to_string()).or_default())
-    }
-
-    /// Marks `chat_id`'s turn as running and hands back the guard that clears
-    /// it. Refused when that chat's turn already runs or waits on its card —
-    /// one chat, one owned history — and when `limit` turns run already.
-    pub(crate) fn begin_running(&self, chat_id: &str, limit: u32, workspace: &std::path::Path) -> Result<RunningTurn, String> {
-        self.begin_running_inner(chat_id, limit, workspace, false)
-    }
-
-    fn begin_resume(&self, chat_id: &str, limit: u32, workspace: &std::path::Path) -> Result<RunningTurn, String> {
-        self.begin_running_inner(chat_id, limit, workspace, true)
-    }
-
-    fn begin_running_inner(&self, chat_id: &str, limit: u32, workspace: &std::path::Path, resume: bool) -> Result<RunningTurn, String> {
-        // A hand-edited zero would refuse every turn; one always runs.
-        let limit = limit.max(1);
-        let _tree = crate::domain::command_risk::git_tree_lock();
-        let mut sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let handle = Arc::clone(sessions.entry(chat_id.to_string()).or_default());
-        if handle.is_running() {
-            return Err("this chat's turn is already running".to_string());
-        }
-        if !resume && handle.paused.load(Ordering::SeqCst) {
-            return Err("this chat's turn is waiting for approval — resume or stop it first".to_string());
-        }
-        let running = sessions.values().filter(|s| s.is_running()).count() as u32;
-        if running >= limit {
-            return Err(format!(
-                "{running} turns are already running — the parallel-turns limit. \
-                 Wait for one to finish, or raise it in Settings"
-            ));
-        }
-        *handle.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.to_path_buf());
-        handle.paused.store(false, Ordering::SeqCst);
-        Ok(RunningTurn(handle))
-    }
-
-    /// Titles of the other chats running in this checkout, live for the prompt's
-    /// standing note and the command guard. A linked worktree is another checkout.
-    fn parallel_chats(&self, chat_id: &str, workspace: &std::path::Path) -> Vec<String> {
-        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let running: Vec<String> = sessions
-            .iter()
-            .filter(|(id, session)| {
-                id.as_str() != chat_id
-                    && session.is_running()
-                    && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        drop(sessions);
-        running.into_iter().map(|id| crate::infra::chat_store::title(&id).ok().flatten().unwrap_or(id)).collect()
-    }
-
-    fn running_turns(&self) -> usize {
-        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        sessions.values().filter(|session| session.is_running()).count()
-    }
-
-    pub(crate) fn ensure_chat_idle(&self, chat_id: &str) -> Result<(), String> {
-        if self.session(chat_id).is_running() {
-            Err("this chat's turn is running — wait for it to finish before moving or deleting it".into())
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Automatic cleanup never removes a checkout another turn is still using.
-    pub(crate) fn root_is_idle(&self, workspace: &std::path::Path) -> bool {
-        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        !sessions.values().any(|session| {
-            session.is_running()
-                && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
-        })
-    }
-
-    /// A checkout moves every chat's folder, so none may be running in it.
-    pub(crate) fn ensure_tree_is_idle(&self) -> Result<(), String> {
-        if self.running_turns() == 0 {
-            Ok(())
-        } else {
-            Err("an agent turn is running in this folder — wait for it to finish, or start a worktree for the new chat".to_string())
-        }
-    }
-
-    pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
-        self.workspace
-            .lock()
-            .map_err(|_| "workspace lock poisoned".to_string())?
-            .clone()
-            .ok_or_else(|| "no folder is open".to_string())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_workspace_for_test(&self, workspace: PathBuf) {
-        *self.workspace.lock().unwrap() = Some(workspace);
-    }
-
-    /// The checkout this chat belongs to, not whichever folder is open now.
-    /// An unsaved chat has no record yet and starts in the open folder.
-    pub(crate) fn chat_workspace(&self, chat_id: &str) -> Result<(PathBuf, Option<String>), String> {
-        let record = match crate::infra::chat_store::load(chat_id) {
-            Ok(record) => Some(record),
-            Err(crate::domain::chat_record::ChatError::NotFound(_)) => None,
-            Err(e) => return Err(e.to_string()),
-        };
-        let Some(record) = record else { return Ok((self.workspace()?, None)) };
-        let root = crate::infra::paths::canonicalize_plain(std::path::Path::new(&record.workspace))
-            .map_err(|e| format!("cannot open the chat's folder {}: {e}", record.workspace))?;
-        if !root.is_dir() {
-            return Err(format!("the chat's folder {} is not a folder", record.workspace));
-        }
-        Ok((root, record.worktree_base))
-    }
-
-    /// Prompt measuring also works before any folder is open, as it did for
-    /// an unsaved chat; a saved chat still reads only its own checkout.
-    fn chat_prompt_workspace(&self, chat_id: &str) -> Result<Option<PathBuf>, String> {
-        match crate::infra::chat_store::load(chat_id) {
-            Ok(_) => self.chat_workspace(chat_id).map(|(root, _)| Some(root)),
-            Err(crate::domain::chat_record::ChatError::NotFound(_)) => Ok(self.workspace().ok()),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-
-    fn picked(&self) -> PickedMode {
-        // A poisoned lock loses the choice, not the turn.
-        self.mode.lock().map_or(PickedMode::default(), |mode| *mode)
-    }
-
-    fn mode(&self) -> ConversationMode {
-        self.picked().into()
-    }
-
-    fn approval(&self) -> Result<ApprovalPolicy, String> {
-        Ok(self
-            .approval
-            .lock()
-            .map_err(|_| "approval lock poisoned".to_string())?
-            .clone())
-    }
-}
-
-/// Opens a folder as the workspace. Canonicalized here, once, so every path a
-/// tool resolves later is measured against a real directory rather than
-/// against whatever spelling the caller used.
-///
-/// Also makes it the indexed folder. The index opening is awaited — it reads
-/// what was embedded before, off the UI thread — and its first sync is not.
-/// An index that cannot open does not stop the folder opening: the reason
-/// arrives on `workspace-index:event`, and the agent works without search.
-#[tauri::command]
-pub async fn workspace_open(
-    path: String,
-    keep_running: Option<bool>,
-    app: AppHandle,
-    state: State<'_, Arc<AgentState>>,
-    index: State<'_, Arc<WorkspaceIndex>>,
-    git_watch: State<'_, super::git::GitWatch>,
-) -> Result<String, String> {
-    // Without `\\?\` on Windows: it is what the folder is known by from
-    // here on — the shell started in it (`cmd.exe` refuses that prefix and
-    // opens in `C:\Windows`), the tools' root, the index's events, the keys
-    // chats and trust are saved under.
-    let resolved = crate::infra::paths::canonicalize_plain(std::path::Path::new(&path))
-        .map_err(|e| format!("cannot open {path}: {e}"))?;
-    if !resolved.is_dir() {
-        return Err(format!("{path} is not a folder"));
-    }
-    *state
-        .workspace
-        .lock()
-        .map_err(|_| "workspace lock poisoned".to_string())? = Some(resolved.clone());
-    // A chat moved to its worktree must not stop the neighbouring chat's
-    // processes. Ordinary folder switches keep the old behaviour.
-    if keep_running != Some(true) {
-        if let Some(processes) = app.try_state::<Arc<Processes>>() {
-            processes.stop_all();
-        }
-        if let Some(terminals) = app.try_state::<Arc<crate::infra::terminal::Terminals>>() {
-            terminals.close_all();
-        }
-    }
-
-    let shown = resolved.display().to_string();
-    // Only a convenience for the next launch: a folder that opened stays open
-    // even if the list could not be written.
-    if let Err(e) = crate::infra::recent_workspaces::record(&shown) {
-        eprintln!("recent folders not saved: {e}");
-    }
-    super::git::watch_git(&app, &git_watch, &resolved, shown.clone());
-    let index = Arc::clone(&index);
-    let sink = index_event_sink(&app, shown.clone());
-    // Reported through the sink; see above.
-    let _ = tauri::async_runtime::spawn_blocking(move || index.open(&resolved, sink)).await;
-    Ok(shown)
-}
-
-/// A folder opened lately, and whose worktree it is if it is one — so the
-/// folder menu can show it under the repository it belongs to.
-#[derive(Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecentFolder {
-    path: String,
-    worktree_of: Option<String>,
-}
-
-/// Folders opened lately that still exist, the last one first.
-#[tauri::command]
-pub fn workspace_recent() -> Vec<RecentFolder> {
-    recent_folders(crate::infra::recent_workspaces::load())
-}
-
-/// Drops a folder from the list the window offers at launch. Nothing on disk
-/// is touched — the entry goes, the folder and its chats stay. The open folder
-/// may be dropped too: it stays open, and the next launch opens another one.
-#[tauri::command]
-pub fn workspace_forget(path: String) -> Result<(), String> {
-    crate::infra::recent_workspaces::forget(&path).map_err(|e| e.to_string())
-}
-
-fn recent_folders(paths: Vec<String>) -> Vec<RecentFolder> {
-    paths
-        .into_iter()
-        .map(|path| {
-            let worktree_of = crate::infra::git_head::worktree_of(std::path::Path::new(&path));
-            RecentFolder { worktree_of: worktree_of.map(|main| main.display().to_string()), path }
-        })
-        .collect()
-}
-
-#[tauri::command]
-pub fn workspace_current(state: State<'_, Arc<AgentState>>) -> Option<String> {
-    state
-        .workspace
-        .lock()
-        .ok()?
-        .clone()
-        .map(|path| path.display().to_string())
-}
-
-/// The branch checked out in the open folder; `None` when it is not a
-/// repository or nothing is open.
-#[tauri::command]
-pub async fn workspace_branch(state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
-    let Ok(root) = state.workspace() else { return Ok(None) };
-    super::blocking(move || Ok::<_, String>(crate::infra::git_head::current_branch(&root))).await
-}
-
-/// The main working tree when the open folder is a worktree of it; `None`
-/// for an ordinary folder or repository.
-#[tauri::command]
-pub async fn workspace_worktree_of(state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
-    let Ok(root) = state.workspace() else { return Ok(None) };
-    super::blocking(move || Ok::<_, String>(crate::infra::git_head::worktree_of(&root).map(|path| path.display().to_string())))
-        .await
-}
-
-/// The open folder's index as it stands — what a window that was not
-/// listening when the sync began (a reload, say) starts from before the next
-/// `workspace-index:event`.
-#[derive(Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexSnapshot {
-    /// The same string `workspace_open` returned, which the events carry too.
-    root: String,
-    syncing: bool,
-    embedded: usize,
-    skipped: usize,
-    embedding_error: Option<String>,
-}
-
-#[tauri::command]
-pub fn workspace_index_status(index: State<'_, Arc<WorkspaceIndex>>) -> Option<IndexSnapshot> {
-    snapshot(&index)
-}
-
-fn snapshot(index: &WorkspaceIndex) -> Option<IndexSnapshot> {
-    let indexer = index.current()?;
-    let status = indexer.status();
-    Some(IndexSnapshot {
-        root: indexer.root().display().to_string(),
-        syncing: status.syncing,
-        embedded: status.embedded,
-        skipped: status.skipped.len(),
-        embedding_error: status.embedding_error,
-    })
-}
+use super::agent_state::{AgentState, SessionHandle, RunningTurn};
 
 /// Starts a fresh turn and resolves when it ends, pauses, or is stopped.
 ///
@@ -634,43 +221,11 @@ pub async fn chat_context_usage(
     .await
 }
 
-/// What the next turn will send in front of the conversation: the prompt
-/// parts and tools `run_off_the_event_loop` gathers, read the same way — but
-/// MCP servers only as they run now, since none is started to be measured,
-/// and the shell by name, since probing it runs it. Without an open folder,
-/// the prompt a turn there would have.
+/// What the next turn of the open window will send in front of the
+/// conversation ([`turn_setup::next_folder_frame`]), in the mode picked now.
 fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, workspace: Option<PathBuf>) -> RequestFrame {
-    let root = workspace.as_deref();
-    let mode = state.mode();
-    let skills = crate::services::skills::enabled_catalog(root).unwrap_or_default();
-    let rules = root.map(crate::services::project_rules::load).unwrap_or_default();
     let servers = app.try_state::<Arc<McpServers>>();
-    let mcp = match (root, crate::services::turn_setup::servers_for(servers.as_ref().map(|s| s.as_ref()), mode)) {
-        (Some(root), Some(servers)) => servers.running(root),
-        _ => McpTools::default(),
-    };
-    let worktree_of = root.and_then(crate::infra::git_head::worktree_of);
-    let shell = crate::infra::shells::for_commands();
-    let today = crate::services::llm_chat::today();
-    let features = crate::services::features::enabled();
-    context_compaction::request_frame(
-        &TurnContext {
-            mode,
-            workspace: root.unwrap_or(std::path::Path::new("")),
-            shell: &shell.program,
-            today: &today,
-            skills: &skills,
-            rules: &rules,
-            worktree_of: worktree_of.as_deref(),
-            parallel: None,
-            // Read like the rest of the frame: as the next turn will read it.
-            language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
-            mcp_servers: mcp.notes(),
-        },
-        &mcp,
-        crate::services::web_search::is_on(WebSearchPlace::Agent),
-        &features,
-    )
+    turn_setup::next_folder_frame(workspace.as_deref(), state.mode(), servers.as_ref().map(|s| s.as_ref()))
 }
 
 /// Journals the turn `turn_id` for the next-prompt model: its input, built
@@ -753,108 +308,6 @@ pub fn chat_steer(
 #[tauri::command]
 pub fn chat_cancel_steer(id: String, chat_id: String, state: State<'_, Arc<AgentState>>) -> bool {
     state.session(&chat_id).steering.cancel(&id)
-}
-
-/// "Always allow this tool", from an approval card. Lasts as long as the app
-/// runs and no longer.
-#[tauri::command]
-pub fn approval_always_allow(tool: String, state: State<'_, Arc<AgentState>>) -> Result<(), String> {
-    state
-        .approval
-        .lock()
-        .map_err(|_| "approval lock poisoned".to_string())?
-        .allow_always(&tool)
-}
-
-/// What the conversation is for: everything, or answering only. Takes effect
-/// from the next turn, and never retroactively — a turn already paused on an
-/// approval card runs the calls the user decided on.
-#[tauri::command]
-pub fn chat_set_mode(
-    mode: PickedMode,
-    state: State<'_, Arc<AgentState>>,
-) -> Result<(), String> {
-    set_mode(&state, mode)
-}
-
-/// Written first: a choice that cannot be kept is refused whole, and the chip,
-/// which moves when this says yes, never shows what the backend is not doing.
-fn set_mode(state: &AgentState, mode: PickedMode) -> Result<(), String> {
-    crate::infra::settings_store::update(|s| s.conversation_mode = mode).map_err(|e| e.to_string())?;
-    *state.mode.lock().map_err(|_| "mode lock poisoned".to_string())? = mode;
-    Ok(())
-}
-
-/// The mode turns run in now, for the composer's panel when the window opens.
-#[tauri::command]
-pub fn chat_mode(state: State<'_, Arc<AgentState>>) -> PickedMode {
-    state.picked()
-}
-
-/// Runs the whole turn without asking. Deliberately not persisted anywhere.
-#[tauri::command]
-pub fn approval_set_unattended(
-    unattended: bool,
-    chat_id: Option<String>,
-    state: State<'_, Arc<AgentState>>,
-) -> Result<(), String> {
-    set_unattended(&state, unattended, chat_id.as_deref())
-}
-
-fn set_unattended(state: &AgentState, unattended: bool, chat_id: Option<&str>) -> Result<(), String> {
-    set_skip_all(state, unattended)?;
-    // Remembered after it took effect: a settings file that cannot be read
-    // costs the memory, not the choice made for this turn.
-    // No folder open, nothing to remember it for.
-    let Ok(folder) = state.workspace() else { return Ok(()) };
-    crate::infra::settings_store::update(|s| s.approval.set_auto(chat_id, &folder.display().to_string(), unattended))
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Puts back what was chosen for this chat, or for the open folder, and says
-/// what it is. Ask when nothing was, or no folder is open.
-#[tauri::command]
-pub fn approval_restore(chat_id: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<bool, String> {
-    restore_unattended(&state, chat_id.as_deref())
-}
-
-fn restore_unattended(state: &AgentState, chat_id: Option<&str>) -> Result<bool, String> {
-    let settings = crate::infra::settings_store::load().map_err(|e| e.to_string())?;
-    let auto = state
-        .workspace()
-        .is_ok_and(|folder| settings.approval.is_auto(chat_id, &folder.display().to_string()));
-    set_skip_all(state, auto)?;
-    Ok(auto)
-}
-
-#[tauri::command]
-pub fn approval_remember_get() -> Result<RememberScope, String> {
-    Ok(crate::infra::settings_store::load().map_err(|e| e.to_string())?.approval.remember)
-}
-
-/// Refuses on settings it cannot read, rather than saving defaults over them.
-#[tauri::command]
-pub fn approval_remember_set(remember: RememberScope) -> Result<(), String> {
-    crate::infra::settings_store::update(|s| s.approval.remember = remember).map_err(|e| e.to_string())
-}
-
-/// A chat switched to Auto before its first save had no id to be remembered
-/// by; it has one now. Best effort: the chat is saved either way, and a
-/// memory that failed to save only means it asks next time.
-pub(super) fn remember_new_chat(state: &AgentState, id: &str) {
-    let auto = state.approval.lock().is_ok_and(|approval| approval.skip_all);
-    if !auto {
-        return;
-    }
-    let _ = crate::infra::settings_store::update(|s| {
-        s.approval.remember == RememberScope::Chat && s.approval.set_auto(Some(id), "", true)
-    });
-}
-
-fn set_skip_all(state: &AgentState, unattended: bool) -> Result<(), String> {
-    state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.skip_all = unattended;
-    Ok(())
 }
 
 /// The chat folder's search, for the turn's tools. A background chat never
@@ -979,6 +432,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     /// A turn's starts are its chat's, so the tabs list them under it.
     #[cfg(unix)]
@@ -992,9 +446,9 @@ mod tests {
         assert_eq!((processes.list_for("c1").len(), agents.list_for("c1").len()), (1, 1));
         processes.stop_all();
     }
-    use crate::domain::tools::ToolName;
+    
     use crate::testing::temp_dir;
-    use std::path::Path;
+    
 
     /// So is a compaction's summary, "Compact now" or before a message.
     #[test]
@@ -1136,99 +590,6 @@ mod tests {
         });
     }
 
-    fn next_prompt_turn(session: &SessionHandle, id: &str, events: &[ChatEventPayload]) {
-        events.iter().for_each(|event| session.observe(event));
-        let done = crate::domain::turn::ChatDone { result: Default::default(), todos: Vec::new(), history: Vec::new(), limit_reached: None };
-        session.end_turn(id.to_string(), &ChatStreamOutcome::Done(done));
-    }
-
-    fn said(text: &str) -> ChatEventPayload {
-        ChatEventPayload::RoundCompleted { text: text.into(), reasoning: String::new(), truncated: false }
-    }
-
-    /// A late call for an older turn must not take the newer one's place in
-    /// the journal, and a turn is journaled once.
-    #[test]
-    fn the_next_prompt_journal_takes_a_finished_turn_once_and_only_by_its_id() {
-        let state = state();
-        let session = state.session("c1");
-        session.begin_turn(state.mode());
-        next_prompt_turn(&session, "turn-2", &[said("ok")]);
-
-        assert!(session.take_finished("turn-1").is_none());
-        assert!(session.take_finished("turn-2").is_some(), "another turn's is left where it was");
-        assert!(session.take_finished("turn-2").is_none());
-    }
-
-    /// An analyst opens the app as they left it; the next window is the next
-    /// `restored`.
-    #[test]
-    fn the_mode_picked_outlives_the_window() {
-        crate::testing::with_app_dir("chat-mode-kept", || {
-            assert_eq!(AgentState::restored().picked(), PickedMode::Agent, "nothing picked yet");
-            std::fs::write(crate::infra::settings_store::path().unwrap(), "{}").unwrap();
-            assert_eq!(AgentState::restored().picked(), PickedMode::Agent, "a file from before the choice");
-            let state = state();
-            set_mode(&state, PickedMode::Analyst).unwrap();
-            assert_eq!(state.mode(), ConversationMode::Analyst);
-            assert_eq!(AgentState::restored().mode(), ConversationMode::Analyst);
-        });
-    }
-
-    /// Settings that cannot be read back to change refuse the choice: the
-    /// backend stays where the chip stays. So at the start, a window opens in Agent.
-    #[test]
-    fn a_choice_that_cannot_be_kept_is_not_made() {
-        crate::testing::with_app_dir("chat-mode-unwritable", || {
-            let state = state();
-            set_mode(&state, PickedMode::Analyst).unwrap();
-            std::fs::write(crate::infra::settings_store::path().unwrap(), "not json").unwrap();
-            assert!(set_mode(&state, PickedMode::Agent).is_err());
-            assert_eq!(state.picked(), PickedMode::Analyst);
-            assert_eq!(AgentState::restored().picked(), PickedMode::Agent);
-        });
-    }
-
-    /// A new turn starts from nothing, in the mode it starts in — and does
-    /// not wipe the last one before the window has journaled it.
-    #[test]
-    fn a_new_turn_starts_the_next_prompt_signals_afresh() {
-        let state = state();
-        let session = state.session("c1");
-        session.begin_turn(state.mode());
-        next_prompt_turn(&session, "turn-1", &[said("first")]);
-        *state.mode.lock().unwrap() = PickedMode::Analyst;
-        session.begin_turn(state.mode());
-        next_prompt_turn(&session, "turn-2", &[said("second")]);
-
-        let input = session.take_finished("turn-2").expect("journaled").model_input("u", "");
-        assert!(input.starts_with("<mode>ask"), "{input}");
-        assert!(input.ends_with("<agent>second"), "{input}");
-    }
-
-    /// Each chat is reached through its own handle: one chat's stop says
-    /// nothing to another's turn, a note waits in the queue it was typed at,
-    /// and each chat journals its own finished turn.
-    #[test]
-    fn one_chats_turn_is_reached_without_touching_anothers() {
-        let state = state();
-        let one = state.session("c1");
-        let other = state.session("c2");
-
-        one.cancel.store(true, Ordering::SeqCst);
-        assert!(one.cancel.load(Ordering::SeqCst));
-        assert!(!other.cancel.load(Ordering::SeqCst), "the other chat's turn runs on");
-
-        one.steering.push(SteeringNote::user("use the helper"));
-        assert!(other.steering.take().is_empty(), "not the other chat's note");
-        assert_eq!(one.steering.take().len(), 1);
-
-        other.begin_turn(state.mode());
-        next_prompt_turn(&other, "turn-1", &[said("done")]);
-        assert!(one.take_finished("turn-1").is_none(), "not the one chat's turn to journal");
-        assert!(other.take_finished("turn-1").is_some());
-    }
-
     /// The commands route by chat id: a stop, a note and its withdrawal land
     /// on that chat's handle and no other.
     #[test]
@@ -1365,28 +726,6 @@ mod tests {
         });
     }
 
-    /// One chat, one turn; the limit counts across chats; a guard's drop
-    /// frees its slot.
-    #[test]
-    fn a_chat_runs_one_turn_and_the_limit_counts_across_chats() {
-        let state = state();
-        let root = Path::new("/repo");
-        let one = state.begin_running("c1", 3, root).expect("the first turn runs");
-        let refused = state.begin_running("c1", 3, root).expect_err("the same chat refuses");
-        assert!(refused.contains("already running"), "{refused}");
-
-        let two = state.begin_running("c2", 2, root).expect("another chat's turn runs beside it");
-        let over = state.begin_running("c3", 2, root).expect_err("the limit binds across chats");
-        assert!(over.contains("limit"), "{over}");
-
-        drop(one);
-        state.begin_running("c3", 2, root).expect("a finished turn frees its slot");
-        drop(two);
-
-        // A hand-edited zero in the settings still lets one turn run.
-        state.begin_running("c4", 0, root).expect("a zero limit still runs one");
-    }
-
     #[test]
     fn a_paused_turn_refuses_a_fresh_start_until_it_is_resumed() {
         crate::testing::with_app_dir("cmd-paused-chat-turn", || {
@@ -1426,66 +765,6 @@ mod tests {
             drop(state.begin_resume("c1", 3, &root).expect("the card resumes its own turn"));
             state.begin_running("c1", 3, &root).expect("after the resume ends, a fresh turn may start");
         });
-    }
-
-    #[test]
-    fn turn_admission_waits_for_a_tree_mutation() {
-        let state = state();
-        let tree = crate::domain::command_risk::git_tree_lock();
-        let (admitted, wait) = std::sync::mpsc::channel();
-        std::thread::scope(|threads| {
-            threads.spawn(|| {
-                let guard = state.begin_running("c1", 3, Path::new("/repo")).expect("turn runs after the mutation");
-                admitted.send(()).unwrap();
-                drop(guard);
-            });
-            assert!(wait.recv_timeout(std::time::Duration::from_millis(50)).is_err(), "admission crossed the tree lock");
-            drop(tree);
-            wait.recv_timeout(std::time::Duration::from_secs(1)).expect("admission resumes with the lock");
-        });
-    }
-
-    #[test]
-    fn parallel_chats_are_scoped_to_their_checkout() {
-        let state = state();
-        let root = Path::new("/repo");
-        let linked = Path::new("/repo-worktree");
-        let one = state.begin_running("c1", 3, root).expect("the first turn runs");
-        let two = state.begin_running("c2", 3, root).expect("the second turn runs");
-        let three = state.begin_running("c3", 3, linked).expect("a worktree turn runs");
-        assert_eq!(state.parallel_chats("c1", root), vec!["c2"]);
-        assert_eq!(state.parallel_chats("c3", linked), Vec::<String>::new());
-        drop(two);
-        assert_eq!(state.parallel_chats("c1", root), Vec::<String>::new());
-        drop(one);
-        drop(three);
-    }
-
-    #[test]
-    fn a_checkout_waits_for_every_running_turn() {
-        let state = state();
-        state.ensure_tree_is_idle().expect("an idle tree can be switched");
-        let running = state.begin_running("c1", 2, Path::new("/repo")).expect("the turn runs");
-        let refused = state.ensure_tree_is_idle().expect_err("a running turn holds the tree");
-        assert!(refused.contains("worktree"), "{refused}");
-        drop(running);
-        state.ensure_tree_is_idle().expect("the finished turn releases the tree");
-    }
-
-    /// The turn's thread dying with the guard frees the mark all the same —
-    /// the Drop, not the happy path, is what the next start relies on.
-    #[test]
-    fn a_panicked_turn_frees_its_slot() {
-        let state = state();
-        let root = Path::new("/repo");
-        let guard = state.begin_running("c1", 3, root).expect("the turn runs");
-        std::thread::spawn(move || {
-            let _guard = guard;
-            panic!("the turn's thread died");
-        })
-        .join()
-        .expect_err("the thread panicked");
-        state.begin_running("c1", 3, root).expect("a panicked turn frees its slot");
     }
 
     /// A refused start is only a refusal: the running turn's stop flag — a
@@ -1724,73 +1003,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn a_recent_worktree_names_the_repository_it_belongs_to() {
-        let main = temp_dir("cmd-recent-main");
-        let repo = git2::Repository::init(&main).unwrap();
-        let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
-        let sig = git2::Signature::now("T", "t@example.com").unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[]).unwrap();
-        let head = repo.head().unwrap().shorthand().unwrap().to_string();
-        let linked =
-            crate::infra::git_branches::add_worktree(&main, &head, "t", &temp_dir("cmd-recent-home")).unwrap();
-
-        let folders = recent_folders(vec![linked.display().to_string(), main.display().to_string()]);
-        let shown = |path: &str| std::path::Path::new(path).canonicalize().unwrap();
-        assert_eq!(folders[0].path, linked.display().to_string());
-        assert_eq!(folders[0].worktree_of.as_deref().map(shown), Some(main.canonicalize().unwrap()));
-        assert_eq!(folders[1], RecentFolder { path: main.display().to_string(), worktree_of: None });
-    }
-
-    fn skip_all(state: &AgentState) -> bool {
-        state.approval.lock().unwrap().skip_all
-    }
-
-    /// Auto is remembered for the chat, or for the folder, and put back from
-    /// there; a chat switched to Auto before it had an id keeps it once saved.
-    #[test]
-    fn ask_or_auto_is_remembered_and_put_back() {
-        crate::testing::with_app_dir("cmd-approval-memory", || {
-            let state = state();
-            // No folder: it takes effect, and nothing is remembered.
-            set_unattended(&state, true, Some("c0")).unwrap();
-            assert!(skip_all(&state));
-            assert!(!restore_unattended(&state, Some("c0")).unwrap(), "no folder asks");
-
-            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-approval-folder").canonicalize().unwrap());
-            set_unattended(&state, true, Some("c1")).unwrap();
-            assert!(!restore_unattended(&state, Some("c2")).unwrap());
-            assert!(!skip_all(&state), "the other chat asks, and the policy says so");
-            assert!(restore_unattended(&state, Some("c1")).unwrap());
-            assert!(skip_all(&state));
-
-            // A new chat picked Auto with no id; its first save remembers it.
-            set_unattended(&state, true, None).unwrap();
-            remember_new_chat(&state, "c3");
-            assert!(restore_unattended(&state, Some("c3")).unwrap());
-            set_unattended(&state, false, Some("c3")).unwrap();
-            remember_new_chat(&state, "c4");
-            assert!(!restore_unattended(&state, Some("c4")).unwrap(), "saved under Ask, it asks");
-
-            // Per repository, one choice for every chat, a new one included.
-            let mut settings = crate::infra::settings_store::load().unwrap();
-            settings.approval.remember = RememberScope::Repository;
-            crate::infra::settings_store::save(&settings).unwrap();
-            assert!(!restore_unattended(&state, Some("c1")).unwrap(), "the chat's choice is not the folder's");
-            set_unattended(&state, true, Some("c1")).unwrap();
-            assert!(restore_unattended(&state, None).unwrap());
-            let before = crate::infra::settings_store::load().unwrap().approval;
-            remember_new_chat(&state, "c5");
-            assert_eq!(crate::infra::settings_store::load().unwrap().approval, before, "the folder already holds it");
-        });
-    }
-
-    #[test]
-    fn a_turn_needs_a_folder_before_it_can_start() {
-        let err = state().workspace().expect_err("nothing is open");
-        assert!(err.contains("no folder"), "{err}");
-    }
-
     /// A chat is saved with the branch its folder has out at that moment —
     /// read at the save, so a switch the turn made is the one kept.
     #[test]
@@ -1820,68 +1032,6 @@ mod tests {
     }
 
     #[test]
-    fn opening_a_folder_canonicalizes_it_once() {
-        let state = state();
-        let root = temp_dir("cmd-workspace");
-        std::fs::create_dir(root.join("inner")).unwrap();
-
-        let spelled = format!("{}/inner/..", root.display());
-        *state.workspace.lock().unwrap() = Some(
-            PathBuf::from(&spelled)
-                .canonicalize()
-                .expect("canonicalizes"),
-        );
-
-        let opened = state.workspace().unwrap();
-        assert!(!opened.to_string_lossy().contains(".."), "{opened:?}");
-        assert!(opened.is_dir());
-    }
-
-    /// The card's third button. It lasts for the session and is not written
-    /// anywhere — a saved "never ask me" is a brake nobody remembers releasing.
-    #[test]
-    fn always_allow_widens_the_policy_for_that_tool_only() {
-        let state = state();
-        state
-            .approval
-            .lock()
-            .unwrap()
-            .always_allowed
-            .insert(ToolName::WriteFile);
-
-        let policy = state.approval().unwrap();
-        assert!(!policy.requires_approval(ToolName::WriteFile, true));
-        assert!(policy.requires_approval(ToolName::Delete, true));
-    }
-
-    #[test]
-    fn a_note_can_be_withdrawn_until_a_round_takes_it() {
-        let state = state();
-        let session = state.session("c1");
-        let note = SteeringNote::user("actually, use the helper");
-        let id = note.id.clone();
-        session.steering.push(note);
-
-        assert!(session.steering.cancel(&id));
-        assert!(session.steering.take().is_empty());
-        assert!(!session.steering.cancel(&id), "already gone");
-    }
-
-    /// A stop is remembered until a fresh turn clears it — that is what makes
-    /// "stop while the approval card is showing" work, since the resumed turn
-    /// reads the flag rather than being told again.
-    #[test]
-    fn a_stop_survives_until_the_next_fresh_turn() {
-        let state = state();
-        let session = state.session("c1");
-        session.cancel.store(true, Ordering::SeqCst);
-        assert!(session.cancel.load(Ordering::SeqCst));
-
-        session.cancel.store(false, Ordering::SeqCst);
-        assert!(!session.cancel.load(Ordering::SeqCst));
-    }
-
-    #[test]
     fn a_turn_gets_the_search_of_the_open_folder() {
         use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
         struct NoModel;
@@ -1904,51 +1054,5 @@ mod tests {
         index.open(&root, Arc::new(|_| {})).unwrap();
         assert!(searcher_of(app.handle(), &root).is_some());
         assert!(searcher_of(app.handle(), &temp_dir("cmd-search-other-repo")).is_none(), "a background chat cannot borrow another folder's index");
-    }
-
-    /// The snapshot names the folder the way the events do, and says why
-    /// search by meaning is off once a sync has found out.
-    #[test]
-    fn the_index_snapshot_speaks_for_the_open_folder() {
-        use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
-        struct NoModel;
-        impl EmbeddingProvider for NoModel {
-            fn embed(&self, _: &[&str]) -> Result<Vec<Embedding>, EmbeddingError> {
-                Err(EmbeddingError::Invalid("no model in this test".into()))
-            }
-            fn dimensions(&self) -> usize {
-                2
-            }
-        }
-        let index = WorkspaceIndex::new(temp_dir("cmd-snapshot-index"), Arc::new(NoModel));
-        assert_eq!(snapshot(&index), None);
-
-        let root = temp_dir("cmd-snapshot-repo").canonicalize().unwrap();
-        std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
-        std::fs::write(root.join("blob.bin"), [0u8, 159, 146, 150]).unwrap();
-        let (tx, finished) = std::sync::mpsc::channel();
-        let tx = Mutex::new(tx);
-        index
-            .open(
-                &root,
-                Arc::new(move |event| {
-                    if matches!(event, crate::domain::workspace_index::IndexEvent::SyncFinished { .. }) {
-                        let _ = tx.lock().unwrap().send(());
-                    }
-                }),
-            )
-            .unwrap();
-        // Not "the first finish": FSEvents may still report the files written
-        // above, and the sync that wakes is running when the first one ends.
-        let shot = loop {
-            finished.recv_timeout(std::time::Duration::from_secs(10)).expect("the sync never finished");
-            let shot = snapshot(&index).unwrap();
-            if !shot.syncing {
-                break shot;
-            }
-        };
-        assert_eq!(shot.root, root.display().to_string());
-        assert_eq!((shot.embedded, shot.skipped), (0, 1));
-        assert!(shot.embedding_error.as_deref().is_some_and(|e| e.contains("no model")), "{shot:?}");
     }
 }

@@ -35,6 +35,7 @@ pub mod rewind;
 pub mod image_sanitize;
 pub mod web_search;
 pub mod turn_setup;
+pub mod folder_open;
 pub mod provider_balance;
 pub mod dictation;
 pub mod meeting_notes;

@@ -131,16 +131,39 @@ pub fn search_many(
     filter: &SearchFilter,
 ) -> Result<CodeSearchResult, IndexStoreError> {
     let queries: Vec<&str> = queries.iter().copied().filter(|q| !q.trim().is_empty()).take(MAX_QUERIES).collect();
-    let first = queries.first().copied().unwrap_or_default();
     let all = queries.join(" ");
-    let include_docs = filter.include_docs;
     let top_k = top_k.clamp(1, MAX_TOP_K);
-    let store = indexer.store();
     let tokens = extract_search_tokens(&all);
+    let ranked = rank(indexer, &queries, fts, top_k, filter, &tokens)?;
+    let selected = select(indexer, ranked.chunks, top_k, filter);
+    let (weak, hint) = explain(indexer, &queries, &all, &tokens, &selected, ranked.unavailable)?;
+    Ok(CodeSearchResult { matches: selected.matches, meta: SearchMeta { tiers_used: ranked.tiers_used, weak, hint } })
+}
+
+/// Every candidate, best first; one may come more than once.
+struct Ranked {
+    chunks: Vec<(ChunkMetadata, MatchSource)>,
+    tiers_used: Vec<MatchSource>,
+    /// Why search by meaning gave nothing, when it could not run.
+    unavailable: Option<String>,
+}
+
+/// The declarations the wordings name, then every wording's words and meaning
+/// fused into one ranking and weighted ([`weight`]).
+fn rank(
+    indexer: &RepoIndexer,
+    queries: &[&str],
+    fts: Option<&[String]>,
+    top_k: usize,
+    filter: &SearchFilter,
+    tokens: &[String],
+) -> Result<Ranked, IndexStoreError> {
+    let first = queries.first().copied().unwrap_or_default();
+    let store = indexer.store();
     let mut ranked: Vec<(ChunkMetadata, MatchSource)> = Vec::new();
 
     let mut names: Vec<String> = Vec::new();
-    for query in &queries {
+    for query in queries {
         for name in names_in(query, &extract_search_tokens(query)) {
             if !names.contains(&name) {
                 names.push(name);
@@ -153,7 +176,7 @@ pub fn search_many(
         }
     }
 
-    let filtered = !include_docs || !filter.paths.is_empty();
+    let filtered = !filter.include_docs || !filter.paths.is_empty();
     let candidates = top_k * CANDIDATES_PER_MATCH * if filtered { FILTERED_SLACK } else { 1 };
     let mut tiers_used = vec![MatchSource::Symbol, MatchSource::Lexical];
     let mut unavailable = None;
@@ -187,14 +210,31 @@ pub fn search_many(
     let mut fused = Vec::new();
     for (id, score, source) in fuse_rrf(lists) {
         if let Some(chunk) = store.load_chunk(&id)? {
-            let score = score * weight(&chunk, &tokens, &by_history);
+            let score = score * weight(&chunk, tokens, &by_history);
             fused.push((chunk, score, source));
         }
     }
     // Stable: equal scores keep the order fusion gave them.
     fused.sort_by(|a, b| b.1.total_cmp(&a.1));
     ranked.extend(fused.into_iter().map(|(chunk, _, source)| (chunk, source)));
+    Ok(Ranked { chunks: ranked, tiers_used, unavailable })
+}
 
+/// What a search hands back, and what it left out on the way.
+struct Selected {
+    matches: Vec<CodeMatch>,
+    docs_left_out: Vec<(ChunkMetadata, MatchSource)>,
+    /// No code matched, and the documentation stands in for it.
+    docs_instead: bool,
+    paths_left_out: usize,
+}
+
+/// The first `top_k` of the ranking the filter allows, each passage once:
+/// no more than [`MAX_PER_FILE`] of one file while others wait, and
+/// documentation left out unless asked for — all but one passage that
+/// outranks all the code, or all of it when no code matched.
+fn select(indexer: &RepoIndexer, ranked: Vec<(ChunkMetadata, MatchSource)>, top_k: usize, filter: &SearchFilter) -> Selected {
+    let include_docs = filter.include_docs;
     let mut seen = HashSet::new();
     let mut matches = Vec::with_capacity(top_k);
     let mut docs_left_out: Vec<(ChunkMetadata, MatchSource)> = Vec::new();
@@ -256,14 +296,29 @@ pub fn search_many(
                 .take(top_k),
         );
     }
+    Selected { matches, docs_left_out, docs_instead, paths_left_out }
+}
 
+/// Whether the result is weak, and the one hint that says what to do about
+/// it. Later reasons outrank earlier ones: a filter that let nothing through
+/// beats documentation left out, which goes beside search by meaning being
+/// down, which beats words missing from the workspace and the ordinary advice.
+fn explain(
+    indexer: &RepoIndexer,
+    queries: &[&str],
+    all: &str,
+    tokens: &[String],
+    selected: &Selected,
+    unavailable: Option<String>,
+) -> Result<(bool, Option<String>), IndexStoreError> {
+    let Selected { matches, docs_left_out, docs_instead, paths_left_out } = selected;
     let symbol_hits = matches.iter().filter(|m| m.source == MatchSource::Symbol).count() as u32;
     let (weak, hint) = weak_search_hint(SearchMetaInput {
         match_count: matches.len(),
         symbol_hits,
         has_semantic: matches.iter().any(|m| m.source == MatchSource::Semantic),
         only_lexical: matches.iter().all(|m| m.source == MatchSource::Lexical),
-        extracted_tokens: &tokens,
+        extracted_tokens: tokens,
     });
     // No Latin words in any wording: a question in another language, and
     // "add an identifier" alone does not say what went wrong. The bench
@@ -285,7 +340,7 @@ pub fn search_many(
     // Not for a question in another language: its words are missing for
     // the language, and "may not be in this workspace" would be wrong.
     let mut absent = !matches.is_empty() && symbol_hits == 0 && !queries.is_empty() && !foreign;
-    for query in &queries {
+    for query in queries {
         if !absent {
             break;
         }
@@ -320,7 +375,7 @@ pub fn search_many(
     // Said even beside another hint: it is the one thing a second search can
     // change without rewording anything.
     let hint = match (docs_left_out.len(), hint) {
-        _ if docs_instead => Some(
+        _ if *docs_instead => Some(
             "No code matched, so these are documentation matches — documentation is left out of a search \
              when anything else matches, unless includeDocs is set."
                 .to_string(),
@@ -338,14 +393,14 @@ pub fn search_many(
     };
     // Nothing passed the path filter: without saying so this reads as
     // "nothing like it exists" rather than "not where you looked".
-    let hint = if matches.is_empty() && paths_left_out > 0 {
+    let hint = if matches.is_empty() && *paths_left_out > 0 {
         Some(format!(
             "None of the {paths_left_out} best matches passed glob/exclude; widen them or search without them."
         ))
     } else {
         hint
     };
-    Ok(CodeSearchResult { matches, meta: SearchMeta { tiers_used, weak, hint } })
+    Ok((weak, hint))
 }
 
 /// A passage as it stands on disk now, or `None` when its file changed since

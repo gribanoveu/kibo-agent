@@ -145,7 +145,7 @@
           "q": "refuse to overwrite a file that changed on disk after the agent read it",
           "expect": [
             {
-              "path": "src-tauri/src/domain/tools.rs",
+              "path": "src-tauri/src/domain/tools/read_files.rs",
               "name": "ReadFiles"
             }
           ]
@@ -155,7 +155,7 @@
           "q": "запретить запись в файл, изменившийся после чтения",
           "expect": [
             {
-              "path": "src-tauri/src/domain/tools.rs",
+              "path": "src-tauri/src/domain/tools/read_files.rs",
               "name": "ReadFiles"
             }
           ],
@@ -326,7 +326,7 @@
           "q": "dedupe_repeat_result",
           "expect": [
             {
-              "path": "src-tauri/src/services/llm_chat.rs",
+              "path": "src-tauri/src/services/llm_chat/calls.rs",
               "name": "dedupe_repeat_result"
             }
           ]
@@ -445,8 +445,8 @@
           "q": "where is dedupe_repeat_result called in the turn loop",
           "expect": [
             {
-              "path": "src-tauri/src/services/llm_chat.rs",
-              "name": "run"
+              "path": "src-tauri/src/services/llm_chat/calls.rs",
+              "name": "run_calls"
             }
           ],
           "answer": "caller"
@@ -467,7 +467,7 @@
           "q": "who calls is_context_length_error",
           "expect": [
             {
-              "path": "src-tauri/src/services/llm_chat.rs",
+              "path": "src-tauri/src/services/llm_chat/round.rs",
               "name": "too_long"
             }
           ],
