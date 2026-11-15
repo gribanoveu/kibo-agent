@@ -30,10 +30,18 @@
   }
 }
 
-/* With a scene the window's ground is the veil alone — the gradient Frost
-   draws where the system draws no glass would cover the scene. */
-:root[data-theme="frost"] .window.has-scene {
-  background: var(--glass-tint);
+/* With a scene nothing darkens it: the window and the panels are clear — a
+   scene is dark and quiet by its own rules — and only what is typed into or
+   stays put over a scroll is frosted: the message box here, the headings
+   below; what floats (menus, sheets) blurs already (tokens.css). */
+:root[data-theme="frost"] .window.has-scene,
+:root[data-theme="frost"] .window.has-scene :is(.main, .aside) {
+  background: transparent;
+}
+:root[data-theme="frost"] .window.has-scene .composer {
+  background: var(--bg-panel);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
 }
 /* Under the system glass the sidebar's headings lost their blur and stopped
    staying put, since WebKit drew it as a flat band there (tokens.css). Over a

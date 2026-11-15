@@ -164,19 +164,12 @@
   background: var(--bg-panel);
   color: var(--text);
 }
-/* A scene's card: its still picture, under the window's veil, under the
-   palette's look. */
+/* A scene's card: its still picture under the palette's look, nothing
+   between, as in the window (WindowScene.css). */
 .theme-preview.with-scene {
   position: relative;
   isolation: isolate;
   background: none;
-}
-.theme-preview.with-scene::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: var(--glass-tint);
 }
 .theme-preview-scene {
   position: absolute;
