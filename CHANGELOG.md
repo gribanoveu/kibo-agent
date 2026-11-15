@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-11-14 Frost, a dark theme of frozen glass: on macOS the desktop shows through the window, blurred
+- 2026-11-15 Frost and Rime, a dark and a light theme of frozen glass: on macOS the desktop shows through the window, blurred
 
 ## v0.13.0 — 2026-11-14
 

@@ -12,12 +12,12 @@ import { WindowScene } from "../components/WindowScene";
 
 // What the theme asks of the system's glass. The rest of the module stays the
 // real one, for every file that loads it after this one.
-const glass: boolean[] = [];
+const glass: ("light" | "dark" | null)[] = [];
 const realWindow = await import("../lib/window");
 mock.module("../lib/window", () => ({
   ...realWindow,
-  setWindowGlass: (on: boolean) => {
-    glass.push(on);
+  setWindowGlass: (side: "light" | "dark" | null) => {
+    glass.push(side);
     return false;
   },
 }));
@@ -131,20 +131,22 @@ describe("the chosen scene", () => {
 
 describe("the window's glass", () => {
   test("goes under Frost, but not under a scene or another palette", () => {
-    expect(glassUnder("frost", false)).toBe(true);
-    expect(glassUnder("frost", true)).toBe(false);
-    expect(glassUnder("ember", false)).toBe(false);
+    expect(glassUnder("frost", "dark", false)).toBe("dark");
+    expect(glassUnder("frost", "dark", true)).toBeNull();
+    expect(glassUnder("ember", "dark", false)).toBeNull();
+    // Scenes are Frost's: Rime keeps its glass with one chosen.
+    expect(glassUnder("rime", "light", true)).toBe("light");
   });
 
   test("the theme takes it away when a scene shows, and gives it back", () => {
     const { result, rerender } = renderHook(({ scene }) => useTheme(scene), { initialProps: { scene: false } });
     act(() => result.current.setMode("dark"));
     act(() => result.current.setPalette("frost"));
-    expect(glass.at(-1)).toBe(true);
+    expect(glass.at(-1)).toBe("dark");
     rerender({ scene: true });
-    expect(glass.at(-1)).toBe(false);
+    expect(glass.at(-1)).toBeNull();
     rerender({ scene: false });
-    expect(glass.at(-1)).toBe(true);
+    expect(glass.at(-1)).toBe("dark");
   });
 });
 

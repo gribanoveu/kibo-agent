@@ -176,7 +176,7 @@
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: var(--scene-veil);
+  background: var(--glass-tint);
 }
 .theme-preview-scene {
   position: absolute;

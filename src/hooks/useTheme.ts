@@ -7,6 +7,7 @@ export const SCHEMES = {
   chalk: "light",
   clay: "light",
   tide: "light",
+  rime: "light",
   ember: "dark",
   basalt: "dark",
   iris: "dark",
@@ -21,6 +22,7 @@ export const THEME_LABELS: Record<Theme, string> = {
   chalk: "Chalk",
   clay: "Clay",
   tide: "Tide",
+  rime: "Rime",
   ember: "Ember",
   basalt: "Basalt",
   iris: "Iris",
@@ -29,6 +31,9 @@ export const THEME_LABELS: Record<Theme, string> = {
 };
 
 /** The palettes on one side, in the order they are offered. */
+/** The palettes drawn as glass over the desktop: tints, with the system's blur under the window. */
+const GLASS: ReadonlySet<Theme> = new Set(["frost", "rime"]);
+
 export const themesOf = (scheme: Scheme) => (Object.keys(SCHEMES) as Theme[]).filter((t) => SCHEMES[t] === scheme);
 
 export const MODES = ["system", "light", "dark"] as const;
@@ -62,8 +67,12 @@ function stored(): ThemeChoice {
   return DEFAULT;
 }
 
-/** Whether the system's glass goes under the window: Frost's, unless a scene covers it. */
-export const glassUnder = (palette: Theme, sceneShown: boolean) => palette === "frost" && !sceneShown;
+/**
+ * The system's glass under the window, by the side it shows on: a glass
+ * palette's, unless Frost's scene covers it (scenes are Frost's alone).
+ */
+export const glassUnder = (palette: Theme, side: Scheme, sceneShown: boolean): Scheme | null =>
+  GLASS.has(palette) && !(palette === "frost" && sceneShown) ? side : null;
 
 const systemIsLight = () => window.matchMedia("(prefers-color-scheme: light)").matches;
 
@@ -89,11 +98,13 @@ export function useTheme(sceneShown = false) {
     }
     const apply = () => {
       const side = sideOf(choice);
-      document.documentElement.dataset.theme = choice[side];
+      const palette = choice[side];
+      document.documentElement.dataset.theme = palette;
       document.documentElement.dataset.scheme = side;
-      // Frost is see-through: the system's blur goes under the window only
-      // while it shows, since the other palettes paint over it anyway.
-      void setWindowGlass(glassUnder(choice[side], sceneShown));
+      // A glass palette is see-through: the system's blur goes under the
+      // window only while one shows, since the others paint over it anyway.
+      document.documentElement.toggleAttribute("data-glass", GLASS.has(palette));
+      void setWindowGlass(glassUnder(palette, side, sceneShown));
     };
     apply();
     // The window's edge in the app's side, not the system's. Under "system"

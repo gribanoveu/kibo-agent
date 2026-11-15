@@ -8,7 +8,7 @@
   z-index: -1;
   pointer-events: none;
   /* The frame fades in over this rather than over the desktop. */
-  background: var(--scene-ground);
+  background: var(--glass-ground);
 }
 [data-theme="frost"] .window-scene {
   display: block;
@@ -33,7 +33,7 @@
 /* With a scene the window's ground is the veil alone — the gradient Frost
    draws where the system draws no glass would cover the scene. */
 :root[data-theme="frost"] .window.has-scene {
-  background: var(--scene-veil);
+  background: var(--glass-tint);
 }
 /* Under the system glass the sidebar's headings lost their blur and stopped
    staying put, since WebKit drew it as a flat band there (tokens.css). Over a

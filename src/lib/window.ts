@@ -27,13 +27,18 @@ export const startWindowDrag = () => inTauri() && getCurrentWindow().startDraggi
 // The OS draws the window's edge in its own appearance: a light theme in a dark
 // system got a black outline. `null` follows the system again.
 export const setWindowTheme = (theme: "light" | "dark" | null) => inTauri() && getCurrentWindow().setTheme(theme);
-// The frosted glass under the Frost palette: macOS's dark HUD material behind
-// the transparent webview, kept on when the window loses focus. Only macOS —
-// Windows' window is opaque (above), and Frost draws a ground of its own there.
-export const setWindowGlass = (on: boolean) =>
+// The frosted glass under a glass palette, kept on when the window loses
+// focus: macOS's dark HUD material under Frost, and under Rime the window's own
+// material, which is light in a light window (useTheme sets the window's side).
+// `null` clears it. Only macOS — Windows' window is opaque (above), and the
+// glass palettes draw a ground of their own there.
+export const setWindowGlass = (side: "light" | "dark" | null) =>
   nativeFrame &&
-  (on
-    ? getCurrentWindow().setEffects({ effects: [Effect.HudWindow], state: EffectState.Active })
+  (side
+    ? getCurrentWindow().setEffects({
+        effects: [side === "dark" ? Effect.HudWindow : Effect.UnderWindowBackground],
+        state: EffectState.Active,
+      })
     : getCurrentWindow().clearEffects());
 
 /**
