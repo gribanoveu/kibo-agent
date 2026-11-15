@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { onAnyToolResult } from "../lib/chat";
+import { onFeaturesChanged } from "../lib/features";
 import { BUILTIN_SCENES } from "../lib/scenes";
 import { deleteScene, listScenes, readScene, type MadeScene } from "../lib/scenesApi";
 import { isBoolean, useStoredState } from "./useStoredState";
@@ -8,6 +10,12 @@ import { isBoolean, useStoredState } from "./useStoredState";
  * ships, one the model made, or none.
  */
 export type SceneChoice = { kind: "builtin" | "made"; id: string } | null;
+
+/** The scene a `paintScene` call kept, from its result (`ToolResult::ScenePainted`); null for any other. */
+export function paintedScene(result: unknown): string | null {
+  const painted = result as { result?: unknown; id?: unknown } | null | undefined;
+  return painted?.result === "scenePainted" && typeof painted.id === "string" ? painted.id : null;
+}
 
 /** A painted scene with its body, as the Generated group draws it. */
 export type MadeSceneBody = MadeScene & { body: string };
@@ -44,18 +52,39 @@ export function useScene() {
   const [made, setMade] = useState<MadeSceneBody[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(
-    () =>
-      readMade().then(
-        (next) => {
-          setMade(next);
-          setError(null);
-        },
-        (e) => setError(String(e)),
-      ),
-    [],
-  );
+  // Reads overlap — two scenes painted in a row, a delete while one is read —
+  // and finish in any order: only the last one started is kept.
+  const reads = useRef(0);
+  const reload = useCallback(() => {
+    const read = ++reads.current;
+    return readMade().then(
+      (next) => {
+        if (read !== reads.current) return;
+        setMade(next);
+        setError(null);
+      },
+      (e) => read === reads.current && setError(String(e)),
+    );
+  }, []);
+  // The scene painted last, the one chosen once its read is done.
+  const painted = useRef<string | null>(null);
   useEffect(() => void reload(), [reload]);
+
+  // A scene the model just painted is read and chosen — read first, or the
+  // window would show none until it arrived. The theme stays the user's.
+  // The Catalog's Delete data takes the painted scenes with it.
+  useEffect(() => {
+    const stops = [
+      onAnyToolResult(({ result }) => {
+        const id = paintedScene(result);
+        if (id === null) return;
+        painted.current = id;
+        void reload().then(() => painted.current === id && choose({ kind: "made", id }));
+      }),
+      onFeaturesChanged(() => void reload()),
+    ];
+    return () => stops.forEach((stop) => void stop.then((unlisten) => unlisten()));
+  }, [reload, choose]);
 
   const remove = useCallback(
     async (id: string) => {

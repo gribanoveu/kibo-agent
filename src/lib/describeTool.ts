@@ -88,6 +88,7 @@ export const LABELS: Record<string, string> = {
   board: "Board",
   mongo: "MongoDB",
   present: "Prototype",
+  paintScene: "Scene",
   toolSearch: "Find tools",
 };
 
@@ -327,6 +328,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         arg: str(result.title) ?? str(args.title) ?? "",
         meta: version === undefined ? undefined : `version ${version}`,
         detail: str(result.path) ?? str(args.path) ?? "",
+      };
+    }
+
+    // A scene for behind the window, by its name; the scene itself is in Settings.
+    case "paintScene": {
+      const html = str(args.html);
+      return {
+        name,
+        arg: str(result.title) ?? str(args.title) ?? "",
+        meta: html === undefined ? undefined : `${Math.max(1, Math.round(html.length / 1024))} KB`,
+        detail: "",
       };
     }
 
@@ -717,6 +729,7 @@ const ACTIVE_VERBS: Record<string, string> = {
   Output: "Reading the output of",
   Stop: "Stopping",
   Explore: "Exploring",
+  Scene: "Painting",
   Memory: "Saving to memory",
 };
 

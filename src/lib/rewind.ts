@@ -34,6 +34,8 @@ const ACCOUNTED = new Set([
   "mongo",
   // A version kept beside a Prototype chat's folder: history, which stays.
   "present",
+  // A scene for behind the window, in the app's own store.
+  "paintScene",
   "skill",
   "writePlan",
   // A button under the answer.

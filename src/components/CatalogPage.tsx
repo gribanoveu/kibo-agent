@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   Puzzle,
+  Snowflake,
   Sparkles,
   SquareKanban,
   SquareSlash,
@@ -62,6 +63,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   mongodb: MongoIcon,
   "voice-input": Mic,
   "layout-correction": Keyboard,
+  scenes: Snowflake,
 };
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {

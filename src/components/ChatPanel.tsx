@@ -33,6 +33,7 @@ import {
   ShipWheel,
   Terminal,
   TerminalSquare,
+  Snowflake,
   Trash2,
   RotateCcw,
   Undo2,
@@ -95,6 +96,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Board: SquareKanban,
   MongoDB: Database,
   Prototype: AppWindow,
+  Scene: Snowflake,
 };
 
 

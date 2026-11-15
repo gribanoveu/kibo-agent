@@ -32,6 +32,15 @@ describe("what each call shows", () => {
     expect(done).toMatchObject({ name: "Prototype", arg: "Coffee shop", meta: "version 3", detail: "index.html" });
   });
 
+  test("a painted scene shows its name and its size, and what it is doing while it runs", () => {
+    const html = "<i></i>".repeat(1000);
+    const args = JSON.stringify({ title: "Snowy forest", html });
+    const done = describeTool(tool({ name: "paintScene", arguments: args, result: { result: "scenePainted", id: "x", title: "Snowy forest" } }));
+    expect(done).toMatchObject({ name: "Scene", arg: "Snowy forest", meta: "7 KB", detail: "" });
+    expect(describeTool(tool({ name: "paintScene", arguments: '{"title":"Lake","html":"<i>"}' }))).toMatchObject({ arg: "Lake", meta: "1 KB" });
+    expect(describeActive(tool({ name: "paintScene", arguments: args, status: "running" }))).toBe("Painting Snowy forest");
+  });
+
   test("a board call names the card it is about, and an edit shows the note it wrote", () => {
     const board = (args: string) => describeTool(tool({ name: "board", arguments: args, result: { cards: [{}, {}] } }));
     expect(board('{"op":"add","title":"Renew cert"}')).toMatchObject({ name: "Board", arg: "Renew cert", meta: "2 cards" });
