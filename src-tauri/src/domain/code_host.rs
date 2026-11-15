@@ -12,10 +12,12 @@
 //! a remote only says which of the configured servers to look at (`server_for`)
 //! and where a form should put its own guess at a base address (`base_url`).
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum CodeHostError {
     /// Not an address this app can read a project and a repository out of. The
     /// caller shows the base address with empty project and slug fields rather
@@ -55,6 +57,20 @@ pub enum CodeHostError {
     Insecure(String),
     #[error("{0}")]
     Store(String),
+    /// The server answered for the repository and none of its clone links is
+    /// the folder's remote: it is some other server's, and no alias is learnt.
+    #[error("the server does not list {0} among its clone links — it is not this repository's server")]
+    NotOnServer(String),
+    #[error("the branch {0} has no open pull request")]
+    NoPullRequest(String),
+    #[error("the branch {0} is not on the server — push it first")]
+    NotPushed(String),
+    #[error("{0} is not a server address — it starts with https:// and names a host")]
+    BadAddress(String),
+    /// A detached HEAD, or a folder that is no repository: there is no branch
+    /// for a pull request to come from.
+    #[error("no branch is checked out")]
+    NoBranch,
 }
 
 fn unreadable(url: &str) -> CodeHostError {
@@ -333,6 +349,10 @@ pub struct Call<'a> {
 /// `infra::bitbucket_client` implements it; a test's own double stands in for
 /// it where the service is tested (BB-3).
 pub trait CodeHost: Send + Sync {
+    /// What the server says it is, asked without a token — the connect form's
+    /// check that the address is this kind of server at all. `Err` when it
+    /// answers as something else.
+    fn identify(&self, server: &CodeHostServer) -> Result<String, CodeHostError>;
     /// The repository's clone links — the membership check of decision 1, which
     /// the domain does with [`canonical_remote`], not this.
     fn clone_links(&self, call: &Call) -> Result<Vec<String>, CodeHostError>;
@@ -433,6 +453,61 @@ pub struct Snapshot {
     /// `None` until the strip has asked, which is not the same as "no".
     pub merge: Option<MergeCheck>,
     pub builds: Vec<Build>,
+}
+
+/// What the strip shows for the open folder, from nothing to a pull request.
+///
+/// Compared whole by the watcher, like [`Snapshot`]: what is in here is what
+/// is drawn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "state")]
+pub enum PrStrip {
+    /// No remote, or not a repository: nothing to show.
+    NoRemote,
+    /// A detached HEAD: no branch for a pull request.
+    NoBranch,
+    /// A remote no configured server answers to: the connect form, filled
+    /// from what the remote says.
+    #[serde(rename_all = "camelCase")]
+    NotConnected { remote: RemoteRepo },
+    #[serde(rename_all = "camelCase")]
+    Ready {
+        server_id: String,
+        branch: String,
+        snapshot: Snapshot,
+        /// [`can_approve`] for the token's user.
+        can_approve: bool,
+        /// The token's user has approved: Unapprove is offered instead.
+        approved: bool,
+        /// [`merge_blocked`]: `None` with a pull request is a live Merge.
+        merge_blocked: Option<Vec<String>>,
+    },
+}
+
+impl PrStrip {
+    /// Whether a build is running — the watcher asks sooner while one is.
+    pub fn building(&self) -> bool {
+        matches!(self, PrStrip::Ready { snapshot, .. } if snapshot.builds.iter().any(|build| build.state == BuildState::InProgress))
+    }
+}
+
+/// The strip of a folder changed: the window reads it again. `root` is the
+/// folder as `workspace_open` named it — an event outlives its folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestChanged {
+    pub root: String,
+}
+
+pub type PullRequestEventSink = Arc<dyn Fn(PullRequestChanged) + Send + Sync>;
+
+/// Whether the token's user has approved this pull request.
+pub fn approved_by(pr: &PullRequest, me: &str) -> bool {
+    let me = me.trim();
+    !me.is_empty()
+        && pr
+            .reviewers
+            .iter()
+            .any(|reviewer| reviewer.slug.trim().eq_ignore_ascii_case(me) && reviewer.status == ReviewStatus::Approved)
 }
 
 /// Whether the strip offers Approve: never on one's own pull request — the
@@ -822,6 +897,40 @@ mod tests {
     fn a_refusal_with_no_veto_still_says_something() {
         let silent = MergeCheck { can_merge: false, conflicted: false, vetoes: Vec::new() };
         assert_eq!(merge_blocked(&silent), Some(vec!["the server does not allow a merge".to_string()]));
+    }
+
+    /// Unapprove is offered for the token's own approval, in any case of its
+    /// slug, and for no one else's.
+    #[test]
+    fn approved_is_the_token_s_user_approving() {
+        let mine = pr("u_them", &[("U_ME", ReviewStatus::Approved), ("u_other", ReviewStatus::Unapproved)]);
+        assert!(approved_by(&mine, "u_me"));
+        assert!(!approved_by(&mine, "u_other"));
+        assert!(!approved_by(&mine, "u_nobody"));
+        assert!(!approved_by(&mine, " "));
+        assert!(!approved_by(&pr("u_them", &[("u_me", ReviewStatus::NeedsWork)]), "u_me"));
+    }
+
+    #[test]
+    fn a_strip_is_building_while_one_of_its_builds_runs() {
+        let ready = |states: &[BuildState]| PrStrip::Ready {
+            server_id: "s".to_string(),
+            branch: "b".to_string(),
+            snapshot: Snapshot {
+                builds: states
+                    .iter()
+                    .map(|state| Build { key: "k".to_string(), name: "n".to_string(), state: *state, url: String::new() })
+                    .collect(),
+                ..Snapshot::default()
+            },
+            can_approve: false,
+            approved: false,
+            merge_blocked: None,
+        };
+        assert!(ready(&[BuildState::Successful, BuildState::InProgress]).building());
+        assert!(!ready(&[BuildState::Successful, BuildState::Failed, BuildState::Unknown]).building());
+        assert!(!ready(&[]).building());
+        assert!(!PrStrip::NoRemote.building());
     }
 
     // ------------------------------------------------------------- snapshots

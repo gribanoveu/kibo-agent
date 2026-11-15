@@ -18,7 +18,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::domain::code_host::{
-    host_of, Build, BuildState, Call, CodeHost, CodeHostError, MergeCheck, PullRequest, ReviewStatus, Reviewer,
+    host_of, Build, BuildState, Call, CodeHost, CodeHostError, CodeHostServer, MergeCheck, PullRequest, ReviewStatus,
+    Reviewer,
 };
 use crate::infra::http_agent;
 
@@ -32,6 +33,21 @@ const ERROR_CHARS: usize = 200;
 pub struct Bitbucket;
 
 impl CodeHost for Bitbucket {
+    fn identify(&self, server: &CodeHostServer) -> Result<String, CodeHostError> {
+        // No token: the form asks this before one is saved, and the probe saw
+        // the server answer it to anyone.
+        let url = format!("{}/rest/api/latest/application-properties", server.base_url.trim().trim_end_matches('/'));
+        let (_, text) = answer(server, common(http::Method::GET, &url), None)?;
+        let properties: Properties = read(&text)?;
+        if properties.display_name != "Bitbucket" {
+            return Err(CodeHostError::BadAnswer(format!(
+                "the server calls itself \"{}\", not Bitbucket",
+                properties.display_name
+            )));
+        }
+        Ok(format!("Bitbucket {}", properties.version).trim().to_string())
+    }
+
     fn clone_links(&self, call: &Call) -> Result<Vec<String>, CodeHostError> {
         let repo: Repo = read(&get(call, &api(call))?)?;
         Ok(repo.links.clone_links.into_iter().map(|link| link.href).collect())
@@ -154,12 +170,6 @@ fn bearer(call: &Call) -> String {
 /// agent sends, so a WAF that refuses an unnamed client at least says which.
 const AGENT: &str = concat!("Kibo-Agent/", env!("CARGO_PKG_VERSION"));
 
-/// The agent for this server: its own certificate replaces the public roots,
-/// so a corporate CA is trusted here and nowhere else.
-fn agent(call: &Call) -> Result<ureq::Agent, CodeHostError> {
-    http_agent::build_agent(call.server.trusted_cert_pem.as_deref()).map_err(|e| CodeHostError::Tls(e.0))
-}
-
 /// One request, with what every one of them shares: the token in one header, a
 /// timeout, and no redirect followed. A body is JSON; a request without one is
 /// a read.
@@ -178,20 +188,34 @@ fn request(
     url: &str,
     body: Option<Value>,
 ) -> Result<(http::HeaderMap, String), CodeHostError> {
+    answer(call.server, common(method, url).header("Authorization", bearer(call)), body)
+}
+
+/// The headers every request carries, the token aside.
+fn common(method: http::Method, url: &str) -> http::request::Builder {
+    http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", AGENT)
+        .header("X-Atlassian-Token", "no-check")
+}
+
+/// Sends `request` to `server` and reads the answer through [`status_check`].
+fn answer(
+    server: &CodeHostServer,
+    request: http::request::Builder,
+    body: Option<Value>,
+) -> Result<(http::HeaderMap, String), CodeHostError> {
     // A token goes over TLS or nowhere; `http` is left for this machine alone,
     // where a test's own server listens — the rule the catalog's sources use.
-    let base = base(call);
+    let base = server.base_url.trim().trim_end_matches('/');
     if base.starts_with("http://") && !is_loopback(base) {
         return Err(CodeHostError::Insecure(base.to_string()));
     }
-    let agent = agent(call)?;
-    let request = http::Request::builder()
-        .method(method)
-        .uri(url)
-        .header("Authorization", bearer(call))
-        .header("Accept", "application/json")
-        .header("User-Agent", AGENT)
-        .header("X-Atlassian-Token", "no-check");
+    // The server's own certificate replaces the public roots: a corporate CA
+    // is trusted for this server and nowhere else.
+    let agent = http_agent::build_agent(server.trusted_cert_pem.as_deref()).map_err(|e| CodeHostError::Tls(e.0))?;
     let mut response = match body {
         None => send(&agent, request.body(())),
         Some(body) => send(&agent, request.header("Content-Type", "application/json").body(body.to_string())),
@@ -317,6 +341,14 @@ fn build_state(state: &str) -> BuildState {
 }
 
 // ----------------------------------------------------------- the server's JSON
+
+#[derive(Deserialize)]
+struct Properties {
+    #[serde(default, rename = "displayName")]
+    display_name: String,
+    #[serde(default)]
+    version: String,
+}
 
 #[derive(Deserialize)]
 struct Values<T> {
@@ -896,6 +928,24 @@ mod tests {
 
         let only_self: Pr = serde_json::from_str(r#"{"id":1,"links":{"self":[{"href":"https://server.com/self"}]}}"#).unwrap();
         assert_eq!(only_self.into_pull_request().url, "https://server.com/self");
+    }
+
+    /// The connect form's check, before a token is saved: no `Authorization`
+    /// goes with it, and a server that is something else says so.
+    #[test]
+    fn identify_asks_without_a_token_and_knows_bitbucket_when_it_sees_it() {
+        let answer = r#"{"version":"8.19.26","buildNumber":"8019026","buildDate":"1","displayName":"Bitbucket"}"#;
+        let (said, asked) = with_server(&json_reply("200 OK", answer), |call| Bitbucket.identify(call.server));
+        assert_eq!(said.unwrap(), "Bitbucket 8.19.26");
+        assert!(asked.starts_with("GET /rest/api/latest/application-properties HTTP/1.1"), "{asked}");
+        assert!(!asked.to_lowercase().contains("authorization"), "a token went with it: {asked}");
+
+        let (other, _) =
+            with_server(&json_reply("200 OK", r#"{"displayName":"Jira","version":"9"}"#), |call| Bitbucket.identify(call.server));
+        assert!(matches!(&other, Err(CodeHostError::BadAnswer(said)) if said.contains("Jira")), "{other:?}");
+
+        let insecure = Bitbucket.identify(&server_at("http://git.server.example"));
+        assert!(matches!(insecure, Err(CodeHostError::Insecure(_))), "{insecure:?}");
     }
 
     /// A `NEEDS_WORK` is a decision the strip shows; a word this app has no

@@ -51,6 +51,19 @@ pub fn repository_id(root: &Path) -> String {
 /// with whichever remote happened to sort first.
 fn remote_identity(root: &Path) -> Option<String> {
     let repo = Repository::open(root).ok()?;
+    chosen_remote_url(&repo).map(|url| canonicalize_remote_url(&url))
+}
+
+/// The address of that same remote, as written in the repository's config —
+/// what the pull request strip reads its server and repository from. Unlike
+/// [`repository_id`], a subfolder finds the repository it is in.
+pub fn remote_url(root: &Path) -> Option<String> {
+    chosen_remote_url(&Repository::discover(root).ok()?)
+}
+
+/// `origin`, or the only remote; `None` when there are several and none is
+/// `origin`.
+fn chosen_remote_url(repo: &Repository) -> Option<String> {
     let remotes = repo.remotes().ok()?;
     let names: Vec<&str> = remotes.iter().filter_map(|name| name.ok().flatten()).collect();
 
@@ -64,7 +77,8 @@ fn remote_identity(root: &Path) -> Option<String> {
     };
 
     let remote = repo.find_remote(name).ok()?;
-    Some(canonicalize_remote_url(remote.url().ok()?))
+    let url = remote.url().ok()?.to_string();
+    Some(url)
 }
 
 /// Collapses the ways of writing one remote into a single string, so that
@@ -205,6 +219,22 @@ mod tests {
 
     /// A fork: `origin` is mine, `upstream` is theirs, and the index belongs
     /// to mine. Picking by sort order would put it under theirs.
+    /// The strip reads the remote as written: its own parser decides what it
+    /// names. A subfolder finds the repository it is in, where the index's
+    /// identity deliberately does not.
+    #[test]
+    fn the_remote_is_read_as_written_and_from_a_subfolder_too() {
+        let dir = repo_with_remotes("remote-url", &[("upstream", "git@x.example:a/b.git"), ("origin", "ssh://git@Host.example:7999/P/r.git")]);
+        assert_eq!(remote_url(&dir).as_deref(), Some("ssh://git@Host.example:7999/P/r.git"));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        assert_eq!(remote_url(&dir.join("sub")).as_deref(), Some("ssh://git@Host.example:7999/P/r.git"));
+        assert_eq!(remote_identity(&dir.join("sub")), None, "the index's identity is the folder's own");
+
+        let two = repo_with_remotes("remote-url-two", &[("a", "git@x.example:a/b.git"), ("b", "git@y.example:a/b.git")]);
+        assert_eq!(remote_url(&two), None, "two remotes and no origin is not a guess");
+        assert_eq!(remote_url(&temp_dir("remote-url-plain")), None);
+    }
+
     #[test]
     fn origin_wins_over_any_other_remote() {
         let fork = repo_with_remotes(

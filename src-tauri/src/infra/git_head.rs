@@ -27,6 +27,23 @@ pub fn current_branch(root: &Path) -> Option<String> {
     branch
 }
 
+/// The branch checked out, and only a branch: `None` for a detached HEAD,
+/// where [`current_branch`] shows the short commit id instead, and outside a
+/// repository. A pull request comes from a branch.
+pub fn checked_out_branch(root: &Path) -> Option<String> {
+    let repo = Repository::discover(root).ok()?;
+    let branch = match repo.head() {
+        Ok(head) if head.is_branch() => head.shorthand().ok().map(String::from),
+        Ok(_) => None,
+        Err(_) => {
+            let head = repo.find_reference("HEAD").ok()?;
+            let target = head.symbolic_target().ok()??;
+            target.strip_prefix("refs/heads/").map(String::from)
+        }
+    };
+    branch
+}
+
 /// The commit `HEAD` points at in the repository `root` is in — the full
 /// sha, so the answer survives branch switches and worktrees, unlike the
 /// branch name. `None` outside a repository and before the first commit,
@@ -60,6 +77,25 @@ mod tests {
         let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
         let sig = Signature::now("Test", "test@example.com").unwrap();
         repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap()
+    }
+
+    /// A pull request comes from a branch: a detached HEAD has none, where the
+    /// header shows the short commit id.
+    #[test]
+    fn a_detached_head_checks_out_no_branch() {
+        let dir = temp_dir("git-head-checked-out");
+        let repo = Repository::init(&dir).unwrap();
+        assert!(checked_out_branch(&dir).is_some(), "an unborn branch is still a branch");
+        let id = commit(&repo);
+        let branch = checked_out_branch(&dir).unwrap();
+        assert_eq!(Some(branch.clone()), current_branch(&dir));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        assert_eq!(checked_out_branch(&dir.join("sub")), Some(branch), "a subfolder is in the repository");
+
+        repo.set_head_detached(id).unwrap();
+        assert_eq!(checked_out_branch(&dir), None);
+        assert!(current_branch(&dir).is_some(), "the header still shows the commit");
+        assert_eq!(checked_out_branch(&temp_dir("git-head-checked-out-plain")), None);
     }
 
     #[test]
