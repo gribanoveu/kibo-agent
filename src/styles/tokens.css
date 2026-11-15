@@ -508,66 +508,6 @@
   color-scheme: dark;
 }
 
-/* Rime. Frost in the light: on macOS the desktop shows through the window,
-   blurred and lightened by the system's own window material (useTheme turns it
-   on), and every surface is a tint over it, laid once, as in Frost — the window
-   a milky white, the chat's page a shade whiter, what rises on it a breath of
-   slate. Where the system draws no glass the window gets a pale ground of its
-   own with a cold light in it. Text is slate, not black: 12:1 on the glass,
-   secondary 7:1 and faint 5:1; the accent a deep ice blue, 5.6:1 on the glass
-   and white on it 5.9:1. Status colours are darkened to read on a light page,
-   as in Linen. */
-[data-theme="rime"] {
-  --bg-app: transparent;
-  --bg-window: transparent;
-  --bg-panel: rgba(255, 255, 255, 0.4);
-  --bg-panel-soft: rgba(30, 50, 90, 0.04);
-  --bg-hover: rgba(30, 50, 90, 0.07);
-  --bg-active: rgba(30, 50, 90, 0.12);
-  --bg-bubble: rgba(30, 50, 90, 0.05);
-
-  --border: rgba(30, 50, 90, 0.15);
-  --border-soft: rgba(30, 50, 90, 0.09);
-  --window-border: transparent;
-
-  --text: #1c2330;
-  --text-dim: #3f4a5a;
-  --text-faint: #566173;
-
-  --accent: #1d63b0;
-  --accent-contrast: #ffffff;
-  --green: #1f7a35;
-  --red: #c4223d;
-  --amber: #875800;
-  --purple: #6f3fae;
-
-  --term-black: var(--text);
-  --term-red: #c2453d;
-  --term-green: #1f8f5c;
-  --term-yellow: #8c650f;
-  --term-blue: #2f6fb8;
-  --term-magenta: #6146c9;
-  --term-cyan: #1b7f8c;
-  --term-white: #8a93a3;
-  --term-bright-black: var(--text-faint);
-  --term-bright-red: #d9574e;
-  --term-bright-green: #27a86d;
-  --term-bright-yellow: #a57a17;
-  --term-bright-blue: #3c82d0;
-  --term-bright-magenta: #7a5fe0;
-  --term-bright-cyan: #2296a5;
-  --term-bright-white: #6b7586;
-
-  --glass-tint: rgba(246, 248, 252, 0.55);
-  --glass-solid: rgb(241, 244, 249);
-  --glass-float: rgba(250, 251, 253, 0.9);
-  --glass-ground: #e8edf4;
-  --glass-light-1: #cfe1f6;
-  --glass-light-2: #e4ddf3;
-
-  color-scheme: light;
-}
-
 :root {
   /* Corners, after macOS: the window's panels are square and joined edge to
      edge by a hairline gutter, drawn in the border colour behind them
@@ -652,7 +592,7 @@
   --shadow-raised: 0 1px 2px color-mix(in srgb, var(--text) 12%, transparent);
 }
 
-/* What the glass palettes (Frost, Rime) share: useTheme marks <html> with
+/* What the glass palettes (Frost for now) share: useTheme marks <html> with
    `data-glass` while one shows. Each palette names its own colours for it —
    the window's tint, the solid a sticky head needs, what floats, and the
    ground drawn where the system has no glass. */

@@ -7,7 +7,6 @@ export const SCHEMES = {
   chalk: "light",
   clay: "light",
   tide: "light",
-  rime: "light",
   ember: "dark",
   basalt: "dark",
   iris: "dark",
@@ -22,7 +21,6 @@ export const THEME_LABELS: Record<Theme, string> = {
   chalk: "Chalk",
   clay: "Clay",
   tide: "Tide",
-  rime: "Rime",
   ember: "Ember",
   basalt: "Basalt",
   iris: "Iris",
@@ -32,7 +30,7 @@ export const THEME_LABELS: Record<Theme, string> = {
 
 /** The palettes on one side, in the order they are offered. */
 /** The palettes drawn as glass over the desktop: tints, with the system's blur under the window. */
-const GLASS: ReadonlySet<Theme> = new Set(["frost", "rime"]);
+const GLASS: ReadonlySet<Theme> = new Set(["frost"]);
 
 export const themesOf = (scheme: Scheme) => (Object.keys(SCHEMES) as Theme[]).filter((t) => SCHEMES[t] === scheme);
 

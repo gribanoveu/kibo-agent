@@ -28,8 +28,8 @@ export const startWindowDrag = () => inTauri() && getCurrentWindow().startDraggi
 // system got a black outline. `null` follows the system again.
 export const setWindowTheme = (theme: "light" | "dark" | null) => inTauri() && getCurrentWindow().setTheme(theme);
 // The frosted glass under a glass palette, kept on when the window loses
-// focus: macOS's dark HUD material under Frost, and under Rime the window's own
-// material, which is light in a light window (useTheme sets the window's side).
+// focus: macOS's dark HUD material on the dark side, and on the light one the
+// window's own material, which is light in a light window (useTheme passes the side).
 // `null` clears it. Only macOS — Windows' window is opaque (above), and the
 // glass palettes draw a ground of their own there.
 export const setWindowGlass = (side: "light" | "dark" | null) =>
