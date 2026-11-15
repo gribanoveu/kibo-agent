@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-15 Scenes behind the Frost glass: pick one of three moving scenes in Settings → Appearance, or turn on Scenes in the Catalog and ask the model to paint one; it shows at once and stays in Settings until deleted
 - 2026-11-15 Frost and Rime, a dark and a light theme of frozen glass: on macOS the desktop shows through the window, blurred
 
 ## v0.13.0 — 2026-11-14
