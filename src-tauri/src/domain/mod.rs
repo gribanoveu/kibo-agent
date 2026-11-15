@@ -46,6 +46,7 @@ pub mod dictation;
 pub mod meeting;
 pub mod mongo;
 pub mod voices;
+pub mod scene;
 pub mod recording;
 pub mod features;
 pub mod keyboard_layout;

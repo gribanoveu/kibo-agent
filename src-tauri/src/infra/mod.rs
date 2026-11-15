@@ -62,6 +62,7 @@ pub mod meeting_recorder;
 pub mod microphone;
 pub mod recording_access;
 pub mod voices_store;
+pub mod scene_store;
 pub mod mongo_store;
 pub mod mongo_client;
 pub mod keyboard_layout;

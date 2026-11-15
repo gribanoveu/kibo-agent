@@ -13,6 +13,7 @@ pub mod chat_events;
 pub mod plain_chat;
 pub mod prototype;
 pub mod artifacts;
+pub mod scenes;
 pub mod settings;
 pub mod chat_history;
 pub mod workspace_events;
