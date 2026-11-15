@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-15 The agent says what it started before a long build, test run or rollout wait, and looks for code by meaning first when it does not know where it lives
+
 ## v0.13.0 — 2026-11-14
 
 - 2026-11-13 Keyboard layout correction notices far more of what was typed on the wrong layout — whole phrases with short words like «я не знаю», English typed on the Russian layout, every wrong word in mixed prose — and stops offering to "fix" abbreviations (src, ctx), file paths, Russian loanwords and a word still being typed
