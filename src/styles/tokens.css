@@ -702,13 +702,25 @@
   -webkit-backdrop-filter: blur(28px) saturate(1.5);
   backdrop-filter: blur(28px) saturate(1.5);
 }
-/* A sheet over the chat and a dialog are read over text: a float's tint let
-   the chat show through them, and WebKit blurs nothing under the system's
-   glass, so they are solid. */
-[data-glass] :is(.modal, .page-sheet) {
+/* A dialog is read over text, and WebKit blurs nothing under the system's
+   glass: it is solid. */
+[data-glass] .modal {
   background: var(--glass-solid);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+/* A sheet stays glass — the page's tint once more over the page — and what it
+   lies over is masked out under it instead: its siblings span the box it is
+   placed against (the chat's column, a page), and the mask's edge is the
+   sheet's own width (Page.css), so the chat to its left stays in view. */
+[data-glass] .page-sheet {
+  background: var(--bg-panel);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+[data-glass] :has(> .page-sheet) > :not(.page-sheet) {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - min(760px, 100% - 120px)), transparent 0);
+  mask-image: linear-gradient(to right, #000 calc(100% - min(760px, 100% - 120px)), transparent 0);
 }
 /* The headings that stay put while a list scrolls under them: clear at rest,
    blurring what passes beneath. A plain blur, no saturation: on macOS WebKit's
