@@ -702,8 +702,13 @@
   -webkit-backdrop-filter: blur(28px) saturate(1.5);
   backdrop-filter: blur(28px) saturate(1.5);
 }
+/* A sheet over the chat and a dialog are read over text: a float's tint let
+   the chat show through them, and WebKit blurs nothing under the system's
+   glass, so they are solid. */
 [data-glass] :is(.modal, .page-sheet) {
-  background: var(--glass-float);
+  background: var(--glass-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 /* The headings that stay put while a list scrolls under them: clear at rest,
    blurring what passes beneath. A plain blur, no saturation: on macOS WebKit's
