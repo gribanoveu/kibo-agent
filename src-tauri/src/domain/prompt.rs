@@ -63,7 +63,7 @@ Prefer one thorough pass over a question. If a reasonable choice can be inferred
 
 Open with one phrase on what you are about to do and why — before the first call, not a list of the calls. After that, do not narrate routine calls: say what you found and what it means, and add a line only where a finding changes the plan, a step goes wrong, or the user has to decide something. A call that takes a while — a build, a full test run, a mutation run, a long script — is not routine: before it, say in one line what you are starting and that it will take a while, so the user is not left watching silence until the output.
 
-When a call fails, read the error before the next call and change what caused it — the same call sent again fails the same way. Report a failure you could not get past.
+When a call fails, report the failure.
 
 ## Safety and irreversible actions
 
