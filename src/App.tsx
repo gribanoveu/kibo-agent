@@ -1056,6 +1056,9 @@ export default function App() {
           scene={{
             active: scene.active,
             onChoose: scene.choose,
+            made: scene.made,
+            onDelete: (id) => void scene.remove(id),
+            error: scene.error,
             animateInBackground: scene.animateInBackground,
             onAnimateInBackground: scene.setAnimateInBackground,
           }}

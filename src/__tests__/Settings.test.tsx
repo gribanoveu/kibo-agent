@@ -3,7 +3,7 @@ import { render, screen, fireEvent, within } from "@testing-library/react";
 import { Settings } from "../components/Settings";
 import type { SkillsView } from "../lib/skills";
 import { DEFAULT_ALERTS, type AlertPrefs } from "../lib/attention";
-import type { SceneChoice } from "../hooks/useScene";
+import type { MadeSceneBody, SceneChoice } from "../hooks/useScene";
 import type { ThemeChoice } from "../hooks/useTheme";
 
 // The dialog's own rules: one section at a time, and the request log — which
@@ -21,6 +21,8 @@ const dialog = (
   skills: SkillsView["skills"] = [],
   theme: ThemeChoice = { mode: "system", light: "linen", dark: "basalt" },
   active: SceneChoice = null,
+  made: MadeSceneBody[] = [],
+  sceneError: string | null = null,
 ) => {
   const logging: boolean[] = [];
   const languages: string[] = [];
@@ -33,6 +35,7 @@ const dialog = (
   const sources: [string, boolean][] = [];
   const scenes: SceneChoice[] = [];
   const motion: boolean[] = [];
+  const deleted: string[] = [];
   let logOpened = 0;
   render(
     <Settings
@@ -61,6 +64,9 @@ const dialog = (
       scene={{
         active,
         onChoose: (scene) => scenes.push(scene),
+        made,
+        onDelete: (id) => deleted.push(id),
+        error: sceneError,
         animateInBackground: false,
         onAnimateInBackground: (on) => motion.push(on),
       }}
@@ -74,7 +80,7 @@ const dialog = (
       policy={{ provider: null, debugLogging, mcpServers: [], hooks: [] }}
     />,
   );
-  return { limits, logging, languages, sizes, wraps, alerts, sources, modes, palettes, scenes, motion, logOpened: () => logOpened };
+  return { limits, logging, languages, sizes, wraps, alerts, sources, modes, palettes, scenes, motion, deleted, logOpened: () => logOpened };
 };
 
 const cardName = (card: HTMLElement) => card.querySelector(".theme-card-name")?.textContent;
@@ -181,6 +187,47 @@ describe("the settings dialog", () => {
     expect(checked.map(cardName)).toEqual(["Glacier Mist"]);
     const badges = screen.getAllByText("showing").map((b) => b.parentElement?.textContent);
     expect(badges).toEqual(["Frostshowing"]);
+  });
+
+  test("the scenes the model painted are a group of their own, there only once there is one", () => {
+    dialog();
+    fireEvent.click(screen.getByText("Appearance"));
+    expect(screen.queryByRole("radiogroup", { name: "Generated" })).toBeNull();
+  });
+
+  test("a painted scene is chosen like a built-in one, and deleted only after a yes", () => {
+    const made = [
+      { id: "b", title: "Lake", created: 2, body: "<i class=lake></i>" },
+      { id: "a", title: "Forest", created: 1, body: "<i class=forest></i>" },
+    ];
+    const { palettes, scenes, deleted } = dialog(false, [], { mode: "dark", light: "linen", dark: "frost" }, { kind: "made", id: "a" }, made);
+    fireEvent.click(screen.getByText("Appearance"));
+    const group = screen.getByRole("radiogroup", { name: "Generated" });
+    const cards = within(group).getAllByRole("radio");
+    expect(cards.map(cardName)).toEqual(["Lake", "Forest"]);
+    expect(cards.filter((c) => c.getAttribute("aria-checked") === "true").map(cardName)).toEqual(["Forest"]);
+    expect(cards[1].querySelector("iframe")?.getAttribute("srcdoc")).toContain("<i class=forest></i>");
+    // The badge is the group whose card shows, and Frost bare is not checked.
+    expect(screen.getAllByText("showing").map((b) => b.parentElement?.textContent)).toEqual(["Generatedshowing"]);
+    expect(within(screen.getByRole("radiogroup", { name: "Frost" })).getByRole("radio", { name: "Frost" }).getAttribute("aria-checked")).toBe("false");
+
+    fireEvent.click(cards[0]);
+    expect(palettes).toEqual(["frost"]);
+    expect(scenes).toEqual([{ kind: "made", id: "b" }]);
+
+    fireEvent.click(within(group).getByRole("button", { name: "Delete Lake" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(deleted).toEqual([]);
+    expect(screen.queryByRole("group", { name: "Delete Lake" })).toBeNull();
+    fireEvent.click(within(group).getByRole("button", { name: "Delete Lake" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Delete Lake" })).getByRole("button", { name: "Delete" }));
+    expect(deleted).toEqual(["b"]);
+  });
+
+  test("a scene that could not be deleted says why", () => {
+    dialog(false, [], undefined, null, [], "the scenes' store failed: disk full");
+    fireEvent.click(screen.getByText("Appearance"));
+    expect(screen.getByText("the scenes' store failed: disk full")).toBeDefined();
   });
 
   test("Skills lists the folders skills come from, in the order a name is looked up, each with a switch", () => {

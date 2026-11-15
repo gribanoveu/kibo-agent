@@ -1,5 +1,5 @@
 import { Fragment, useState, type ComponentProps } from "react";
-import { Activity, Bell, Bot, Check, Gauge, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
+import { Activity, Bell, Bot, Check, Gauge, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles, Trash2 } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
 import { Switch } from "./Switch";
 import { KubeSettings } from "./KubeSettings";
@@ -13,7 +13,7 @@ import { DEFAULT_TURN_LIMITS, type ReplyLanguage, type TurnLimits } from "../lib
 import type { SkillSourceItem, SkillsView } from "../lib/skills";
 import type { PanelItem } from "../types";
 import { MODES, sideOf, THEME_LABELS, themesOf, type Mode, type Theme, type ThemeChoice } from "../hooks/useTheme";
-import { sameScene, type SceneChoice } from "../hooks/useScene";
+import { sameScene, type MadeSceneBody, type SceneChoice } from "../hooks/useScene";
 import { BUILTIN_SCENES } from "../lib/scenes";
 import { sceneDocument } from "../lib/sceneDocument";
 import { FONT_SIZES, type FontSize } from "../hooks/useChatFontSize";
@@ -125,6 +125,10 @@ type Props = {
   scene: {
     active: SceneChoice;
     onChoose: (scene: SceneChoice) => void;
+    /** The scenes the model painted, newest first. */
+    made: MadeSceneBody[];
+    onDelete: (id: string) => void;
+    error: string | null;
     animateInBackground: boolean;
     onAnimateInBackground: (on: boolean) => void;
   };
@@ -167,6 +171,10 @@ export function Settings({
   policy,
 }: Props) {
   const [section, setSection] = useState<SettingsSection>(opening);
+  // A painted scene asked to be deleted, waiting for the yes. Inline, not a
+  // dialog: a dialog inside Settings would be held to its box under Frost's blur.
+  const [deleting, setDeleting] = useState<MadeSceneBody | null>(null);
+  const frostShowing = sideOf(theme) === "dark" && theme.dark === "frost";
 
   return (
     <div className="settings">
@@ -283,7 +291,7 @@ export function Settings({
             <section className="theme-group">
               <h4 className="theme-group-title">
                 Frost
-                {sideOf(theme) === "dark" && theme.dark === "frost" && <span className="theme-group-badge">showing</span>}
+                {frostShowing && scene.active?.kind !== "made" && <span className="theme-group-badge">showing</span>}
               </h4>
               <div className="theme-cards" role="radiogroup" aria-label="Frost">
                 {FROST_CARDS.map(({ choice, title, body }) => {
@@ -310,6 +318,68 @@ export function Settings({
                 })}
               </div>
             </section>
+            {scene.made.length > 0 && (
+              <section className="theme-group">
+                <h4 className="theme-group-title">
+                  Generated
+                  {frostShowing && scene.active?.kind === "made" && <span className="theme-group-badge">showing</span>}
+                </h4>
+                <div className="theme-cards" role="radiogroup" aria-label="Generated">
+                  {scene.made.map((made) => {
+                    const choice = { kind: "made", id: made.id } as const;
+                    const active = theme.dark === "frost" && sameScene(scene.active, choice);
+                    return (
+                      <div key={made.id} className="scene-card">
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          className={`theme-card${active ? " active" : ""}`}
+                          onClick={() => {
+                            onThemePalette("frost");
+                            scene.onChoose(choice);
+                          }}
+                        >
+                          <ThemePreview theme="frost" scene={made.body} />
+                          <span className="theme-card-name">
+                            {active && <Check size={13} aria-hidden />}
+                            {made.title}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="iconbtn scene-card-delete"
+                          title={`Delete ${made.title}`}
+                          aria-label={`Delete ${made.title}`}
+                          onClick={() => setDeleting(made)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {deleting && (
+                  <div className="scene-delete" role="group" aria-label={`Delete ${deleting.title}`}>
+                    <span>Delete “{deleting.title}”? It cannot be brought back.</span>
+                    <button type="button" className="btn btn-ghost" onClick={() => setDeleting(null)}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => {
+                        scene.onDelete(deleting.id);
+                        setDeleting(null);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </section>
+            )}
+            {scene.error && <p className="modal-note settings-error">{scene.error}</p>}
             <div className="modal-field">
               <label>Scene while another app is in front</label>
               <div className="segmented" role="radiogroup" aria-label="Scene while another app is in front">

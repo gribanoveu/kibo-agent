@@ -252,3 +252,34 @@
 .alert-none {
   color: var(--text-faint);
 }
+
+/* A painted scene's card with its delete button over the picture's corner. */
+.scene-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.scene-card-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--bg-panel);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.scene-card:hover .scene-card-delete,
+.scene-card-delete:focus-visible {
+  opacity: 1;
+}
+.scene-delete {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.scene-delete span {
+  flex: 1;
+}
