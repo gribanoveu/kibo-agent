@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::domain::code_host::{
-    Build, BuildState, Call, CodeHost, CodeHostError, MergeCheck, PullRequest, ReviewStatus, Reviewer,
+    host_of, Build, BuildState, Call, CodeHost, CodeHostError, MergeCheck, PullRequest, ReviewStatus, Reviewer,
 };
 use crate::infra::http_agent;
 
@@ -38,23 +38,18 @@ impl CodeHost for Bitbucket {
     }
 
     fn me(&self, call: &Call) -> Result<String, CodeHostError> {
-        let mut response = request(call, Method::Get, &api(call), None)?;
-        // The header is read before the body, which consumes the response.
-        let said = response
-            .headers()
+        let (headers, _) = request(call, http::Method::GET, &api(call), None)?;
+        headers
             .get("x-ausername")
             .and_then(|value| value.to_str().ok())
             .map(str::trim)
             .filter(|name| !name.is_empty())
-            .map(str::to_string);
-        let status = response.status().as_u16();
-        let text = response.body_mut().read_to_string().map_err(|e| CodeHostError::Network(e.to_string()))?;
-        status_check(status, &text)?;
-        said.ok_or_else(|| {
-            CodeHostError::BadAnswer(
-                "the server did not say whose token this is (no X-AUSERNAME header)".to_string(),
-            )
-        })
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CodeHostError::BadAnswer(
+                    "the server did not say whose token this is (no X-AUSERNAME header)".to_string(),
+                )
+            })
     }
 
     fn default_branch(&self, call: &Call) -> Result<String, CodeHostError> {
@@ -64,9 +59,11 @@ impl CodeHost for Bitbucket {
 
     fn branch_commit(&self, call: &Call, branch: &str) -> Result<Option<String>, CodeHostError> {
         let found: Values<BranchCommit> =
-            read(&get(call, &format!("{}/branches?filterText={}&limit=25", api(call), encode(branch)))?)?;
+            read(&get(call, &format!("{}/branches?filterText={}&boostMatches=true&limit=25", api(call), encode(branch)))?)?;
         // `filterText` is a substring search: the server's list is searched for
-        // the branch itself, not taken as the answer.
+        // the branch itself, not taken as the answer. `boostMatches` puts the
+        // exact name first, or `dev` among thirty `feature/dev-*` would fall off
+        // the page and read as a branch nobody pushed.
         Ok(found.values.into_iter().find(|candidate| candidate.display_id == branch).and_then(|candidate| candidate.latest_commit))
     }
 
@@ -113,7 +110,7 @@ impl CodeHost for Bitbucket {
 
     fn approve(&self, call: &Call, pr: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError> {
         let status = if approved { "APPROVED" } else { "UNAPPROVED" };
-        put_json(
+        put(
             call,
             &format!("{}/pull-requests/{}/participants/{}", api(call), pr.id, encode(me)),
             json!({ "status": status }),
@@ -123,8 +120,9 @@ impl CodeHost for Bitbucket {
 
     fn merge(&self, call: &Call, pr: &PullRequest) -> Result<(), CodeHostError> {
         // The version is the optimistic lock: a stale one is 409, and the strip
-        // re-reads rather than repeating this.
-        post(call, &format!("{}/pull-requests/{}/merge?version={}", api(call), pr.id, pr.version)).map(|_| ())
+        // re-reads rather than repeating this. The empty object is there for the
+        // `Content-Type`: the resource takes JSON, and a body-less POST is 415.
+        post(call, &format!("{}/pull-requests/{}/merge?version={}", api(call), pr.id, pr.version), json!({})).map(|_| ())
     }
 
     fn create(&self, call: &Call, from: &str, to: &str, title: &str) -> Result<PullRequest, CodeHostError> {
@@ -133,7 +131,7 @@ impl CodeHost for Bitbucket {
             "fromRef": { "id": format!("refs/heads/{from}") },
             "toRef": { "id": format!("refs/heads/{to}") },
         });
-        let created = post_json(call, &format!("{}/pull-requests", api(call)), body)?;
+        let created = post(call, &format!("{}/pull-requests", api(call)), body)?;
         Ok(read::<Pr>(&created)?.into_pull_request())
     }
 }
@@ -156,33 +154,30 @@ fn bearer(call: &Call) -> String {
 /// agent sends, so a WAF that refuses an unnamed client at least says which.
 const AGENT: &str = concat!("Kibo-Agent/", env!("CARGO_PKG_VERSION"));
 
-/// What a request is, beside its address.
-#[derive(Clone, Copy)]
-enum Method {
-    Get,
-    Post,
-    Put,
-}
-
 /// The agent for this server: its own certificate replaces the public roots,
 /// so a corporate CA is trusted here and nowhere else.
 fn agent(call: &Call) -> Result<ureq::Agent, CodeHostError> {
     http_agent::build_agent(call.server.trusted_cert_pem.as_deref()).map_err(|e| CodeHostError::Tls(e.0))
 }
 
-/// One request, with the three things every one of them shares: the token in one
-/// header, a timeout, and no redirect followed.
+/// One request, with what every one of them shares: the token in one header, a
+/// timeout, and no redirect followed. A body is JSON; a request without one is
+/// a read.
 ///
 /// The redirect is not a nicety: Data Center answers 302 to an SSO page (the
 /// probe's step 3 looks for exactly that), and following it would carry the
 /// `Authorization` header to whichever host the answer names — the one thing
 /// decision 1 promises never happens.
+///
+/// `X-Atlassian-Token: no-check` is what Atlassian's XSRF filter wants of a
+/// client that is not a browser; without it a write can come back 403, which
+/// would read as a token without the right to write.
 fn request(
     call: &Call,
-    method: Method,
+    method: http::Method,
     url: &str,
     body: Option<Value>,
-) -> Result<http::Response<ureq::Body>, CodeHostError> {
+) -> Result<(http::HeaderMap, String), CodeHostError> {
     // A token goes over TLS or nowhere; `http` is left for this machine alone,
     // where a test's own server listens — the rule the catalog's sources use.
     let base = base(call);
@@ -190,59 +185,32 @@ fn request(
         return Err(CodeHostError::Insecure(base.to_string()));
     }
     let agent = agent(call)?;
-    let sent = match (method, body) {
-        (Method::Get, _) => agent
-            .get(url)
-            .header("Authorization", &bearer(call))
-            .header("Accept", "application/json")
-            .header("User-Agent", AGENT)
-            .config()
-            .timeout_global(Some(TIMEOUT))
-            .max_redirects(0)
-            .build()
-            .call(),
-        (Method::Post, Some(body)) => agent
-            .post(url)
-            .header("Authorization", &bearer(call))
-            .header("Accept", "application/json")
-            .header("User-Agent", AGENT)
-            .config()
-            .timeout_global(Some(TIMEOUT))
-            .max_redirects(0)
-            .build()
-            .send_json(body),
-        (Method::Post, None) => agent
-            .post(url)
-            .header("Authorization", &bearer(call))
-            .header("Accept", "application/json")
-            .header("User-Agent", AGENT)
-            .config()
-            .timeout_global(Some(TIMEOUT))
-            .max_redirects(0)
-            .build()
-            .send_empty(),
-        (Method::Put, Some(body)) => agent
-            .put(url)
-            .header("Authorization", &bearer(call))
-            .header("Accept", "application/json")
-            .header("User-Agent", AGENT)
-            .config()
-            .timeout_global(Some(TIMEOUT))
-            .max_redirects(0)
-            .build()
-            .send_json(body),
-        (Method::Put, None) => agent
-            .put(url)
-            .header("Authorization", &bearer(call))
-            .header("Accept", "application/json")
-            .header("User-Agent", AGENT)
-            .config()
-            .timeout_global(Some(TIMEOUT))
-            .max_redirects(0)
-            .build()
-            .send_empty(),
-    };
-    sent.map_err(|error| match error {
+    let request = http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header("Authorization", bearer(call))
+        .header("Accept", "application/json")
+        .header("User-Agent", AGENT)
+        .header("X-Atlassian-Token", "no-check");
+    let mut response = match body {
+        None => send(&agent, request.body(())),
+        Some(body) => send(&agent, request.header("Content-Type", "application/json").body(body.to_string())),
+    }?;
+    let status = response.status().as_u16();
+    let text = response.body_mut().read_to_string().map_err(|e| CodeHostError::Network(e.to_string()))?;
+    status_check(status, &text)?;
+    Ok((std::mem::take(response.headers_mut()), text))
+}
+
+fn send<S: ureq::AsSendBody>(
+    agent: &ureq::Agent,
+    request: Result<http::Request<S>, http::Error>,
+) -> Result<http::Response<ureq::Body>, CodeHostError> {
+    // A header the token makes invalid — a newline pasted with it — fails here,
+    // before anything is sent.
+    let request = request.map_err(|e| CodeHostError::Network(e.to_string()))?;
+    let request = agent.configure_request(request).timeout_global(Some(TIMEOUT)).max_redirects(0).build();
+    agent.run(request).map_err(|error| match error {
         ureq::Error::Tls(message) => CodeHostError::Tls(message.to_string()),
         // A rustls handshake failure reaches ureq as an io error, and its text is
         // rustls' own — "invalid peer certificate: UnknownIssuer". That text is
@@ -254,46 +222,51 @@ fn request(
 }
 
 /// `http` is allowed only to this machine, where a test's own server listens.
+/// The host is compared whole: `localhost.example` and `localhost@example` are
+/// somewhere else.
 fn is_loopback(base: &str) -> bool {
-    let after = base.split_once("://").map_or(base, |(_, rest)| rest);
-    let host = after.split('/').next().unwrap_or_default();
-    host.starts_with("127.0.0.1") || host.starts_with("localhost") || host.starts_with("[::1]")
-}
-
-fn text_of(call: &Call, method: Method, url: &str, body: Option<Value>) -> Result<String, CodeHostError> {
-    let mut response = request(call, method, url, body)?;
-    let status = response.status().as_u16();
-    let text = response.body_mut().read_to_string().map_err(|e| CodeHostError::Network(e.to_string()))?;
-    status_check(status, &text)?;
-    Ok(text)
+    match host_of(base) {
+        Some(host) => host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    }
 }
 
 fn get(call: &Call, url: &str) -> Result<String, CodeHostError> {
-    text_of(call, Method::Get, url, None)
+    request(call, http::Method::GET, url, None).map(|(_, text)| text)
 }
 
-fn post(call: &Call, url: &str) -> Result<String, CodeHostError> {
-    text_of(call, Method::Post, url, None)
+fn post(call: &Call, url: &str, body: Value) -> Result<String, CodeHostError> {
+    request(call, http::Method::POST, url, Some(body)).map(|(_, text)| text)
 }
 
-fn post_json(call: &Call, url: &str, body: Value) -> Result<String, CodeHostError> {
-    text_of(call, Method::Post, url, Some(body))
-}
-
-fn put_json(call: &Call, url: &str, body: Value) -> Result<String, CodeHostError> {
-    text_of(call, Method::Put, url, Some(body))
+fn put(call: &Call, url: &str, body: Value) -> Result<String, CodeHostError> {
+    request(call, http::Method::PUT, url, Some(body)).map(|(_, text)| text)
 }
 
 /// The three statuses the strip acts on, and everything else with the server's
 /// own words: 401 is the token, 403 the token's rights, 409 a stale version.
+///
+/// Only a stale version is [`CodeHostError::Conflict`]: Data Center answers 409
+/// to a vetoed merge and to a second pull request between the same branches as
+/// well, and there its own words are the whole point.
 fn status_check(status: u16, text: &str) -> Result<(), CodeHostError> {
     match status {
         200..=299 => Ok(()),
         401 => Err(CodeHostError::Unauthorized),
         403 => Err(CodeHostError::Forbidden),
-        409 => Err(CodeHostError::Conflict),
+        409 if is_out_of_date(text) => Err(CodeHostError::Conflict),
         _ => Err(CodeHostError::Http(status, said(text))),
     }
+}
+
+/// Whether a 409 is the optimistic lock: Data Center names the exception
+/// `…PullRequestOutOfDateException`.
+fn is_out_of_date(text: &str) -> bool {
+    serde_json::from_str::<Value>(text).is_ok_and(|value| {
+        value["errors"]
+            .as_array()
+            .is_some_and(|errors| errors.iter().any(|error| error["exceptionName"].as_str().is_some_and(|name| name.ends_with("OutOfDateException"))))
+    })
 }
 
 fn read<T: DeserializeOwned>(text: &str) -> Result<T, CodeHostError> {
@@ -421,9 +394,9 @@ impl Pr {
             // separately means it.
             url: self
                 .links
-                .self_links
+                .web
                 .into_iter()
-                .chain(self.links.web)
+                .chain(self.links.self_links)
                 .next()
                 .map(|link| link.href)
                 .unwrap_or_default(),
@@ -698,6 +671,8 @@ mod tests {
     fn a_branch_on_the_server_is_its_commit_and_a_missing_one_is_nothing() {
         let (commit, asked, _) = ask(json_reply("200 OK", BRANCHES), |call| Bitbucket.branch_commit(call, "docs/wowtax-8238"));
         assert!(asked.contains("filterText=docs%2Fwowtax-8238"), "{asked}");
+        // Without it the exact name can be past the page among longer ones.
+        assert!(asked.contains("boostMatches=true"), "{asked}");
         assert_eq!(commit.as_deref(), Some("94beed93512849804d03fe90d10a99b1418d4342"));
 
         // `filterText` is a substring search: a longer branch in its answer is
@@ -746,8 +721,11 @@ mod tests {
     #[test]
     fn statuses_become_the_errors_the_buttons_act_on() {
         // Each status through a server of its own.
-        for (status, wanted) in [("401 Unauthorized", "token"), ("403 Forbidden", "Repository write"), ("409 Conflict", "read again")] {
-            let (base, server) = serve(json_reply(status, "{}"));
+        let stale = r#"{"errors":[{"exceptionName":"com.atlassian.bitbucket.pull.PullRequestOutOfDateException"}]}"#;
+        for (status, body, wanted) in
+            [("401 Unauthorized", "{}", "token"), ("403 Forbidden", "{}", "Repository write"), ("409 Conflict", stale, "read again")]
+        {
+            let (base, server) = serve(json_reply(status, body));
             let at = server_at(&base);
             let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
             let call = Call { server: &at, token: "t", remote: &remote };
@@ -822,6 +800,12 @@ mod tests {
             asked.starts_with("POST /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153/merge?version=6 HTTP/1.1"),
             "{asked}"
         );
+        // The resource takes JSON, and Atlassian's XSRF filter wants a client
+        // that is not a browser to say so: without either a merge is 415 or 403.
+        let head = asked.to_lowercase();
+        assert!(head.contains("content-type: application/json"), "{asked}");
+        assert!(head.contains("x-atlassian-token: no-check"), "{asked}");
+        assert_eq!(body_of(&asked), json!({}));
 
         let (created, asked) =
             with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title"));
@@ -836,6 +820,44 @@ mod tests {
             })
         );
         assert_eq!((created.id, created.from_branch.as_str()), (154, "docs/wowtax-8238"));
+    }
+
+    /// A 409 is the optimistic lock only when the server says so; a vetoed
+    /// merge and a second pull request between the same branches are 409 too,
+    /// and their reason is what the user needs to see.
+    #[test]
+    fn only_a_stale_version_is_a_conflict() {
+        let stale = r#"{"errors":[{"message":"You are attempting to modify a pull request based on out-of-date information.",
+            "exceptionName":"com.atlassian.bitbucket.pull.PullRequestOutOfDateException"}]}"#;
+        let vetoed = r#"{"errors":[{"message":"Merging the pull request has been vetoed.",
+            "exceptionName":"com.atlassian.bitbucket.pull.PullRequestMergeVetoedException",
+            "vetoes":[{"summaryMessage":"Requires approvals"}]}]}"#;
+        let duplicate = r#"{"errors":[{"message":"Only one pull request may be open for a given source and target branch",
+            "exceptionName":"com.atlassian.bitbucket.pull.DuplicatePullRequestException"}]}"#;
+
+        assert_eq!(status_check(409, stale), Err(CodeHostError::Conflict));
+        assert!(matches!(status_check(409, vetoed), Err(CodeHostError::Http(409, words)) if words.contains("vetoed")));
+        assert!(matches!(status_check(409, duplicate), Err(CodeHostError::Http(409, words)) if words.contains("Only one")));
+        assert!(matches!(status_check(409, "{}"), Err(CodeHostError::Http(409, _))));
+    }
+
+    /// `http` reaches this machine and nothing else, however the host is
+    /// dressed: a name that starts like `localhost` is somebody's host.
+    #[test]
+    fn only_this_machine_is_loopback() {
+        for local in ["http://localhost:7990", "http://127.0.0.1:1/x", "http://[::1]:8080", "http://LOCALHOST", "http://127.0.0.2"] {
+            assert!(is_loopback(local), "{local}");
+        }
+        for remote in [
+            "http://localhost.corp.example",
+            "http://127.0.0.1.nip.io",
+            "http://localhost@code.corp.example",
+            "http://localhost:x@code.corp.example/",
+            "http://code.corp.example/localhost",
+            "http://",
+        ] {
+            assert!(!is_loopback(remote), "{remote}");
+        }
     }
 
     /// A token goes over TLS or nowhere: a server stored as `http://` on a real
@@ -860,6 +882,20 @@ mod tests {
         let redirect = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         let (answer, _) = with_server(redirect, |call| Bitbucket.default_branch(call));
         assert!(matches!(answer, Err(CodeHostError::Http(302, _))), "{answer:?}");
+    }
+
+    /// A server that names the pull request's page apart from its own link
+    /// means it: `web` is opened, and `self` only when it is all there is.
+    #[test]
+    fn the_web_link_is_preferred_over_self() {
+        let both: Pr = serde_json::from_str(
+            r#"{"id":1,"links":{"self":[{"href":"https://server.com/self"}],"web":[{"href":"https://server.com/web"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(both.into_pull_request().url, "https://server.com/web");
+
+        let only_self: Pr = serde_json::from_str(r#"{"id":1,"links":{"self":[{"href":"https://server.com/self"}]}}"#).unwrap();
+        assert_eq!(only_self.into_pull_request().url, "https://server.com/self");
     }
 
     /// A `NEEDS_WORK` is a decision the strip shows; a word this app has no

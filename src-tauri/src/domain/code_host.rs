@@ -71,7 +71,22 @@ fn without_credentials(url: &str) -> String {
         Some((scheme, rest)) => (format!("{scheme}://"), rest),
         None => (String::new(), trimmed),
     };
-    format!("{scheme}{}", rest.split_once('@').map_or(rest, |(_, after)| after))
+    let (authority, path) = split_authority(rest);
+    format!("{scheme}{}{path}", without_userinfo(authority))
+}
+
+/// What follows the scheme, cut where the authority ends: the first `/`. A
+/// `?` or `#` before it ends it too.
+fn split_authority(rest: &str) -> (&str, &str) {
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    rest.split_at(end)
+}
+
+/// The authority without `user:password@`. The last `@` is the one that ends
+/// it: a password may carry one of its own, and splitting at the first would
+/// leave the rest of the password in front of the host.
+fn without_userinfo(authority: &str) -> &str {
+    authority.rsplit_once('@').map_or(authority, |(_, host)| host)
 }
 
 /// How a remote reaches the server. It decides what the address can say about
@@ -123,15 +138,12 @@ impl RemoteRepo {
             };
             // A token in a clone URL is a real thing people have; it names
             // nobody and is quietly dropped.
-            let rest = &trimmed[at + 3..];
-            let rest = rest.split_once('@').map_or(rest, |(_, after)| after);
-            let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-            (transport, authority, path)
+            let (authority, path) = split_authority(&trimmed[at + 3..]);
+            (transport, without_userinfo(authority), path.trim_start_matches('/'))
         } else {
             // `user@host:project/repository`.
             let (user_host, path) = trimmed.split_once(':').ok_or_else(|| unreadable(url))?;
-            let host = user_host.split_once('@').map_or(user_host, |(_, after)| after);
-            (Transport::Ssh, host, path)
+            (Transport::Ssh, without_userinfo(user_host), path)
         };
 
         let (host, port) = split_port(authority).ok_or_else(|| unreadable(url))?;
@@ -231,12 +243,16 @@ pub struct CodeHostServer {
     pub token_set: bool,
 }
 
-/// The host of a base address, lowercase and without the port.
+/// The host of a base address, lowercase and without the port; an IPv6
+/// literal without its brackets.
 pub fn host_of(base_url: &str) -> Option<String> {
     let rest = base_url.trim();
     let rest = rest.split_once("://").map_or(rest, |(_, after)| after);
-    let rest = rest.split_once('@').map_or(rest, |(_, after)| after);
-    let host = rest.split(['/', ':']).next()?;
+    let authority = without_userinfo(split_authority(rest).0);
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next()?,
+        None => authority.split(':').next()?,
+    };
     if host.is_empty() {
         None
     } else {
@@ -402,8 +418,8 @@ pub struct MergeCheck {
 
 /// Everything the strip draws, in one comparison.
 ///
-/// The watcher sends its event only when a snapshot differs from the last one,
-/// so this type carries what is drawn and nothing else — a timestamp here would
+/// The watcher sends its event only when a snapshot is `!=` the last one, so
+/// this type carries what is drawn and nothing else — a timestamp here would
 /// make every poll a change.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -417,13 +433,6 @@ pub struct Snapshot {
     /// `None` until the strip has asked, which is not the same as "no".
     pub merge: Option<MergeCheck>,
     pub builds: Vec<Build>,
-}
-
-impl Snapshot {
-    /// Whether the window has anything new to draw.
-    pub fn differs(&self, other: &Self) -> bool {
-        self != other
-    }
 }
 
 /// Whether the strip offers Approve: never on one's own pull request — the
@@ -544,6 +553,27 @@ mod tests {
         assert!(text.contains("server.com/org/repo"), "{text}");
     }
 
+    /// A password may carry an `@` of its own: the last one ends the userinfo,
+    /// and nothing of the password stays in front of the host.
+    #[test]
+    fn a_password_with_an_at_sign_is_dropped_whole() {
+        let parsed = RemoteRepo::parse("https://me:p@ss-ATATT@server.com/scm/P/r.git").unwrap();
+        assert_eq!(parsed.host, "server.com");
+        assert_eq!(parsed.canonical(), "server.com/p/r");
+
+        let text = RemoteRepo::parse("https://me:p@ss-ATATT@server.com/org/repo").unwrap_err().to_string();
+        assert!(!text.contains("ATATT") && !text.contains("ss-"), "{text}");
+        assert!(text.contains("https://server.com/org/repo"), "{text}");
+    }
+
+    /// An `@` after the host is part of the path, not the end of a userinfo.
+    #[test]
+    fn an_at_sign_in_the_path_is_left_where_it_is() {
+        assert_eq!(host_of("https://code.corp/x@y"), Some("code.corp".to_string()));
+        assert_eq!(without_credentials("https://code.corp/a@b/c"), "https://code.corp/a@b/c");
+        assert_eq!(without_credentials("git@code.corp:P/r.git"), "code.corp:P/r.git");
+    }
+
     /// A context path is part of the web address the form offers, and no part of
     /// what decides which repository this is.
     #[test]
@@ -637,6 +667,8 @@ mod tests {
         assert_eq!(host_of("https://CODE.corp/"), Some("code.corp".to_string()));
         assert_eq!(host_of("https://user:token@code.corp/x"), Some("code.corp".to_string()));
         assert_eq!(host_of("code.corp/x"), Some("code.corp".to_string()));
+        assert_eq!(host_of("http://[::1]:8080/x"), Some("::1".to_string()));
+        assert_eq!(host_of("http://localhost?x=1"), Some("localhost".to_string()));
         assert_eq!(host_of("  "), None);
         assert_eq!(host_of("https://"), None);
     }
@@ -813,7 +845,7 @@ mod tests {
     /// window re-reads every thirty seconds for no reason.
     #[test]
     fn two_snapshots_of_one_state_are_not_a_change() {
-        assert!(!snapshot().differs(&snapshot()));
+        assert_eq!(snapshot(), snapshot());
     }
 
     #[test]
@@ -822,15 +854,15 @@ mod tests {
 
         let mut approved = snapshot();
         approved.pr = Some(pr("u_them", &[("u_me", ReviewStatus::Approved)]));
-        assert!(base.differs(&approved), "a reviewer approved");
+        assert_ne!(base, approved, "a reviewer approved");
 
         let mut built = snapshot();
         built.builds[0].state = BuildState::Successful;
-        assert!(base.differs(&built), "a build finished");
+        assert_ne!(base, built, "a build finished");
 
         let mut unblocked = snapshot();
         unblocked.merge = Some(MergeCheck { can_merge: true, conflicted: false, vetoes: Vec::new() });
-        assert!(base.differs(&unblocked), "the vetoes went away");
+        assert_ne!(base, unblocked, "the vetoes went away");
     }
 
     /// Pushing the branch is a change too: Create PR appears where it was
@@ -840,10 +872,10 @@ mod tests {
         let empty = Snapshot::default();
         let mut pushed = Snapshot::default();
         pushed.branch_on_server = true;
-        assert!(empty.differs(&pushed));
+        assert_ne!(empty, pushed);
 
         let mut opened = pushed.clone();
         opened.pr = Some(pr("u_them", &[]));
-        assert!(pushed.differs(&opened));
+        assert_ne!(pushed, opened);
     }
 }

@@ -126,7 +126,15 @@ pub fn put(server: CodeHostServer, token: Option<String>) -> Result<(), CodeHost
     let _held = writing();
     // An empty field is an empty field, not a token: the form sends whatever is
     // in it, and a blank one must not wipe a token that is working.
-    let token = token.filter(|token| !token.trim().is_empty());
+    // A token pasted with a newline after it is the token: kept as pasted, it
+    // would make the `Authorization` header invalid.
+    let token = token
+        .map(|mut pasted| {
+            let trimmed = pasted.trim().to_string();
+            pasted.zeroize();
+            trimmed
+        })
+        .filter(|token| !token.is_empty());
     let mut servers = load()?;
     match servers.0.iter_mut().find(|saved| saved.server.id == server.id) {
         Some(saved) => {
@@ -196,6 +204,16 @@ mod tests {
             // A blank field is not a token either, and leaves the saved one.
             put(server("a", "https://server.com"), Some("  ".to_string())).unwrap();
             assert_eq!(token("a").unwrap().expose_secret(), "ATATT-secret-a");
+        });
+    }
+
+    /// A token copied out of a terminal comes with its newline, and a header
+    /// with one in it is not a header.
+    #[test]
+    fn a_pasted_token_is_kept_without_the_space_around_it() {
+        with_app_dir("code-host-store-trim", || {
+            put(server("a", "https://server.com"), Some("  ATATT-secret\n".into())).unwrap();
+            assert_eq!(token("a").unwrap().expose_secret(), "ATATT-secret");
         });
     }
 
