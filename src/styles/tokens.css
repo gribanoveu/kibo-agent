@@ -630,7 +630,7 @@
 /* The headings that stay put while a list scrolls under them: clear at rest,
    blurring what passes beneath. A plain blur, no saturation: on macOS WebKit's backdrop takes in the
    system's glass too, and a saturated copy of it read as a lighter band. */
-[data-theme="frost"] :is(.group-head, .chat-day, .meeting-cap, .meeting-card-head, .provider-foot) {
+[data-theme="frost"] :is(.group-head, .chat-day, .provider-foot) {
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
 }
@@ -645,6 +645,39 @@
 }
 [data-theme="frost"] :is(.modal, .page-sheet) {
   background: rgba(20, 26, 36, 0.82);
+}
+/* A meeting's cards' heads stay put while the transcript scrolls under them:
+   solid here, a dark bar over its card. The strip above them hid what passed
+   between the top and a head stopped just under it — solid too it was a dark
+   block round the card's rounded corners, so the head stops at the top and
+   the strip is clear. */
+[data-theme="frost"] .meeting-card-head {
+  top: 0;
+  background: rgb(22, 27, 37);
+}
+[data-theme="frost"] .meeting-cap {
+  background: none;
+}
+/* The head's rounded corners, stopped over the middle of its card, left the
+   card's edge and text showing in them: the card clips to its own rounded
+   shape, so a stopped head is square across it and a head at rest rounded
+   with it. Nothing inside a card pops out of it. */
+[data-theme="frost"] .meeting-card {
+  overflow: clip;
+}
+[data-theme="frost"] .meeting-card-head {
+  border-radius: 0;
+}
+/* A board card's buttons laid over its foot: a patch of the card's colour
+   would be a second layer of it, so the foot fades out under them instead. */
+[data-theme="frost"] .board-card-tools {
+  background: none;
+}
+[data-theme="frost"]
+  :is(.board-card:hover, .board-card:focus-visible, .board-card:has(:focus-visible))
+  .board-card-meta {
+  -webkit-mask-image: linear-gradient(to left, transparent 96px, #000 124px);
+  mask-image: linear-gradient(to left, transparent 96px, #000 124px);
 }
 
 /* The type scale. Five steps, not a size per component: monospace is for
