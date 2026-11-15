@@ -25,6 +25,7 @@ use crate::domain::tools::{
 
 pub mod board;
 pub mod present;
+pub mod paint_scene;
 pub mod deepseek;
 pub mod delete;
 pub mod delete_directory;
@@ -121,6 +122,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::Board, board::definition),
     (ToolName::Mongo, mongo::definition),
     (ToolName::Present, present::definition),
+    (ToolName::PaintScene, paint_scene::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
 
@@ -186,6 +188,7 @@ pub fn dispatch(
         ToolCall::Board(args) => board::board(args, deps),
         ToolCall::Mongo(args) => mongo::mongo(args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
+        ToolCall::PaintScene(args) => paint_scene::paint_scene(args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
         ToolCall::KubeGet(args) => cluster::kube_get(deps.kube, args),
@@ -607,6 +610,10 @@ mod definition_tests {
                     path: "index.html".into(),
                     title: "Coffee shop".into(),
                 })],
+            ),
+            ToolName::PaintScene => (
+                r#"{"title":"Snowy forest","html":"<i></i>"}"#,
+                vec![ToolCall::PaintScene(crate::domain::tools::PaintSceneArgs { title: "Snowy forest".into(), html: "<i></i>".into() })],
             ),
             ToolName::ToolSearch => (
                 r#"{"query":"create issue"}"#,

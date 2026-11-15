@@ -142,6 +142,12 @@ mod tests {
         });
     }
 
+    /// The Catalog's Delete data for Scenes removes this folder and nothing else.
+    #[test]
+    fn the_features_data_is_this_folder() {
+        assert_eq!(crate::domain::features::Feature::Scenes.manifest().data, Some(DIR));
+    }
+
     #[test]
     fn the_fifty_first_scene_is_refused() {
         with_app_dir("scenes-full", || {

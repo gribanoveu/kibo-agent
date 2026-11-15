@@ -220,6 +220,8 @@ pub enum ToolError {
     #[error(transparent)]
     Board(#[from] crate::domain::board::BoardError),
     #[error(transparent)]
+    Scene(#[from] crate::domain::scene::SceneError),
+    #[error(transparent)]
     Mongo(#[from] crate::domain::mongo::MongoError),
     #[error(transparent)]
     Prototype(#[from] crate::domain::prototype::PrototypeError),

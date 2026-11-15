@@ -148,13 +148,13 @@ fn every_request_carries_the_tool_schemas() {
     let requests = h.provider.requests();
     let offered: &[LlmToolDefinition] = &requests[0].tools;
     // Every built-in one but a review's own, the features' — the board,
-    // DeepSeek's two, MongoDB's one — the Kubernetes role's and the
-    // Prototype role's `present`; MCP tools come from servers, and none
+    // DeepSeek's two, MongoDB's one — the Kubernetes role's, the
+    // Prototype role's `present` and the roles' `paintScene`; MCP tools come from servers, and none
     // is connected. Those waiting for `toolSearch` are found with it.
     let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
     assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
     // And `toolSearch`, which is there for them.
-    assert_eq!(offered.len(), ToolName::ALL.len() - 8 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+    assert_eq!(offered.len(), ToolName::ALL.len() - 9 - ChatRole::Kubernetes.tools().len() - waiting + 1);
 }
 
 /// A write in the loop says what it did to the file, for a rewind; a

@@ -203,6 +203,15 @@ pub struct PresentArgs {
     pub title: String,
 }
 
+/// `paintScene` arguments: the scene's name for its card, and its body —
+/// HTML and CSS for behind Frost's glass (`domain::scene`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PaintSceneArgs {
+    pub title: String,
+    pub html: String,
+}
+
 /// `writePlan` arguments: the whole plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

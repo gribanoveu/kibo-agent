@@ -61,6 +61,7 @@ pub enum ToolCall {
     Board(BoardArgs),
     Mongo(MongoArgs),
     Present(PresentArgs),
+    PaintScene(PaintSceneArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
 }
@@ -116,6 +117,7 @@ impl ToolCall {
             ToolCall::Board(_) => ToolName::Board,
             ToolCall::Mongo(_) => ToolName::Mongo,
             ToolCall::Present(_) => ToolName::Present,
+            ToolCall::PaintScene(_) => ToolName::PaintScene,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
         }
@@ -392,4 +394,6 @@ pub enum ToolResult {
     Mongo { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
+    /// `paintScene`: the scene kept, by the id the window chooses it by.
+    ScenePainted { id: String, title: String },
 }

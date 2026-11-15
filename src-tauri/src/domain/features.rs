@@ -25,6 +25,7 @@ pub enum Feature {
     Mongodb,
     VoiceInput,
     LayoutCorrection,
+    Scenes,
 }
 
 /// Why a choice on the Catalog was not saved.
@@ -49,7 +50,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Mongodb, Feature::VoiceInput, Feature::LayoutCorrection];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Mongodb, Feature::VoiceInput, Feature::LayoutCorrection, Feature::Scenes];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -132,6 +133,16 @@ impl Feature {
                 tools: &[],
                 data: None,
             },
+            Feature::Scenes => Manifest {
+                id: "scenes",
+                name: "Scenes",
+                description: "Ask the model for a scene behind the window — \"a snowy forest\", \"a night lake\" — and it paints one: \
+                    moving HTML and CSS under the frosted glass of the Frost theme, chosen at once and kept among the Generated \
+                    scenes in Settings → Appearance. The three built-in scenes are there without this.",
+                enabled_by_default: false,
+                tools: &[ToolName::PaintScene],
+                data: Some("scenes"),
+            },
         }
     }
 
@@ -210,7 +221,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "mongodb", "voice-input", "layout-correction"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "mongodb", "voice-input", "layout-correction", "scenes"]);
     }
 
     #[test]
@@ -231,6 +242,7 @@ mod tests {
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::VoiceMemory), "voice prints, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Mongodb), "a network client, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::LayoutCorrection), "an opt-in writing aid");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Scenes), "a long tool description, off until chosen");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));
         // An id from another build changes nothing here.
@@ -247,6 +259,8 @@ mod tests {
             assert!(on.offers(tool), "{tool:?}");
         }
         assert!(!off.offers(ToolName::Board));
+        assert!(!off.offers(ToolName::PaintScene), "Scenes' tool, with its long description, waits for the feature");
+        assert_eq!(Feature::owning(ToolName::PaintScene), Some(Feature::Scenes));
     }
 
     #[test]

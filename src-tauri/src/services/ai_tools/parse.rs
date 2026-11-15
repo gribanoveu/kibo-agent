@@ -76,6 +76,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "board" => ToolCall::Board(args(call)?),
         "mongo" => ToolCall::Mongo(args(call)?),
         "present" => ToolCall::Present(args(call)?),
+        "paintScene" => ToolCall::PaintScene(args(call)?),
         "toolSearch" => ToolCall::ToolSearch(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to
         // get wrong. Whatever it sent alongside is ignored rather than refused.

@@ -132,6 +132,10 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Presented { path, title, version } => {
             format!("Presented {path} as \"{title}\", version {version}. The user sees it beside the chat; say in a line or two what to look at.")
         }
+        ToolResult::ScenePainted { title, .. } => format!(
+            "Painted \"{title}\" and chose it: it shows behind the window while the Frost theme is on (Settings → Appearance), \
+             and stays there among the generated scenes until the user deletes it."
+        ),
     }
 }
 
@@ -1102,5 +1106,14 @@ mod tests {
         assert_eq!(shown, "Outline of a.rs (10 lines), start-end:\n2-9  A.run");
         let none = for_model(&ToolResult::FileOutline { path: "a.txt".into(), entries: vec![], total_lines: 4 });
         assert_eq!(none, "No declarations or headings found in a.txt (4 lines).");
+    }
+
+    /// The model is told where the scene shows, so it can tell a user on another theme.
+    #[test]
+    fn a_painted_scene_says_it_shows_under_frost_and_where_it_is_kept() {
+        let shown = for_model(&ToolResult::ScenePainted { id: "6f1c1f0e-8d5b-4a3a-9a57-0b3c1f6d2e11".into(), title: "Snowy forest".into() });
+        assert!(shown.starts_with("Painted \"Snowy forest\" and chose it"), "{shown}");
+        assert!(shown.contains("Frost theme") && shown.contains("Settings → Appearance"), "{shown}");
+        assert!(!shown.contains("6f1c1f0e"), "the id is the window's, not the model's: {shown}");
     }
 }

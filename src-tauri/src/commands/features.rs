@@ -58,20 +58,39 @@ pub fn features_set_layout_switch<R: Runtime>(app: AppHandle<R>, on: bool) -> Re
     Ok(features::list())
 }
 
+/// The feature's data deleted, and said on the channel: what the window
+/// drew from it — the painted scenes behind it — is read again.
 #[tauri::command]
-pub fn features_delete_data(id: String, mongo: tauri::State<'_, Arc<MongoClients>>) -> Result<Vec<FeatureView>, String> {
+pub fn features_delete_data<R: Runtime>(app: AppHandle<R>, id: String) -> Result<Vec<FeatureView>, String> {
     features::delete_data(&id)?;
     // Its clients were made from the connections just deleted; off the main thread, as in `features_set`.
     if id == Feature::Mongodb.manifest().id {
-        let mongo = mongo.inner().clone();
+        let mongo = app.state::<Arc<MongoClients>>().inner().clone();
         tauri::async_runtime::spawn_blocking(move || mongo.forget_all());
     }
+    let _ = app.emit(FEATURES_EVENT, ());
     Ok(features::list())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Deleting the painted scenes says so, or the window keeps drawing them.
+    #[test]
+    fn deleting_a_features_data_is_said_on_the_channel() {
+        crate::testing::with_app_dir("features-delete-said", || {
+            use tauri::Listener;
+            let app = tauri::test::mock_app();
+            let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let count = Arc::clone(&heard);
+            app.handle().listen(FEATURES_EVENT, move |_| {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            });
+            features_delete_data(app.handle().clone(), Feature::Scenes.manifest().id.to_string()).unwrap();
+            assert_eq!(heard.load(std::sync::atomic::Ordering::SeqCst), 1);
+        });
+    }
 
     /// `src/lib/features.ts` listens on this name.
     #[test]

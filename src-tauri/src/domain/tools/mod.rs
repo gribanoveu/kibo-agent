@@ -128,6 +128,9 @@ pub enum ToolName {
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
+    /// A scene the model painted for behind Frost's glass, kept and chosen
+    /// (`docs/55-frost-scenes.md`, decision 8).
+    PaintScene,
     /// Finds the MCP tools left out of the request (`Exposure::Deferred`)
     /// and declares them from the next round on.
     ToolSearch,
@@ -194,6 +197,7 @@ impl ToolName {
         ToolName::Board,
         ToolName::Mongo,
         ToolName::Present,
+        ToolName::PaintScene,
         ToolName::ToolSearch,
         ToolName::Mcp,
     ];
@@ -250,6 +254,7 @@ impl ToolName {
             ToolName::Board => "board",
             ToolName::Mongo => "mongo",
             ToolName::Present => "present",
+            ToolName::PaintScene => "paintScene",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
             ToolName::Mcp => MCP_PREFIX,
@@ -402,6 +407,8 @@ impl ToolName {
             | ToolName::Mongo
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
+            // The app's own scenes, beside the folder; the window's look.
+            | ToolName::PaintScene
             | ToolName::ToolSearch => false,
         }
     }
@@ -453,6 +460,7 @@ impl ToolName {
             | ToolName::Remember
             | ToolName::Board
             | ToolName::Present
+            | ToolName::PaintScene
             // The cluster's reads wait on it and have a bench of their own to
             // show they gain; until then, one at a time.
             | ToolName::KubeList
@@ -507,6 +515,8 @@ impl ToolName {
             | ToolName::Mongo
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
+            // The app's own scenes, not the folder.
+            | ToolName::PaintScene
             | ToolName::Skill
             | ToolName::WritePlan
             | ToolName::ReadOutput
@@ -574,7 +584,8 @@ impl ToolName {
             // A small file in the app directory, read and written.
             | ToolName::Board
             // A copy of a folder of a few pages.
-            | ToolName::Present => 1,
+            | ToolName::Present
+            | ToolName::PaintScene => 1,
             // A gitignore-aware walk plus a regex over many files.
             ToolName::Grep => 3,
             // Local git2 I/O plus diff/blame compaction.

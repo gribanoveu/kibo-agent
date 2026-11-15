@@ -122,6 +122,8 @@ impl ChatRole {
                 ToolName::Board,
                 // Reads, while the user has MongoDB on.
                 ToolName::Mongo,
+                // A scene for behind the window, while the user has Scenes on.
+                ToolName::PaintScene,
             ],
             // Reads only (K-3); changes arrive with backups and undo, K-5.
             ChatRole::Kubernetes => &[
@@ -160,6 +162,8 @@ impl ChatRole {
                 // Facts for the page's text; the page itself reaches no network.
                 ToolName::WebSearch,
                 ToolName::WebFetch,
+                // A scene for behind the window, while the user has Scenes on.
+                ToolName::PaintScene,
             ],
             // `todo` runs, `delete` asks first — and then finds no folder.
             #[cfg(test)]
@@ -404,7 +408,8 @@ mod tests {
                 ToolName::DeepseekSearch,
                 ToolName::DeepseekFetch,
                 ToolName::Board,
-                ToolName::Mongo
+                ToolName::Mongo,
+                ToolName::PaintScene
             ]
         );
         let tools = ChatRole::Kubernetes.tools();
@@ -438,8 +443,9 @@ mod tests {
         assert_eq!(ChatRole::default(), ChatRole::Assistant);
     }
 
-    /// The prototype role's tools are its folder's and the web's: no command,
-    /// no cluster, no MCP — so nothing it writes runs on the machine.
+    /// The prototype role's tools are its folder's, the web's and a scene for
+    /// the window: no command, no cluster, no MCP — so nothing it writes runs
+    /// on the machine.
     #[test]
     fn the_prototype_role_reaches_its_folder_and_the_web_and_runs_nothing() {
         let tools = ChatRole::Prototype.tools();
@@ -454,8 +460,11 @@ mod tests {
                 ToolName::Present,
                 ToolName::WebSearch,
                 ToolName::WebFetch,
+                // The app's own store, not a file of the machine's.
+                ToolName::PaintScene,
             ]
         );
+        assert!(!ToolName::PaintScene.is_mutating(), "it writes no file of the user's");
         assert!(ChatRole::ALL.contains(&ChatRole::Prototype), "listed in the role menu");
     }
 

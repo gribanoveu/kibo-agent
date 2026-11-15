@@ -24,6 +24,8 @@ use crate::domain::tools::{ToolCall, ToolError, ToolResult};
 pub const CONTENT_FIELDS: &[&str] = &[
     // readFile, writeFile, a skill's file
     "content",
+    // paintScene: a scene's whole body
+    "html",
     // kubeApply: objects whole, a Secret's values among them
     "manifest",
     // grep and semanticSearch matches, and grep's context lines
@@ -409,6 +411,11 @@ mod tests {
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),
                 ToolResult::Presented { path: "index.html".into(), title: "Coffee shop".into(), version: 2 },
+            ),
+            // The scene's name stays; its body is content.
+            ToolName::PaintScene => (
+                Some(ToolCall::PaintScene(crate::domain::tools::PaintSceneArgs { title: "Snowy forest".into(), html: LEAK.into() })),
+                ToolResult::ScenePainted { id: "6f1c1f0e-8d5b-4a3a-9a57-0b3c1f6d2e11".into(), title: "Snowy forest".into() },
             ),
             ToolName::ToolSearch => (
                 None,
