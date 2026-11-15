@@ -591,6 +591,10 @@
   /* The title bar, the side columns and the message box at rest are the
      window's glass itself. */
   --bg-box: transparent;
+  /* Over a scene the window's tint is its veil (WindowScene.css). */
+  --scene-veil: rgba(12, 16, 24, 0.5);
+  /* Under a scene while its frame fades in: dark, not the desktop. */
+  --scene-ground: #0b1018;
   --bg-menu: rgba(28, 34, 46, 0.86);
   --bg-menu-hover: rgba(200, 225, 255, 0.12);
 }

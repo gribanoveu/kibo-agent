@@ -62,6 +62,9 @@ function stored(): ThemeChoice {
   return DEFAULT;
 }
 
+/** Whether the system's glass goes under the window: Frost's, unless a scene covers it. */
+export const glassUnder = (palette: Theme, sceneShown: boolean) => palette === "frost" && !sceneShown;
+
 const systemIsLight = () => window.matchMedia("(prefers-color-scheme: light)").matches;
 
 /** The side `choice` shows now. */
@@ -73,8 +76,9 @@ export const sideOf = (choice: ThemeChoice): Scheme =>
  * what src/styles/tokens.css keys its palettes off, and its side to
  * `data-scheme`, for what comes only in light and dark (the code colours). A
  * new palette there becomes selectable by adding it to SCHEMES.
+ * `sceneShown`: a scene is chosen, which under Frost covers the system glass.
  */
-export function useTheme() {
+export function useTheme(sceneShown = false) {
   const [choice, setChoice] = useState<ThemeChoice>(stored);
 
   useEffect(() => {
@@ -89,7 +93,7 @@ export function useTheme() {
       document.documentElement.dataset.scheme = side;
       // Frost is see-through: the system's blur goes under the window only
       // while it shows, since the other palettes paint over it anyway.
-      void setWindowGlass(choice[side] === "frost");
+      void setWindowGlass(glassUnder(choice[side], sceneShown));
     };
     apply();
     // The window's edge in the app's side, not the system's. Under "system"
@@ -99,7 +103,7 @@ export function useTheme() {
     const mql = window.matchMedia("(prefers-color-scheme: light)");
     mql.addEventListener("change", apply);
     return () => mql.removeEventListener("change", apply);
-  }, [choice]);
+  }, [choice, sceneShown]);
 
   const setMode = useCallback((mode: Mode) => setChoice((c) => ({ ...c, mode })), []);
   // Picked while the other side shows, a palette switches to its own side — a

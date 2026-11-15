@@ -36,6 +36,28 @@ export const setWindowGlass = (on: boolean) =>
     ? getCurrentWindow().setEffects({ effects: [Effect.HudWindow], state: EffectState.Active })
     : getCurrentWindow().clearEffects());
 
+/**
+ * Whether the window is the one in use: `onChange` on every change. Under Tauri
+ * it is the system's word — while a frame of the app holds focus (a prototype,
+ * an artifact) a switch to another program never blurs this document. Outside
+ * Tauri, the page's own focus. Returns the unsubscribe.
+ */
+export function onWindowFocus(onChange: (focused: boolean) => void): () => void {
+  if (inTauri()) {
+    const unlisten = getCurrentWindow().onFocusChanged(({ payload }) => onChange(payload));
+    return () => void unlisten.then((stop) => stop());
+  }
+  const focus = () => onChange(true);
+  // Focus moving into a frame of the page blurs it first; `hasFocus` says where it landed.
+  const blur = () => window.setTimeout(() => onChange(document.hasFocus()), 0);
+  window.addEventListener("focus", focus);
+  window.addEventListener("blur", blur);
+  return () => {
+    window.removeEventListener("focus", focus);
+    window.removeEventListener("blur", blur);
+  };
+}
+
 /** In a Markdown viewer (`viewer.html`), the file it was opened on: its name and its text. */
 export const viewerFile = () => invoke<{ name: string; text: string }>("viewer_file");
 

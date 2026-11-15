@@ -1,0 +1,52 @@
+/* Under the whole window, and only under Frost: the other palettes are opaque.
+   z-index -1 in the page's own stacking order puts it above the transparent
+   page and below `.window`, whose tint is then the veil over the scene. */
+.window-scene {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  /* The frame fades in over this rather than over the desktop. */
+  background: var(--scene-ground);
+}
+[data-theme="frost"] .window-scene {
+  display: block;
+}
+.window-scene iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  transition: opacity 600ms ease;
+}
+.window-scene iframe.ready {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .window-scene iframe {
+    transition: none;
+  }
+}
+
+/* With a scene the window's ground is the veil alone — the gradient Frost
+   draws where the system draws no glass would cover the scene. */
+:root[data-theme="frost"] .window.has-scene {
+  background: var(--scene-veil);
+}
+/* Under the system glass the sidebar's headings lost their blur and stopped
+   staying put, since WebKit drew it as a flat band there (tokens.css). Over a
+   scene there is something to blur, so they get both back. */
+:root[data-theme="frost"] .native-frame.has-scene .group-head {
+  position: sticky;
+  top: 0;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+:root[data-theme="frost"] .native-frame.has-scene .chat-day {
+  position: sticky;
+  top: var(--control-sm);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
