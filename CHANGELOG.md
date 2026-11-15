@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-11-15 The agent says what it started before a long build, test run or rollout wait, and looks for code by meaning first when it does not know where it lives
+- 2026-11-15 The agent says what it started before a long build, test run or rollout wait, and looks for code by meaning first when it does not know where it lives, and starts a helper agent only when asked to or a skill says so
 
 ## v0.13.0 — 2026-11-14
 
