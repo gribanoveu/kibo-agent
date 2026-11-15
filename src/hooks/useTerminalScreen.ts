@@ -44,8 +44,11 @@ const ANSI = [
 function look(element: HTMLElement) {
   const root = getComputedStyle(document.documentElement);
   const token = (name: string) => root.getPropertyValue(name).trim();
+  const panel = token("--bg-panel");
   const theme: ITheme = {
-    background: token("--bg-panel"),
+    // A see-through panel (Frost) is painted once, by the pane under the
+    // screen: xterm's own copy would lay a second, darker band over it.
+    background: panel.startsWith("rgba") ? "rgba(0, 0, 0, 0)" : panel,
     foreground: token("--text"),
     cursor: token("--text"),
     cursorAccent: token("--bg-panel"),
@@ -75,7 +78,7 @@ export function useTerminalScreen(
   useEffect(() => {
     const element = container.current;
     if (!element) return;
-    const term = new Terminal({ ...look(element), cursorBlink: true, scrollback: 5000 });
+    const term = new Terminal({ ...look(element), allowTransparency: true, cursorBlink: true, scrollback: 5000 });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon((_, uri) => void openExternal(uri)));
