@@ -3,6 +3,8 @@ import { render, screen, fireEvent, within } from "@testing-library/react";
 import { Settings } from "../components/Settings";
 import type { SkillsView } from "../lib/skills";
 import { DEFAULT_ALERTS, type AlertPrefs } from "../lib/attention";
+import type { SceneChoice } from "../hooks/useScene";
+import type { ThemeChoice } from "../hooks/useTheme";
 
 // The dialog's own rules: one section at a time, and the request log — which
 // writes whole conversations to disk — stays off until someone turns it on.
@@ -14,7 +16,12 @@ const SOURCES: SkillsView["sources"] = [
   { id: "claude", path: "/Users/me/.claude/skills", enabled: true },
 ];
 
-const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
+const dialog = (
+  debugLogging = false,
+  skills: SkillsView["skills"] = [],
+  theme: ThemeChoice = { mode: "system", light: "linen", dark: "basalt" },
+  active: SceneChoice = null,
+) => {
   const logging: boolean[] = [];
   const languages: string[] = [];
   const limits: { rounds: number; budget: number; parallel: number }[] = [];
@@ -24,6 +31,8 @@ const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
   const wraps: boolean[] = [];
   const alerts: AlertPrefs[] = [];
   const sources: [string, boolean][] = [];
+  const scenes: SceneChoice[] = [];
+  const motion: boolean[] = [];
   let logOpened = 0;
   render(
     <Settings
@@ -46,9 +55,15 @@ const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
       onReplyLanguage={(language) => languages.push(language)}
       turnLimits={{ rounds: 60, budget: 250, parallel: 3 }}
       onTurnLimits={(next) => limits.push(next)}
-      theme={{ mode: "system", light: "linen", dark: "basalt" }}
+      theme={theme}
       onThemeMode={(mode) => modes.push(mode)}
       onThemePalette={(theme) => palettes.push(theme)}
+      scene={{
+        active,
+        onChoose: (scene) => scenes.push(scene),
+        animateInBackground: false,
+        onAnimateInBackground: (on) => motion.push(on),
+      }}
       fontSize="large"
       onFontSize={(size) => sizes.push(size)}
       wrapLines
@@ -59,8 +74,10 @@ const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
       policy={{ provider: null, debugLogging, mcpServers: [], hooks: [] }}
     />,
   );
-  return { limits, logging, languages, sizes, wraps, alerts, sources, modes, palettes, logOpened: () => logOpened };
+  return { limits, logging, languages, sizes, wraps, alerts, sources, modes, palettes, scenes, motion, logOpened: () => logOpened };
 };
+
+const cardName = (card: HTMLElement) => card.querySelector(".theme-card-name")?.textContent;
 
 describe("the settings dialog", () => {
   test("a turn limit is saved as its field is left, and a zero goes back to the saved value", () => {
@@ -125,6 +142,45 @@ describe("the settings dialog", () => {
     expect(chalk.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(chalk);
     expect(palettes).toEqual(["chalk"]);
+  });
+
+  test("Frost and its scenes are a group of their own, beside the light and dark palettes", () => {
+    const { palettes, scenes, motion } = dialog();
+    fireEvent.click(screen.getByText("Appearance"));
+    expect(within(screen.getByRole("radiogroup", { name: "Dark theme" })).queryByRole("radio", { name: "Frost" })).toBeNull();
+
+    const frost = screen.getByRole("radiogroup", { name: "Frost" });
+    const cards = within(frost).getAllByRole("radio");
+    expect(cards.map(cardName)).toEqual(["Frost", "Frost Ferns", "Glacier Mist", "Snowfall"]);
+    // Dark is Basalt: nothing in the group is what shows.
+    expect(cards.filter((c) => c.getAttribute("aria-checked") === "true").map(cardName)).toEqual([]);
+    // A scene's card is its still picture, in a frame with no scripts.
+    const picture = cards[3].querySelector("iframe")!;
+    expect(picture.getAttribute("sandbox")).toBe("");
+    expect(picture.getAttribute("srcdoc")).toContain('<html class="paused">');
+    expect(cards[0].querySelector("iframe")).toBeNull();
+
+    fireEvent.click(cards[3]);
+    expect(palettes).toEqual(["frost"]);
+    expect(scenes).toEqual([{ kind: "builtin", id: "snowfall" }]);
+    fireEvent.click(cards[0]);
+    expect(scenes.at(-1)).toBeNull();
+
+    const background = screen.getByRole("radiogroup", { name: "Scene while another app is in front" });
+    expect(within(background).getByRole("radio", { name: "paused" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(within(background).getByRole("radio", { name: "moving" }));
+    expect(motion).toEqual([true]);
+  });
+
+  test("under Frost, the card checked is the scene that shows, and the badge is the Frost group's", () => {
+    dialog(false, [], { mode: "dark", light: "linen", dark: "frost" }, { kind: "builtin", id: "glacier-mist" });
+    fireEvent.click(screen.getByText("Appearance"));
+    const checked = within(screen.getByRole("radiogroup", { name: "Frost" }))
+      .getAllByRole("radio")
+      .filter((c) => c.getAttribute("aria-checked") === "true");
+    expect(checked.map(cardName)).toEqual(["Glacier Mist"]);
+    const badges = screen.getAllByText("showing").map((b) => b.parentElement?.textContent);
+    expect(badges).toEqual(["Frostshowing"]);
   });
 
   test("Skills lists the folders skills come from, in the order a name is looked up, each with a switch", () => {

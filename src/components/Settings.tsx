@@ -13,6 +13,9 @@ import { DEFAULT_TURN_LIMITS, type ReplyLanguage, type TurnLimits } from "../lib
 import type { SkillSourceItem, SkillsView } from "../lib/skills";
 import type { PanelItem } from "../types";
 import { MODES, sideOf, THEME_LABELS, themesOf, type Mode, type Theme, type ThemeChoice } from "../hooks/useTheme";
+import { sameScene, type SceneChoice } from "../hooks/useScene";
+import { BUILTIN_SCENES } from "../lib/scenes";
+import { sceneDocument } from "../lib/sceneDocument";
 import { FONT_SIZES, type FontSize } from "../hooks/useChatFontSize";
 import type { AlertPrefs, Attention } from "../lib/attention";
 import "./Settings.css";
@@ -118,6 +121,13 @@ type Props = {
   theme: ThemeChoice;
   onThemeMode: (mode: Mode) => void;
   onThemePalette: (theme: Theme) => void;
+  /** The scene behind Frost's glass, and whether it moves while another app is in front. */
+  scene: {
+    active: SceneChoice;
+    onChoose: (scene: SceneChoice) => void;
+    animateInBackground: boolean;
+    onAnimateInBackground: (on: boolean) => void;
+  };
   fontSize: FontSize;
   onFontSize: (size: FontSize) => void;
   /** The file viewer's long lines: wrapped, or scrolled sideways. */
@@ -146,6 +156,7 @@ export function Settings({
   theme,
   onThemeMode,
   onThemePalette,
+  scene,
   fontSize,
   onFontSize,
   wrapLines,
@@ -244,10 +255,13 @@ export function Settings({
               <section key={side} className="theme-group">
                 <h4 className="theme-group-title">
                   {side === "light" ? "Light theme" : "Dark theme"}
-                  {sideOf(theme) === side && <span className="theme-group-badge">showing</span>}
+                  {sideOf(theme) === side && !(side === "dark" && theme.dark === "frost") && (
+                    <span className="theme-group-badge">showing</span>
+                  )}
                 </h4>
                 <div className="theme-cards" role="radiogroup" aria-label={side === "light" ? "Light theme" : "Dark theme"}>
-                  {themesOf(side).map((name) => (
+                  {/* Frost and its scenes are a group of their own, below. */}
+                  {themesOf(side).filter((name) => name !== "frost").map((name) => (
                     <button
                       key={name}
                       type="button"
@@ -266,6 +280,61 @@ export function Settings({
                 </div>
               </section>
             ))}
+            <section className="theme-group">
+              <h4 className="theme-group-title">
+                Frost
+                {sideOf(theme) === "dark" && theme.dark === "frost" && <span className="theme-group-badge">showing</span>}
+              </h4>
+              <div className="theme-cards" role="radiogroup" aria-label="Frost">
+                {FROST_CARDS.map(({ choice, title, body }) => {
+                  const active = theme.dark === "frost" && sameScene(scene.active, choice);
+                  return (
+                    <button
+                      key={choice?.id ?? "frost"}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      className={`theme-card${active ? " active" : ""}`}
+                      onClick={() => {
+                        onThemePalette("frost");
+                        scene.onChoose(choice);
+                      }}
+                    >
+                      <ThemePreview theme="frost" scene={body} />
+                      <span className="theme-card-name">
+                        {active && <Check size={13} aria-hidden />}
+                        {title}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+            <div className="modal-field">
+              <label>Scene while another app is in front</label>
+              <div className="segmented" role="radiogroup" aria-label="Scene while another app is in front">
+                {(
+                  [
+                    ["paused", false],
+                    ["moving", true],
+                  ] as const
+                ).map(([label, value]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    role="radio"
+                    aria-checked={scene.animateInBackground === value}
+                    className={`segment${scene.animateInBackground === value ? " active" : ""}`}
+                    onClick={() => scene.onAnimateInBackground(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="modal-note settings-hint">
+              A moving scene costs the system a redraw of the window on every frame, so by default it stands still while you work elsewhere.
+            </p>
             <div className="modal-field">
               <label>Text size</label>
               <div className="segmented" role="radiogroup" aria-label="Text size">
@@ -448,18 +517,27 @@ const ALERT_ROWS: { attention: Attention; label: string }[] = [
   { attention: "approval", label: "Waiting for approval" },
 ];
 
-
 const MODE_LABELS: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
+
+/** Frost bare, then each scene the app ships, as the Frost group's cards. */
+const FROST_CARDS: { choice: SceneChoice; title: string; body: string | null }[] = [
+  { choice: null, title: "Frost", body: null },
+  ...BUILTIN_SCENES.map((s) => ({ choice: { kind: "builtin" as const, id: s.id }, title: s.title, body: s.body() })),
+];
 
 /**
  * A few of the app's own elements — a message, an answer with code and a
  * link, a changed line, a button — in `theme`'s palette, drawn with the classes
  * the chat and the diff use, so a card shows what the app will look like
  * rather than a picture of it. The palette comes from `data-theme` on it.
+ * With `scene`, over that scene's still picture, as the window draws it.
  */
-function ThemePreview({ theme }: { theme: Theme }) {
+function ThemePreview({ theme, scene }: { theme: Theme; scene?: string | null }) {
   return (
-    <span className="theme-preview" data-theme={theme} aria-hidden>
+    <span className={`theme-preview${scene ? " with-scene" : ""}`} data-theme={theme} aria-hidden>
+      {scene && (
+        <iframe className="theme-preview-scene" title="" sandbox="" loading="lazy" tabIndex={-1} srcDoc={sceneDocument(scene, true)} />
+      )}
       <span className="theme-preview-body">
         <span className="bubble theme-preview-ask">Why does the index rebuild?</span>
         <span className="theme-preview-answer">

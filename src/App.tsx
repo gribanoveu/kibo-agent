@@ -40,6 +40,8 @@ import { useSkills } from "./hooks/useSkills";
 import { useToolLog } from "./hooks/useToolLog";
 import { roomFor, usePanelSizes } from "./hooks/usePanelSizes";
 import { sideOf, useTheme } from "./hooks/useTheme";
+import { useScene } from "./hooks/useScene";
+import { WindowScene } from "./components/WindowScene";
 import { useChatFontSize } from "./hooks/useChatFontSize";
 import { useGitBranch, useWorktreeOf } from "./hooks/useGitBranch";
 import { useChangeTotals } from "./hooks/useChangeTotals";
@@ -296,7 +298,8 @@ export default function App() {
   // The folder's own commands are listed only once it is trusted.
   const trust = useFolderTrust(workspace.path, commandFiles.reload);
   const serverPrompts = useMcpPrompts(workspace.path, agent.turn.status);
-  const theme = useTheme();
+  const scene = useScene();
+  const theme = useTheme(scene.body !== null);
   const fontSize = useChatFontSize();
   const panels = usePanelSizes({
     sidebar: {
@@ -851,7 +854,7 @@ export default function App() {
 
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${dockShown ? "" : " aside-hidden"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${dockShown ? "" : " aside-hidden"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}${scene.body !== null ? " has-scene" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
@@ -862,6 +865,7 @@ export default function App() {
         } as React.CSSProperties
       }
     >
+      {scene.body !== null && <WindowScene body={scene.body} animateInBackground={scene.animateInBackground} />}
       <Titlebar
         slot={setHeadSlot}
         leading={
@@ -1049,6 +1053,12 @@ export default function App() {
           theme={theme.choice}
           onThemeMode={theme.setMode}
           onThemePalette={theme.setPalette}
+          scene={{
+            active: scene.active,
+            onChoose: scene.choose,
+            animateInBackground: scene.animateInBackground,
+            onAnimateInBackground: scene.setAnimateInBackground,
+          }}
           fontSize={fontSize.size}
           onFontSize={fontSize.setSize}
           wrapLines={wrapLines}
