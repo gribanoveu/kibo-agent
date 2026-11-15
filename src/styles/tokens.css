@@ -498,7 +498,74 @@
   --term-bright-cyan: #8adbe4;
   --term-bright-white: var(--text);
 
+  --glass-tint: rgba(12, 16, 24, 0.5);
+  --glass-solid: rgb(22, 27, 37);
+  --glass-float: rgba(24, 30, 41, 0.86);
+  --glass-ground: #0b1018;
+  --glass-light-1: #1d3350;
+  --glass-light-2: #262a44;
+
   color-scheme: dark;
+}
+
+/* Rime. Frost in the light: on macOS the desktop shows through the window,
+   blurred and lightened by the system's own window material (useTheme turns it
+   on), and every surface is a tint over it, laid once, as in Frost — the window
+   a milky white, the chat's page a shade whiter, what rises on it a breath of
+   slate. Where the system draws no glass the window gets a pale ground of its
+   own with a cold light in it. Text is slate, not black: 12:1 on the glass,
+   secondary 7:1 and faint 5:1; the accent a deep ice blue, 5.6:1 on the glass
+   and white on it 5.9:1. Status colours are darkened to read on a light page,
+   as in Linen. */
+[data-theme="rime"] {
+  --bg-app: transparent;
+  --bg-window: transparent;
+  --bg-panel: rgba(255, 255, 255, 0.4);
+  --bg-panel-soft: rgba(30, 50, 90, 0.04);
+  --bg-hover: rgba(30, 50, 90, 0.07);
+  --bg-active: rgba(30, 50, 90, 0.12);
+  --bg-bubble: rgba(30, 50, 90, 0.05);
+
+  --border: rgba(30, 50, 90, 0.15);
+  --border-soft: rgba(30, 50, 90, 0.09);
+  --window-border: transparent;
+
+  --text: #1c2330;
+  --text-dim: #3f4a5a;
+  --text-faint: #566173;
+
+  --accent: #1d63b0;
+  --accent-contrast: #ffffff;
+  --green: #1f7a35;
+  --red: #c4223d;
+  --amber: #875800;
+  --purple: #6f3fae;
+
+  --term-black: var(--text);
+  --term-red: #c2453d;
+  --term-green: #1f8f5c;
+  --term-yellow: #8c650f;
+  --term-blue: #2f6fb8;
+  --term-magenta: #6146c9;
+  --term-cyan: #1b7f8c;
+  --term-white: #8a93a3;
+  --term-bright-black: var(--text-faint);
+  --term-bright-red: #d9574e;
+  --term-bright-green: #27a86d;
+  --term-bright-yellow: #a57a17;
+  --term-bright-blue: #3c82d0;
+  --term-bright-magenta: #7a5fe0;
+  --term-bright-cyan: #2296a5;
+  --term-bright-white: #6b7586;
+
+  --glass-tint: rgba(246, 248, 252, 0.55);
+  --glass-solid: rgb(241, 244, 249);
+  --glass-float: rgba(250, 251, 253, 0.9);
+  --glass-ground: #e8edf4;
+  --glass-light-1: #cfe1f6;
+  --glass-light-2: #e4ddf3;
+
+  color-scheme: light;
 }
 
 :root {
@@ -585,38 +652,46 @@
   --shadow-raised: 0 1px 2px color-mix(in srgb, var(--text) 12%, transparent);
 }
 
-/* Frost's floating glass: a tint as thin as the panels' would leave a menu's
-   text over the chat's. */
-[data-theme="frost"] {
+/* What the glass palettes (Frost, Rime) share: useTheme marks <html> with
+   `data-glass` while one shows. Each palette names its own colours for it —
+   the window's tint, the solid a sticky head needs, what floats, and the
+   ground drawn where the system has no glass. */
+[data-glass] {
   /* The title bar, the side columns and the message box at rest are the
      window's glass itself. */
   --bg-box: transparent;
-  --bg-menu: rgba(28, 34, 46, 0.86);
-  --bg-menu-hover: rgba(200, 225, 255, 0.12);
+  /* A tint as thin as the panels' would leave a menu's text over the chat's. */
+  --bg-menu: var(--glass-float);
 }
-[data-theme="frost"] .window {
-  background: rgba(12, 16, 24, 0.5);
+[data-glass] .window {
+  background: var(--glass-tint);
 }
 /* The hairlines between the panels are the window's ground showing through
    their gaps (App.css): under clear panels that ground would tint them all, so
    it goes, and the page draws its edge round itself into the gaps instead. */
-[data-theme="frost"] .body {
+[data-glass] .body {
   background: transparent;
 }
-[data-theme="frost"] .main {
+[data-glass] .main {
   box-shadow: 0 0 0 var(--gutter) var(--border-soft);
 }
-/* No system glass under it — Windows, a browser: a dark ground with a cold
-   light in it, so the tint has something to be glass over. */
-[data-theme="frost"] .window:not(.native-frame) {
+/* No system glass under it — Windows, a browser: a ground of its own with a
+   cold light in it, so the tint has something to be glass over. */
+[data-glass] .window:not(.native-frame) {
   background:
-    linear-gradient(rgba(12, 16, 24, 0.5), rgba(12, 16, 24, 0.5)),
-    radial-gradient(ellipse at 15% 0%, #1d3350, transparent 60%),
-    radial-gradient(ellipse at 95% 100%, #262a44, transparent 55%),
-    #0b1018;
+    linear-gradient(var(--glass-tint), var(--glass-tint)),
+    radial-gradient(ellipse at 15% 0%, var(--glass-light-1), transparent 60%),
+    radial-gradient(ellipse at 95% 100%, var(--glass-light-2), transparent 55%),
+    var(--glass-ground);
+}
+/* What lies on the page and painted the page's colour again to look the same
+   — the chat under its thread, the terminal under its last row — would be a
+   second layer of it, a band lighter or darker than what is round it. */
+[data-glass] :is(.chat-panel, .terminal-view .xterm .xterm-viewport) {
+  background: transparent;
 }
 /* What floats: it blurs what it covers. */
-[data-theme="frost"]
+[data-glass]
   :is(
     .modal,
     .page-sheet,
@@ -627,53 +702,51 @@
   -webkit-backdrop-filter: blur(28px) saturate(1.5);
   backdrop-filter: blur(28px) saturate(1.5);
 }
+[data-glass] :is(.modal, .page-sheet) {
+  background: var(--glass-float);
+}
 /* The headings that stay put while a list scrolls under them: clear at rest,
-   blurring what passes beneath. A plain blur, no saturation: on macOS WebKit's backdrop takes in the
-   system's glass too, and a saturated copy of it read as a lighter band. */
-[data-theme="frost"] :is(.group-head, .chat-day, .provider-foot) {
+   blurring what passes beneath. A plain blur, no saturation: on macOS WebKit's
+   backdrop takes in the system's glass too, and a saturated copy of it read as
+   a band of its own. */
+[data-glass] :is(.group-head, .chat-day, .provider-foot) {
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
 }
-/* Under the system's glass WebKit draws any backdrop as a flat grey band,
-   whatever is behind the window, so the sidebar's headings drop it there — and
-   with it staying put, or the rows would scroll through their words. */
-[data-theme="frost"] .native-frame :is(.group-head, .chat-day) {
+/* Under the system's glass WebKit draws any backdrop as a flat band, whatever
+   is behind the window, so the sidebar's headings drop it there — and with it
+   staying put, or the rows would scroll through their words. */
+[data-glass] .native-frame :is(.group-head, .chat-day) {
   position: relative;
   top: auto;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-[data-theme="frost"] :is(.modal, .page-sheet) {
-  background: rgba(20, 26, 36, 0.82);
-}
 /* A meeting's cards' heads stay put while the transcript scrolls under them:
-   solid here, a dark bar over its card. The strip above them hid what passed
-   between the top and a head stopped just under it — solid too it was a dark
+   solid here, a bar over its card. The strip above them hid what passed
+   between the top and a head stopped just under it — solid too it was a
    block round the card's rounded corners, so the head stops at the top and
-   the strip is clear. */
-[data-theme="frost"] .meeting-card-head {
-  top: 0;
-  background: rgb(22, 27, 37);
-}
-[data-theme="frost"] .meeting-cap {
-  background: none;
-}
-/* The head's rounded corners, stopped over the middle of its card, left the
-   card's edge and text showing in them: the card clips to its own rounded
-   shape, so a stopped head is square across it and a head at rest rounded
-   with it. Nothing inside a card pops out of it. */
-[data-theme="frost"] .meeting-card {
+   the strip is clear. The card clips to its own rounded shape, so a stopped
+   head is square across it — its own rounded corners left the card's edge and
+   text showing in them — and a head at rest is rounded with it. Nothing inside
+   a card pops out of it. */
+[data-glass] .meeting-card {
   overflow: clip;
 }
-[data-theme="frost"] .meeting-card-head {
+[data-glass] .meeting-card-head {
+  top: 0;
   border-radius: 0;
+  background: var(--glass-solid);
+}
+[data-glass] .meeting-cap {
+  background: none;
 }
 /* A board card's buttons laid over its foot: a patch of the card's colour
    would be a second layer of it, so the foot fades out under them instead. */
-[data-theme="frost"] .board-card-tools {
+[data-glass] .board-card-tools {
   background: none;
 }
-[data-theme="frost"]
+[data-glass]
   :is(.board-card:hover, .board-card:focus-visible, .board-card:has(:focus-visible))
   .board-card-meta {
   -webkit-mask-image: linear-gradient(to left, transparent 96px, #000 124px);
