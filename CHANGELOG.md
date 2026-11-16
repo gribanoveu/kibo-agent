@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-15 The agent says what it started before a long build, test run or rollout wait, and looks for code by meaning first when it does not know where it lives
 - 2026-11-15 Frost, a dark theme of frozen glass: on macOS the desktop shows through the window, blurred
 
 ## v0.13.0 — 2026-11-14
