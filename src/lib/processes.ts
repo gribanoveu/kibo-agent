@@ -7,7 +7,7 @@ import { inTauri, requireBackend } from "./backend";
 /** Mirrors `domain::background::ProcessState`. */
 export type ProcessState = { state: "running" } | { state: "exited"; code: number | null } | { state: "stopped" };
 /** Mirrors `domain::background::ProcessInfo`. */
-export type ProcessInfo = { id: number; command: string; cwd: string; state: ProcessState };
+export type ProcessInfo = { id: number; command: string; description?: string | null; cwd: string; state: ProcessState };
 /** A row of the Terminal tab: the process and the end of what it wrote. */
 export type ProcessView = ProcessInfo & { tail: string };
 

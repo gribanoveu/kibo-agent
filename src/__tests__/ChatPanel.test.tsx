@@ -807,14 +807,14 @@ describe("a review while it runs", () => {
 });
 
 describe("a background process that ended", () => {
-  const ended = (code: number) =>
+  const ended = (code: number, description?: string) =>
     ({
       kind: "processEnded",
       id: "ended:0",
-      process: { id: 4, command: "cargo build", cwd: "src-tauri", state: { state: "exited", code } },
+      process: { id: 4, command: "cargo build", description, cwd: "src-tauri", state: { state: "exited", code } },
     }) as Block;
 
-  test("is a card with the command, the folder and how it ended, that opens the Terminal tab", () => {
+  test("is a two-line row — the command, the folder and how it ended — that opens the Terminal tab", () => {
     const opened: number[] = [];
     const { container } = render(
       <ChatPanel
@@ -826,8 +826,10 @@ describe("a background process that ended", () => {
       />,
     );
     const card = screen.getByTitle("Show in Terminal");
+    expect(card.className).toContain("process-ended");
     expect(card.className).toContain("failed");
-    expect(screen.getByText("Background process #4 ended")).toBeTruthy();
+    expect(screen.getByText("Background process")).toBeTruthy();
+    expect(screen.getByText("#4")).toBeTruthy();
     expect(screen.getByText("cargo build")).toBeTruthy();
     expect(screen.getByText("src-tauri")).toBeTruthy();
     expect(screen.getByText("exit 101")).toBeTruthy();
@@ -835,6 +837,23 @@ describe("a background process that ended", () => {
     expect(container.querySelector(".role")).toBeNull();
     fireEvent.click(card);
     expect(opened).toEqual([4]);
+  });
+
+  test("with a description, the description leads and the command sits under it", () => {
+    const { container } = render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([ended(0, "build the crate")])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        onOpenProcess={() => {}}
+      />,
+    );
+    const name = container.querySelector(".process-ended-name");
+    expect(name?.textContent).toBe("build the crate");
+    const command = container.querySelector(".process-ended-command");
+    expect(command?.textContent).toBe("cargo build");
+    expect(command?.className).not.toContain("solo");
   });
 
   test("a clean exit is not drawn as a failure", () => {
