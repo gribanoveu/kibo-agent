@@ -146,6 +146,24 @@ describe("a review a subagent ran", () => {
     expect(screen.getByText(range)).toBeTruthy();
   });
 
+  /// The findings are what to act on; the reviewer's prose waits behind a
+  /// fold — unless there is nothing else, and it is the whole report.
+  test("the reviewer's words fold away behind Summary, and stand open with no findings", () => {
+    const mine = render(<ReviewReport review={reviewOf(card())!} />);
+    const fold = document.querySelector("details.review-notes")!;
+    expect(fold.hasAttribute("open")).toBe(false);
+    expect(fold.querySelector(".review-report-range")?.textContent).toBe(range);
+    expect(fold.querySelector(".review-report-summary")?.textContent).toContain("One real problem.");
+    expect(document.querySelector(".review-finding")).toBeTruthy();
+    // The fold sits below the findings, not above them.
+    const last = [...document.querySelectorAll(".review-finding")].at(-1)!;
+    expect(last.compareDocumentPosition(fold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    mine.unmount();
+    const bare = { ...(card() as Tool), result: { ...(card() as Tool).result, findings: [] } };
+    render(<ReviewReport review={reviewOf(bare)!} />);
+    expect(document.querySelector("details.review-notes")!.hasAttribute("open")).toBe(true);
+  });
+
   /// A review that failed is still the turn's one piece of work: its card stands alone, not folded away.
   test("a failed review stays in sight", () => {
     const failed = { ...(card() as Tool), status: "failed" as const, result: undefined, error: "the review was stopped before it finished" };
