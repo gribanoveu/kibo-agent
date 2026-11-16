@@ -608,6 +608,39 @@ describe("the model row", () => {
     expect(current?.label).toBe("openrouter/anthropic/claude-sonnet-5");
   });
 
+  /// Adding a provider probes its models, so the list is known right away:
+  /// auto must stay the current choice and name the model it would send.
+  test("auto with the list known names the model it would send, and stays the current choice", () => {
+    const models = modelChoices({ ...settings, activeProviderId: "local" }, { local: ["qwen", "llama"] });
+    expect(models.current).toEqual({ providerId: "local", model: null, label: "local/qwen (auto)" });
+    expect(models.choices.map((c) => c.label)).toEqual([
+      "openrouter/anthropic/claude-sonnet-5",
+      "local/qwen (auto)",
+      "local/qwen",
+      "local/llama",
+    ]);
+    render(
+      <Composer
+        draftKey="draft"
+        onSend={() => {}}
+        onStop={() => {}}
+        running={false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={models}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+      />,
+    );
+    expect(document.querySelector(".composer-settings-shrink")?.textContent).toBe("qwen (auto)");
+  });
+
   test("shows the current one, asks for the list on open, and reports the pick", () => {
     const models = modelChoices(settings, { OpenRouter: ["openai/gpt-5"] });
     const picked: string[] = [];
