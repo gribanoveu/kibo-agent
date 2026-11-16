@@ -50,6 +50,11 @@ pub const MAX_OUTPUT_CHARS: usize = 30_000;
 pub struct CommandRequest {
     /// One command line, as it would be typed.
     pub command: String,
+    /// What the line does, in the model's own words — for the user reading the
+    /// call, not for the runner. It is not examined anywhere a decision is
+    /// made: the risk class and the approval gate read the command line alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Where to run it, relative to the workspace root. `None` is the root.
     #[serde(default)]
     pub cwd: Option<String>,
@@ -453,6 +458,7 @@ mod tests {
     fn request(timeout_seconds: Option<u32>) -> CommandRequest {
         CommandRequest {
             command: "cargo test".to_string(),
+            description: None,
             cwd: None,
             timeout_seconds,
             background: None,

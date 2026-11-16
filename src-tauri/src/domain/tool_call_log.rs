@@ -221,6 +221,7 @@ mod tests {
         let process = || crate::domain::background::ProcessInfo {
             id: 1,
             command: "npm run dev".into(),
+            description: None,
             cwd: ".".into(),
             state: crate::domain::background::ProcessState::Running,
         };
@@ -269,7 +270,7 @@ mod tests {
             ToolName::GitBlame => (None, ToolResult::GitBlame { path: path(), hunks: vec![], truncated: false }),
             ToolName::GitLog => (None, ToolResult::GitLog { path: path(), commits: vec![], truncated: false }),
             ToolName::RunCommand => (
-                Some(ToolCall::RunCommand(CommandRequest { command: "cargo test".into(), cwd: None, timeout_seconds: None, background: None })),
+                Some(ToolCall::RunCommand(CommandRequest { command: "cargo test".into(), description: None, cwd: None, timeout_seconds: None, background: None })),
                 ToolResult::CommandRan(CommandOutput {
                     stdout: LEAK.into(),
                     stderr: LEAK.into(),

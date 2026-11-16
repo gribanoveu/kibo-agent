@@ -90,7 +90,7 @@ pub fn run_or_move(
     woken: &dyn Fn() -> bool,
     stop: &dyn Fn() -> bool,
 ) -> Result<Ran, CommandError> {
-    let adopt = |child: Child, backlog: &str| processes.adopt(child, &request.command, shown_cwd, backlog).ok();
+    let adopt = |child: Child, backlog: &str| processes.adopt(child, &request.command, request.description.as_deref(), shown_cwd, backlog).ok();
     // ponytail: room is checked before `adopt`, which ends the child when
     // full; a process started in between kills the command. Make `adopt`
     // hand the child back on refusal if that window ever matters.
@@ -464,6 +464,7 @@ mod tests {
     fn ask(command: &str, timeout_seconds: Option<u32>) -> CommandRequest {
         CommandRequest {
             command: command.to_string(),
+            description: None,
             cwd: None,
             timeout_seconds,
             background: None,
@@ -485,7 +486,7 @@ mod tests {
                 let sink = Arc::clone(&sink);
                 Box::new(move |text: Option<&str>| sink.lock().unwrap().push(text.map(String::from))) as Feed
             };
-            let info = ProcessInfo { id: 1, command: String::new(), cwd: ".".into(), state: ProcessState::Running };
+            let info = ProcessInfo { id: 1, command: String::new(), description: None, cwd: ".".into(), state: ProcessState::Running };
             Some((info, [feed(), feed()]))
         };
 

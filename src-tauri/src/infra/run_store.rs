@@ -130,7 +130,7 @@ mod tests {
     }
 
     fn process(id: u32, state: ProcessState) -> ProcessView {
-        ProcessView { info: ProcessInfo { id, command: "npm test".into(), cwd: "web".into(), state }, tail: "ok\n".into() }
+        ProcessView { info: ProcessInfo { id, command: "npm test".into(), description: None, cwd: "web".into(), state }, tail: "ok\n".into() }
     }
 
     fn row(kind: &str, id: u32) -> (String, i64, Option<i64>, String) {

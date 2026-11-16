@@ -206,13 +206,20 @@ impl Processes {
         registry: &mut Registry,
         child: Child,
         command: &str,
+        description: Option<&str>,
         shown_cwd: &str,
         backlog: &str,
         chat: Option<&str>,
     ) -> (ProcessInfo, [Feed; 2]) {
         registry.next_id += 1;
         let id = registry.next_id;
-        let info = ProcessInfo { id, command: command.to_string(), cwd: shown_cwd.to_string(), state: ProcessState::Running };
+        let info = ProcessInfo {
+            id,
+            command: command.to_string(),
+            description: description.map(str::to_string),
+            cwd: shown_cwd.to_string(),
+            state: ProcessState::Running,
+        };
         let mut buffer = OutputBuffer::default();
         buffer.push(backlog);
         registry.entries.push(Entry { info: info.clone(), child: Some(child), buffer, streams: 2, reported: false, chat: chat.map(str::to_string) });
@@ -245,7 +252,7 @@ fn end(child: &mut Child) {
 }
 
 impl Processes {
-    fn start_in(&self, chat: Option<&str>, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
+    fn start_in(&self, chat: Option<&str>, shell: &Shell, command: &str, description: Option<&str>, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
         let mut registry = lock(&self.registry);
         room(&registry)?;
 
@@ -260,7 +267,7 @@ impl Processes {
         let mut child = process.spawn().map_err(|e| BackgroundError::NotStarted(format!("{}: {e}", shell.program)))?;
 
         let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-        let (info, [out, err]) = self.register(&mut registry, child, command, shown_cwd, "", chat);
+        let (info, [out, err]) = self.register(&mut registry, child, command, description, shown_cwd, "", chat);
         // Under the lock still: a reader's first chunk waits for the entry.
         read_into(stdout, out);
         read_into(stderr, err);
@@ -275,6 +282,7 @@ impl Processes {
         chat: Option<&str>,
         mut child: Child,
         command: &str,
+        description: Option<&str>,
         shown_cwd: &str,
         backlog: &str,
     ) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
@@ -283,7 +291,7 @@ impl Processes {
             end(&mut child);
             return Err(full);
         }
-        let adopted = self.register(&mut registry, child, command, shown_cwd, backlog, chat);
+        let adopted = self.register(&mut registry, child, command, description, shown_cwd, backlog, chat);
         drop(registry);
         save(&self.registry, &self.log, adopted.0.id);
         (self.changed)(ProcessChanged { id: adopted.0.id });
@@ -292,12 +300,12 @@ impl Processes {
 }
 
 impl BackgroundProcesses for Processes {
-    fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
-        self.start_in(None, shell, command, cwd, shown_cwd)
+    fn start(&self, shell: &Shell, command: &str, description: Option<&str>, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
+        self.start_in(None, shell, command, description, cwd, shown_cwd)
     }
 
-    fn adopt(&self, child: Child, command: &str, shown_cwd: &str, backlog: &str) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
-        self.adopt_in(None, child, command, shown_cwd, backlog)
+    fn adopt(&self, child: Child, command: &str, description: Option<&str>, shown_cwd: &str, backlog: &str) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
+        self.adopt_in(None, child, command, description, shown_cwd, backlog)
     }
 
     fn read(&self, id: u32) -> Result<ProcessOutput, BackgroundError> {
@@ -348,12 +356,12 @@ pub struct ChatProcesses {
 }
 
 impl BackgroundProcesses for ChatProcesses {
-    fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
-        self.processes.start_in(Some(&self.chat), shell, command, cwd, shown_cwd)
+    fn start(&self, shell: &Shell, command: &str, description: Option<&str>, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
+        self.processes.start_in(Some(&self.chat), shell, command, description, cwd, shown_cwd)
     }
 
-    fn adopt(&self, child: Child, command: &str, shown_cwd: &str, backlog: &str) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
-        self.processes.adopt_in(Some(&self.chat), child, command, shown_cwd, backlog)
+    fn adopt(&self, child: Child, command: &str, description: Option<&str>, shown_cwd: &str, backlog: &str) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
+        self.processes.adopt_in(Some(&self.chat), child, command, description, shown_cwd, backlog)
     }
 
     fn read(&self, id: u32) -> Result<ProcessOutput, BackgroundError> {
@@ -470,7 +478,7 @@ mod tests {
     use std::time::Instant;
 
     fn start(processes: &Processes, command: &str) -> ProcessInfo {
-        processes.start(&Shell::default(), command, &temp_dir("bg"), ".").expect("starts")
+        processes.start(&Shell::default(), command, None, &temp_dir("bg"), ".").expect("starts")
     }
 
     fn until(what: &str, mut done: impl FnMut() -> bool) {
@@ -487,11 +495,11 @@ mod tests {
         let processes = Arc::new(Processes::default());
         let (mine, theirs) = (processes.for_chat("a"), processes.for_chat("b"));
         let dir = temp_dir("bg-chat");
-        mine.start(&Shell::default(), "printf hi; sleep 30", &dir, ".").unwrap();
-        theirs.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        mine.start(&Shell::default(), "printf hi; sleep 30", None, &dir, ".").unwrap();
+        theirs.start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         start(&processes, "sleep 30");
         let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-        let _feeds = mine.adopt(child, "sleep 30", ".", "so far").unwrap();
+        let _feeds = mine.adopt(child, "sleep 30", None, ".", "so far").unwrap();
         let ids = |chat| processes.list_for(chat).iter().map(|p| p.info.id).collect::<Vec<_>>();
         assert_eq!((ids("a"), ids("b"), ids("c")), (vec![1, 4], vec![2], vec![]));
 
@@ -519,11 +527,11 @@ mod tests {
         {
             let before = Arc::new(Processes::with_log(Arc::new(|_| {}), log.clone()));
             let chat = before.for_chat("a");
-            chat.start(&Shell::default(), "echo built; exit 2", &dir, ".").unwrap();
-            let serving = chat.start(&Shell::default(), "echo serving; sleep 30", &dir, ".").unwrap();
+            chat.start(&Shell::default(), "echo built; exit 2", None, &dir, ".").unwrap();
+            let serving = chat.start(&Shell::default(), "echo serving; sleep 30", None, &dir, ".").unwrap();
             assert_eq!(states("a"), [(1, ProcessState::Running), (2, ProcessState::Running)], "saved as they start");
             start(&before, "sleep 30");
-            chat.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+            chat.start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
             until("the exit, saved drained", || log.processes("a")[0].tail.contains("built") && !log.processes("a")[0].info.running());
             until("the output", || before.tail(serving.id, 100).unwrap().contains("serving"));
             before.stop_by_user(serving.id).unwrap();
@@ -537,8 +545,8 @@ mod tests {
         );
 
         let after = Arc::new(Processes::with_log(Arc::new(|_| {}), log.clone()));
-        let next = after.for_chat("a").start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
-        after.for_chat("b").start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        let next = after.for_chat("a").start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
+        after.for_chat("b").start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         assert_eq!(next.id, 5, "numbered on from the log");
         let listed = after.list_for("a");
         assert_eq!(listed.iter().map(|p| p.info.id).collect::<Vec<_>>(), [1, 2, 4, 5]);
@@ -602,7 +610,7 @@ mod tests {
         let dir = temp_dir("bg-tree");
         let pid_file = dir.join("child.pid");
         let own = processes
-            .start(&Shell::default(), &format!("sleep 300 & echo $! > {}; wait", pid_file.display()), &dir, ".")
+            .start(&Shell::default(), &format!("sleep 300 & echo $! > {}; wait", pid_file.display()), None, &dir, ".")
             .unwrap();
         until("the child", || pid_file.exists() && !std::fs::read_to_string(&pid_file).unwrap().trim().is_empty());
         let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
@@ -623,7 +631,7 @@ mod tests {
         for _ in 0..MAX_RUNNING {
             start(&processes, "sleep 30");
         }
-        let refused = processes.start(&Shell::default(), "sleep 30", &temp_dir("bg-full"), ".").unwrap_err();
+        let refused = processes.start(&Shell::default(), "sleep 30", None, &temp_dir("bg-full"), ".").unwrap_err();
         assert!(matches!(&refused, BackgroundError::TooMany(list) if list.contains("#1 `sleep 30` is running")), "{refused}");
         processes.stop(1).unwrap();
         start(&processes, "sleep 30");
@@ -688,7 +696,7 @@ mod tests {
         // An exited process whose stdout is still being read.
         let registry = Arc::new(Mutex::new(Registry::default()));
         lock(&registry).entries.push(Entry {
-            info: ProcessInfo { id: 1, command: "x".into(), cwd: ".".into(), state: ProcessState::Exited { code: Some(0) } },
+            info: ProcessInfo { id: 1, command: "x".into(), description: None, cwd: ".".into(), state: ProcessState::Exited { code: Some(0) } },
             child: None,
             buffer: OutputBuffer::default(),
             streams: 1,

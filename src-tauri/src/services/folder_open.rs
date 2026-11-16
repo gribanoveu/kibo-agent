@@ -67,7 +67,7 @@ mod tests {
             let processes = Processes::default();
             let index = WorkspaceIndex::new(temp_dir("folder-open-index"), Arc::new(NoModel));
             let root = crate::infra::paths::canonicalize_plain(&temp_dir("folder-open-root")).unwrap();
-            processes.start(&crate::domain::command_exec::Shell::default(), "sleep 30", &root, ".").unwrap();
+            processes.start(&crate::domain::command_exec::Shell::default(), "sleep 30", None, &root, ".").unwrap();
 
             open(&root, true, Some(&processes), None, &index, Arc::new(|_| {}));
             assert_eq!(processes.list().iter().filter(|p| p.state == crate::domain::background::ProcessState::Running).count(), 1, "a worktree move keeps them");
