@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-16 While subagents run, the Working panel shows their live speed and tokens as a line of its own, the run's sheet shows its speed too, and Overview gains a Subagents tokens row under Session tokens with an info icon explaining what each counts
+
 ## v0.13.1 — 2026-11-16
 
 - 2026-11-16 On Windows a command the agent runs no longer flashes a console window: the release app has none of its own, so `taskkill` — which ends what a command leaves behind, on every run — was opening one
