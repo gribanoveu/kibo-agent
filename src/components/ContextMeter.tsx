@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
+import { InfoTip } from "./InfoTip";
 import "./ContextMeter.css";
 import { compactTokens } from "../lib/usage";
 import { matches } from "../lib/shortcuts";
@@ -47,18 +48,21 @@ const shareOf = (context: ContextUsage) => (context.limit ? Math.min(1, context.
 
 /** What the tokens are spent on: the ring's panel, and the Overview pane's. `cache` adds the
     last request's cache hit as a row (the Overview's — the ring says it in a sentence); `children`
-    go under the rows. `spent` adds what the whole session has cost, every model call of it.
+    go under the rows. `spent` adds what the whole session has cost, every model call of it;
+    `subagents` the share of it the chat's subagents spent, under it.
     `onOpenPane` makes a part's row a link to the pane it is made in. */
 export function ContextDetails({
   context,
   cache,
   spent,
+  subagents,
   onOpenPane,
   children,
 }: {
   context: ContextUsage;
   cache?: ChatUsage | null;
   spent?: number | null;
+  subagents?: number | null;
   onOpenPane?: (pane: AsideTab) => void;
   children?: ReactNode;
 }) {
@@ -128,6 +132,16 @@ export function ContextDetails({
               Session tokens
             </dt>
             <dd>{spent === null ? "—" : compactTokens(spent)}</dd>
+          </div>
+        )}
+        {subagents !== undefined && (
+          <div>
+            <dt>
+              <i className="ctx-dot ctx-dot--subagents" />
+              Subagents tokens
+              <InfoTip text="Only this chat's subagents' model calls. Session tokens above count every call of the chat — these included." />
+            </dt>
+            <dd>{subagents === null ? "—" : compactTokens(subagents)}</dd>
           </div>
         )}
       </dl>

@@ -11,7 +11,8 @@ export type Metric =
   | "sessions"
   | "prompts"
   | "toolCalls"
-  | "chatTokens";
+  | "chatTokens"
+  | "subagentTokens";
 
 export const METRICS: Metric[] = [
   "promptTokens",
@@ -47,6 +48,12 @@ export async function dailyMetrics(metrics: Metric[]): Promise<DailyMetric[]> {
 export async function chatTokens(chatId: string): Promise<number> {
   // ponytail: reads every chat's rows to sum one; a per-chat SUM command once the table is big enough to notice.
   const rows = await dailyMetrics(["chatTokens"]);
+  return rows.reduce((sum, { key, value }) => (key === chatId ? sum + value : sum), 0);
+}
+
+/** The subagents' share of `chatTokens(chatId)` — the Overview's row under the session total. */
+export async function subagentTokens(chatId: string): Promise<number> {
+  const rows = await dailyMetrics(["subagentTokens"]);
   return rows.reduce((sum, { key, value }) => (key === chatId ? sum + value : sum), 0);
 }
 

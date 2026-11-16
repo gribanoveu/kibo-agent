@@ -604,6 +604,7 @@ export default function App() {
       context: agent.context,
       usage: agent.turn.usage,
       spent: agent.spent,
+      subagents: agent.subagents,
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.
       onOpenProcesses: () => openProcess(null),
