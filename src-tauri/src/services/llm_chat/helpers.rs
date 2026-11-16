@@ -77,7 +77,19 @@ pub(super) fn run_helper(
                         chunk: format!("{text}\n"),
                     });
                 }
-                ChatEventPayload::ContextUsage(usage) => agents.spent(id, &usage, now()),
+                ChatEventPayload::ContextUsage(usage) => {
+                    agents.spent(id, &usage, now());
+                    // The subagents' share of the chat's session total, counted
+                    // where the round reports it — the same spend `Counted` keeps
+                    // under the chat, so the two agree by construction.
+                    // ponytail: a compaction inside the helper asks outside this
+                    // event and is not counted here; a counter on the helper's
+                    // own provider wrapper if that ever shows.
+                    if let Some(chat) = agents.chat() {
+                        let spent = u64::from(usage.prompt_tokens) + u64::from(usage.completion_tokens);
+                        crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::SubagentTokens, chat, spent)]);
+                    }
+                }
                 // The live meter's quantities: characters as they stream, the
                 // round's start and end. The text itself stays the result's.
                 ChatEventPayload::RoundStarted => agents.round_started(id),

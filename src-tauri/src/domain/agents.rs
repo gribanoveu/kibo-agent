@@ -179,6 +179,11 @@ impl Agents {
         Self { runs, sink, chat: None, log }
     }
 
+    /// The chat this handle starts runs under; `None` outside one.
+    pub fn chat(&self) -> Option<&str> {
+        self.chat.as_deref()
+    }
+
     /// The same record, for a turn of `chat`: what it starts is that chat's.
     pub fn for_chat(&self, chat: &str) -> Agents {
         Agents {

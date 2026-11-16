@@ -539,6 +539,39 @@ fn a_helper_run_is_recorded_with_its_steps_answer_and_tokens() {
     assert_eq!(run.progress, AgentProgress::default());
 }
 
+/// The subagents' spend is counted under their chat, for the Overview's row
+/// of its own — and a helper outside a chat counts under none.
+#[test]
+fn a_helpers_spend_is_counted_under_its_chat() {
+    use crate::domain::agents::Agents;
+    use crate::domain::metrics::Metric;
+    crate::testing::with_app_dir("explore-subagent-tokens", || {
+        let script = || {
+            vec![
+                asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]),
+                Step::Reply(ChatStreamResult {
+                    text: "X is in a.rs:1".into(),
+                    usage: Some(ChatUsage { prompt_tokens: 1500, completion_tokens: 20, total_tokens: 1520, cached_tokens: 1000 }),
+                    ..Default::default()
+                }),
+                text("done"),
+            ]
+        };
+        let mut h = harness("explore-subagent-tokens", script());
+        h.agents = Some(Arc::new(Agents::default().for_chat("c-sub")));
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let rows = crate::infra::daily_metrics::read(&[Metric::SubagentTokens]).unwrap();
+        assert_eq!(rows.iter().map(|r| (r.key.as_str(), r.value)).collect::<Vec<_>>(), [("c-sub", 1520)]);
+
+        // The same helper outside a chat: nothing is counted under an empty key.
+        let mut h = harness("explore-subagent-tokens-nochat", script());
+        h.agents = Some(Arc::new(Agents::default()));
+        h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
+        let rows = crate::infra::daily_metrics::read(&[Metric::SubagentTokens]).unwrap();
+        assert_eq!(rows.iter().map(|r| (r.key.as_str(), r.value)).collect::<Vec<_>>(), [("c-sub", 1520)]);
+    });
+}
+
 /// Stop in the Agents tab ends the helper, not the turn: the caller is
 /// told why, and goes on.
 #[test]
