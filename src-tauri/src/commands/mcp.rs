@@ -139,10 +139,13 @@ pub fn mcp_prompts(
 /// timeout, and the menu shows the other commands meanwhile.
 #[tauri::command]
 pub async fn mcp_prompts_start(
+    workspace: Option<String>,
     state: State<'_, Arc<AgentState>>,
     servers: State<'_, Arc<McpServers>>,
 ) -> Result<Vec<McpPromptItem>, String> {
-    let workspace = state.workspace()?;
+    let workspace = state
+        .ui_workspace(&workspace)?
+        .ok_or_else(|| "no folder is open".to_string())?;
     let servers = Arc::clone(&servers);
     tauri::async_runtime::spawn_blocking(move || {
         if let Ok(config) = mcp_config::load() {
@@ -165,10 +168,13 @@ pub async fn mcp_prompt_get(
     server: String,
     name: String,
     typed: String,
+    workspace: Option<String>,
     state: State<'_, Arc<AgentState>>,
     servers: State<'_, Arc<McpServers>>,
 ) -> Result<String, String> {
-    let workspace = state.workspace()?;
+    let workspace = state
+        .ui_workspace(&workspace)?
+        .ok_or_else(|| "no folder is open".to_string())?;
     let servers = Arc::clone(&servers);
     tauri::async_runtime::spawn_blocking(move || servers.get_prompt(&server, &name, &typed, &workspace).map_err(|e| e.to_string()))
         .await

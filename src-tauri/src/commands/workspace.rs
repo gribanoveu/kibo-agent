@@ -220,16 +220,16 @@ pub fn workspace_current(state: State<'_, Arc<AgentState>>) -> Option<String> {
 /// The branch checked out in the open folder; `None` when it is not a
 /// repository or nothing is open.
 #[tauri::command]
-pub async fn workspace_branch(state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
-    let Ok(root) = state.workspace() else { return Ok(None) };
+pub async fn workspace_branch(workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
+    let Some(root) = state.ui_workspace(&workspace)? else { return Ok(None) };
     super::blocking(move || Ok::<_, String>(crate::infra::git_head::current_branch(&root))).await
 }
 
 /// The main working tree when the open folder is a worktree of it; `None`
 /// for an ordinary folder or repository.
 #[tauri::command]
-pub async fn workspace_worktree_of(state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
-    let Ok(root) = state.workspace() else { return Ok(None) };
+pub async fn workspace_worktree_of(workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<Option<String>, String> {
+    let Some(root) = state.ui_workspace(&workspace)? else { return Ok(None) };
     super::blocking(move || Ok::<_, String>(crate::infra::git_head::worktree_of(&root).map(|path| path.display().to_string())))
         .await
 }
@@ -355,5 +355,31 @@ mod tests {
         let refused = close_refusal(&state, &root, true).expect_err("unattributed runners hold the folder");
         assert!(refused.contains("processes"), "{refused}");
         close_refusal(&state, &root, false).expect("an idle, quiet folder closes");
+    }
+
+    /// The branch is read for the folder the window names (F-8, invariant 1),
+    /// not whichever is active; no folder is `None`, a folder not open is an error.
+    #[test]
+    fn the_branch_is_read_for_the_folder_named() {
+        let app = tauri::test::mock_app();
+        let state = Arc::new(AgentState::default());
+        app.manage(Arc::clone(&state));
+        assert_eq!(tauri::async_runtime::block_on(workspace_branch(None, app.state())).unwrap(), None);
+
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("ws-branch-repo")).unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("T", "t@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[]).unwrap();
+        state.register_open(root.clone());
+        // Active is another folder, without a repository: the answer must be
+        // the named folder's branch, not the active folder's nothing.
+        state.set_workspace_for_test(temp_dir("ws-branch-active"));
+        let branch = tauri::async_runtime::block_on(workspace_branch(Some(root.display().to_string()), app.state())).unwrap();
+        assert!(branch.is_some(), "the named repository's branch");
+
+        let elsewhere = temp_dir("ws-branch-elsewhere");
+        let err = tauri::async_runtime::block_on(workspace_branch(Some(elsewhere.display().to_string()), app.state())).unwrap_err();
+        assert!(err.contains("not an open folder"), "{err}");
     }
 }

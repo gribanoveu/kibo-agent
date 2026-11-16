@@ -1,7 +1,6 @@
 //! The Files tab's folder tree, one folder at a time as it is unfolded, and
 //! saving a file edited in the viewer.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::State;

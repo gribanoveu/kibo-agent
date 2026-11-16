@@ -190,11 +190,6 @@ impl AgentState {
         running.into_iter().map(|id| crate::infra::chat_store::title(&id).ok().flatten().unwrap_or(id)).collect()
     }
 
-    pub(super) fn running_turns(&self) -> usize {
-        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        sessions.values().filter(|session| session.is_running()).count()
-    }
-
     pub(crate) fn ensure_chat_idle(&self, chat_id: &str) -> Result<(), String> {
         if self.session(chat_id).is_running() {
             Err("this chat's turn is running — wait for it to finish before moving or deleting it".into())
@@ -279,6 +274,8 @@ impl AgentState {
 
     #[cfg(test)]
     pub(crate) fn set_workspace_for_test(&self, workspace: PathBuf) {
+        // The active folder is always one of the open ones (F-8).
+        self.register_open(workspace.clone());
         *self.workspace.lock().unwrap() = Some(workspace);
     }
 
