@@ -17,11 +17,16 @@ use crate::services::{chat_title, llm_session};
 use super::blocking;
 use super::agent_state::AgentState;
 
-/// Chats of the open folder, newest first. No folder open is an empty list:
-/// there is nothing to be wrong about yet, and the sidebar already says so.
+/// Chats of the folder `workspace` names, newest first. `None` (Chat mode)
+/// and no folder are an empty list: there is nothing to be wrong about yet,
+/// and the sidebar already says so. The path is canonicalized and accepted
+/// only as an open folder (F-8, invariant 1).
 #[tauri::command]
-pub async fn chat_list(state: State<'_, Arc<AgentState>>) -> Result<Vec<ChatSummary>, String> {
-    let Ok(workspace) = state.workspace() else {
+pub async fn chat_list(
+    workspace: Option<String>,
+    state: State<'_, Arc<AgentState>>,
+) -> Result<Vec<ChatSummary>, String> {
+    let Some(workspace) = state.ui_workspace(&workspace)? else {
         return Ok(Vec::new());
     };
     blocking(move || chat_store::list(&workspace.display().to_string())).await

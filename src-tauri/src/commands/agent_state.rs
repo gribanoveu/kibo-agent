@@ -212,9 +212,11 @@ impl AgentState {
         })
     }
 
-    /// A checkout moves every chat's folder, so none may be running in it.
-    pub(crate) fn ensure_tree_is_idle(&self) -> Result<(), String> {
-        if self.running_turns() == 0 {
+    /// The folder's tree may change only when no turn runs in it (F-8): only
+    /// turns in the same checkout share files and a git index — a turn in
+    /// another folder does not hold this one.
+    pub(crate) fn ensure_folder_idle(&self, root: &std::path::Path) -> Result<(), String> {
+        if self.root_is_idle(root) {
             Ok(())
         } else {
             Err("an agent turn is running in this folder — wait for it to finish, or start a worktree for the new chat".to_string())
@@ -266,6 +268,13 @@ impl AgentState {
         } else {
             Err(format!("{path} is not an open folder"))
         }
+    }
+
+    /// The folder a window-scoped command acts on (F-8): `Some(path)` is
+    /// canonicalized and accepted only as an open folder (invariant 1);
+    /// `None` is Chat mode's "no folder".
+    pub(crate) fn ui_workspace(&self, workspace: &Option<String>) -> Result<Option<PathBuf>, String> {
+        workspace.as_ref().map(|path| self.require_open(path)).transpose()
     }
 
     #[cfg(test)]
@@ -452,14 +461,17 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_waits_for_every_running_turn() {
+    fn a_folder_waits_only_for_its_own_turns() {
         let state = state();
-        state.ensure_tree_is_idle().expect("an idle tree can be switched");
-        let running = state.begin_running("c1", 2, Path::new("/repo")).expect("the turn runs");
-        let refused = state.ensure_tree_is_idle().expect_err("a running turn holds the tree");
+        let here = Path::new("/repo");
+        let there = Path::new("/other");
+        state.ensure_folder_idle(here).expect("an idle folder can be switched");
+        let running = state.begin_running("c1", 2, here).expect("the turn runs");
+        let refused = state.ensure_folder_idle(here).expect_err("a running turn holds its folder");
         assert!(refused.contains("worktree"), "{refused}");
+        state.ensure_folder_idle(there).expect("another folder is not held");
         drop(running);
-        state.ensure_tree_is_idle().expect("the finished turn releases the tree");
+        state.ensure_folder_idle(here).expect("the finished turn releases the folder");
     }
 
     /// The turn's thread dying with the guard frees the mark all the same —
@@ -577,5 +589,18 @@ mod tests {
         let other = crate::infra::paths::canonicalize_plain(&temp_dir("require-open-other")).unwrap();
         assert!(state.require_open(&other.display().to_string()).is_err(), "another existing folder is not open");
         assert!(state.require_open(&root.join("gone").display().to_string()).is_err(), "a missing path resolves nowhere");
+    }
+
+    /// `ui_workspace` is `require_open` for a window that may be in Chat
+    /// mode: `Some` answers the folder or an error, `None` answers no folder.
+    #[test]
+    fn ui_workspace_accepts_only_open_folders_and_passes_none_through() {
+        let state = state();
+        assert_eq!(state.ui_workspace(&None), Ok(None));
+
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("ui-workspace")).unwrap();
+        state.register_open(root.clone());
+        assert_eq!(state.ui_workspace(&Some(root.display().to_string())).unwrap(), Some(root.clone()));
+        assert!(state.ui_workspace(&Some(root.join("elsewhere").display().to_string())).is_err());
     }
 }
