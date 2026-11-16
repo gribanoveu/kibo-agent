@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 
 use crate::domain::conversation_mode::{ConversationMode, PickedMode};
@@ -105,6 +105,10 @@ pub struct AgentState {
     /// chat touched in a window's run. An LRU is the way past that if a long
     /// run ever shows it.
     pub(super) sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
+    /// The folders open in the window (F-8): canonical paths, the last added
+    /// first. `workspace` is always one of them — registering a folder makes
+    /// it the active one, closing it moves the active mark.
+    pub(super) open: Mutex<Vec<PathBuf>>,
     pub(super) workspace: Mutex<Option<PathBuf>>,
     /// Grows as the user answers "always allow"; not persisted, because a
     /// saved "never ask me" is a brake released a month ago and forgotten.
@@ -223,6 +227,45 @@ impl AgentState {
             .map_err(|_| "workspace lock poisoned".to_string())?
             .clone()
             .ok_or_else(|| "no folder is open".to_string())
+    }
+
+    /// The open folders (F-8), the last added first.
+    pub(crate) fn open_folders(&self) -> Vec<PathBuf> {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    pub(crate) fn is_open(&self, root: &std::path::Path) -> bool {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|open| open == root)
+    }
+
+    /// Makes `root` an open folder: first in recency, exactly once. Does not
+    /// touch the active mark — that is `activate` in `commands::workspace`.
+    pub(crate) fn register_open(&self, root: PathBuf) {
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        open.retain(|known| *known != root);
+        open.insert(0, root);
+    }
+
+    /// Drops `root` from the open set. `true` when it was there.
+    pub(crate) fn unregister_open(&self, root: &std::path::Path) -> bool {
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = open.len();
+        open.retain(|known| known != root);
+        open.len() != before
+    }
+
+    /// The one door a folder path from the window goes through before the
+    /// backend acts on it (F-8, invariant 1): canonicalized — `..` and
+    /// symlinks resolve to what they really point at — and accepted only as
+    /// one of the open folders.
+    pub(crate) fn require_open(&self, path: &str) -> Result<PathBuf, String> {
+        let asked = crate::infra::paths::canonicalize_plain(std::path::Path::new(path))
+            .map_err(|e| format!("cannot use {path}: {e}"))?;
+        if self.is_open(&asked) {
+            Ok(asked)
+        } else {
+            Err(format!("{path} is not an open folder"))
+        }
     }
 
     #[cfg(test)]
@@ -484,5 +527,55 @@ mod tests {
 
         session.cancel.store(false, Ordering::SeqCst);
         assert!(!session.cancel.load(Ordering::SeqCst));
+    }
+
+    /// The registry holds each folder once, the last added first; closing
+    /// removes only the named folder.
+    #[test]
+    fn open_folders_register_once_most_recent_first() {
+        let state = state();
+        let a = PathBuf::from("/a");
+        let b = PathBuf::from("/b");
+        state.register_open(a.clone());
+        state.register_open(b.clone());
+        state.register_open(a.clone());
+        assert_eq!(state.open_folders(), vec![a.clone(), b.clone()]);
+
+        assert!(state.unregister_open(&b));
+        assert!(!state.unregister_open(&b), "a folder that is not open is not an error");
+        assert_eq!(state.open_folders(), vec![a]);
+    }
+
+    /// Invariant 1: a path from the window is canonicalized — over-qualified
+    /// spellings, `..` and symlinks resolve to what they really point at —
+    /// and accepted only as one of the open folders.
+    #[test]
+    fn require_open_resolves_spellings_and_rejects_what_is_not_open() {
+        let state = state();
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("require-open")).unwrap();
+        state.register_open(root.clone());
+        let shown = root.display().to_string();
+
+        // Over-qualified spellings of the same folder: the same folder.
+        assert_eq!(state.require_open(&format!("{shown}/.")).unwrap(), root);
+        std::fs::create_dir(root.join("inner")).unwrap();
+        assert_eq!(state.require_open(&format!("{shown}/inner/..")).unwrap(), root);
+
+        // A symlink at the window's spelling resolves to the folder itself.
+        #[cfg(unix)]
+        {
+            let links = temp_dir("require-open-links");
+            std::os::unix::fs::symlink(&root, links.join("link")).unwrap();
+            let spelled = links.join("link").display().to_string();
+            assert_eq!(state.require_open(&spelled).unwrap(), root);
+        }
+
+        // What resolves outside the open set — a parent, another existing
+        // folder, a path that does not exist — is refused, not acted on.
+        let parent = root.parent().unwrap().to_path_buf();
+        assert!(state.require_open(&parent.display().to_string()).is_err(), "the parent is not open");
+        let other = crate::infra::paths::canonicalize_plain(&temp_dir("require-open-other")).unwrap();
+        assert!(state.require_open(&other.display().to_string()).is_err(), "another existing folder is not open");
+        assert!(state.require_open(&root.join("gone").display().to_string()).is_err(), "a missing path resolves nowhere");
     }
 }

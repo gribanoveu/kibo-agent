@@ -51,6 +51,7 @@ pub mod file_tree;
 pub mod file_write;
 pub mod git_history;
 pub mod recent_workspaces;
+pub mod open_folders;
 pub mod kube_changes;
 pub mod paths;
 pub mod speech;

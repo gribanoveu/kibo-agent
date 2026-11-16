@@ -1,26 +1,45 @@
 //! The open folder: opening it, the recent list, its branch and its index.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
+use crate::domain::background::BackgroundProcesses;
 use crate::infra::background::Processes;
+use crate::infra::terminal::Terminals;
 use crate::services::workspace_index::WorkspaceIndex;
 
 use super::workspace_events::index_event_sink;
 use super::agent_state::AgentState;
 
-/// Opens a folder as the workspace. Canonicalized here, once, so every path a
-/// tool resolves later is measured against a real directory rather than
-/// against whatever spelling the caller used.
-///
-/// The rest — stopping what ran in the old folder, the recent list, the
-/// index — is `services::folder_open::open`, awaited off the UI thread; the
-/// index's first sync is not awaited, and its failures arrive on
-/// `workspace-index:event`.
+/// Opens a folder as the workspace. Kept as the frontend's entry point until
+/// F-8.6; it is `workspace_add` — the folder joins the open set like any add.
 #[tauri::command]
 pub async fn workspace_open(
+    path: String,
+    keep_running: Option<bool>,
+    app: AppHandle,
+    state: State<'_, Arc<AgentState>>,
+    index: State<'_, Arc<WorkspaceIndex>>,
+    git_watch: State<'_, super::git::GitWatch>,
+) -> Result<String, String> {
+    workspace_add(path, keep_running, app, state, index, git_watch).await
+}
+
+/// Adds a folder to the open set and makes it the active one. Canonicalized
+/// here, once, so every path a tool resolves later is measured against a real
+/// directory rather than against whatever spelling the caller used.
+///
+/// Until F-8.3, switching the active folder still stops what ran in the
+/// previous one (`services::folder_open::open`; `keep_running` is the
+/// worktree-move exception) — from this step on only the registry is
+/// many-folder. The rest — the git watch, the recent list, the index — is
+/// `activate`, awaited off the UI thread; the index's first sync is not
+/// awaited, and its failures arrive on `workspace-index:event`.
+#[tauri::command]
+pub async fn workspace_add(
     path: String,
     keep_running: Option<bool>,
     app: AppHandle,
@@ -32,27 +51,127 @@ pub async fn workspace_open(
     // here on — the shell started in it (`cmd.exe` refuses that prefix and
     // opens in `C:\Windows`), the tools' root, the index's events, the keys
     // chats and trust are saved under.
-    let resolved = crate::infra::paths::canonicalize_plain(std::path::Path::new(&path))
+    let resolved = crate::infra::paths::canonicalize_plain(Path::new(&path))
         .map_err(|e| format!("cannot open {path}: {e}"))?;
     if !resolved.is_dir() {
         return Err(format!("{path} is not a folder"));
     }
+    state.register_open(resolved.clone());
+    // Only a convenience for the next launch: an open folder stays open even
+    // if the list could not be written.
+    if let Err(e) = crate::infra::open_folders::record(&resolved.display().to_string()) {
+        eprintln!("open folders not saved: {e}");
+    }
+    activate(resolved, keep_running == Some(true), &app, &state, &index, &git_watch).await
+}
+
+/// Makes `root` the folder the window's panes read: the git watch and the
+/// index, and — unless `keep_running` — stopping what ran in the folder that
+/// was active before.
+async fn activate(
+    root: PathBuf,
+    keep_running: bool,
+    app: &AppHandle,
+    state: &AgentState,
+    index: &Arc<WorkspaceIndex>,
+    git_watch: &super::git::GitWatch,
+) -> Result<String, String> {
     *state
         .workspace
         .lock()
-        .map_err(|_| "workspace lock poisoned".to_string())? = Some(resolved.clone());
-    let shown = resolved.display().to_string();
-    super::git::watch_git(&app, &git_watch, &resolved, shown.clone());
-    let index = Arc::clone(&index);
-    let sink = index_event_sink(&app, shown.clone());
+        .map_err(|_| "workspace lock poisoned".to_string())? = Some(root.clone());
+    let shown = root.display().to_string();
+    super::git::watch_git(app, git_watch, &root, shown.clone());
+    let index = Arc::clone(index);
+    let sink = index_event_sink(app, shown.clone());
     let processes = app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes));
-    let terminals = app.try_state::<Arc<crate::infra::terminal::Terminals>>().map(|terminals| Arc::clone(&terminals));
-    let keep_running = keep_running == Some(true);
+    let terminals = app.try_state::<Arc<Terminals>>().map(|terminals| Arc::clone(&terminals));
     let _ = tauri::async_runtime::spawn_blocking(move || {
-        crate::services::folder_open::open(&resolved, keep_running, processes.as_deref(), terminals.as_deref(), &index, sink)
+        crate::services::folder_open::open(&root, keep_running, processes.as_deref(), terminals.as_deref(), &index, sink)
     })
     .await;
     Ok(shown)
+}
+
+/// Closes an open folder: out of the registry, its things stopped (F-8
+/// invariant 4). Refused while a turn runs in it (invariant 5), and while
+/// anything runs that cannot yet be attributed to a folder — F-8.3 gives
+/// processes and terminals their folder and lifts that.
+#[tauri::command]
+pub async fn workspace_close(
+    path: String,
+    app: AppHandle,
+    state: State<'_, Arc<AgentState>>,
+    index: State<'_, Arc<WorkspaceIndex>>,
+    git_watch: State<'_, super::git::GitWatch>,
+) -> Result<(), String> {
+    let root = state.require_open(&path)?;
+    let was_active = state.workspace().ok().as_deref() == Some(root.as_path());
+    close_refusal(&state, &root, anything_runs(&app))?;
+    state.unregister_open(&root);
+    if let Err(e) = crate::infra::open_folders::remove(&root.display().to_string()) {
+        eprintln!("open folders not saved: {e}");
+    }
+    if was_active {
+        if let Some(processes) = app.try_state::<Arc<Processes>>() {
+            processes.stop_all();
+        }
+        if let Some(terminals) = app.try_state::<Arc<Terminals>>() {
+            terminals.close_all();
+        }
+        let next = state.open_folders().into_iter().next();
+        *state
+            .workspace
+            .lock()
+            .map_err(|_| "workspace lock poisoned".to_string())? = next.clone();
+        if let Some(next) = next {
+            activate(next, false, &app, &state, &index, &git_watch).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Why a close may not happen, if it may not — kept out of the command so the
+/// refusals are testable without a Tauri app.
+fn close_refusal(state: &AgentState, root: &Path, anything_runs: bool) -> Result<(), String> {
+    if !state.root_is_idle(root) {
+        return Err("an agent turn is running in this folder — stop it before closing the folder".to_string());
+    }
+    if anything_runs {
+        return Err("processes or terminals are still running — stop them before closing the folder".to_string());
+    }
+    Ok(())
+}
+
+fn anything_runs(app: &AppHandle) -> bool {
+    let processes = app.try_state::<Arc<Processes>>().is_some_and(|processes| !processes.list().is_empty());
+    let terminals = app.try_state::<Arc<Terminals>>().is_some_and(|terminals| !terminals.list().is_empty());
+    processes || terminals
+}
+
+/// An open folder, as the sidebar will draw it from F-8.6 on.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFolder {
+    path: String,
+    /// The one the window's panes read by default; at most one while any
+    /// folder is open.
+    active: bool,
+}
+
+/// The folders open in the window, the last added first. `workspaces_list`,
+/// not `workspace_list` — the latter is the Files tab's tree command.
+#[tauri::command]
+pub fn workspaces_list(state: State<'_, Arc<AgentState>>) -> Vec<OpenFolder> {
+    let active = state.workspace().ok();
+    state
+        .open_folders()
+        .into_iter()
+        .map(|path| OpenFolder {
+            active: active.as_deref() == Some(path.as_path()),
+            path: path.display().to_string(),
+        })
+        .collect()
 }
 
 /// A folder opened lately, and whose worktree it is if it is one — so the
@@ -216,5 +335,25 @@ mod tests {
         assert_eq!(shot.root, root.display().to_string());
         assert_eq!((shot.embedded, shot.skipped), (0, 1));
         assert!(shot.embedding_error.as_deref().is_some_and(|e| e.contains("no model")), "{shot:?}");
+    }
+
+    /// Invariant 5: closing a folder is refused while one of its turns runs.
+    /// Until processes and terminals carry a folder (F-8.3), a close is also
+    /// refused while any of them runs anywhere — stopping the close's folder
+    /// could not touch only what is its.
+    #[test]
+    fn closing_a_folder_is_refused_while_it_cannot_be_left_safely() {
+        let state = AgentState::default();
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("ws-close-guard")).unwrap();
+        state.register_open(root.clone());
+
+        let running = state.begin_running("c1", 1, &root).unwrap();
+        let refused = close_refusal(&state, &root, false).expect_err("a running turn holds the folder");
+        assert!(refused.contains("turn"), "{refused}");
+        drop(running);
+
+        let refused = close_refusal(&state, &root, true).expect_err("unattributed runners hold the folder");
+        assert!(refused.contains("processes"), "{refused}");
+        close_refusal(&state, &root, false).expect("an idle, quiet folder closes");
     }
 }
