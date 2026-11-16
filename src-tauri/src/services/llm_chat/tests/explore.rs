@@ -466,27 +466,49 @@ fn a_helper_without_an_answer_is_an_error() {
     assert_eq!(back, vec!["Error: explore: the helper finished without an answer".to_string()]);
 }
 
-pub(super) fn costing(step: Step, prompt: u32, cached: u32, completion: u32) -> Step {
-    let Step::Reply(mut result) = step else { unreachable!() };
-    result.usage = Some(ChatUsage { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion, cached_tokens: cached });
-    Step::Reply(result)
-}
-
 /// The run is in the Agents tab from start to answer, with what it cost;
 /// the cost is on the card, and never on the chat's own context meter.
+/// Its stream moves the live meter while it runs.
 #[test]
 fn a_helper_run_is_recorded_with_its_steps_answer_and_tokens() {
-    use crate::domain::agents::{AgentState, AgentTokens, Agents};
+    use crate::domain::agents::{AgentChanged, AgentProgress, AgentState, AgentTokens, Agents};
+    use std::sync::OnceLock;
     let mut h = harness(
         "explore-record",
         vec![
             asks(vec![wants("e1", "explore", r#"{"task":"where is X"}"#)]),
-            costing(asks(vec![wants("g1", "grep", r#"{"pattern":"X"}"#)]), 1000, 600, 40),
-            costing(text("X is in a.rs:1"), 1500, 1000, 20),
+            // The helper's rounds stream as a provider does: call arguments
+            // in chunks, then reasoning before the answer.
+            Step::ReplyStreamingCalls(
+                vec![vec![("g1", "grep", r#"{"pattern":"#)], vec![("g1", "grep", r#"{"pattern":"X"}"#)]],
+                ChatStreamResult {
+                    tool_calls: vec![wants("g1", "grep", r#"{"pattern":"X"}"#)],
+                    usage: Some(ChatUsage { prompt_tokens: 1000, completion_tokens: 40, total_tokens: 1040, cached_tokens: 600 }),
+                    ..Default::default()
+                },
+            ),
+            Step::ReplyThinking(
+                "хм хм",
+                ChatStreamResult {
+                    text: "X is in a.rs:1".into(),
+                    usage: Some(ChatUsage { prompt_tokens: 1500, completion_tokens: 20, total_tokens: 1520, cached_tokens: 1000 }),
+                    ..Default::default()
+                },
+            ),
             text("done"),
         ],
     );
-    let agents = Arc::new(Agents::default());
+    // Each signal's view of the run: the meter must move while it runs.
+    let snapshots = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&snapshots);
+    let registry: Arc<OnceLock<Arc<Agents>>> = Arc::default();
+    let reach = Arc::clone(&registry);
+    let agents = Arc::new(Agents::new(Arc::new(move |event: AgentChanged| {
+        if let Some(run) = reach.get().and_then(|agents| agents.get(event.id)) {
+            seen.lock().unwrap().push(run.progress);
+        }
+    })));
+    registry.set(Arc::clone(&agents)).ok();
     h.agents = Some(Arc::clone(&agents));
     h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("turn");
 
@@ -503,6 +525,18 @@ fn a_helper_run_is_recorded_with_its_steps_answer_and_tokens() {
     assert_eq!((agent, tokens), (run.id, spent));
     assert!(text.starts_with("X is in a.rs:1\n\n[Checked by the app"), "{text}");
     assert!(!payloads(&h.events()).contains(&"contextUsage".to_string()), "the helper's usage is not the chat's");
+
+    // The stream was visible while it ran: the call's first argument chunk
+    // on its own, then the reasoning before the answer joined it.
+    let seen = snapshots.lock().unwrap();
+    assert!(
+        seen.iter().any(|p| p.stream_chars == 11 && p.stream_since.is_some_and(|since| since > 0)),
+        "the call's arguments streamed, on the wall clock: {seen:?}"
+    );
+    // Cyrillic: five characters, nine bytes — the meter counts characters.
+    assert!(seen.iter().any(|p| p.stream_chars == 5), "the reasoning streamed: {seen:?}");
+    // The rounds closed; a scripted stream is too fast to weigh into the ratio.
+    assert_eq!(run.progress, AgentProgress::default());
 }
 
 /// Stop in the Agents tab ends the helper, not the turn: the caller is
