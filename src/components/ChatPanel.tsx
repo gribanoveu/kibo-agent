@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   AppWindow,
   ArrowUpRight,
+  Bot,
   Brain,
   Loader2,
   ChevronRight,
@@ -271,12 +272,11 @@ function SubagentCard({
     .join(" · ");
   // A call with no body of its own unfolds to its argument in full.
   const detail = shown.detail || shown.arg;
-  const Icon = block.name === "review" ? SearchCheck : Telescope;
   return (
     <div className={`subagent-card ${block.status}${open ? " open" : ""}`}>
       <button type="button" className="subagent-row" onClick={() => setOpen((v) => !v)}>
         <span className="subagent-ico" aria-hidden>
-          <Icon size={14} />
+          <Bot size={14} />
         </span>
         <span className="subagent-body">
           <span className="subagent-title">{block.name === "review" ? shown.name : shown.arg}</span>
