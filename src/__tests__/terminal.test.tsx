@@ -187,7 +187,7 @@ describe("TerminalPanel", () => {
   });
 
   test("a row in the Agents tab opens its run over the chat", async () => {
-    runs = [{ id: 1, task: "t", state: { state: "done" }, steps: ["grep needle"], tokens: { prompt: 0, cached: 0, completion: 0 }, answer: "found" }];
+    runs = [{ id: 1, task: "t", state: { state: "done" }, steps: ["grep needle"], tokens: { prompt: 0, cached: 0, completion: 0 }, answer: "found", progress: { streamSince: null, streamChars: 0, timed: { tokens: 0, ms: 0, chars: 0 } } }];
     const opened: AgentFocus[] = [];
     render(panel({ onOpenAgent: (agent) => opened.push(agent) }));
     await settle();

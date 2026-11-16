@@ -144,7 +144,8 @@
 }
 /* Not a part of the bar, so not one of its colours: the same dot, hollow. */
 .ctx-dot--cache,
-.ctx-dot--spent {
+.ctx-dot--spent,
+.ctx-dot--subagents {
   box-sizing: border-box;
   border: 1.5px solid var(--text-faint);
 }

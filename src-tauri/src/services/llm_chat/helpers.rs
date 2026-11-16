@@ -25,8 +25,9 @@ pub(super) fn check_with(session: &LlmSession, prompt: &str, text: &str) -> Resu
 /// It shares what the calling turn has — the model, the folder, the stop
 /// button, the hooks, the log — and nothing of its conversation: no history,
 /// no plan, no checklist. Of its events only the calls go out, as lines of
-/// the calling card's output, and its usage goes to its record: its text is
-/// the result, and its tokens are not this chat's context.
+/// the calling card's output; its usage and the shape of its stream go to
+/// its record, for the live meter: its text is the result, and its tokens
+/// are not this chat's context.
 ///
 /// Recorded in the Agents tab from start to end, and stopped from there too;
 /// the caller says how it ended (`Agents::finish`). The chat's own Stop ends
@@ -57,25 +58,47 @@ pub(super) fn run_helper(
     let events: ChatEventSink = {
         let agents = Arc::clone(&agents);
         let progress = progress.clone();
-        Arc::new(move |event: ChatTurnEvent| match event.event {
-            ChatEventPayload::ToolCall(call) => {
-                let step = explore_step(&call.name, &call.arguments);
-                progress(CommandEvent {
-                    stream: crate::domain::command_exec::OutputStream::Stdout,
-                    chunk: format!("{step}\n"),
-                });
-                agents.step(id, step);
+        Arc::new(move |event: ChatTurnEvent| {
+            let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+            match event.event {
+                ChatEventPayload::ToolCall(call) => {
+                    let step = explore_step(&call.name, &call.arguments);
+                    progress(CommandEvent {
+                        stream: crate::domain::command_exec::OutputStream::Stdout,
+                        chunk: format!("{step}\n"),
+                    });
+                    agents.step(id, step);
+                }
+                // The budget note is the card's own line, not a notice in the
+                // chat: it belongs where the review's steps are.
+                ChatEventPayload::WrapUpReminded { text, .. } => {
+                    progress(CommandEvent {
+                        stream: crate::domain::command_exec::OutputStream::Stdout,
+                        chunk: format!("{text}\n"),
+                    });
+                }
+                ChatEventPayload::ContextUsage(usage) => {
+                    agents.spent(id, &usage, now());
+                    // The subagents' share of the chat's session total, counted
+                    // where the round reports it — the same spend `Counted` keeps
+                    // under the chat, so the two agree by construction.
+                    // ponytail: a compaction inside the helper asks outside this
+                    // event and is not counted here; a counter on the helper's
+                    // own provider wrapper if that ever shows.
+                    if let Some(chat) = agents.chat() {
+                        let spent = u64::from(usage.prompt_tokens) + u64::from(usage.completion_tokens);
+                        crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::SubagentTokens, chat, spent)]);
+                    }
+                }
+                // The live meter's quantities: characters as they stream, the
+                // round's start and end. The text itself stays the result's.
+                ChatEventPayload::RoundStarted => agents.round_started(id),
+                ChatEventPayload::Delta { delta } | ChatEventPayload::Reasoning { delta } => {
+                    agents.streamed(id, delta.chars().count() as u64, now());
+                }
+                ChatEventPayload::ToolCallDelta(call) => agents.streamed(id, call.arguments.chars().count() as u64, now()),
+                _ => {}
             }
-            // The budget note is the card's own line, not a notice in the
-            // chat: it belongs where the review's steps are.
-            ChatEventPayload::WrapUpReminded { text, .. } => {
-                progress(CommandEvent {
-                    stream: crate::domain::command_exec::OutputStream::Stdout,
-                    chunk: format!("{text}\n"),
-                });
-            }
-            ChatEventPayload::ContextUsage(usage) => agents.spent(id, &usage),
-            _ => {}
         })
     };
     let stopped = || (turn.cancelled)() || agents.stop_asked(id);

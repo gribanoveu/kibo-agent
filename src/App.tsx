@@ -604,6 +604,7 @@ export default function App() {
       context: agent.context,
       usage: agent.turn.usage,
       spent: agent.spent,
+      subagents: agent.subagents,
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.
       onOpenProcesses: () => openProcess(null),
@@ -640,6 +641,7 @@ export default function App() {
             }
             onOpenSettings={ide ? () => openSettings() : undefined}
             workspace={workspace.path}
+            chatId={agent.chatId}
             turn={agent.turn}
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}

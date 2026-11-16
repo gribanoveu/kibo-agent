@@ -19,6 +19,8 @@ export type OverviewProps = {
   usage: ChatUsage | null;
   /** Every model call of the open chat, in tokens — helpers, title and checks included; `null` until read. */
   spent: number | null;
+  /** The subagents' share of the session total, in tokens; `null` until read. */
+  subagents: number | null;
   servers: McpServerItem[];
   /** Background processes and helper agents, running or ended. */
   processes: ProcessInfo[];
@@ -57,6 +59,7 @@ export function OverviewPanel({
   context,
   usage,
   spent,
+  subagents,
   servers,
   processes,
   agents,
@@ -73,7 +76,7 @@ export function OverviewPanel({
     <div className="overview">
       {context && (
         <section className="overview-card overview-ctx">
-          <ContextDetails context={context} cache={usage} spent={spent} onOpenPane={onOpenPanel} />
+          <ContextDetails context={context} cache={usage} spent={spent} subagents={subagents} onOpenPane={onOpenPanel} />
         </section>
       )}
 

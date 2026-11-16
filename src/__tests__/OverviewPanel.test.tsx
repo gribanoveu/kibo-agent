@@ -17,6 +17,8 @@ const props = (over: Partial<OverviewProps> = {}): OverviewProps => ({
   changes: { files: 3, add: 593, del: 34 },
   context: null,
   usage: null,
+  spent: null,
+  subagents: null,
   servers: [],
   processes: [],
   agents: [],
@@ -63,8 +65,8 @@ describe("Overview", () => {
             { id: 2, command: "cargo test", cwd: "/", state: { state: "exited", code: 0 } },
           ],
           agents: [
-            { id: 7, task: "Find the ranking code", state: { state: "running" }, steps: [], tokens, answer: null },
-            { id: 8, task: "Old", state: { state: "done" }, steps: [], tokens, answer: "x" },
+            { id: 7, task: "Find the ranking code", state: { state: "running" }, steps: [], tokens, answer: null, progress: { streamSince: null, streamChars: 0, timed: { tokens: 0, ms: 0, chars: 0 } } },
+            { id: 8, task: "Old", state: { state: "done" }, steps: [], tokens, answer: "x", progress: { streamSince: null, streamChars: 0, timed: { tokens: 0, ms: 0, chars: 0 } } },
           ],
           onOpenProcess: (id) => opened.push(id),
           onOpenAgent: (agent) => opened.push(agent),
@@ -85,6 +87,20 @@ describe("Overview", () => {
     render(<OverviewPanel {...props({ onOpenProcesses: () => opened.push("processes"), onOpenPanel: (tab) => opened.push(tab) })} />);
     fireEvent.click(screen.getByText("Background"));
     expect(opened).toEqual(["processes"]);
+  });
+
+  test("the subagents' share of the session total stands under it", () => {
+    render(
+      <OverviewPanel
+        {...props({
+          context: { instructions: 1000, skills: 0, tools: 2000, mcp: 0, conversation: 7000, total: 10000, limit: 100000, compactsAt: 80000 },
+          spent: 38000,
+          subagents: 12400,
+        })}
+      />,
+    );
+    expect(screen.getByText("Session tokens").nextElementSibling?.textContent).toBe("38k");
+    expect(screen.getByText("Subagents tokens").nextElementSibling?.textContent).toBe("12k");
   });
 
   test("says when there is nothing to count", () => {

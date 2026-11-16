@@ -121,7 +121,7 @@ mod tests {
     use crate::domain::agents::AgentTokens;
 
     fn run(id: u32, state: AgentState) -> AgentInfo {
-        AgentInfo { id, task: format!("t{id}"), state, steps: Vec::new(), tokens: AgentTokens::default(), answer: None }
+        AgentInfo { id, task: format!("t{id}"), state, steps: Vec::new(), tokens: AgentTokens::default(), answer: None, progress: Default::default() }
     }
 
     #[test]
