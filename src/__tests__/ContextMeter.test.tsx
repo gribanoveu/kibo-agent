@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { ContextMeter } from "../components/ContextMeter";
+import { ContextMeter, ContextDetails } from "../components/ContextMeter";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
 
 // The ring beside the send button, and the panel it opens: how full the
@@ -118,6 +118,21 @@ describe("the context meter", () => {
     openMeter();
     fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Context" })).toBeNull();
+  });
+
+  /// The subagents' share of the session total, under it — with the icon
+  /// that says what the two numbers mean.
+  test("the subagents' row under the session total; a dash until read, and nothing unasked", () => {
+    const live = render(<ContextDetails context={context()} spent={38_000} subagents={12_400} />);
+    expect(screen.getByText("Subagents tokens").nextElementSibling?.textContent).toBe("12k");
+    fireEvent.pointerEnter(screen.getByRole("button", { name: "More info" }));
+    expect(screen.getByRole("tooltip").textContent).toContain("Session tokens above count every call");
+    live.unmount();
+    const unread = render(<ContextDetails context={context()} spent={38_000} subagents={null} />);
+    expect(screen.getByText("Subagents tokens").nextElementSibling?.textContent).toBe("—");
+    unread.unmount();
+    render(<ContextDetails context={context()} spent={38_000} />);
+    expect(screen.queryByText("Subagents tokens")).toBeNull();
   });
 
   /// No window is a number with no scale — not a ring filled against a guess.

@@ -56,7 +56,8 @@ import { ImageThumbs } from "./ImageThumbs";
 import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
 import { describeActive, describeHelperStep, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
-import { type AgentTokens, tokensSpent } from "../lib/agents";
+import { type AgentInfo, type AgentTokens, subagentMeter, tokensSpent } from "../lib/agents";
+import { useAgents } from "../hooks/useAgents";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
@@ -552,6 +553,28 @@ function Spent({ spent }: { spent: number }) {
   );
 }
 
+/**
+ * "· subagent ~42 tok/s · 3.1k tokens": what the chat's running subagents
+ * spend, estimated while they stream — their own, not the chat's context.
+ * Several run at once; the line is theirs together.
+ */
+function SubagentLine({ agents, now }: { agents: AgentInfo[]; now: number }) {
+  const meter = subagentMeter(agents, now);
+  if (!meter) return null;
+  return (
+    <>
+      <span className="turn-clock-sep">·</span>
+      <span className="turn-clock-time">{meter.count === 1 ? "subagent" : `${meter.count} subagents`}</span>
+      <Speed rate={meter.speed} prefix="~" />
+      <span className="turn-clock-sep">·</span>
+      <span className="turn-clock-time">
+        {meter.streaming ? "~" : ""}
+        {formatTokens(meter.tokens)} tokens
+      </span>
+    </>
+  );
+}
+
 /** The session's average output speed, or `null` before anything was timed. */
 const averageSpeed = ({ speed }: TurnState) => (speed.ms > 0 ? (speed.tokens * 1000) / speed.ms : null);
 
@@ -563,11 +586,13 @@ function WorkingClock({
   since,
   before,
   turn,
+  subagents = [],
   children,
 }: {
   since: number;
   before: number;
   turn: TurnState;
+  subagents?: AgentInfo[];
   children?: ReactNode;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -583,6 +608,7 @@ function WorkingClock({
       <span className="turn-clock-time">{formatDuration(before + Math.max(0, now - since))}</span>
       {live === null ? <Speed rate={turn.speed.last} /> : <Speed rate={live} prefix="~" />}
       <Spent spent={turn.spent} />
+      <SubagentLine agents={subagents} now={now} />
       {children}
     </div>
   );
@@ -752,6 +778,8 @@ type Props = {
   /** Settings from the "…" menu, where the window has no sidebar to open them from. */
   onOpenSettings?: () => void;
   workspace: string | null;
+  /** The open chat: its running subagents feed the Working panel's line. */
+  chatId?: string | null;
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
   onOpenRepo: () => void;
@@ -818,6 +846,8 @@ type TranscriptProps = Pick<
   preview?: PreviewCalls;
   /** Opens the Preview panel on a version a `present` card kept; a Prototype chat's. */
   onOpenVersion?: (version: number) => void;
+  /** The chat's subagent runs, read while a turn runs; the Working panel's line. */
+  subagents?: AgentInfo[];
 };
 
 type PreviewCalls = (calls: PendingToolCall[]) => Promise<ToolPreview[]>;
@@ -869,6 +899,7 @@ export function Transcript({
   onOpenVersion,
   steered = [],
   onWithdraw,
+  subagents = [],
 }: TranscriptProps) {
   const groups = group(turn.blocks);
   // Under a finished answer only, gathered from the whole last turn — a notice
@@ -931,7 +962,7 @@ export function Transcript({
       {turn.status === "running" && turn.runningSince !== null && (
         <>
           <TaskTicker checklist={checklist} />
-          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn}>
+          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn} subagents={subagents}>
             <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
           </WorkingClock>
         </>
@@ -952,6 +983,7 @@ export function ChatPanel({
   heading,
   onOpenSettings,
   workspace,
+  chatId = null,
   turn,
   onDecide,
   onOpenRepo,
@@ -974,6 +1006,9 @@ export function ChatPanel({
   headSlot = null,
 }: Props) {
   const groups = group(turn.blocks);
+  // The subagents' live meter, read only while a turn runs: the line is the
+  // running ones', and a turn at rest has none.
+  const { agents: subagents } = useAgents(turn.status === "running", chatId);
   // The thread follows the answer as it grows, until the user scrolls up to
   // read; scrolling back to the end picks it up again.
   const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
@@ -1098,6 +1133,7 @@ export function ChatPanel({
               checklist={checklist}
               steered={steered}
               onWithdraw={onWithdraw}
+              subagents={subagents}
             />
           </div>
         )}

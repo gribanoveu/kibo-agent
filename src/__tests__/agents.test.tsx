@@ -50,6 +50,7 @@ beforeEach(() => {
       steps: ["grep refresh", "readFile src/auth.rs"],
       tokens: { prompt: 30000, cached: 27000, completion: 800 },
       answer: null,
+      progress: { streamSince: Date.now() - 4000, streamChars: 160, timed: { tokens: 100, ms: 2000, chars: 400 } },
     },
     {
       id: 1,
@@ -58,6 +59,7 @@ beforeEach(() => {
       steps: ["grep parse"],
       tokens: { prompt: 900, cached: 0, completion: 60 },
       answer: "tests/parser.rs:12",
+      progress: { streamSince: null, streamChars: 0, timed: { tokens: 60, ms: 1000, chars: 240 } },
     },
   ];
   calls = [];
@@ -251,6 +253,19 @@ describe("the agent sheet", () => {
     expect(answer.querySelector(".md-code")?.getAttribute("data-lang")).toBe("rust");
     fireEvent.click(answer.querySelector("a.md-link")!);
     expect(opened).toEqual(["tests/parser.rs#L12"]);
+  });
+
+  test("a running run shows its live speed beside what it cost; a finished one does not", async () => {
+    // 160 characters at 4 per token over about 4 seconds: some ten tok/s.
+    const live = render(sheet({ id: 2, task: "Where is the token refreshed?" }));
+    await settle();
+    expect(screen.getByText(/~\d+ tok\/s/)).toBeTruthy();
+    live.unmount();
+    // A run stopped mid-stream keeps its progress; the speed is the running's only.
+    listed[1] = { ...listed[1], progress: { streamSince: Date.now() - 2000, streamChars: 100, timed: { tokens: 0, ms: 0, chars: 0 } } };
+    render(sheet({ id: 1, task: "Which tests cover the parser?" }));
+    await settle();
+    expect(screen.queryByText(/tok\/s/)).toBeNull();
   });
 
   test("a failed run says why", async () => {
