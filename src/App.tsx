@@ -287,7 +287,7 @@ export default function App() {
   });
   // Servers start with an Agent or Analyst turn and may stop during one.
   // Settings shows both in "Where your data goes".
-  const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, agent.turn.status);
+  const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, workspace.path, agent.turn.status);
   const hooks = useHooks(shown("hooks") || hooksEditing || settingsOpen);
   // Settings has its own copy: which skills folders are read. The Skills
   // pane reads the same list for itself while it is open.
@@ -422,7 +422,13 @@ export default function App() {
   const ownCommands = [...builtIn, ...fileCommands(commandFiles.files, builtIn, (text, sent) => void send(text, sent))];
   const commands = [
     ...ownCommands,
-    ...mcpPromptCommands(serverPrompts.prompts, ownCommands, mcpPromptGet, (text, sent) => void send(text, sent), toast.show),
+    ...mcpPromptCommands(
+      serverPrompts.prompts,
+      ownCommands,
+      (server, name, typed) => mcpPromptGet(server, name, typed, workspace.path),
+      (text, sent) => void send(text, sent),
+      toast.show,
+    ),
   ];
 
   const pickConversation = async (mode: ConversationMode) => {
@@ -457,6 +463,7 @@ export default function App() {
   // the chat's own branch — switched only between turns, never under one.
   const branchPicker = useBranchPicker({
     chatId: agent.chatId,
+    workspace: workspace.path,
     current: branch,
     guard: folderSwitch.guard,
     open: workspace.open,

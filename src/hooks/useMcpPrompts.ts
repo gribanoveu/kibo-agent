@@ -17,8 +17,8 @@ export function useMcpPrompts(workspace: string | null, turnStatus: unknown) {
   const pending = useRef(false);
 
   const reload = useCallback(() => {
-    mcpPrompts().then(setPrompts, () => setPrompts([]));
-  }, []);
+    mcpPrompts(workspace).then(setPrompts, () => setPrompts([]));
+  }, [workspace]);
 
   useEffect(reload, [workspace, turnStatus, reload]);
 
@@ -26,14 +26,14 @@ export function useMcpPrompts(workspace: string | null, turnStatus: unknown) {
     if (pending.current) return;
     pending.current = true;
     const say = setTimeout(() => setStarting(true), SAY_STARTING_AFTER_MS);
-    startMcpPrompts()
+    startMcpPrompts(workspace)
       .then(setPrompts, () => setPrompts([]))
       .finally(() => {
         clearTimeout(say);
         pending.current = false;
         setStarting(false);
       });
-  }, []);
+  }, [workspace]);
 
   return { prompts, reload, start, starting };
 }

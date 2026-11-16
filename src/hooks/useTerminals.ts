@@ -11,7 +11,7 @@ import {
  * The user's shells, read while the Terminal tab is open: when it opens, and
  * each time the backend says one opened, ended or closed.
  */
-export function useTerminals(visible: boolean) {
+export function useTerminals(visible: boolean, workspace: string | null) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   // Read at least once since the tab opened: an empty list means none, not "not yet".
   const [loaded, setLoaded] = useState(false);
@@ -39,10 +39,10 @@ export function useTerminals(visible: boolean) {
     };
   }, [visible]);
 
-  /** In the open folder. The new one, or null when it did not start — the reason is in `error`. */
+  /** In the folder `workspace` names. The new one, or null when it did not start — the reason is in `error`. */
   const open = useCallback(async (): Promise<TerminalInfo | null> => {
     try {
-      const terminal = await terminalOpen();
+      const terminal = await terminalOpen(workspace);
       setTerminals((list) => (list.some((t) => t.id === terminal.id) ? list : [...list, terminal]));
       setError(null);
       return terminal;
@@ -50,7 +50,7 @@ export function useTerminals(visible: boolean) {
       setError(String(e));
       return null;
     }
-  }, []);
+  }, [workspace]);
 
   const close = useCallback(async (id: number) => {
     try {

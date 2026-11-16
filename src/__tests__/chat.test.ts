@@ -193,10 +193,12 @@ describe("saved chats", () => {
     expect(calls).toEqual([{ command: "chat_load", args: { id: "c1" } }]);
   });
 
-  test("the list asks for nothing: the backend knows which folder is open", async () => {
+  test("the list asks for the folder named, and nothing for Chat mode", async () => {
     invokeResult = [];
-    await savedChats.listChats();
-    expect(calls).toEqual([{ command: "chat_list", args: undefined }]);
+    await savedChats.listChats("/repo");
+    expect(calls).toEqual([{ command: "chat_list", args: { workspace: "/repo" } }]);
+    await savedChats.listChats(null);
+    expect(calls[1]).toEqual({ command: "chat_list", args: { workspace: null } });
   });
 
   test("pinning sends the id and the value it was given", async () => {

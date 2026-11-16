@@ -7,7 +7,7 @@ import { connectMcpServer, mcpConfig, type McpView, onMcpChanged, saveMcpConfig,
  * while shown, each time the backend says a server started, ended or was
  * stopped, and when `refreshKey` changes — the turn's status.
  */
-export function useMcp(visible: boolean, refreshKey?: unknown) {
+export function useMcp(visible: boolean, workspace: string | null, refreshKey?: unknown) {
   const [view, setView] = useState<McpView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,13 +76,13 @@ export function useMcp(visible: boolean, refreshKey?: unknown) {
   const connect = useCallback(async (name: string) => {
     setView((v) => v && { ...v, servers: v.servers.map((s) => (s.name === name && s.state.state === "notStarted" ? { ...s, state: { state: "starting" } } : s)) });
     try {
-      setView(await connectMcpServer(name));
+      setView(await connectMcpServer(name, workspace));
       setError(null);
     } catch (e) {
       setError(String(e));
       await reload();
     }
-  }, [reload]);
+  }, [reload, workspace]);
 
   return { view, error, save, setEnabled, setToolShown, connect };
 }

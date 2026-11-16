@@ -79,7 +79,7 @@ const rows = () => [...document.querySelectorAll(".diff-row")].map((row) => row.
 describe("FileViewer", () => {
   test("asks for the file on its side and shows what changed, named and counted", async () => {
     await open();
-    expect(asked).toEqual([{ path: "src/main.rs", side: "unstaged" }]);
+    expect(asked).toEqual([{ path: "src/main.rs", side: "unstaged", workspace: "/repo" }]);
     expect(document.querySelector(".file-viewer-title")?.textContent).toBe("src/main.rs");
     expect(screen.getByRole("tab", { name: "main.rs" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText("Unstaged")).toBeTruthy();
@@ -157,7 +157,7 @@ describe("FileViewer", () => {
     await settle();
     // The same file from both sides says which is which; the other needs no letter.
     expect(screen.getAllByRole("tab").slice(0, 3).map((t) => t.textContent)).toEqual(["a.rsU", "a.rsS", "README.md"]);
-    expect(asked).toEqual([{ path: "src/a.rs", side: "staged" }]);
+    expect(asked).toEqual([{ path: "src/a.rs", side: "staged", workspace: "/repo" }]);
     fireEvent.click(screen.getByRole("tab", { name: "README.md" }));
     expect(shown).toEqual([c]);
     // The preview tab is set apart, and a double click keeps it.

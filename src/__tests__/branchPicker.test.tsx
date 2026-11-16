@@ -51,7 +51,7 @@ const picker = ({ agree = true }: Setup = {}) => {
   let guarded = 0;
   let switched = 0;
   const hook = renderHook(() =>
-    useBranchPicker({
+    useBranchPicker({ workspace: "/work/kibo",
       chatId: null,
       current: "main",
       guard: (go, onCancel) => {
@@ -79,7 +79,7 @@ describe("picking a branch", () => {
     expect(switched()).toBe(0);
 
     await act(() => hook.result.current.pick("origin/feature"));
-    expect(calls).toEqual([{ command: "git_checkout", args: { branch: "origin/feature" } }]);
+    expect(calls).toEqual([{ command: "git_checkout", args: { branch: "origin/feature", workspace: "/work/kibo" } }]);
     expect(hook.result.current.conflict).toBeNull();
     expect(opened).toEqual([]);
     // The chat is told, so it keeps the branch it is on now as its own.
@@ -118,7 +118,7 @@ describe("picking a branch", () => {
   test("Worktree and its base are dropped when another chat is opened", async () => {
     const hook = renderHook(
       ({ chatId }) =>
-        useBranchPicker({ chatId, current: "main", guard: (go) => go(), open: async () => true, notify: () => {}, send: () => {} }),
+        useBranchPicker({ workspace: "/work/kibo", chatId, current: "main", guard: (go) => go(), open: async () => true, notify: () => {}, send: () => {} }),
       { initialProps: { chatId: null as string | null } },
     );
     act(() => hook.result.current.setWorktree(true));
@@ -140,7 +140,7 @@ describe("picking a branch", () => {
     });
     expect(started).toBe(true);
     expect(guarded()).toBe(1);
-    expect(calls).toEqual([{ command: "git_worktree_add", args: { base: "feature" } }]);
+    expect(calls).toEqual([{ command: "git_worktree_add", args: { base: "feature", workspace: "/work/kibo" } }]);
     expect(opened).toEqual(["/home/.kibo/worktrees/kibo/main"]);
     expect(hook.result.current.worktree).toBe(false);
     expect(hook.result.current.base).toBe("main");
@@ -166,7 +166,7 @@ describe("picking a branch", () => {
     const hook = renderHook(() => {
       const [folder, setFolder] = useState("/work/kibo");
       useFolderConversation(folder, false, undefined, agent);
-      const picker = useBranchPicker({
+      const picker = useBranchPicker({ workspace: "/work/kibo",
         chatId: null,
         current: "main",
         guard: (go) => go(),
@@ -194,7 +194,7 @@ describe("picking a branch", () => {
   test("nothing is sent when the worktree does not open", async () => {
     const sent: string[] = [];
     const { result } = renderHook(() =>
-      useBranchPicker({
+      useBranchPicker({ workspace: "/work/kibo",
         chatId: null,
         current: "main",
         guard: (_go, onCancel) => onCancel?.(),
@@ -232,7 +232,7 @@ describe("picking a branch", () => {
       await hook.result.current.startWorktree(hook.result.current.conflict!.branch);
     });
     expect(hook.result.current.conflict).toBeNull();
-    expect(calls.at(-1)).toEqual({ command: "git_worktree_add", args: { base: "feature" } });
+    expect(calls.at(-1)).toEqual({ command: "git_worktree_add", args: { base: "feature", workspace: "/work/kibo" } });
     expect(opened).toHaveLength(1);
   });
 

@@ -11,11 +11,11 @@ export function useRules(visible: boolean, workspace: string | null) {
 
   const reload = useCallback(async () => {
     try {
-      setRules(await rulesList());
+      setRules(await rulesList(workspace));
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [workspace]);
 
   useEffect(() => {
     if (visible) reload();

@@ -13,12 +13,12 @@ export function useChatHistory(workspace: string | null) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
 
   const refresh = useCallback(() => {
-    listChats()
+    listChats(workspace)
       .then(setChats)
       // A list that fails to load leaves the previous rows rather than
       // blanking the sidebar; nothing here is worth a message.
       .catch(() => {});
-  }, []);
+  }, [workspace]);
 
   useEffect(refresh, [workspace, refresh]);
 

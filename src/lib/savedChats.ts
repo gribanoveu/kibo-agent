@@ -67,10 +67,10 @@ export type ChatRecord = {
   headAtStart?: string | null;
 };
 
-/** Chats of the open folder, newest first. No folder, no backend: no rows. */
-export async function listChats(): Promise<ChatSummary[]> {
+/** Chats of the folder `workspace` names, newest first. `null` (Chat mode), no folder, no backend: no rows. */
+export async function listChats(workspace: string | null): Promise<ChatSummary[]> {
   if (!inTauri()) return [];
-  return invoke<ChatSummary[]>("chat_list");
+  return invoke<ChatSummary[]>("chat_list", { workspace });
 }
 
 export async function loadChat(id: string): Promise<ChatRecord> {

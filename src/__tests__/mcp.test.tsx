@@ -88,7 +88,7 @@ beforeEach(() => {
 
 describe("useMcp", () => {
   test("reads the file when shown, and not while hidden", async () => {
-    const { result, rerender } = renderHook(({ visible }) => useMcp(visible), { initialProps: { visible: false } });
+    const { result, rerender } = renderHook(({ visible }) => useMcp(visible, null), { initialProps: { visible: false } });
     await settle();
     expect(calls).toEqual([]);
     rerender({ visible: true });
@@ -97,7 +97,7 @@ describe("useMcp", () => {
   });
 
   test("a switch is what the backend saved", async () => {
-    const { result } = renderHook(() => useMcp(true));
+    const { result } = renderHook(() => useMcp(true, null));
     await settle();
     await act(() => result.current.setEnabled("github", false));
     expect(result.current.view?.servers[0].enabled).toBe(false);
@@ -105,7 +105,7 @@ describe("useMcp", () => {
   });
 
   test("a tool's switch shows what the backend decided, not a guess", async () => {
-    const { result } = renderHook(() => useMcp(true));
+    const { result } = renderHook(() => useMcp(true, null));
     await settle();
     await act(() => result.current.setToolShown("github", "search_code", true));
     const github = result.current.view!.servers[0].state;
@@ -114,7 +114,7 @@ describe("useMcp", () => {
   });
 
   test("opening a server's row starts it and its tools arrive", async () => {
-    const { result } = renderHook(() => useMcp(true));
+    const { result } = renderHook(() => useMcp(true, null));
     await settle();
     await act(() => result.current.connect("idle"));
     expect(calls).toContain("mcp_server_connect");
@@ -125,7 +125,7 @@ describe("useMcp", () => {
   });
 
   test("a row that is already running keeps its tools while it answers", async () => {
-    const { result } = renderHook(() => useMcp(true));
+    const { result } = renderHook(() => useMcp(true, null));
     await settle();
     const before = structuredClone(disk.servers[0].state);
     let answered: Promise<void> = Promise.resolve();
@@ -137,7 +137,7 @@ describe("useMcp", () => {
   });
 
   test("a turn starting or ending re-reads what the servers are doing", async () => {
-    const { rerender } = renderHook(({ status }) => useMcp(true, status), { initialProps: { status: "idle" } });
+    const { rerender } = renderHook(({ status }) => useMcp(true, null, status), { initialProps: { status: "idle" } });
     await settle();
     rerender({ status: "running" });
     await settle();
@@ -147,7 +147,7 @@ describe("useMcp", () => {
   });
 
   test("a server that starts while shown is read again, and not once hidden", async () => {
-    const { result, rerender } = renderHook(({ visible }) => useMcp(visible), { initialProps: { visible: true } });
+    const { result, rerender } = renderHook(({ visible }) => useMcp(visible, null), { initialProps: { visible: true } });
     await settle();
     disk.servers[1] = { ...disk.servers[1], state: { state: "starting" } };
     act(() => listeners.forEach((changed) => changed()));
@@ -160,7 +160,7 @@ describe("useMcp", () => {
   });
 
   test("a refused save says why and reports it was not stored", async () => {
-    const { result } = renderHook(() => useMcp(true));
+    const { result } = renderHook(() => useMcp(true, null));
     await settle();
     let stored = true;
     await act(async () => {

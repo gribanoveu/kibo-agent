@@ -100,12 +100,12 @@ describe("ChangesPanel", () => {
     await settle();
     fireEvent.click(screen.getAllByTitle("Stage")[0]);
     await settle();
-    expect(calls.find((c) => c.command === "git_stage")?.args).toEqual({ paths: ["src/main/tax/TaxProfileMapper.java"] });
+    expect(calls.find((c) => c.command === "git_stage")?.args).toEqual({ paths: ["src/main/tax/TaxProfileMapper.java"], workspace: "/repo" });
     expect(screen.getAllByTitle("Unstage")).toHaveLength(1);
 
     fireEvent.click(screen.getByTitle("Unstage"));
     await settle();
-    expect(calls.find((c) => c.command === "git_unstage")?.args).toEqual({ paths: ["src/main/tax/TaxProfileMapper.java"] });
+    expect(calls.find((c) => c.command === "git_unstage")?.args).toEqual({ paths: ["src/main/tax/TaxProfileMapper.java"], workspace: "/repo" });
     expect(screen.queryByTitle("Unstage")).toBeNull();
   });
 
@@ -149,6 +149,7 @@ describe("ChangesPanel", () => {
     await settle();
     expect(calls.find((c) => c.command === "git_stage")?.args).toEqual({
       paths: ["src/main/tax/TaxProfileMapper.java", "README.md"],
+      workspace: "/repo",
     });
     expect(screen.getByText("No unstaged changes")).toBeTruthy();
   });
@@ -161,7 +162,7 @@ describe("ChangesPanel", () => {
     await settle();
     fireEvent.click(screen.getByText("Commit"));
     await settle();
-    expect(calls.find((c) => c.command === "git_commit")?.args).toEqual({ message: "Fix the tax rate" });
+    expect(calls.find((c) => c.command === "git_commit")?.args).toEqual({ message: "Fix the tax rate", workspace: "/repo" });
     expect(messages).toEqual([""]);
     expect(notes).toEqual(["Committed abc1234"]);
   });
@@ -245,7 +246,7 @@ describe("History tab", () => {
     expect(calls.some((c) => c.command === "git_history")).toBe(false);
     fireEvent.click(screen.getByRole("tab", { name: "History" }));
     await settle();
-    expect(calls.find((c) => c.command === "git_history")?.args).toEqual({ limit: 50 });
+    expect(calls.find((c) => c.command === "git_history")?.args).toEqual({ limit: 50, workspace: "/repo" });
   });
 
   test("shows the branch against its upstream and each commit with its marks", async () => {
@@ -277,7 +278,10 @@ describe("History tab", () => {
     await openHistory();
     fireEvent.click(screen.getByText("Load more"));
     await settle();
-    expect(calls.filter((c) => c.command === "git_history").map((c) => c.args)).toEqual([{ limit: 50 }, { limit: 100 }]);
+    expect(calls.filter((c) => c.command === "git_history").map((c) => c.args)).toEqual([
+      { limit: 50, workspace: "/repo" },
+      { limit: 100, workspace: "/repo" },
+    ]);
   });
 
   test("reads again when .git changes, and says when there is nothing yet", async () => {

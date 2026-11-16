@@ -27,9 +27,9 @@ export async function terminalList(): Promise<TerminalInfo[]> {
   return invoke<TerminalInfo[]>("terminal_list");
 }
 
-/** The user's login shell in the open folder. The screen resizes it once it has measured itself. */
-export async function terminalOpen(cols = 80, rows = 24): Promise<TerminalInfo> {
-  return invoke<TerminalInfo>("terminal_open", { cols, rows });
+/** The user's login shell in the folder `workspace` names. The screen resizes it once it has measured itself. */
+export async function terminalOpen(workspace: string | null, cols = 80, rows = 24): Promise<TerminalInfo> {
+  return invoke<TerminalInfo>("terminal_open", { cols, rows, workspace });
 }
 
 /**

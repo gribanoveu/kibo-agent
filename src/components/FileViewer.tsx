@@ -394,7 +394,7 @@ export function FileViewer({
               {diagram ? (
                 <PlantumlPreview text={draft?.text ?? view.new} />
               ) : language === "asciidoc" ? (
-                <AsciiDocPreview text={draft?.text ?? view.new} path={target.path} />
+                <AsciiDocPreview text={draft?.text ?? view.new} path={target.path} workspace={workspace} />
               ) : (
                 <Markdown text={draft?.text ?? view.new} streaming={false} />
               )}

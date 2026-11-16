@@ -144,16 +144,16 @@ export async function currentWorkspace(): Promise<string | null> {
   return invoke<string | null>("workspace_current");
 }
 
-/** The branch checked out in the open folder; `null` outside a repository. */
-export async function currentBranch(): Promise<string | null> {
+/** The branch checked out in the folder `workspace` names; `null` outside a repository. */
+export async function currentBranch(workspace: string | null): Promise<string | null> {
   if (!inTauri()) return null;
-  return invoke<string | null>("workspace_branch");
+  return invoke<string | null>("workspace_branch", { workspace });
 }
 
-/** The main working tree when the open folder is a git worktree of it; `null` otherwise. */
-export async function worktreeOf(): Promise<string | null> {
+/** The main working tree when the folder `workspace` names is a git worktree of it; `null` otherwise. */
+export async function worktreeOf(workspace: string | null): Promise<string | null> {
   if (!inTauri()) return null;
-  return invoke<string | null>("workspace_worktree_of");
+  return invoke<string | null>("workspace_worktree_of", { workspace });
 }
 
 /** Folders opened lately that still exist, the last one first. */

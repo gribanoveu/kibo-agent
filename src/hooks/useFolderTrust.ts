@@ -17,7 +17,7 @@ export function useFolderTrust(workspace: string | null, onDecided: () => void) 
     let live = true;
     setAsking(false);
     setError(null);
-    folderTrust().then(
+    folderTrust(workspace).then(
       (read) => {
         if (!live) return;
         setTrust(read);
@@ -33,7 +33,7 @@ export function useFolderTrust(workspace: string | null, onDecided: () => void) 
   const decide = useCallback(
     async (trusted: boolean) => {
       try {
-        await setFolderTrust(trusted);
+        await setFolderTrust(workspace, trusted);
         setTrust((read) => read && { ...read, trusted });
         setAsking(false);
         onDecided();
@@ -41,7 +41,7 @@ export function useFolderTrust(workspace: string | null, onDecided: () => void) 
         setError(String(e));
       }
     },
-    [onDecided],
+    [onDecided, workspace],
   );
 
   return {

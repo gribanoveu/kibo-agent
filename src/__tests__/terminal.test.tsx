@@ -121,7 +121,7 @@ describe("terminalAttach", () => {
 describe("useTerminals", () => {
   test("reads when the tab opens and on each change, not before and not after", async () => {
     listed = [{ id: 1, shell: "zsh", state: { state: "running" } }];
-    const { result, rerender } = renderHook(({ visible }) => useTerminals(visible), { initialProps: { visible: false } });
+    const { result, rerender } = renderHook(({ visible }) => useTerminals(visible, "/repo"), { initialProps: { visible: false } });
     await settle();
     expect(calls).toEqual([]);
 
@@ -141,7 +141,7 @@ describe("useTerminals", () => {
   });
 
   test("opens one in the list and closes it out of it", async () => {
-    const { result } = renderHook(() => useTerminals(true));
+    const { result } = renderHook(() => useTerminals(true, "/repo"));
     await settle();
     await act(async () => void (await result.current.open()));
     expect(result.current.terminals.map((t) => t.id)).toEqual([10]);

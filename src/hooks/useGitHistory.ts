@@ -16,7 +16,7 @@ export function useGitHistory(visible: boolean, workspace: string | null) {
 
   const load = useCallback(
     () =>
-      gitHistory(limit).then(
+      gitHistory(limit, workspace).then(
         (next) => {
           setHistory(next);
           setError(null);
@@ -26,7 +26,7 @@ export function useGitHistory(visible: boolean, workspace: string | null) {
           setError(String(e));
         },
       ),
-    [limit],
+    [limit, workspace],
   );
 
   useEffect(() => {

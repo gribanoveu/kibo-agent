@@ -13,11 +13,11 @@ export function useSkills(visible: boolean, workspace: string | null = null) {
 
   const reload = useCallback(async () => {
     try {
-      setView(await skillsList());
+      setView(await skillsList(workspace));
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [workspace]);
 
   useEffect(() => {
     if (visible) reload();

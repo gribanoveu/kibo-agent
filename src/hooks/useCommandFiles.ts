@@ -11,8 +11,8 @@ export function useCommandFiles(workspace: string | null) {
   const [files, setFiles] = useState<CommandFile[]>([]);
 
   const reload = useCallback(() => {
-    commandFilesList().then(setFiles, () => setFiles([]));
-  }, []);
+    commandFilesList(workspace).then(setFiles, () => setFiles([]));
+  }, [workspace]);
 
   useEffect(reload, [workspace, reload]);
 
