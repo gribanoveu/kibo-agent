@@ -110,6 +110,13 @@ pub struct AgentState {
     /// it the active one, closing it moves the active mark.
     pub(super) open: Mutex<Vec<PathBuf>>,
     pub(super) workspace: Mutex<Option<PathBuf>>,
+    /// Held for the whole of adding or closing a folder: the registry, the
+    /// active mark and the folder's index change together. Without it React's
+    /// StrictMode double launch opened one folder's index twice, two first
+    /// syncs writing one store, and a close racing an add left an index open
+    /// for a folder no longer in the registry, or the reverse. Async: held
+    /// across the index's open, which reads the store.
+    pub(super) folder_change: tokio::sync::Mutex<()>,
     /// Grows as the user answers "always allow"; not persisted, because a
     /// saved "never ask me" is a brake released a month ago and forgotten.
     pub(super) approval: Mutex<ApprovalPolicy>,

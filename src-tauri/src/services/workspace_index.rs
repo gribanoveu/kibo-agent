@@ -1,15 +1,17 @@
-//! The index of whichever folder is open, kept current while it stays open.
+//! The indexes of the open folders, each kept current while its folder stays
+//! open (F-8.2).
 //!
 //! One per app. It owns the embedding model — one [`EmbeddingProvider`] for
 //! every folder, so opening another project does not load a second copy — and
-//! the indexer and watcher of the open folder. Opening another folder drops the
-//! previous watcher; a sync of the previous folder still running finishes on
-//! its own thread and is then dropped with it.
+//! an indexer and watcher per open folder. Opening another folder leaves the
+//! others watched; closing one drops its watcher, and a sync of it still
+//! running finishes on its own thread and is then dropped with it.
 //!
 //! The store lives under `index_dir`, named by [`repository_id`], never inside
 //! the folder: a store written under the watched tree would wake its own
 //! watcher after every sync.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -34,11 +36,12 @@ pub enum WorkspaceIndexError {
 pub struct WorkspaceIndex {
     index_dir: PathBuf,
     provider: Arc<dyn EmbeddingProvider>,
-    open: Mutex<Option<Open>>,
+    /// Keyed by the folder's canonical spelling — the one the registry of
+    /// open folders and a chat's record resolve to.
+    open: Mutex<HashMap<PathBuf, Open>>,
 }
 
 struct Open {
-    root: PathBuf,
     indexer: Arc<RepoIndexer>,
     /// `None` when the folder could not be watched; the index still answers,
     /// from what the first sync found.
@@ -47,7 +50,7 @@ struct Open {
 
 impl WorkspaceIndex {
     pub fn new(index_dir: PathBuf, provider: Arc<dyn EmbeddingProvider>) -> Self {
-        Self { index_dir, provider, open: Mutex::new(None) }
+        Self { index_dir, provider, open: Mutex::new(HashMap::new()) }
     }
 
     /// The bundled model, shared: a chat's web search picks a page's passages
@@ -56,12 +59,12 @@ impl WorkspaceIndex {
         Arc::clone(&self.provider)
     }
 
-    /// Makes `root` the indexed folder: opens its store, starts watching it,
-    /// and starts the first sync on a thread of its own. Returns once the
-    /// store is open — which reads what was embedded before, so it blocks for
-    /// that long and belongs off the UI thread.
+    /// Indexes `root` beside the folders already open: opens its store, starts
+    /// watching it, and starts the first sync on a thread of its own. Returns
+    /// once the store is open — which reads what was embedded before, so it
+    /// blocks for that long and belongs off the UI thread.
     ///
-    /// Opening the folder that is already open changes nothing. A failure is
+    /// Opening a folder that is already open changes nothing. A failure is
     /// also reported through `sink` as [`IndexEvent::Failed`]: the caller
     /// opens the folder either way, and the window learns why search is off.
     pub fn open(&self, root: &Path, sink: IndexEventSink) -> Result<(), WorkspaceIndexError> {
@@ -69,13 +72,11 @@ impl WorkspaceIndex {
     }
 
     fn try_open(&self, root: &Path, sink: &IndexEventSink) -> Result<(), WorkspaceIndexError> {
-        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        if open.as_ref().is_some_and(|current| current.root == root) {
+        if self.indexer(root).is_some() {
             return Ok(());
         }
-        // Stop watching the old folder before anything below can fail.
-        *open = None;
-
+        // Opened without the map's lock: reading a large store takes seconds,
+        // and the other folders' turns search meanwhile.
         let store_dir = self.index_dir.join(repository_id(root));
         let indexer =
             Arc::new(RepoIndexer::open(root, &store_dir, Arc::clone(&self.provider), ChunkBuildOptions::default())?);
@@ -95,22 +96,39 @@ impl WorkspaceIndex {
             Ok(watcher) => (Some(watcher), None),
             Err(error) => (None, Some(error)),
         };
-        *open = Some(Open { root: root.to_path_buf(), indexer, _watcher: watcher });
+        // Two opens of one folder racing would both get here, and both first
+        // syncs would run: the callers serialize opening and closing
+        // (`AgentState::folder_change`). If one slips through, the first in
+        // stays.
+        self.open
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(root.to_path_buf())
+            .or_insert(Open { indexer, _watcher: watcher });
         failed.map_or(Ok(()), |error| Err(error.into()))
     }
 
-    /// Search of the open folder, as the tools take it. Bound to that folder's
-    /// indexer: a turn keeps searching the folder it started in.
-    pub fn searcher(&self) -> Option<CodeSearchFn> {
-        let indexer = self.current()?;
+    /// Stops following `root`: its watcher is dropped, and no search is
+    /// offered from it any more. Closing a folder that is not open does nothing.
+    pub fn close(&self, root: &Path) {
+        // Dropped outside the lock: stopping the OS watch is a system call.
+        let closed = self.open.lock().unwrap_or_else(PoisonError::into_inner).remove(root);
+        drop(closed);
+    }
+
+    /// Search of `root`'s index, as the tools take it — `None` unless that
+    /// folder is open. Bound to its indexer: a turn keeps searching the folder
+    /// it started in, and never another one's.
+    pub fn searcher(&self, root: &Path) -> Option<CodeSearchFn> {
+        let indexer = self.indexer(root)?;
         Some(Arc::new(move |queries, fts, top_k, filter| {
             code_search::search_many(&indexer, queries, fts, top_k, filter).map_err(|error| error.to_string())
         }))
     }
 
-    /// The open folder's indexer, for search.
-    pub fn current(&self) -> Option<Arc<RepoIndexer>> {
-        self.open.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|open| Arc::clone(&open.indexer))
+    /// `root`'s indexer, if that folder is open.
+    pub fn indexer(&self, root: &Path) -> Option<Arc<RepoIndexer>> {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner).get(root).map(|open| Arc::clone(&open.indexer))
     }
 }
 
@@ -156,9 +174,18 @@ mod tests {
         }
     }
 
-    fn finds(index: &WorkspaceIndex, word: &str) -> usize {
+    fn finds(index: &WorkspaceIndex, root: &Path, word: &str) -> usize {
         let query = fts5_query(word).unwrap();
-        index.current().unwrap().store().search_bm25(&query, 5).unwrap().len()
+        index.indexer(root).unwrap().store().search_bm25(&query, 5).unwrap().len()
+    }
+
+    /// Waits until `word` reaches `root`'s index, as a save is seen.
+    fn until_found(index: &WorkspaceIndex, root: &Path, word: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while finds(index, root, word) == 0 {
+            assert!(std::time::Instant::now() < deadline, "{word} never reached the index of {}", root.display());
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]
@@ -171,28 +198,24 @@ mod tests {
         index.open(&root, sink).unwrap();
 
         assert!(matches!(next_finish(&events), IndexEvent::SyncFinished { embedding_error: None, .. }));
-        assert_eq!(finds(&index, "present_at_open"), 1);
+        assert_eq!(finds(&index, &root, "present_at_open"), 1);
         fs::write(root.join("b.rs"), "fn saved_after_open() {}\n").unwrap();
         // Not "the next finish": FSEvents may still report the folder's
         // creation, and that sync can finish before the save is seen.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while finds(&index, "saved_after_open") == 0 {
-            assert!(std::time::Instant::now() < deadline, "the save never reached the index");
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        until_found(&index, &root, "saved_after_open");
     }
 
     #[test]
     fn the_searcher_searches_the_open_folder_and_is_absent_without_one() {
         let index = workspace_index("ws-searcher");
-        assert!(index.searcher().is_none());
         let root = temp_dir("ws-searcher-repo");
+        assert!(index.searcher(&root).is_none());
         fs::write(root.join("a.rs"), "fn find_me_here() {}\n").unwrap();
         let (sink, events) = channel_sink();
         index.open(&root, sink).unwrap();
         next_finish(&events);
 
-        let found = index.searcher().unwrap()(&["find_me_here"], None, 5, &Default::default()).unwrap();
+        let found = index.searcher(&root).unwrap()(&["find_me_here"], None, 5, &Default::default()).unwrap();
 
         assert_eq!(found.matches[0].path, "a.rs");
     }
@@ -204,31 +227,55 @@ mod tests {
         let (sink, events) = channel_sink();
         index.open(&root, Arc::clone(&sink)).unwrap();
         next_finish(&events);
-        let before = index.current().unwrap();
+        let before = index.indexer(&root).unwrap();
 
         index.open(&root, sink).unwrap();
 
-        assert!(Arc::ptr_eq(&before, &index.current().unwrap()));
+        assert!(Arc::ptr_eq(&before, &index.indexer(&root).unwrap()));
+        // Nor syncs it again: going back to an open folder is free.
+        let (again, again_events) = channel_sink();
+        index.open(&root, again).unwrap();
+        assert!(again_events.recv_timeout(Duration::from_millis(500)).is_err(), "an open folder was synced again");
     }
 
+    /// F-8.2: two folders indexed side by side, each searching only itself;
+    /// closing one stops following it and leaves the other followed.
     #[test]
-    fn opening_another_folder_stops_following_the_first() {
-        let index = workspace_index("ws-switch");
-        let first = temp_dir("ws-switch-first");
-        let (first_sink, first_events) = channel_sink();
-        index.open(&first, first_sink).unwrap();
-        next_finish(&first_events);
-        let left_behind = index.current().unwrap();
+    fn open_folders_are_indexed_apart_and_closed_alone() {
+        let index = workspace_index("ws-two");
+        let a = temp_dir("ws-two-a");
+        let b = temp_dir("ws-two-b");
+        fs::write(a.join("a.rs"), "fn only_in_a() {}\n").unwrap();
+        fs::write(b.join("b.rs"), "fn only_in_b() {}\n").unwrap();
+        let (a_sink, a_events) = channel_sink();
+        let (b_sink, b_events) = channel_sink();
+        index.open(&a, a_sink).unwrap();
+        index.open(&b, b_sink).unwrap();
+        next_finish(&a_events);
+        next_finish(&b_events);
 
-        let second = temp_dir("ws-switch-second");
-        let (second_sink, second_events) = channel_sink();
-        index.open(&second, second_sink).unwrap();
-        next_finish(&second_events);
-        fs::write(first.join("a.rs"), "fn after_switch() {}\n").unwrap();
+        // Paths, not counts: every text embeds alike here, so any query
+        // matches every chunk of the folder searched — and only of it.
+        let search = |root: &Path, word: &str| -> Vec<String> {
+            let found = index.searcher(root).unwrap()(&[word], None, 5, &Default::default()).unwrap();
+            found.matches.into_iter().map(|m| m.path).collect()
+        };
+        assert_eq!(search(&a, "only_in_b"), ["a.rs"], "A finds its own and not B's");
+        assert_eq!(search(&b, "only_in_a"), ["b.rs"], "B finds its own and not A's");
+
+        // Opening B left A followed.
+        fs::write(a.join("c.rs"), "fn saved_in_a() {}\n").unwrap();
+        until_found(&index, &a, "saved_in_a");
+
+        let left_behind = index.indexer(&a).unwrap();
+        index.close(&a);
+        assert!(index.searcher(&a).is_none(), "a closed folder is not searched");
+        fs::write(a.join("d.rs"), "fn after_close() {}\n").unwrap();
+        fs::write(b.join("e.rs"), "fn saved_in_b() {}\n").unwrap();
+        until_found(&index, &b, "saved_in_b");
         std::thread::sleep(Duration::from_secs(1));
-
-        let query = fts5_query("after_switch").unwrap();
-        assert!(left_behind.store().search_bm25(&query, 5).unwrap().is_empty(), "the folder left behind is still watched");
+        let query = fts5_query("after_close").unwrap();
+        assert!(left_behind.store().search_bm25(&query, 5).unwrap().is_empty(), "the closed folder is still watched");
     }
 
     /// The store is where the app keeps its data, not in the folder.
@@ -253,16 +300,17 @@ mod tests {
         let index = WorkspaceIndex::new(blocked, Arc::new(FlatModel));
         let (sink, events) = channel_sink();
 
-        assert!(index.open(&temp_dir("ws-blocked-repo"), sink).is_err());
+        let repo = temp_dir("ws-blocked-repo");
+        assert!(index.open(&repo, sink).is_err());
 
         assert!(matches!(events.try_recv(), Ok(IndexEvent::Failed { .. })));
-        assert!(index.current().is_none());
+        assert!(index.indexer(&repo).is_none());
     }
 
-    /// Opening the next folder fails: the previous one is not left watched
-    /// and answering as if it were the open folder.
+    /// Opening the next folder fails: it is not open, and the folder open
+    /// before it still is.
     #[test]
-    fn a_failed_open_leaves_the_previous_folder_closed() {
+    fn a_failed_open_leaves_the_other_folders_open() {
         let index = workspace_index("ws-fail-after");
         let first = temp_dir("ws-fail-after-first");
         let (sink, events) = channel_sink();
@@ -273,7 +321,8 @@ mod tests {
 
         assert!(matches!(index.open(&second, sink), Err(WorkspaceIndexError::Store(_))));
 
-        assert!(index.current().is_none());
+        assert!(index.indexer(&second).is_none());
+        assert!(index.indexer(&first).is_some());
     }
 
     /// A folder that cannot be watched is still indexed once and searchable;
@@ -286,7 +335,7 @@ mod tests {
 
         assert!(matches!(index.open(&missing, sink), Err(WorkspaceIndexError::Watch(_))));
 
-        assert!(index.current().is_some());
+        assert!(index.indexer(&missing).is_some());
         let said = std::iter::from_fn(|| events.recv_timeout(Duration::from_secs(5)).ok())
             .any(|event| matches!(&event, IndexEvent::Failed { error } if error.contains("cannot be watched")));
         assert!(said, "the window was not told");

@@ -11,7 +11,7 @@ use crate::services::workspace_index::WorkspaceIndex;
 /// Makes `root` the folder the window works in: what ran in the folder
 /// before stops — unless `keep_running`, a chat moved to its worktree, which
 /// must not stop the neighbouring chat's processes — the folder goes on the
-/// recent list, and its index opens. Blocking: the index reads what was
+/// recent list, and its index opens beside the other open folders'. Blocking: the index reads what was
 /// embedded before. An index that cannot open does not stop the folder
 /// opening: the reason goes out on `sink`, and the agent works without search.
 pub fn open(
@@ -71,7 +71,7 @@ mod tests {
 
             open(&root, true, Some(&processes), None, &index, Arc::new(|_| {}));
             assert_eq!(processes.list().iter().filter(|p| p.state == crate::domain::background::ProcessState::Running).count(), 1, "a worktree move keeps them");
-            assert_eq!(index.current().map(|i| i.root().to_path_buf()), Some(root.clone()));
+            assert_eq!(index.indexer(&root).map(|i| i.root().to_path_buf()), Some(root.clone()));
             assert_eq!(crate::infra::recent_workspaces::load(), vec![root.display().to_string()]);
 
             open(&root, false, Some(&processes), None, &index, Arc::new(|_| {}));

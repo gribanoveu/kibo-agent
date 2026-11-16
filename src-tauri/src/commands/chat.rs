@@ -310,12 +310,10 @@ pub fn chat_cancel_steer(id: String, chat_id: String, state: State<'_, Arc<Agent
     state.session(&chat_id).steering.cancel(&id)
 }
 
-/// The chat folder's search, for the turn's tools. A background chat never
-/// searches through the index of a folder opened after its turn started.
+/// The chat folder's search, for the turn's tools — that folder's index and no
+/// other open one's (F-8.2).
 fn searcher_of<R: Runtime>(app: &AppHandle<R>, workspace: &std::path::Path) -> Option<CodeSearchFn> {
-    let index = app.try_state::<Arc<WorkspaceIndex>>()?;
-    let current = index.current()?;
-    (current.root() == workspace).then(|| index.searcher()).flatten()
+    app.try_state::<Arc<WorkspaceIndex>>()?.searcher(workspace)
 }
 
 /// The MongoDB page's clients, as the agent's `mongo` tool reads through them.
@@ -1052,7 +1050,8 @@ mod tests {
         assert!(searcher_of(app.handle(), &root).is_none(), "no folder open");
 
         index.open(&root, Arc::new(|_| {})).unwrap();
-        assert!(searcher_of(app.handle(), &root).is_some());
+        index.open(&temp_dir("cmd-search-neighbour"), Arc::new(|_| {})).unwrap();
+        assert!(searcher_of(app.handle(), &root).is_some(), "a neighbour opened after it leaves the chat's folder searched");
         assert!(searcher_of(app.handle(), &temp_dir("cmd-search-other-repo")).is_none(), "a background chat cannot borrow another folder's index");
     }
 }

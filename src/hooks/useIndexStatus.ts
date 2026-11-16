@@ -46,7 +46,7 @@ export function useIndexStatus(path: string | null): IndexState | null {
     if (!path) return;
     let live = true;
     attached.current?.promise
-      .then(indexStatus)
+      .then(() => indexStatus(path))
       .then((snapshot) => {
         if (!live || !snapshot) return;
         setByRoot((known) =>

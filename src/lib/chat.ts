@@ -127,7 +127,10 @@ export async function addWorkspace(path: string, keepRunning = false): Promise<s
   return invoke<string>("workspace_add", { path, keepRunning });
 }
 
-/** Closes an open folder: its processes, terminals and MCP servers stop. Refused while a turn runs in it (F-8). */
+/**
+ * Closes an open folder: out of the open set, its index no longer followed. Refused while a turn runs
+ * in it, and — until processes and terminals carry their folder (F-8.3) — while any of them runs (F-8).
+ */
 export async function closeWorkspace(path: string): Promise<void> {
   requireBackend();
   return invoke("workspace_close", { path });
@@ -197,9 +200,10 @@ export type IndexSnapshot = {
   embeddingError: string | null;
 };
 
-export async function indexStatus(): Promise<IndexSnapshot | null> {
+/** `workspace`'s index — each open folder keeps its own. */
+export async function indexStatus(workspace: string): Promise<IndexSnapshot | null> {
   if (!inTauri()) return null;
-  return invoke<IndexSnapshot | null>("workspace_index_status");
+  return invoke<IndexSnapshot | null>("workspace_index_status", { workspace });
 }
 
 /** Every folder's index events: a sync can outlive its folder being open. */

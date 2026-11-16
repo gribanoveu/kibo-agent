@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::domain::background::BackgroundProcesses;
 use crate::infra::background::Processes;
@@ -17,10 +17,10 @@ use super::agent_state::AgentState;
 /// Opens a folder as the workspace. Kept as the frontend's entry point until
 /// F-8.6; it is `workspace_add` — the folder joins the open set like any add.
 #[tauri::command]
-pub async fn workspace_open(
+pub async fn workspace_open<R: Runtime>(
     path: String,
     keep_running: Option<bool>,
-    app: AppHandle,
+    app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
     index: State<'_, Arc<WorkspaceIndex>>,
     git_watch: State<'_, super::git::GitWatch>,
@@ -34,19 +34,20 @@ pub async fn workspace_open(
 ///
 /// Until F-8.3, switching the active folder still stops what ran in the
 /// previous one (`services::folder_open::open`; `keep_running` is the
-/// worktree-move exception) — from this step on only the registry is
-/// many-folder. The rest — the git watch, the recent list, the index — is
-/// `activate`, awaited off the UI thread; the index's first sync is not
-/// awaited, and its failures arrive on `workspace-index:event`.
+/// worktree-move exception); the registry and the indexes are many-folder
+/// already (F-8.1, F-8.2). The rest — the git watch, the recent list, the
+/// index — is `activate`, awaited off the UI thread; the index's first sync
+/// is not awaited, and its failures arrive on `workspace-index:event`.
 #[tauri::command]
-pub async fn workspace_add(
+pub async fn workspace_add<R: Runtime>(
     path: String,
     keep_running: Option<bool>,
-    app: AppHandle,
+    app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
     index: State<'_, Arc<WorkspaceIndex>>,
     git_watch: State<'_, super::git::GitWatch>,
 ) -> Result<String, String> {
+    let _changing = state.folder_change.lock().await;
     // Without `\\?\` on Windows: it is what the folder is known by from
     // here on — the shell started in it (`cmd.exe` refuses that prefix and
     // opens in `C:\Windows`), the tools' root, the index's events, the keys
@@ -68,10 +69,10 @@ pub async fn workspace_add(
 /// Makes `root` the folder the window's panes read: the git watch and the
 /// index, and — unless `keep_running` — stopping what ran in the folder that
 /// was active before.
-async fn activate(
+async fn activate<R: Runtime>(
     root: PathBuf,
     keep_running: bool,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     state: &AgentState,
     index: &Arc<WorkspaceIndex>,
     git_watch: &super::git::GitWatch,
@@ -93,22 +94,26 @@ async fn activate(
     Ok(shown)
 }
 
-/// Closes an open folder: out of the registry, its things stopped (F-8
-/// invariant 4). Refused while a turn runs in it (invariant 5), and while
+/// Closes an open folder: out of the registry, its index no longer followed,
+/// its things stopped (F-8 invariant 4). Refused while a turn runs in it (invariant 5), and while
 /// anything runs that cannot yet be attributed to a folder — F-8.3 gives
 /// processes and terminals their folder and lifts that.
 #[tauri::command]
-pub async fn workspace_close(
+pub async fn workspace_close<R: Runtime>(
     path: String,
-    app: AppHandle,
+    app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
     index: State<'_, Arc<WorkspaceIndex>>,
     git_watch: State<'_, super::git::GitWatch>,
 ) -> Result<(), String> {
+    let _changing = state.folder_change.lock().await;
     let root = state.require_open(&path)?;
     let was_active = state.workspace().ok().as_deref() == Some(root.as_path());
     close_refusal(&state, &root, anything_runs(&app))?;
     state.unregister_open(&root);
+    let closing = Arc::clone(&index);
+    let closed = root.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || closing.close(&closed)).await;
     if let Err(e) = crate::infra::open_folders::remove(&root.display().to_string()) {
         eprintln!("open folders not saved: {e}");
     }
@@ -143,7 +148,7 @@ fn close_refusal(state: &AgentState, root: &Path, anything_runs: bool) -> Result
     Ok(())
 }
 
-fn anything_runs(app: &AppHandle) -> bool {
+fn anything_runs<R: Runtime>(app: &AppHandle<R>) -> bool {
     let processes = app.try_state::<Arc<Processes>>().is_some_and(|processes| !processes.list().is_empty());
     let terminals = app.try_state::<Arc<Terminals>>().is_some_and(|terminals| !terminals.list().is_empty());
     processes || terminals
@@ -234,7 +239,7 @@ pub async fn workspace_worktree_of(workspace: Option<String>, state: State<'_, A
         .await
 }
 
-/// The open folder's index as it stands — what a window that was not
+/// An open folder's index as it stands — what a window that was not
 /// listening when the sync began (a reload, say) starts from before the next
 /// `workspace-index:event`.
 #[derive(Debug, PartialEq, Serialize)]
@@ -248,13 +253,19 @@ pub struct IndexSnapshot {
     embedding_error: Option<String>,
 }
 
+/// `None` for no folder, or one whose index is not open.
 #[tauri::command]
-pub fn workspace_index_status(index: State<'_, Arc<WorkspaceIndex>>) -> Option<IndexSnapshot> {
-    snapshot(&index)
+pub fn workspace_index_status(
+    workspace: Option<String>,
+    state: State<'_, Arc<AgentState>>,
+    index: State<'_, Arc<WorkspaceIndex>>,
+) -> Result<Option<IndexSnapshot>, String> {
+    let Some(root) = state.ui_workspace(&workspace)? else { return Ok(None) };
+    Ok(snapshot(&index, &root))
 }
 
-fn snapshot(index: &WorkspaceIndex) -> Option<IndexSnapshot> {
-    let indexer = index.current()?;
+fn snapshot(index: &WorkspaceIndex, root: &Path) -> Option<IndexSnapshot> {
+    let indexer = index.indexer(root)?;
     let status = indexer.status();
     Some(IndexSnapshot {
         root: indexer.root().display().to_string(),
@@ -306,9 +317,9 @@ mod tests {
             }
         }
         let index = WorkspaceIndex::new(temp_dir("cmd-snapshot-index"), Arc::new(NoModel));
-        assert_eq!(snapshot(&index), None);
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-snapshot-repo")).unwrap();
+        assert_eq!(snapshot(&index, &root), None);
 
-        let root = temp_dir("cmd-snapshot-repo").canonicalize().unwrap();
         std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
         std::fs::write(root.join("blob.bin"), [0u8, 159, 146, 150]).unwrap();
         let (tx, finished) = std::sync::mpsc::channel();
@@ -327,7 +338,7 @@ mod tests {
         // above, and the sync that wakes is running when the first one ends.
         let shot = loop {
             finished.recv_timeout(std::time::Duration::from_secs(10)).expect("the sync never finished");
-            let shot = snapshot(&index).unwrap();
+            let shot = snapshot(&index, &root).unwrap();
             if !shot.syncing {
                 break shot;
             }
@@ -335,6 +346,9 @@ mod tests {
         assert_eq!(shot.root, root.display().to_string());
         assert_eq!((shot.embedded, shot.skipped), (0, 1));
         assert!(shot.embedding_error.as_deref().is_some_and(|e| e.contains("no model")), "{shot:?}");
+        let neighbour = temp_dir("cmd-snapshot-neighbour");
+        index.open(&neighbour, Arc::new(|_| {})).unwrap();
+        assert_eq!(snapshot(&index, &root).unwrap().root, root.display().to_string(), "the folder asked about, not the last opened");
     }
 
     /// Invariant 5: closing a folder is refused while one of its turns runs.
@@ -355,6 +369,104 @@ mod tests {
         let refused = close_refusal(&state, &root, true).expect_err("unattributed runners hold the folder");
         assert!(refused.contains("processes"), "{refused}");
         close_refusal(&state, &root, false).expect("an idle, quiet folder closes");
+    }
+
+    /// Closing a folder stops following its index and leaves the other open
+    /// folder's index followed (F-8.2, invariant 4); the folder left active is
+    /// the one still open.
+    #[test]
+    fn closing_a_folder_closes_its_index_and_no_other() {
+        crate::testing::with_app_dir("ws-close-index", || {
+            let app = tauri::test::mock_app();
+            let state = Arc::new(AgentState::default());
+            let index = Arc::new(WorkspaceIndex::new(temp_dir("ws-close-index-store"), Arc::new(Flat)));
+            app.manage(Arc::clone(&state));
+            app.manage(Arc::clone(&index));
+            app.manage(super::super::git::GitWatch::default());
+            let plain = |dir: PathBuf| crate::infra::paths::canonicalize_plain(&dir).unwrap();
+            let (a, b) = (plain(temp_dir("ws-close-a")), plain(temp_dir("ws-close-b")));
+            let add = |root: &Path| {
+                tauri::async_runtime::block_on(workspace_add(
+                    root.display().to_string(),
+                    None,
+                    app.handle().clone(),
+                    app.state(),
+                    app.state(),
+                    app.state(),
+                ))
+                .unwrap()
+            };
+            add(&a);
+            add(&b);
+            assert!(index.indexer(&a).is_some() && index.indexer(&b).is_some(), "both folders indexed");
+
+            tauri::async_runtime::block_on(workspace_close(
+                b.display().to_string(),
+                app.handle().clone(),
+                app.state(),
+                app.state(),
+                app.state(),
+            ))
+            .unwrap();
+
+            assert!(index.indexer(&b).is_none(), "the closed folder's index is closed");
+            assert!(index.indexer(&a).is_some(), "the other folder's index stays");
+            assert_eq!(state.open_folders(), vec![a.clone()]);
+            assert_eq!(state.workspace().unwrap(), a);
+        });
+    }
+
+    /// Adding and closing a folder wait for each other (`folder_change`): a
+    /// double launch opens one index once, and a close never interleaves
+    /// with an add of the same folder.
+    #[test]
+    fn adding_and_closing_a_folder_wait_for_one_in_progress() {
+        crate::testing::with_app_dir("ws-change-lock", || {
+            let app = tauri::test::mock_app();
+            let state = Arc::new(AgentState::default());
+            app.manage(Arc::clone(&state));
+            app.manage(Arc::new(WorkspaceIndex::new(temp_dir("ws-change-lock-store"), Arc::new(Flat))));
+            app.manage(super::super::git::GitWatch::default());
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("ws-change-lock-root")).unwrap();
+            let shown = root.display().to_string();
+            let waits = |work: Box<dyn FnOnce(AppHandle<tauri::test::MockRuntime>) + Send>, done: &dyn Fn() -> bool| {
+                let held = state.folder_change.blocking_lock();
+                let handle = app.handle().clone();
+                let worker = std::thread::spawn(move || work(handle));
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                assert!(!done(), "went ahead while another change was in progress");
+                drop(held);
+                worker.join().unwrap();
+                assert!(done());
+            };
+
+            let path = shown.clone();
+            waits(
+                Box::new(move |h| {
+                    tauri::async_runtime::block_on(workspace_add(path, None, h.clone(), h.state(), h.state(), h.state()))
+                        .unwrap();
+                }),
+                &|| state.is_open(&root),
+            );
+            let path = shown.clone();
+            waits(
+                Box::new(move |h| {
+                    tauri::async_runtime::block_on(workspace_close(path, h.clone(), h.state(), h.state(), h.state()))
+                        .unwrap();
+                }),
+                &|| !state.is_open(&root),
+            );
+        });
+    }
+
+    struct Flat;
+    impl crate::domain::embeddings::EmbeddingProvider for Flat {
+        fn embed(&self, texts: &[&str]) -> Result<Vec<crate::domain::embeddings::Embedding>, crate::domain::embeddings::EmbeddingError> {
+            Ok(texts.iter().map(|_| crate::domain::embeddings::Embedding(vec![1.0, 0.0])).collect())
+        }
+        fn dimensions(&self) -> usize {
+            2
+        }
     }
 
     /// The branch is read for the folder the window names (F-8, invariant 1),
