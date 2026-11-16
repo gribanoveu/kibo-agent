@@ -14,8 +14,12 @@ use crate::services::workspace_index::WorkspaceIndex;
 use super::workspace_events::index_event_sink;
 use super::agent_state::AgentState;
 
-/// Opens a folder as the workspace. Kept as the frontend's entry point until
-/// F-8.6; it is `workspace_add` — the folder joins the open set like any add.
+/// Opens a folder as the workspace — the frontend's entry point until F-8.6,
+/// while it shows one folder at a time. A switch, not an add: the folder it
+/// leaves goes out of the open set (and `workspaces.json`, and its index
+/// closes), unless a turn still runs there. Kept open, every folder visited
+/// stayed open with no way to close it: a worktree once opened could not be
+/// removed, and the next launch (F-8.8) would reopen them all.
 #[tauri::command]
 pub async fn workspace_open<R: Runtime>(
     path: String,
@@ -25,7 +29,22 @@ pub async fn workspace_open<R: Runtime>(
     index: State<'_, Arc<WorkspaceIndex>>,
     git_watch: State<'_, super::git::GitWatch>,
 ) -> Result<String, String> {
-    workspace_add(path, keep_running, app, state, index, git_watch).await
+    let _changing = state.folder_change.lock().await;
+    let left = state.workspace().ok();
+    let shown = add(path, keep_running, &app, &state, &index, &git_watch).await?;
+    if let Some(left) = left.filter(|left| *left != Path::new(&shown) && state.root_is_idle(left)) {
+        state.unregister_open(&left);
+        forget_open(&left);
+        let index = Arc::clone(&index);
+        let _ = tauri::async_runtime::spawn_blocking(move || index.close(&left)).await;
+    }
+    Ok(shown)
+}
+
+fn forget_open(root: &Path) {
+    if let Err(e) = crate::infra::open_folders::remove(&root.display().to_string()) {
+        eprintln!("open folders not saved: {e}");
+    }
 }
 
 /// Adds a folder to the open set and makes it the active one. Canonicalized
@@ -48,6 +67,17 @@ pub async fn workspace_add<R: Runtime>(
     git_watch: State<'_, super::git::GitWatch>,
 ) -> Result<String, String> {
     let _changing = state.folder_change.lock().await;
+    add(path, keep_running, &app, &state, &index, &git_watch).await
+}
+
+async fn add<R: Runtime>(
+    path: String,
+    keep_running: Option<bool>,
+    app: &AppHandle<R>,
+    state: &AgentState,
+    index: &Arc<WorkspaceIndex>,
+    git_watch: &super::git::GitWatch,
+) -> Result<String, String> {
     // Without `\\?\` on Windows: it is what the folder is known by from
     // here on — the shell started in it (`cmd.exe` refuses that prefix and
     // opens in `C:\Windows`), the tools' root, the index's events, the keys
@@ -63,7 +93,7 @@ pub async fn workspace_add<R: Runtime>(
     if let Err(e) = crate::infra::open_folders::record(&resolved.display().to_string()) {
         eprintln!("open folders not saved: {e}");
     }
-    activate(resolved, keep_running == Some(true), &app, &state, &index, &git_watch).await
+    activate(resolved, keep_running == Some(true), app, state, index, git_watch).await
 }
 
 /// Makes `root` the folder the window's panes read: the git watch and the
@@ -107,16 +137,18 @@ pub async fn workspace_close<R: Runtime>(
     git_watch: State<'_, super::git::GitWatch>,
 ) -> Result<(), String> {
     let _changing = state.folder_change.lock().await;
-    let root = state.require_open(&path)?;
+    // A folder deleted or renamed while open no longer canonicalizes; it is
+    // closed by the spelling it was registered under, or it could never go.
+    let root = state.require_open(&path).or_else(|refused| {
+        state.open_folders().into_iter().find(|open| open.as_os_str() == path.as_str()).ok_or(refused)
+    })?;
     let was_active = state.workspace().ok().as_deref() == Some(root.as_path());
     close_refusal(&state, &root, anything_runs(&app))?;
     state.unregister_open(&root);
     let closing = Arc::clone(&index);
     let closed = root.clone();
     let _ = tauri::async_runtime::spawn_blocking(move || closing.close(&closed)).await;
-    if let Err(e) = crate::infra::open_folders::remove(&root.display().to_string()) {
-        eprintln!("open folders not saved: {e}");
-    }
+    forget_open(&root);
     if was_active {
         if let Some(processes) = app.try_state::<Arc<Processes>>() {
             processes.stop_all();
@@ -129,8 +161,9 @@ pub async fn workspace_close<R: Runtime>(
             .workspace
             .lock()
             .map_err(|_| "workspace lock poisoned".to_string())? = next.clone();
-        if let Some(next) = next {
-            activate(next, false, &app, &state, &index, &git_watch).await?;
+        match next {
+            Some(next) => drop(activate(next, false, &app, &state, &index, &git_watch).await?),
+            None => git_watch.stop(),
         }
     }
     Ok(())
@@ -456,6 +489,87 @@ mod tests {
                 }),
                 &|| !state.is_open(&root),
             );
+        });
+    }
+
+    fn folder_app() -> (tauri::App<tauri::test::MockRuntime>, Arc<AgentState>, Arc<WorkspaceIndex>) {
+        let app = tauri::test::mock_app();
+        let state = Arc::new(AgentState::default());
+        let index = Arc::new(WorkspaceIndex::new(temp_dir("ws-app-store"), Arc::new(Flat)));
+        app.manage(Arc::clone(&state));
+        app.manage(Arc::clone(&index));
+        app.manage(super::super::git::GitWatch::default());
+        (app, state, index)
+    }
+
+    fn git_repo(label: &str) -> PathBuf {
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+        git2::Repository::init(&root).unwrap();
+        root
+    }
+
+    /// Until F-8.6 the window shows one folder: `workspace_open` switches, so
+    /// the folder left goes out of the open set — unless a turn runs there —
+    /// and a worktree once visited can still be removed.
+    #[test]
+    fn the_legacy_open_switches_and_leaves_no_idle_folder_behind() {
+        crate::testing::with_app_dir("ws-legacy-open", || {
+            let (app, state, index) = folder_app();
+            let open = |root: &Path| {
+                tauri::async_runtime::block_on(workspace_open(
+                    root.display().to_string(),
+                    None,
+                    app.handle().clone(),
+                    app.state(),
+                    app.state(),
+                    app.state(),
+                ))
+                .unwrap()
+            };
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b, c) = (plain("ws-legacy-a"), plain("ws-legacy-b"), plain("ws-legacy-c"));
+            open(&a);
+            open(&b);
+            assert_eq!(state.open_folders(), vec![b.clone()], "A was left");
+            assert!(index.indexer(&a).is_none(), "and its index closed");
+            assert_eq!(crate::infra::open_folders::load(), vec![b.display().to_string()]);
+            open(&b);
+            assert_eq!(state.open_folders(), vec![b.clone()], "reopening the active folder keeps it");
+
+            let running = state.begin_running("c1", 1, &b).unwrap();
+            open(&c);
+            assert_eq!(state.open_folders(), vec![c.clone(), b.clone()], "a folder with a running turn stays open");
+            drop(running);
+        });
+    }
+
+    /// A folder deleted while open still closes, by the spelling it was
+    /// opened under; closing the last folder stops watching its `.git`.
+    #[test]
+    fn a_vanished_folder_closes_and_the_last_close_stops_the_git_watch() {
+        crate::testing::with_app_dir("ws-vanished", || {
+            let (app, state, _) = folder_app();
+            let close = |path: String| {
+                tauri::async_runtime::block_on(workspace_close(path, app.handle().clone(), app.state(), app.state(), app.state()))
+            };
+            let root = git_repo("ws-vanished-repo");
+            tauri::async_runtime::block_on(workspace_add(
+                root.display().to_string(),
+                None,
+                app.handle().clone(),
+                app.state(),
+                app.state(),
+                app.state(),
+            ))
+            .unwrap();
+            assert!(app.state::<super::super::git::GitWatch>().is_watching());
+            std::fs::remove_dir_all(&root).unwrap();
+
+            close(root.display().to_string()).unwrap();
+
+            assert!(state.open_folders().is_empty());
+            assert!(!app.state::<super::super::git::GitWatch>().is_watching(), "the closed folder's .git is still watched");
+            assert!(close(root.display().to_string()).is_err(), "a folder not open is refused");
         });
     }
 

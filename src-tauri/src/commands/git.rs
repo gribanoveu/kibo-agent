@@ -33,6 +33,18 @@ struct GitChanged {
 #[derive(Default)]
 pub struct GitWatch(Mutex<Option<FileWatcher>>);
 
+impl GitWatch {
+    /// Watches nothing: the last open folder closed.
+    pub fn stop(&self) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    #[cfg(test)]
+    pub fn is_watching(&self) -> bool {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+    }
+}
+
 /// Watches the repository `root` is in, in place of the previous folder's.
 /// Outside a repository, or where it cannot be watched, nothing is reported —
 /// the tab still reads again after its own actions and on tree edits.
@@ -159,8 +171,11 @@ pub struct WorktreeCheck {
 /// and not one still open (F-8) — its processes, terminals and watchers run
 /// in it until it is closed.
 fn removable(path: &str, open: &[PathBuf], recent: &[String]) -> Result<PathBuf, String> {
-    let target = Path::new(path).canonicalize().map_err(|e| format!("{path}: {e}"))?;
-    let same = |folder: &Path| folder.canonicalize().is_ok_and(|folder| folder == target);
+    // Plain (no `\\?\` on Windows): the target's chats are found and deleted
+    // by the spelling they were saved under.
+    let plain = crate::infra::paths::canonicalize_plain;
+    let target = plain(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    let same = |folder: &Path| plain(folder).is_ok_and(|folder| folder == target);
     if open.iter().any(|folder| same(folder)) {
         return Err("this worktree is an open folder — close it to remove it".into());
     }
@@ -294,7 +309,7 @@ mod tests {
         let recent = vec![listed.display().to_string()];
         let spelled = listed.join(".").display().to_string();
 
-        assert_eq!(removable(&spelled, &[], &recent).unwrap(), listed.canonicalize().unwrap());
+        assert_eq!(removable(&spelled, &[], &recent).unwrap(), crate::infra::paths::canonicalize_plain(&listed).unwrap());
         assert!(removable(&spelled, &[listed.clone()], &recent).unwrap_err().contains("close it"));
         // Open beside another folder, not the active one: still not removable.
         let other = temp_dir("cmd-removable-other");

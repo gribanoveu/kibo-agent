@@ -47,13 +47,15 @@ pub fn chat_mode(state: State<'_, Arc<AgentState>>) -> PickedMode {
 }
 
 /// Runs the whole turn without asking. Deliberately not persisted anywhere.
+/// Async: a chat's folder is read from the chat store.
 #[tauri::command]
-pub fn approval_set_unattended(
+pub async fn approval_set_unattended(
     unattended: bool,
     chat_id: Option<String>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<(), String> {
-    set_unattended(&state, unattended, chat_id.as_deref())
+    let state = Arc::clone(&state);
+    super::blocking(move || set_unattended(&state, unattended, chat_id.as_deref())).await
 }
 
 fn set_unattended(state: &AgentState, unattended: bool, chat_id: Option<&str>) -> Result<(), String> {
@@ -81,8 +83,9 @@ fn auto_folder(state: &AgentState, chat_id: Option<&str>) -> Option<std::path::P
 /// Puts back what was chosen for this chat, or for the open folder, and says
 /// what it is. Ask when nothing was, or no folder is open.
 #[tauri::command]
-pub fn approval_restore(chat_id: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<bool, String> {
-    restore_unattended(&state, chat_id.as_deref())
+pub async fn approval_restore(chat_id: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<bool, String> {
+    let state = Arc::clone(&state);
+    super::blocking(move || restore_unattended(&state, chat_id.as_deref())).await
 }
 
 fn restore_unattended(state: &AgentState, chat_id: Option<&str>) -> Result<bool, String> {
@@ -205,6 +208,29 @@ mod tests {
             let before = crate::infra::settings_store::load().unwrap().approval;
             remember_new_chat(&state, "c5");
             assert_eq!(crate::infra::settings_store::load().unwrap().approval, before, "the folder already holds it");
+        });
+    }
+
+    /// A saved chat's Auto is kept under the chat's own folder, not the one
+    /// the window has active (F-8): per repository, it is that repository's.
+    #[test]
+    fn a_saved_chats_auto_is_kept_under_its_own_folder() {
+        crate::testing::with_app_dir("cmd-approval-chat-folder", || {
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (home, active) = (plain("cmd-approval-home"), plain("cmd-approval-active"));
+            crate::infra::chat_store::save("saved", &home.display().to_string(), &[], &serde_json::json!([]), &[], None, None, None)
+                .unwrap();
+            state.set_workspace_for_test(active.clone());
+            crate::infra::settings_store::update(|s| s.approval.remember = RememberScope::Repository).unwrap();
+
+            set_unattended(&state, true, Some("saved")).unwrap();
+
+            let approval = crate::infra::settings_store::load().unwrap().approval;
+            assert!(approval.is_auto(None, &home.display().to_string()), "kept under the chat's folder");
+            assert!(!approval.is_auto(None, &active.display().to_string()), "not under the active one");
+            assert!(!restore_unattended(&state, None).unwrap(), "the active folder asks");
+            assert!(restore_unattended(&state, Some("saved")).unwrap());
         });
     }
 
