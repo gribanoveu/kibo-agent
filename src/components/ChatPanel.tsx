@@ -214,6 +214,8 @@ function ToolRow({
           detail && <ChevronRight className="chev" size={12} />
         )}
       </button>
+      {/* The model's words for the command, under the line they explain. */}
+      {shown.note && <div className="tool-note">{shown.note}</div>}
       {/* Unfolded rather than instead of it, as a process row does: the
           answer stays readable here after the app has forgotten the run. */}
       {open && shown.agent && onOpenAgent && (

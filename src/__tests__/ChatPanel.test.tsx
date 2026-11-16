@@ -1067,3 +1067,24 @@ describe("a call with no body of its own", () => {
     expect(container.querySelector(".tool-detail")?.textContent).toBe(fact);
   });
 });
+
+describe("a command's own words for itself", () => {
+  test("stand under the row without unfolding it, and the line stays the row's text", () => {
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "rc1",
+          round: 1,
+          name: "runCommand",
+          arguments: JSON.stringify({ command: "python fix.py --apply", description: "Rewrites imports in place" }),
+          status: "done",
+          result: { stdout: "", stderr: "", exitCode: 0, timedOut: false },
+          output: "",
+        } as Block,
+      ]),
+    );
+    expect(container.querySelector(".tool-note")?.textContent).toBe("Rewrites imports in place");
+    expect(container.querySelector(".tool .arg")?.textContent).toBe("python fix.py --apply");
+  });
+});

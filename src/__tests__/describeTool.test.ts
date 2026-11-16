@@ -563,6 +563,23 @@ describe("what each call shows", () => {
     expect(shown.detail).toBe("--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-a\n+b\n--- a/src/c.rs\n+++ b/src/c.rs\n@@ -0,0 +1,2 @@\n+x\n+y\n");
   });
 
+  test("a command's description is its note, in every shape the row takes", () => {
+    const described = (args: string, over: Partial<Extract<Block, { kind: "tool" }>> = {}) =>
+      describeTool(tool({ name: "runCommand", arguments: args, ...over })).note;
+    const finished = { result: { stdout: "", stderr: "", exitCode: 0, timedOut: false } };
+    expect(described('{"command":"python fix.py --apply","description":"Rewrites imports in place"}', finished)).toBe("Rewrites imports in place");
+    expect(described('{"command":"npm run dev","background":true,"description":"Dev server"}')).toBe("Dev server");
+    expect(
+      described('{"command":"cargo test","description":"The whole suite"}', {
+        result: { result: "commandMoved", id: 4, command: "cargo test", cwd: ".", state: { state: "running" }, afterMs: 120000 },
+      }),
+    ).toBe("The whole suite");
+    // Nothing said, or an empty string: no note under the row.
+    expect(described('{"command":"make"}', finished)).toBeUndefined();
+    expect(described('{"command":"make","description":null}', finished)).toBeUndefined();
+    expect(described('{"command":"make","description":""}', finished)).toBeUndefined();
+  });
+
   test("a command says how long it took next to how it ended", () => {
     const ran = (durationMs: number) =>
       describeTool(tool({ name: "runCommand", arguments: '{"command":"make"}', result: { stdout: "", stderr: "", exitCode: 0, timedOut: false, durationMs } })).meta;
