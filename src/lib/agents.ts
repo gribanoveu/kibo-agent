@@ -40,15 +40,25 @@ export async function onAgentChanged(handler: (id: number) => void): Promise<Unl
   return listen<{ id: number }>(AGENT_EVENT, ({ payload }) => handler(payload.id));
 }
 
+/** A review brief's focus line — `domain::review::review_message`, whose tests pin the wording. */
+const REVIEW_FOCUS = "The one asking for this review asks to pay particular attention to: ";
+
 /**
  * What a helper is asked, in one line: the brief's `Goal:` or `Question:`
  * line when it has one — a model often opens with context such as
- * `Repository: /path` — else its first line.
+ * `Repository: /path` — a review's `focus`, when the caller gave one, since
+ * its first line is the same for every review — else its first line.
  */
 export function briefTitle(task: string): string {
   const lines = task.split("\n").map((line) => line.trim()).filter(Boolean);
-  const asked = lines.map((line) => /^(?:goal|question|task|цель|вопрос|задача)\s*:\s*(.+)$/i.exec(line)?.[1]).find(Boolean);
-  return asked ?? lines[0] ?? "";
+  // A label is the brief's own line, written at the start of a line — so the
+  // match is against the untrimmed line. Embedded material never is: a diff's
+  // lines carry `+`/`-` or a context space, a code snippet is indented, and
+  // `task: …` in either must not be read as the brief's `Task:`.
+  const asked = task.split("\n").map((line) => /^(?:goal|question|task|цель|вопрос|задача)\s*:\s*(.+)$/i.exec(line)?.[1].trim()).find(Boolean);
+  // The template's trailing dot is not the focus's own.
+  const focus = lines.find((line) => line.startsWith(REVIEW_FOCUS))?.slice(REVIEW_FOCUS.length).replace(/\.$/, "");
+  return asked ?? focus ?? lines[0] ?? "";
 }
 
 /** The runs chat `chatId` started, newest first. */
