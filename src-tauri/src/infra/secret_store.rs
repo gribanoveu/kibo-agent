@@ -36,6 +36,9 @@ pub enum SecretPurpose {
     /// The MongoDB page's saved connections (`infra::mongo_store`): their
     /// URIs carry the passwords.
     MongoConnections,
+    /// The pull request feature's servers (`infra::code_host_store`): the HTTP
+    /// access token lives beside the address it is sent to.
+    CodeHosts,
     /// A second purpose, so the suite can prove the one property that needs
     /// two to exist: that a blob restamped as another purpose and opened as
     /// that purpose still fails. Compiled out of release builds — by the time
@@ -50,6 +53,7 @@ impl SecretPurpose {
             SecretPurpose::ProviderApiKey => b"provider-api-key",
             SecretPurpose::KubeBackup => b"kube-backup",
             SecretPurpose::MongoConnections => b"mongo-connections",
+            SecretPurpose::CodeHosts => b"code-hosts",
             #[cfg(test)]
             SecretPurpose::Other => b"something-else",
         }
