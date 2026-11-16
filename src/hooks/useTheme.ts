@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { setWindowTheme } from "../lib/window";
+import { setWindowGlass, setWindowTheme } from "../lib/window";
 
 /** Each palette in src/styles/tokens.css, and whether it is light or dark. */
 export const SCHEMES = {
@@ -11,6 +11,7 @@ export const SCHEMES = {
   basalt: "dark",
   iris: "dark",
   fjord: "dark",
+  frost: "dark",
 } as const;
 export type Theme = keyof typeof SCHEMES;
 export type Scheme = (typeof SCHEMES)[Theme];
@@ -24,9 +25,13 @@ export const THEME_LABELS: Record<Theme, string> = {
   basalt: "Basalt",
   iris: "Iris",
   fjord: "Fjord",
+  frost: "Frost",
 };
 
 /** The palettes on one side, in the order they are offered. */
+/** The palettes drawn as glass over the desktop: tints, with the system's blur under the window. */
+const GLASS: ReadonlySet<Theme> = new Set(["frost"]);
+
 export const themesOf = (scheme: Scheme) => (Object.keys(SCHEMES) as Theme[]).filter((t) => SCHEMES[t] === scheme);
 
 export const MODES = ["system", "light", "dark"] as const;
@@ -83,8 +88,14 @@ export function useTheme() {
     }
     const apply = () => {
       const side = sideOf(choice);
-      document.documentElement.dataset.theme = choice[side];
+      const palette = choice[side];
+      document.documentElement.dataset.theme = palette;
       document.documentElement.dataset.scheme = side;
+      // A glass palette is see-through: the system's blur goes under the
+      // window only while one shows, since the others paint over it anyway.
+      const glass = GLASS.has(palette);
+      document.documentElement.toggleAttribute("data-glass", glass);
+      void setWindowGlass(glass ? side : null);
     };
     apply();
     // The window's edge in the app's side, not the system's. Under "system"
