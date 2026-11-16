@@ -250,12 +250,28 @@ impl AgentState {
         open.insert(0, root);
     }
 
-    /// Drops `root` from the open set. `true` when it was there.
-    pub(crate) fn unregister_open(&self, root: &std::path::Path) -> bool {
+    /// Drops `root` from the open set unless a turn runs in it — checked and
+    /// dropped under the registry's lock. A turn starting meanwhile marks
+    /// itself running first and asks `is_open` after (`chat_start`), so one
+    /// of the two sees the other: either this refuses, or the turn does —
+    /// never a turn running in a folder already closed, its processes
+    /// unstoppable. `false` when a turn holds it.
+    pub(crate) fn unregister_if_idle(&self, root: &std::path::Path) -> bool {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        let before = open.len();
+        if !self.root_is_idle(root) {
+            return false;
+        }
         open.retain(|known| known != root);
-        open.len() != before
+        true
+    }
+
+    /// A turn just admitted in `root` may run only while `root` is open:
+    /// checked after `begin_running`, see `unregister_if_idle`.
+    pub(crate) fn still_open(&self, root: &std::path::Path) -> Result<(), String> {
+        match self.is_open(root) {
+            true => Ok(()),
+            false => Err(format!("{} is not an open folder — open it to work in this chat", root.display())),
+        }
     }
 
     /// The one door a folder path from the window goes through before the
@@ -557,8 +573,8 @@ mod tests {
         state.register_open(a.clone());
         assert_eq!(state.open_folders(), vec![a.clone(), b.clone()]);
 
-        assert!(state.unregister_open(&b));
-        assert!(!state.unregister_open(&b), "a folder that is not open is not an error");
+        assert!(state.unregister_if_idle(&b));
+        assert!(state.unregister_if_idle(&b), "a folder that is not open is not an error");
         assert_eq!(state.open_folders(), vec![a]);
     }
 

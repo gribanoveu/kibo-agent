@@ -6,7 +6,6 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
-use crate::domain::background::BackgroundProcesses;
 use crate::infra::background::Processes;
 use crate::infra::terminal::Terminals;
 use crate::services::workspace_index::WorkspaceIndex;
@@ -15,11 +14,15 @@ use super::workspace_events::index_event_sink;
 use super::agent_state::AgentState;
 
 /// Opens a folder as the workspace — the frontend's entry point until F-8.6,
-/// while it shows one folder at a time. A switch, not an add: the folder it
-/// leaves goes out of the open set (and `workspaces.json`, and its index
-/// closes), unless a turn still runs there. Kept open, every folder visited
-/// stayed open with no way to close it: a worktree once opened could not be
-/// removed, and the next launch (F-8.8) would reopen them all.
+/// while it shows one folder at a time. A switch, not an add: every other
+/// open folder is closed — out of the open set and `workspaces.json`, its
+/// processes, shells and index stopped — unless a turn still runs there.
+/// Every other, not only the one left: `keep_running` — a chat moved to its
+/// worktree — leaves the neighbouring chat its folder open and running, and
+/// the next switch is what closes it. Kept open, every folder visited stayed
+/// open with no way to close it until F-8.6: a worktree once opened could not
+/// be removed, a dev server ran on unseen, and the next launch (F-8.8) would
+/// reopen them all.
 #[tauri::command]
 pub async fn workspace_open<R: Runtime>(
     path: String,
@@ -30,15 +33,38 @@ pub async fn workspace_open<R: Runtime>(
     git_watch: State<'_, super::git::GitWatch>,
 ) -> Result<String, String> {
     let _changing = state.folder_change.lock().await;
-    let left = state.workspace().ok();
-    let shown = add(path, keep_running, &app, &state, &index, &git_watch).await?;
-    if let Some(left) = left.filter(|left| *left != Path::new(&shown) && state.root_is_idle(left)) {
-        state.unregister_open(&left);
-        forget_open(&left);
-        let index = Arc::clone(&index);
-        let _ = tauri::async_runtime::spawn_blocking(move || index.close(&left)).await;
+    let shown = add(path, &app, &state, &index, &git_watch).await?;
+    if keep_running != Some(true) {
+        for left in state.open_folders().into_iter().filter(|folder| *folder != Path::new(&shown)) {
+            // Refused while a turn runs there: that folder stays open.
+            let _ = close_folder(left, &app, &state, &index).await;
+        }
     }
     Ok(shown)
+}
+
+/// Out of the open set and `workspaces.json`, and everything of it stopped
+/// (`services::folder_open::close`) off the UI thread. Refused while a turn
+/// runs in it (invariant 5) — checked with the registry held, so no turn
+/// starts in it between the check and the close (`unregister_if_idle`).
+async fn close_folder<R: Runtime>(
+    root: PathBuf,
+    app: &AppHandle<R>,
+    state: &AgentState,
+    index: &Arc<WorkspaceIndex>,
+) -> Result<(), String> {
+    if !state.unregister_if_idle(&root) {
+        return Err("an agent turn is running in this folder — stop it before closing the folder".to_string());
+    }
+    forget_open(&root);
+    let processes = app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes));
+    let terminals = app.try_state::<Arc<Terminals>>().map(|terminals| Arc::clone(&terminals));
+    let index = Arc::clone(index);
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        crate::services::folder_open::close(&root, processes.as_deref(), terminals.as_deref(), &index)
+    })
+    .await;
+    Ok(())
 }
 
 fn forget_open(root: &Path) {
@@ -51,28 +77,24 @@ fn forget_open(root: &Path) {
 /// here, once, so every path a tool resolves later is measured against a real
 /// directory rather than against whatever spelling the caller used.
 ///
-/// Until F-8.3, switching the active folder still stops what ran in the
-/// previous one (`services::folder_open::open`; `keep_running` is the
-/// worktree-move exception); the registry and the indexes are many-folder
-/// already (F-8.1, F-8.2). The rest — the git watch, the recent list, the
-/// index — is `activate`, awaited off the UI thread; the index's first sync
-/// is not awaited, and its failures arrive on `workspace-index:event`.
+/// Nothing of the folder active before stops: it stays open, its processes,
+/// shells and index running (F-8.3). The rest — the git watch, the recent
+/// list, the index — is `activate`, awaited off the UI thread; the index's
+/// first sync is not awaited, and its failures arrive on `workspace-index:event`.
 #[tauri::command]
 pub async fn workspace_add<R: Runtime>(
     path: String,
-    keep_running: Option<bool>,
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
     index: State<'_, Arc<WorkspaceIndex>>,
     git_watch: State<'_, super::git::GitWatch>,
 ) -> Result<String, String> {
     let _changing = state.folder_change.lock().await;
-    add(path, keep_running, &app, &state, &index, &git_watch).await
+    add(path, &app, &state, &index, &git_watch).await
 }
 
 async fn add<R: Runtime>(
     path: String,
-    keep_running: Option<bool>,
     app: &AppHandle<R>,
     state: &AgentState,
     index: &Arc<WorkspaceIndex>,
@@ -93,15 +115,13 @@ async fn add<R: Runtime>(
     if let Err(e) = crate::infra::open_folders::record(&resolved.display().to_string()) {
         eprintln!("open folders not saved: {e}");
     }
-    activate(resolved, keep_running == Some(true), app, state, index, git_watch).await
+    activate(resolved, app, state, index, git_watch).await
 }
 
 /// Makes `root` the folder the window's panes read: the git watch and the
-/// index, and — unless `keep_running` — stopping what ran in the folder that
-/// was active before.
+/// index. Nothing of the folder active before stops.
 async fn activate<R: Runtime>(
     root: PathBuf,
-    keep_running: bool,
     app: &AppHandle<R>,
     state: &AgentState,
     index: &Arc<WorkspaceIndex>,
@@ -115,19 +135,13 @@ async fn activate<R: Runtime>(
     super::git::watch_git(app, git_watch, &root, shown.clone());
     let index = Arc::clone(index);
     let sink = index_event_sink(app, shown.clone());
-    let processes = app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes));
-    let terminals = app.try_state::<Arc<Terminals>>().map(|terminals| Arc::clone(&terminals));
-    let _ = tauri::async_runtime::spawn_blocking(move || {
-        crate::services::folder_open::open(&root, keep_running, processes.as_deref(), terminals.as_deref(), &index, sink)
-    })
-    .await;
+    let _ = tauri::async_runtime::spawn_blocking(move || crate::services::folder_open::open(&root, &index, sink)).await;
     Ok(shown)
 }
 
-/// Closes an open folder: out of the registry, its index no longer followed,
-/// its things stopped (F-8 invariant 4). Refused while a turn runs in it (invariant 5), and while
-/// anything runs that cannot yet be attributed to a folder — F-8.3 gives
-/// processes and terminals their folder and lifts that.
+/// Closes an open folder: out of the registry, its processes, shells and
+/// index stopped, and nothing of another folder's (F-8 invariant 4). Refused
+/// while a turn runs in it (invariant 5).
 #[tauri::command]
 pub async fn workspace_close<R: Runtime>(
     path: String,
@@ -143,48 +157,19 @@ pub async fn workspace_close<R: Runtime>(
         state.open_folders().into_iter().find(|open| open.as_os_str() == path.as_str()).ok_or(refused)
     })?;
     let was_active = state.workspace().ok().as_deref() == Some(root.as_path());
-    close_refusal(&state, &root, anything_runs(&app))?;
-    state.unregister_open(&root);
-    let closing = Arc::clone(&index);
-    let closed = root.clone();
-    let _ = tauri::async_runtime::spawn_blocking(move || closing.close(&closed)).await;
-    forget_open(&root);
+    close_folder(root, &app, &state, &index).await?;
     if was_active {
-        if let Some(processes) = app.try_state::<Arc<Processes>>() {
-            processes.stop_all();
-        }
-        if let Some(terminals) = app.try_state::<Arc<Terminals>>() {
-            terminals.close_all();
-        }
         let next = state.open_folders().into_iter().next();
         *state
             .workspace
             .lock()
             .map_err(|_| "workspace lock poisoned".to_string())? = next.clone();
         match next {
-            Some(next) => drop(activate(next, false, &app, &state, &index, &git_watch).await?),
+            Some(next) => drop(activate(next, &app, &state, &index, &git_watch).await?),
             None => git_watch.stop(),
         }
     }
     Ok(())
-}
-
-/// Why a close may not happen, if it may not — kept out of the command so the
-/// refusals are testable without a Tauri app.
-fn close_refusal(state: &AgentState, root: &Path, anything_runs: bool) -> Result<(), String> {
-    if !state.root_is_idle(root) {
-        return Err("an agent turn is running in this folder — stop it before closing the folder".to_string());
-    }
-    if anything_runs {
-        return Err("processes or terminals are still running — stop them before closing the folder".to_string());
-    }
-    Ok(())
-}
-
-fn anything_runs<R: Runtime>(app: &AppHandle<R>) -> bool {
-    let processes = app.try_state::<Arc<Processes>>().is_some_and(|processes| !processes.list().is_empty());
-    let terminals = app.try_state::<Arc<Terminals>>().is_some_and(|terminals| !terminals.list().is_empty());
-    processes || terminals
 }
 
 /// An open folder, as the sidebar will draw it from F-8.6 on.
@@ -384,24 +369,26 @@ mod tests {
         assert_eq!(snapshot(&index, &root).unwrap().root, root.display().to_string(), "the folder asked about, not the last opened");
     }
 
-    /// Invariant 5: closing a folder is refused while one of its turns runs.
-    /// Until processes and terminals carry a folder (F-8.3), a close is also
-    /// refused while any of them runs anywhere — stopping the close's folder
-    /// could not touch only what is its.
+    /// Invariant 5: closing a folder is refused while one of its turns runs,
+    /// and only then — what else runs in it is its to stop (F-8.3).
     #[test]
-    fn closing_a_folder_is_refused_while_it_cannot_be_left_safely() {
+    fn closing_a_folder_is_refused_while_a_turn_runs_in_it() {
         let state = AgentState::default();
         let root = crate::infra::paths::canonicalize_plain(&temp_dir("ws-close-guard")).unwrap();
         state.register_open(root.clone());
 
         let running = state.begin_running("c1", 1, &root).unwrap();
-        let refused = close_refusal(&state, &root, false).expect_err("a running turn holds the folder");
-        assert!(refused.contains("turn"), "{refused}");
+        assert!(!state.unregister_if_idle(&root), "a running turn holds the folder");
+        assert!(state.is_open(&root));
         drop(running);
-
-        let refused = close_refusal(&state, &root, true).expect_err("unattributed runners hold the folder");
-        assert!(refused.contains("processes"), "{refused}");
-        close_refusal(&state, &root, false).expect("an idle, quiet folder closes");
+        assert!(state.unregister_if_idle(&root), "an idle folder closes");
+        assert!(!state.is_open(&root));
+        // A turn admitted after the close is refused, its mark cleared: no
+        // turn runs in a closed folder, its processes out of reach.
+        let late = state.begin_running("c2", 1, &root).unwrap();
+        assert!(state.still_open(&root).is_err());
+        drop(late);
+        assert!(state.root_is_idle(&root));
     }
 
     /// Closing a folder stops following its index and leaves the other open
@@ -421,7 +408,6 @@ mod tests {
             let add = |root: &Path| {
                 tauri::async_runtime::block_on(workspace_add(
                     root.display().to_string(),
-                    None,
                     app.handle().clone(),
                     app.state(),
                     app.state(),
@@ -476,7 +462,7 @@ mod tests {
             let path = shown.clone();
             waits(
                 Box::new(move |h| {
-                    tauri::async_runtime::block_on(workspace_add(path, None, h.clone(), h.state(), h.state(), h.state()))
+                    tauri::async_runtime::block_on(workspace_add(path, h.clone(), h.state(), h.state(), h.state()))
                         .unwrap();
                 }),
                 &|| state.is_open(&root),
@@ -515,10 +501,12 @@ mod tests {
     fn the_legacy_open_switches_and_leaves_no_idle_folder_behind() {
         crate::testing::with_app_dir("ws-legacy-open", || {
             let (app, state, index) = folder_app();
-            let open = |root: &Path| {
+            let processes = Arc::new(Processes::default());
+            app.manage(Arc::clone(&processes));
+            let open_with = |root: &Path, keep_running: Option<bool>| {
                 tauri::async_runtime::block_on(workspace_open(
                     root.display().to_string(),
-                    None,
+                    keep_running,
                     app.handle().clone(),
                     app.state(),
                     app.state(),
@@ -526,20 +514,39 @@ mod tests {
                 ))
                 .unwrap()
             };
+            let open = |root: &Path| open_with(root, None);
             let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
-            let (a, b, c) = (plain("ws-legacy-a"), plain("ws-legacy-b"), plain("ws-legacy-c"));
+            let (a, b, c, d) = (plain("ws-legacy-a"), plain("ws-legacy-b"), plain("ws-legacy-c"), plain("ws-legacy-d"));
+            let runs_in = |root: &Path| {
+                use crate::domain::background::BackgroundProcesses;
+                processes.for_chat("c", root).start(&crate::domain::command_exec::Shell::default(), "sleep 30", root, ".").unwrap()
+            };
+            let running = |root: &Path| processes.list_in(root).iter().filter(|p| p.info.running()).count();
             open(&a);
+            runs_in(&a);
             open(&b);
             assert_eq!(state.open_folders(), vec![b.clone()], "A was left");
             assert!(index.indexer(&a).is_none(), "and its index closed");
+            assert_eq!(running(&a), 0, "and what ran in it stopped");
             assert_eq!(crate::infra::open_folders::load(), vec![b.display().to_string()]);
             open(&b);
             assert_eq!(state.open_folders(), vec![b.clone()], "reopening the active folder keeps it");
 
-            let running = state.begin_running("c1", 1, &b).unwrap();
+            let running_turn = state.begin_running("c1", 1, &b).unwrap();
             open(&c);
             assert_eq!(state.open_folders(), vec![c.clone(), b.clone()], "a folder with a running turn stays open");
-            drop(running);
+            drop(running_turn);
+
+            // A chat moved to its worktree: the folder it leaves stays open, running.
+            runs_in(&c);
+            open_with(&d, Some(true));
+            assert_eq!(state.open_folders(), vec![d.clone(), c.clone(), b.clone()]);
+            assert_eq!(running(&c), 1, "keep_running keeps C's process");
+            // The next switch closes every other folder, the one kept running too.
+            open(&a);
+            assert_eq!(state.open_folders(), vec![a.clone()]);
+            assert_eq!(running(&c), 0, "C's process stopped on the next switch");
+            processes.stop_all();
         });
     }
 
@@ -555,7 +562,6 @@ mod tests {
             let root = git_repo("ws-vanished-repo");
             tauri::async_runtime::block_on(workspace_add(
                 root.display().to_string(),
-                None,
                 app.handle().clone(),
                 app.state(),
                 app.state(),

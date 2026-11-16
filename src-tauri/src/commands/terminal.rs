@@ -54,10 +54,21 @@ pub fn terminal_open(
     terminals.open(&root, size).map_err(|e| e.to_string())
 }
 
-/// Read when the tab opens and on each [`TERMINAL_EVENT`].
+/// Read when the tab opens and on each [`TERMINAL_EVENT`]: the shells of the
+/// folder `workspace` names (F-8.3), checked against the open set; with no
+/// folder, none.
+/// Async: the folder is canonicalized against the user's files.
 #[tauri::command]
-pub fn terminal_list(terminals: State<'_, Arc<Terminals>>) -> Vec<TerminalInfo> {
-    terminals.list()
+pub async fn terminal_list(
+    workspace: Option<String>,
+    state: State<'_, Arc<AgentState>>,
+    terminals: State<'_, Arc<Terminals>>,
+) -> Result<Vec<TerminalInfo>, String> {
+    let (state, terminals) = (Arc::clone(&state), Arc::clone(&terminals));
+    super::blocking(move || {
+        Ok::<_, String>(state.ui_workspace(&workspace)?.map(|root| terminals.list_in(&root)).unwrap_or_default())
+    })
+    .await
 }
 
 /// What it wrote so far, then everything it writes, down `on_output`.
