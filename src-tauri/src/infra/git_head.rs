@@ -12,19 +12,12 @@ use git2::Repository;
 /// A repository with no commits yet still has a branch — HEAD names it
 /// before anything is on it — so that case reads the name from HEAD itself.
 pub fn current_branch(root: &Path) -> Option<String> {
-    let repo = Repository::discover(root).ok()?;
-    // Bound before returning: the references borrow `repo`, and a tail
-    // expression's temporaries would outlive it.
-    let branch = match repo.head() {
-        Ok(head) if head.is_branch() => head.shorthand().ok().map(String::from),
-        Ok(head) => head.target().map(|id| id.to_string().chars().take(7).collect()),
-        Err(_) => {
-            let head = repo.find_reference("HEAD").ok()?;
-            let target = head.symbolic_target().ok()??;
-            target.strip_prefix("refs/heads/").map(String::from)
-        }
-    };
-    branch
+    checked_out_branch(root).or_else(|| {
+        let repo = Repository::discover(root).ok()?;
+        // Bound before returning: the head borrows `repo`.
+        let short = repo.head().ok()?.target().map(|id| id.to_string().chars().take(7).collect());
+        short
+    })
 }
 
 /// The branch checked out, and only a branch: `None` for a detached HEAD,

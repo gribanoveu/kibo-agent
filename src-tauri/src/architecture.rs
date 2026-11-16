@@ -204,7 +204,9 @@ fn commands() -> Vec<Command> {
 }
 
 /// What a command reaches that can take long enough to freeze the window:
-/// SQLite, git, the keychain, the provider, the user's files.
+/// SQLite, git, the keychain, the provider, the user's files. A service is
+/// seen by its type's name only when called as `Service::method(&state, …)`,
+/// as `PullRequests::` is: `state.method(…)` would slip past.
 const SLOW: &[&str] = &[
     "chat_store::", "tool_call_log::", "daily_metrics::", "next_prompt_log::", "llm_session::resolve", "list_models",
     "llm_credentials_store::", "has_saved_key", "master_key::", "git_head::", "git2::", "rewind::", "preview::",

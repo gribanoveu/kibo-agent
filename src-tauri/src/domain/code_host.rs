@@ -61,6 +61,8 @@ pub enum CodeHostError {
     /// the folder's remote: it is some other server's, and no alias is learnt.
     #[error("the server does not list {0} among its clone links — it is not this repository's server")]
     NotOnServer(String),
+    #[error("this folder has no remote a server could be found by")]
+    NoRemote,
     #[error("the branch {0} has no open pull request")]
     NoPullRequest(String),
     #[error("the branch {0} is not on the server — push it first")]
@@ -931,6 +933,33 @@ mod tests {
         assert!(!ready(&[BuildState::Successful, BuildState::Failed, BuildState::Unknown]).building());
         assert!(!ready(&[]).building());
         assert!(!PrStrip::NoRemote.building());
+    }
+
+    /// The window's `PrStrip` union in `src/lib/pullRequests.ts` reads these
+    /// names: a tag of `state`, camelCase inside each.
+    #[test]
+    fn a_strip_reaches_the_window_in_the_shape_it_reads() {
+        let json = |strip: &PrStrip| serde_json::to_value(strip).unwrap();
+        assert_eq!(json(&PrStrip::NoRemote), serde_json::json!({ "state": "noRemote" }));
+        assert_eq!(json(&PrStrip::NoBranch), serde_json::json!({ "state": "noBranch" }));
+
+        let remote = RemoteRepo::parse("ssh://git@git.server.com/corp/tax-api.git").unwrap();
+        let not_connected = json(&PrStrip::NotConnected { remote });
+        assert_eq!((&not_connected["state"], &not_connected["remote"]["baseUrl"]), (&"notConnected".into(), &"https://git.server.com".into()));
+
+        let ready = json(&PrStrip::Ready {
+            server_id: "s".to_string(),
+            branch: "b".to_string(),
+            snapshot: snapshot(),
+            can_approve: true,
+            approved: false,
+            merge_blocked: Some(vec!["v".to_string()]),
+        });
+        for key in ["state", "serverId", "branch", "snapshot", "canApprove", "approved", "mergeBlocked"] {
+            assert!(ready.get(key).is_some(), "{key}: {ready}");
+        }
+        assert_eq!(ready["state"], "ready");
+        assert!(ready["snapshot"].get("branchOnServer").is_some(), "{ready}");
     }
 
     // ------------------------------------------------------------- snapshots

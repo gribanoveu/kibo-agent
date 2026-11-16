@@ -31,9 +31,10 @@ const BUILDING: Duration = Duration::from_secs(10);
 pub struct PullRequests {
     host: Arc<dyn CodeHost>,
     changed: PullRequestEventSink,
-    /// The token's user, per server: one request per server for the session,
-    /// rather than one per read.
-    me: Mutex<HashMap<String, String>>,
+    /// The token's user, per server, with the fingerprint of the token that
+    /// was asked: one request per token rather than one per read, and a read
+    /// begun with the old token cannot leave its user for the new one.
+    me: Mutex<HashMap<String, (blake3::Hash, String)>>,
     /// The window's last read, watched or not: a watch that starts after it
     /// starts from what the window already has.
     read_last: Mutex<Option<(PathBuf, Read)>>,
@@ -141,12 +142,13 @@ impl PullRequests {
     /// The token's user, asked once per server. A server that does not say is
     /// `None` — no Approve, rather than no strip.
     fn me(&self, call: &Call) -> Result<Option<String>, CodeHostError> {
-        if let Some(me) = lock(&self.me).get(&call.server.id) {
+        let token = blake3::hash(call.token.as_bytes());
+        if let Some((_, me)) = lock(&self.me).get(&call.server.id).filter(|(asked, _)| *asked == token) {
             return Ok(Some(me.clone()));
         }
         match self.host.me(call) {
             Ok(me) => {
-                lock(&self.me).insert(call.server.id.clone(), me.clone());
+                lock(&self.me).insert(call.server.id.clone(), (token, me.clone()));
                 Ok(Some(me))
             }
             Err(CodeHostError::BadAnswer(_)) => Ok(None),
@@ -167,11 +169,17 @@ impl PullRequests {
         })
     }
 
-    /// Merges with the version just read: a 409 means someone changed it in
-    /// between, and the strip reads again rather than this repeating.
-    pub fn merge(&self, root: &Path) -> Result<(), CodeHostError> {
+    /// Merges the pull request the user confirmed — its `id` at the `version`
+    /// the strip showed. One that has moved since is [`CodeHostError::Conflict`]
+    /// before anything is sent: a merge cannot be taken back, and what is
+    /// merged is what was seen. The server's own 409 covers the moment between
+    /// this read and the merge; the strip reads again either way.
+    pub fn merge(&self, root: &Path, id: u64, version: u64) -> Result<(), CodeHostError> {
         self.acting(root, |call, target| {
             let pr = self.open_pull_request(call, target)?;
+            if (pr.id, pr.version) != (id, version) {
+                return Err(CodeHostError::Conflict);
+            }
             self.host.merge(call, &pr)
         })
     }
@@ -206,7 +214,7 @@ impl PullRequests {
             Found::Target(target) => target,
             Found::Nothing(PrStrip::NoBranch) => return Err(CodeHostError::NoBranch),
             Found::Nothing(PrStrip::NotConnected { remote }) => return Err(CodeHostError::NoServer(remote.host)),
-            Found::Nothing(_) => return Err(CodeHostError::NoServer(root.display().to_string())),
+            Found::Nothing(_) => return Err(CodeHostError::NoRemote),
         };
         let result = act(&target.call(), &target);
         self.report(root);
@@ -221,52 +229,65 @@ impl PullRequests {
     }
 
     /// Saves a server; with `root`, the folder the connect form was opened for,
-    /// also proves the folder's repository is on it — one of its clone links
-    /// is the remote — and remembers the remote's host as the server's alias
+    /// first proves the folder's repository is on it — one of its clone links
+    /// is the remote — and learns the remote's host as the server's alias
     /// when it is not the server's own (decision 1).
     ///
-    /// The server stays saved when the proof fails: the error says why, and
-    /// the form edits what is there rather than starting over.
+    /// Nothing is saved when the proof fails: a form sent again would
+    /// otherwise add a second server on the same host, and two servers on one
+    /// host find neither. Aliases are learnt, never typed: an edit keeps the
+    /// ones the saved server has, whatever the form sent.
     pub fn save(&self, server: CodeHostServer, token: Option<String>, root: Option<&Path>) -> Result<Vec<CodeHostServer>, CodeHostError> {
-        let server = checked(server)?;
-        let id = server.id.clone();
-        // A new token may belong to someone else.
-        lock(&self.me).remove(&id);
-        code_host_store::put(server, token)?;
+        let mut server = checked(server)?;
+        let saved = code_host_store::list()?.into_iter().find(|saved| saved.id == server.id);
+        let known = saved.is_some();
+        server.hosts = saved.map(|saved| saved.hosts).unwrap_or_default();
         if let Some(root) = root {
-            self.prove(&id, root)?;
-            self.report(root);
+            let proof_token = match token.as_deref().map(str::trim).filter(|token| !token.is_empty()) {
+                Some(token) => SecretString::from(token),
+                None if known => code_host_store::token(&server.id)?,
+                None => return Err(CodeHostError::NoToken(server.base_url)),
+            };
+            if let Some(alias) = self.prove(&server, &proof_token, root)? {
+                server.hosts.push(alias);
+            }
         }
+        code_host_store::put(server, token)?;
+        self.report_changed(root);
         code_host_store::list()
     }
 
-    fn prove(&self, id: &str, root: &Path) -> Result<(), CodeHostError> {
+    /// The alias to learn once the clone links have shown the repository on
+    /// `server`; `Ok(None)` for a folder whose remote names no repository.
+    fn prove(&self, server: &CodeHostServer, token: &SecretString, root: &Path) -> Result<Option<String>, CodeHostError> {
         let Some(remote) = repository_identity::remote_url(root).and_then(|url| RemoteRepo::parse(&url).ok()) else {
-            return Ok(());
+            return Ok(None);
         };
-        let server = code_host_store::list()?
-            .into_iter()
-            .find(|server| server.id == id)
-            .ok_or_else(|| CodeHostError::NoServer(id.to_string()))?;
-        let token = code_host_store::token(id)?;
-        let call = Call { server: &server, token: token.expose_secret(), remote: &remote };
+        let call = Call { server, token: token.expose_secret(), remote: &remote };
         let wanted = remote.canonical();
         let listed = self.host.clone_links(&call)?;
         if !listed.iter().any(|link| canonical_remote(link).is_ok_and(|link| link == wanted)) {
             return Err(CodeHostError::NotOnServer(wanted));
         }
-        if let Some(alias) = alias_to_remember(&server, &remote) {
-            let mut learnt = server;
-            learnt.hosts.push(alias);
-            code_host_store::put(learnt, None)?;
-        }
-        Ok(())
+        Ok(alias_to_remember(server, &remote))
     }
 
     pub fn delete(&self, id: &str) -> Result<Vec<CodeHostServer>, CodeHostError> {
-        lock(&self.me).remove(id);
         code_host_store::delete(id)?;
+        self.report_changed(None);
         code_host_store::list()
+    }
+
+    /// A server added, changed or gone changes the strip of the folder it was
+    /// for and of the folder on screen — NotConnected to Ready and back.
+    fn report_changed(&self, root: Option<&Path>) {
+        let watched = lock(&self.watching).as_ref().map(|watching| watching.root.clone());
+        if let Some(root) = root {
+            self.report(root);
+        }
+        if let Some(watched) = watched.filter(|watched| Some(watched.as_path()) != root) {
+            self.report(&watched);
+        }
     }
 
     // --------------------------------------------------------------- watching
@@ -313,9 +334,13 @@ impl PullRequests {
                 Err(RecvTimeoutError::Disconnected) => return,
             }
             let read = self.read(root);
-            // Unwatched while the server was being asked: nobody to tell.
-            if matches!(woken.try_recv(), Err(TryRecvError::Disconnected)) {
-                return;
+            match woken.try_recv() {
+                Err(TryRecvError::Empty) => {}
+                // The window read while the server was being asked: its answer
+                // is newer than this one, and is what the window has.
+                Ok(()) => continue,
+                // Unwatched meanwhile: nobody to tell.
+                Err(TryRecvError::Disconnected) => return,
             }
             let mut seen = lock(last);
             if seen.as_ref() != Some(&read) {
@@ -393,8 +418,11 @@ mod tests {
         links: Mutex<Vec<String>>,
         me: Mutex<Option<String>>,
         merged: Mutex<Option<CodeHostError>>,
-        /// How long the default branch takes to answer: a read in flight.
+        /// How long the builds take to answer — the last thing a read asks
+        /// but one: a read in flight that has seen the branch and its PR.
         slow: Mutex<Duration>,
+        /// What the default branch answers instead: a server that does not.
+        down: Mutex<Option<CodeHostError>>,
     }
 
     impl Double {
@@ -414,8 +442,8 @@ mod tests {
             self.ask("identify");
             Ok("Bitbucket 8.19.26".to_string())
         }
-        fn clone_links(&self, _: &Call) -> Result<Vec<String>, CodeHostError> {
-            self.ask("clone_links");
+        fn clone_links(&self, call: &Call) -> Result<Vec<String>, CodeHostError> {
+            self.ask(&format!("clone_links {}", call.token));
             Ok(lock(&self.links).clone())
         }
         fn me(&self, _: &Call) -> Result<String, CodeHostError> {
@@ -424,9 +452,7 @@ mod tests {
         }
         fn default_branch(&self, _: &Call) -> Result<String, CodeHostError> {
             self.ask("default_branch");
-            let slow = *lock(&self.slow);
-            std::thread::sleep(slow);
-            Ok("master".to_string())
+            lock(&self.down).clone().map_or(Ok("master".to_string()), Err)
         }
         fn branch_commit(&self, _: &Call, _: &str) -> Result<Option<String>, CodeHostError> {
             self.ask("branch_commit");
@@ -442,6 +468,8 @@ mod tests {
         }
         fn builds(&self, _: &Call, _: &str) -> Result<Vec<Build>, CodeHostError> {
             self.ask("builds");
+            let slow = *lock(&self.slow);
+            std::thread::sleep(slow);
             Ok(lock(&self.builds).clone())
         }
         fn approve(&self, _: &Call, _: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError> {
@@ -574,6 +602,22 @@ mod tests {
         });
     }
 
+    /// A pushed branch with no pull request has nothing to approve: whose the
+    /// token is is not asked.
+    #[test]
+    fn no_pull_request_asks_nobody_s_name() {
+        with_app_dir("prs-no-pr", || {
+            let (service, double, _) = connected();
+            *lock(&double.commit) = Some("94beed9".to_string());
+            *lock(&double.me) = Some("u_me".to_string());
+            let PrStrip::Ready { snapshot, .. } = service.strip(&repo("prs-no-pr-repo", Some(REMOTE))).unwrap() else {
+                panic!("not ready")
+            };
+            assert!(snapshot.branch_on_server && snapshot.pr.is_none());
+            assert_eq!((double.asked("builds"), double.asked("me")), (1, 0));
+        });
+    }
+
     /// The author is not offered Approve; their own approval is Unapprove.
     #[test]
     fn approve_follows_who_the_token_is() {
@@ -682,9 +726,28 @@ mod tests {
             *lock(&double.merged) = Some(CodeHostError::Conflict);
             let root = repo("prs-merge-stale-repo", Some(REMOTE));
 
-            assert_eq!(service.merge(&root), Err(CodeHostError::Conflict));
+            assert_eq!(service.merge(&root, 153, 7), Err(CodeHostError::Conflict));
             assert_eq!(double.asked("merge v7"), 1, "the version just read, sent once");
             assert_eq!(*lock(&events), [root.display().to_string()]);
+        });
+    }
+
+    /// What is merged is what the user saw: a pull request that moved since the
+    /// strip showed it, or another one on the branch now, is not sent at all.
+    #[test]
+    fn a_merge_of_what_the_strip_no_longer_shows_sends_nothing() {
+        with_app_dir("prs-merge-moved", || {
+            let (service, double, events) = connected();
+            *lock(&double.pr) = Some(pull_request(8));
+            let root = repo("prs-merge-moved-repo", Some(REMOTE));
+
+            assert_eq!(service.merge(&root, 153, 7), Err(CodeHostError::Conflict), "a newer version");
+            assert_eq!(service.merge(&root, 152, 8), Err(CodeHostError::Conflict), "another pull request");
+            assert_eq!(double.asked("merge v8"), 0);
+            assert_eq!(lock(&events).len(), 2, "the strip reads again");
+
+            service.merge(&root, 153, 8).unwrap();
+            assert_eq!(double.asked("merge v8"), 1);
         });
     }
 
@@ -715,17 +778,28 @@ mod tests {
             *lock(&double.commit) = Some("94beed9".to_string());
             service.create(&root, "  ", None).unwrap();
             assert_eq!(double.asked("create feature/x -> master: feature/x"), 1, "an empty title is the branch");
+            service.create(&root, "t", Some("  ")).unwrap();
+            assert_eq!(double.asked("create feature/x -> master: t"), 1, "an empty target is the default branch");
             service.create(&root, "Fix it", Some("release")).unwrap();
             assert_eq!(double.asked("create feature/x -> release: Fix it"), 1);
         });
     }
 
+    /// Each folder a button cannot act in says why, in its own words, and
+    /// sends nothing.
     #[test]
-    fn a_button_in_a_folder_without_a_server_sends_nothing() {
+    fn a_button_in_a_folder_without_a_target_sends_nothing() {
         with_app_dir("prs-button-nowhere", || {
             let (service, double, events) = connected();
-            let root = repo("prs-button-nowhere-repo", Some("ssh://git@elsewhere.example/P/r.git"));
-            assert_eq!(service.merge(&root), Err(CodeHostError::NoServer("elsewhere.example".to_string())));
+            let elsewhere = repo("prs-button-nowhere-repo", Some("ssh://git@elsewhere.example/P/r.git"));
+            assert_eq!(service.merge(&elsewhere, 153, 1), Err(CodeHostError::NoServer("elsewhere.example".to_string())));
+            assert_eq!(service.approve(&repo("prs-button-no-remote", None), true), Err(CodeHostError::NoRemote));
+
+            let detached = repo("prs-button-detached", Some(REMOTE));
+            let git = git2::Repository::open(&detached).unwrap();
+            git.set_head_detached(git.head().unwrap().target().unwrap()).unwrap();
+            assert_eq!(service.create(&detached, "t", None), Err(CodeHostError::NoBranch));
+
             assert_eq!((double.total(), lock(&events).len()), (0, 0));
         });
     }
@@ -740,21 +814,31 @@ mod tests {
             let (service, double, events) = service(Duration::from_secs(60), Duration::from_secs(60));
             let root = repo("prs-alias-repo", Some(REMOTE));
             let web = server("https://bitbucket.server.com", &[]);
+            // On screen as well: the folder is told once, not once per reason.
+            service.watch(root.clone());
 
             *lock(&double.links) = vec!["https://bitbucket.server.com/scm/corp/other.git".to_string()];
             let refused = service.save(web.clone(), Some("t0k".to_string()), Some(&root));
             assert_eq!(refused, Err(CodeHostError::NotOnServer("git.server.com/corp/tax-api".to_string())));
-            assert!(code_host_store::list().unwrap()[0].hosts.is_empty(), "no proof, no alias");
+            assert!(code_host_store::list().unwrap().is_empty(), "no proof, nothing kept");
             assert!(lock(&events).is_empty());
 
             *lock(&double.links) = vec![
                 "https://bitbucket.server.com/scm/corp/tax-api.git".to_string(),
                 "ssh://git@git.server.com:7999/corp/tax-api.git".to_string(),
             ];
-            let saved = service.save(web, None, Some(&root)).unwrap();
+            assert_eq!(service.save(web.clone(), None, Some(&root)), Err(CodeHostError::NoToken(web.base_url.clone())));
+            let saved = service.save(web.clone(), Some("t0k".to_string()), Some(&root)).unwrap();
             assert_eq!(saved[0].hosts, ["git.server.com"]);
-            assert!(saved[0].token_set, "the token of the first save is kept");
+            assert!(saved[0].token_set);
             assert_eq!(*lock(&events), [root.display().to_string()]);
+
+            // Saved again with the kept token, it proves with that one and
+            // learns nothing twice.
+            let again = service.save(web, None, Some(&root)).unwrap();
+            assert_eq!((again.len(), again[0].hosts.as_slice()), (1, ["git.server.com".to_string()].as_slice()));
+            assert_eq!(double.asked("clone_links t0k"), 3, "the kept token is the one proven with");
+            service.unwatch(&root);
 
             // And the folder now finds its server by that alias.
             assert!(matches!(service.strip(&root), Ok(PrStrip::Ready { .. })));
@@ -790,6 +874,41 @@ mod tests {
             let (service, double, _) = service(Duration::from_secs(60), Duration::from_secs(60));
             service.save(server("https://bitbucket.server.com", &[]), Some("t".to_string()), None).unwrap();
             assert_eq!(double.total(), 0);
+        });
+    }
+
+    /// Aliases are learnt from clone links, never taken from the form: a host
+    /// typed there would send the token wherever it names.
+    #[test]
+    fn a_host_from_the_form_is_not_kept() {
+        with_app_dir("prs-save-hosts", || {
+            let (service, _, _) = service(Duration::from_secs(60), Duration::from_secs(60));
+            code_host_store::put(server("https://bitbucket.server.com", &["git.server.com"]), Some("t".to_string())).unwrap();
+            let saved = service.save(server("https://bitbucket.server.com", &["evil.example"]), None, None).unwrap();
+            assert_eq!(saved[0].hosts, ["git.server.com"], "an edit keeps the learnt ones");
+
+            let fresh = CodeHostServer { id: String::new(), ..server("https://other.server.com", &["evil.example"]) };
+            let saved = service.save(fresh, None, None).unwrap();
+            assert!(saved.iter().all(|saved| !saved.hosts.contains(&"evil.example".to_string())), "{saved:?}");
+        });
+    }
+
+    /// A server added or removed in Settings turns the strip on screen from
+    /// NotConnected to Ready and back: the watched folder is told.
+    #[test]
+    fn a_server_saved_or_deleted_tells_the_watched_folder() {
+        with_app_dir("prs-save-watched", || {
+            let (service, _, events) = service(Duration::from_secs(60), Duration::from_secs(60));
+            let root = temp_dir("prs-save-watched-repo");
+            service.save(server("https://git.server.com", &[]), Some("t".to_string()), None).unwrap();
+            assert!(lock(&events).is_empty(), "nothing on screen");
+
+            service.watch(root.clone());
+            service.save(server("https://git.server.com", &[]), None, None).unwrap();
+            let deleted = service.delete("bb").unwrap();
+            assert!(deleted.is_empty());
+            assert_eq!(*lock(&events), [root.display().to_string(), root.display().to_string()]);
+            service.unwatch(&root);
         });
     }
 
@@ -895,6 +1014,51 @@ mod tests {
             service.unwatch(&root);
             std::thread::sleep(Duration::from_millis(500));
             assert!(lock(&events).is_empty(), "{:?}", lock(&events));
+        });
+    }
+
+    /// A server that stops answering is a change too: the strip greys out with
+    /// the reason, and is told once.
+    #[test]
+    fn a_server_going_down_is_reported_once() {
+        with_app_dir("prs-watch-down", || {
+            code_host_store::put(server("https://git.server.com", &[]), Some("t0k".to_string())).unwrap();
+            let (service, double, events) = service(Duration::from_millis(20), Duration::from_millis(20));
+            let root = repo("prs-watch-down-repo", Some(REMOTE));
+            assert!(service.strip(&root).is_ok());
+            service.watch(root.clone());
+
+            *lock(&double.down) = Some(CodeHostError::Network("refused".to_string()));
+            assert!(eventually(Duration::from_secs(5), || !lock(&events).is_empty()));
+            let ticks = double.asked("default_branch");
+            assert!(eventually(Duration::from_secs(5), || double.asked("default_branch") >= ticks + 3));
+            assert_eq!(lock(&events).len(), 1, "still down is not news");
+            assert_eq!(service.strip(&root), Err(CodeHostError::Network("refused".to_string())));
+            service.unwatch(&root);
+        });
+    }
+
+    /// The window read while the watcher's own read was in flight: the window
+    /// has the newer answer, and the watcher's older one is not news.
+    #[test]
+    fn a_read_overtaken_by_the_window_s_is_not_reported() {
+        with_app_dir("prs-watch-overtaken", || {
+            code_host_store::put(server("https://git.server.com", &[]), Some("t0k".to_string())).unwrap();
+            let (service, double, events) = service(Duration::from_millis(50), Duration::from_millis(50));
+            *lock(&double.commit) = Some("94beed9".to_string());
+            let root = repo("prs-watch-overtaken-repo", Some(REMOTE));
+            service.strip(&root).unwrap();
+
+            *lock(&double.slow) = Duration::from_millis(300);
+            service.watch(root.clone());
+            assert!(eventually(Duration::from_secs(5), || double.asked("builds") == 2), "the watcher's read in flight");
+            *lock(&double.slow) = Duration::ZERO;
+            *lock(&double.pr) = Some(pull_request(6));
+            assert!(matches!(service.strip(&root), Ok(PrStrip::Ready { snapshot: Snapshot { pr: Some(_), .. }, .. })));
+
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(lock(&events).is_empty(), "{:?}", lock(&events));
+            service.unwatch(&root);
         });
     }
 

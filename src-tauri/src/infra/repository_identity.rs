@@ -217,8 +217,6 @@ mod tests {
         assert_ne!(repository_id(&local), repository_id(&plain_copy));
     }
 
-    /// A fork: `origin` is mine, `upstream` is theirs, and the index belongs
-    /// to mine. Picking by sort order would put it under theirs.
     /// The strip reads the remote as written: its own parser decides what it
     /// names. A subfolder finds the repository it is in, where the index's
     /// identity deliberately does not.
@@ -235,6 +233,8 @@ mod tests {
         assert_eq!(remote_url(&temp_dir("remote-url-plain")), None);
     }
 
+    /// A fork: `origin` is mine, `upstream` is theirs, and the index belongs
+    /// to mine. Picking by sort order would put it under theirs.
     #[test]
     fn origin_wins_over_any_other_remote() {
         let fork = repo_with_remotes(

@@ -117,9 +117,10 @@ export async function pullRequestApprove(approved: boolean): Promise<void> {
   return invoke<void>("pull_request_approve", { approved });
 }
 
-export async function pullRequestMerge(): Promise<void> {
+/** The pull request the user confirmed, at the `version` the strip showed: one that moved since is refused. */
+export async function pullRequestMerge(id: number, version: number): Promise<void> {
   requireBackend();
-  return invoke<void>("pull_request_merge");
+  return invoke<void>("pull_request_merge", { id, version });
 }
 
 /** The strip is on screen for the open folder. */

@@ -94,11 +94,13 @@ pub async fn pull_request_approve(approved: bool, state: Agent<'_>, prs: Prs<'_>
     blocking(move || PullRequests::approve(&prs, &root, approved)).await
 }
 
+/// The pull request the user confirmed, at the version the strip showed: one
+/// that moved since is refused, not merged.
 #[tauri::command]
-pub async fn pull_request_merge(state: Agent<'_>, prs: Prs<'_>) -> Result<(), String> {
+pub async fn pull_request_merge(id: u64, version: u64, state: Agent<'_>, prs: Prs<'_>) -> Result<(), String> {
     let root = state.workspace()?;
     let prs = prs.inner().clone();
-    blocking(move || PullRequests::merge(&prs, &root)).await
+    blocking(move || PullRequests::merge(&prs, &root, id, version)).await
 }
 
 /// The strip is on screen: the open folder is watched until it says otherwise.
