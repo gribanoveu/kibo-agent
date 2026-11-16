@@ -3,6 +3,8 @@ import { Loader2, Minus, Plus, Sparkles } from "lucide-react";
 import { useStaging } from "../hooks/useStaging";
 import type { ChangedFile, FileTarget } from "../lib/git";
 import { useGitHistory } from "../hooks/useGitHistory";
+import { usePullRequest } from "../hooks/usePullRequest";
+import { PullRequestStrip } from "./PullRequestStrip";
 import { HistoryView } from "./HistoryView";
 import { Tabs } from "./Tabs";
 import "./ChangesPanel.css";
@@ -19,6 +21,8 @@ type Props = {
   /** The commit message, held above the panel: it outlives the panel being closed or moved. */
   message: string;
   onMessage: (message: string) => void;
+  /** The Catalog's `pull-requests` feature is on: the branch's pull request sits above the lists. */
+  pullRequests?: boolean;
 };
 
 function StageRow({
@@ -70,8 +74,9 @@ function StageRow({
   );
 }
 
-export function ChangesPanel({ active, workspace, onNotify, openFile, onOpenFile, message, onMessage }: Props) {
+export function ChangesPanel({ active, workspace, onNotify, openFile, onOpenFile, message, onMessage, pullRequests = false }: Props) {
   const [view, setView] = useState<"changes" | "history">("changes");
+  const pr = usePullRequest(active && pullRequests && view === "changes", workspace);
   const { unstaged, staged, error, stage, unstage, commit, describe } = useStaging(active, workspace);
   const history = useGitHistory(active && view === "history", workspace);
   const [committing, setCommitting] = useState(false);
@@ -115,6 +120,7 @@ export function ChangesPanel({ active, workspace, onNotify, openFile, onOpenFile
           { id: "history", label: "History" },
         ]}
       />
+      {view === "changes" && pullRequests && <PullRequestStrip {...pr} onNotify={onNotify} />}
       {view === "history" ? (
         <HistoryView {...history} onLoadMore={history.loadMore} />
       ) : error ? (

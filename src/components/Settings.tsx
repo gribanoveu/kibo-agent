@@ -1,10 +1,11 @@
 import { Fragment, useState, type ComponentProps } from "react";
-import { Activity, Bell, Bot, Check, Gauge, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
+import { Activity, Bell, Bot, Check, Gauge, GitPullRequest, Globe, Languages, Palette, Shield, ShieldCheck, ShipWheel, Sparkles } from "lucide-react";
 import { ProviderSettings } from "./ProviderSettings";
 import { Switch } from "./Switch";
 import { KubeSettings } from "./KubeSettings";
 import { WebSearchSettings } from "./WebSearchSettings";
 import { ShellSettings } from "./ShellSettings";
+import { CodeHostSettings } from "./CodeHostSettings";
 import { UsagePane } from "./UsageHeatmap";
 import { DataPolicy } from "./DataPolicy";
 import { ItemList } from "./ItemList";
@@ -30,6 +31,7 @@ const SECTIONS = [
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "kubernetes", label: "Kubernetes", icon: ShipWheel },
   { id: "web", label: "Web search", icon: Globe },
+  { id: "code-hosts", label: "Bitbucket", icon: GitPullRequest },
   { id: "permissions", label: "Permissions", icon: ShieldCheck },
   { id: "privacy", label: "Privacy", icon: Shield },
   { id: "usage", label: "Usage", icon: Activity },
@@ -128,6 +130,8 @@ type Props = {
   onAlerts: (next: AlertPrefs) => void;
   onOpenLog: () => void;
   policy: ComponentProps<typeof DataPolicy>;
+  /** The Catalog's `pull-requests` feature is on: its servers have a section. */
+  codeHosts?: boolean;
 };
 
 export function Settings({
@@ -154,13 +158,14 @@ export function Settings({
   onAlerts,
   onOpenLog,
   policy,
+  codeHosts = false,
 }: Props) {
   const [section, setSection] = useState<SettingsSection>(opening);
 
   return (
     <div className="settings">
       <nav className="settings-nav" aria-label="Settings sections">
-        {SECTIONS.map(({ id, label, icon: Icon }) => (
+        {SECTIONS.filter(({ id }) => id !== "code-hosts" || codeHosts).map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             type="button"
@@ -374,6 +379,7 @@ export function Settings({
 
         {section === "kubernetes" && <KubeSettings kube={kube} />}
         {section === "web" && <WebSearchSettings />}
+        {section === "code-hosts" && codeHosts && <CodeHostSettings />}
         {section === "usage" && <UsagePane />}
 
         {section === "permissions" && (

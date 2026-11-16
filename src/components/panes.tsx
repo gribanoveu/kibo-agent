@@ -45,6 +45,8 @@ export type PaneContext = {
   onNotify: (msg: string) => void;
   /** The commit message being written in Changes. */
   commitDraft: { message: string; onMessage: (message: string) => void };
+  /** The Catalog's `pull-requests` feature is on: Changes shows the branch's pull request. */
+  pullRequests: boolean;
   /** The background process a chat row asked to see — `null` for the list; a new object each ask. */
   processFocus: { id: number | null } | null;
   /** Terminal took what was asked for: App lets go of it. */
@@ -436,7 +438,7 @@ const TerminalPanel = lazy(() => import("./TerminalPanel").then((m) => ({ defaul
 
 export const PANES: PaneDef[] = [
   { id: "overview", label: "Overview", icon: Info, dock: "right", headless: true, Component: OverviewPane },
-  { id: "changes", label: "Changes", icon: FileDiff, dock: "right", Component: ({ active, workspace, onNotify, commitDraft, openFile, onOpenFile }) => <ChangesPanel active={active} workspace={workspace} onNotify={onNotify} openFile={openFile} onOpenFile={onOpenFile} {...commitDraft} /> },
+  { id: "changes", label: "Changes", icon: FileDiff, dock: "right", Component: ({ active, workspace, onNotify, commitDraft, openFile, onOpenFile, pullRequests }) => <ChangesPanel active={active} workspace={workspace} onNotify={onNotify} openFile={openFile} onOpenFile={onOpenFile} pullRequests={pullRequests} {...commitDraft} /> },
   { id: "plan", label: "Plan", icon: ClipboardList, dock: "right", Component: ({ plan }) => <PlanPanel {...plan} /> },
   { id: "files", label: "Files", icon: FolderClosed, dock: "right", Component: FilesPane },
   { id: "rules", label: "Rules", icon: BookText, dock: "right", Component: RulesPane },

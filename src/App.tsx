@@ -563,6 +563,7 @@ export default function App() {
     ide,
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
+    pullRequests: features.isOn("pull-requests"),
     processFocus,
     chatId: agent.chatId,
     onOpenAgent: openAgent,
@@ -1022,6 +1023,7 @@ export default function App() {
       <Modal title="Settings" wide open={settingsOpen} onClose={() => setSettingsOpen(false)}>
         <Settings
           section={settingsAt}
+          codeHosts={features.isOn("pull-requests")}
           kube={kube}
           skills={{ view: skillSources.view, error: skillSources.error, onToggle: skillSources.setSourceEnabled }}
           provider={{

@@ -2,28 +2,7 @@ import { useState, type ComponentType, type KeyboardEvent } from "react";
 import { DeepSeekIcon } from "./DeepSeekIcon";
 import { MongoIcon } from "./MongoIcon";
 import { Steps } from "./Steps";
-import {
-  ArrowRight,
-  AudioLines,
-  BookOpen,
-  Check,
-  Keyboard,
-  Loader2,
-  Mic,
-  Plug,
-  Plus,
-  RefreshCw,
-  Search,
-  Puzzle,
-  Sparkles,
-  SquareKanban,
-  SquareSlash,
-  Store,
-  Users,
-  Webhook,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { ArrowRight, AudioLines, BookOpen, Check, GitPullRequest, Keyboard, Loader2, Mic, Plug, Plus, Puzzle, RefreshCw, Search, Sparkles, SquareKanban, SquareSlash, Store, Users, Webhook, X, type LucideIcon } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
@@ -62,6 +41,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   mongodb: MongoIcon,
   "voice-input": Mic,
   "layout-correction": Keyboard,
+  "pull-requests": GitPullRequest,
 };
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {
