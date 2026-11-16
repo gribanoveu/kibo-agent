@@ -90,10 +90,13 @@ pub fn mcp_tool_set_shown(
 #[tauri::command]
 pub async fn mcp_server_connect(
     name: String,
+    workspace: Option<String>,
     state: State<'_, Arc<AgentState>>,
     servers: State<'_, Arc<McpServers>>,
 ) -> Result<McpView, String> {
-    let workspace = state.workspace()?;
+    let workspace = state
+        .ui_workspace(&workspace)?
+        .ok_or_else(|| "no folder is open".to_string())?;
     let servers = Arc::clone(&servers);
     tauri::async_runtime::spawn_blocking(move || {
         let config = mcp_config::load().map_err(|e| e.to_string())?;
@@ -113,13 +116,18 @@ pub struct McpPromptItem {
     pub prompt: crate::domain::mcp::McpPrompt,
 }
 
-/// The prompts of the servers running for the open folder. Starts nothing:
-/// a server's prompts are offered once a turn, the tab or the `/` menu has
-/// started it.
+/// The prompts of the servers running for the folder `workspace` names —
+/// canonicalized, accepted only as an open folder (F-8, invariant 1). Starts
+/// nothing: a server's prompts are offered once a turn, the tab or the `/`
+/// menu has started it.
 #[tauri::command]
-pub fn mcp_prompts(state: State<'_, Arc<AgentState>>, servers: State<'_, Arc<McpServers>>) -> Vec<McpPromptItem> {
-    let Ok(workspace) = state.workspace() else { return Vec::new() };
-    prompt_items(&servers, &workspace)
+pub fn mcp_prompts(
+    workspace: Option<String>,
+    state: State<'_, Arc<AgentState>>,
+    servers: State<'_, Arc<McpServers>>,
+) -> Result<Vec<McpPromptItem>, String> {
+    let workspace = state.ui_workspace(&workspace)?;
+    Ok(workspace.map_or_else(Vec::new, |root| prompt_items(&servers, &root)))
 }
 
 /// The same, once the servers not running yet are started — what the `/`

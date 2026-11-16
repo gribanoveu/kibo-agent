@@ -60,11 +60,22 @@ fn set_unattended(state: &AgentState, unattended: bool, chat_id: Option<&str>) -
     set_skip_all(state, unattended)?;
     // Remembered after it took effect: a settings file that cannot be read
     // costs the memory, not the choice made for this turn.
-    // No folder open, nothing to remember it for.
-    let Ok(folder) = state.workspace() else { return Ok(()) };
+    // No folder, nothing to remember it for.
+    let Some(folder) = auto_folder(state, chat_id) else { return Ok(()) };
     crate::infra::settings_store::update(|s| s.approval.set_auto(chat_id, &folder.display().to_string(), unattended))
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Auto is keyed by (chat, folder), and the folder is the chat's own: a chat
+/// never leaves its checkout (F-8), so the choice must not follow whichever
+/// folder the window happens to show. A folder-scope choice (`None` chat) and
+/// a chat with no record yet key on the open folder.
+fn auto_folder(state: &AgentState, chat_id: Option<&str>) -> Option<std::path::PathBuf> {
+    match chat_id {
+        Some(id) => state.chat_workspace(id).ok().map(|(root, _)| root),
+        None => state.workspace().ok(),
+    }
 }
 
 /// Puts back what was chosen for this chat, or for the open folder, and says
@@ -76,9 +87,8 @@ pub fn approval_restore(chat_id: Option<String>, state: State<'_, Arc<AgentState
 
 fn restore_unattended(state: &AgentState, chat_id: Option<&str>) -> Result<bool, String> {
     let settings = crate::infra::settings_store::load().map_err(|e| e.to_string())?;
-    let auto = state
-        .workspace()
-        .is_ok_and(|folder| settings.approval.is_auto(chat_id, &folder.display().to_string()));
+    let auto = auto_folder(state, chat_id)
+        .is_some_and(|folder| settings.approval.is_auto(chat_id, &folder.display().to_string()));
     set_skip_all(state, auto)?;
     Ok(auto)
 }

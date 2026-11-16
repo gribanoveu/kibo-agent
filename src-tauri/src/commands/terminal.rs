@@ -37,16 +37,21 @@ fn size(cols: u16, rows: u16) -> Result<TerminalSize, String> {
     TerminalSize::new(cols, rows).map_err(|e| e.to_string())
 }
 
-/// In the open folder, at the size the tab measured.
+/// In the folder `workspace` names — canonicalized, accepted only as an open
+/// folder (F-8, invariant 1) — at the size the tab measured.
 #[tauri::command]
 pub fn terminal_open(
     cols: u16,
     rows: u16,
+    workspace: Option<String>,
     state: State<'_, Arc<AgentState>>,
     terminals: State<'_, Arc<Terminals>>,
 ) -> Result<TerminalInfo, String> {
     let size = size(cols, rows)?;
-    terminals.open(&state.workspace()?, size).map_err(|e| e.to_string())
+    let root = state
+        .ui_workspace(&workspace)?
+        .ok_or_else(|| "no folder is open".to_string())?;
+    terminals.open(&root, size).map_err(|e| e.to_string())
 }
 
 /// Read when the tab opens and on each [`TERMINAL_EVENT`].

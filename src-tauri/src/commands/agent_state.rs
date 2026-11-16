@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 
 use crate::domain::conversation_mode::{ConversationMode, PickedMode};
@@ -105,6 +105,10 @@ pub struct AgentState {
     /// chat touched in a window's run. An LRU is the way past that if a long
     /// run ever shows it.
     pub(super) sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
+    /// The folders open in the window (F-8): canonical paths, the last added
+    /// first. `workspace` is always one of them — registering a folder makes
+    /// it the active one, closing it moves the active mark.
+    pub(super) open: Mutex<Vec<PathBuf>>,
     pub(super) workspace: Mutex<Option<PathBuf>>,
     /// Grows as the user answers "always allow"; not persisted, because a
     /// saved "never ask me" is a brake released a month ago and forgotten.
@@ -208,9 +212,11 @@ impl AgentState {
         })
     }
 
-    /// A checkout moves every chat's folder, so none may be running in it.
-    pub(crate) fn ensure_tree_is_idle(&self) -> Result<(), String> {
-        if self.running_turns() == 0 {
+    /// The folder's tree may change only when no turn runs in it (F-8): only
+    /// turns in the same checkout share files and a git index — a turn in
+    /// another folder does not hold this one.
+    pub(crate) fn ensure_folder_idle(&self, root: &std::path::Path) -> Result<(), String> {
+        if self.root_is_idle(root) {
             Ok(())
         } else {
             Err("an agent turn is running in this folder — wait for it to finish, or start a worktree for the new chat".to_string())
@@ -223,6 +229,52 @@ impl AgentState {
             .map_err(|_| "workspace lock poisoned".to_string())?
             .clone()
             .ok_or_else(|| "no folder is open".to_string())
+    }
+
+    /// The open folders (F-8), the last added first.
+    pub(crate) fn open_folders(&self) -> Vec<PathBuf> {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    pub(crate) fn is_open(&self, root: &std::path::Path) -> bool {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|open| open == root)
+    }
+
+    /// Makes `root` an open folder: first in recency, exactly once. Does not
+    /// touch the active mark — that is `activate` in `commands::workspace`.
+    pub(crate) fn register_open(&self, root: PathBuf) {
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        open.retain(|known| *known != root);
+        open.insert(0, root);
+    }
+
+    /// Drops `root` from the open set. `true` when it was there.
+    pub(crate) fn unregister_open(&self, root: &std::path::Path) -> bool {
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = open.len();
+        open.retain(|known| known != root);
+        open.len() != before
+    }
+
+    /// The one door a folder path from the window goes through before the
+    /// backend acts on it (F-8, invariant 1): canonicalized — `..` and
+    /// symlinks resolve to what they really point at — and accepted only as
+    /// one of the open folders.
+    pub(crate) fn require_open(&self, path: &str) -> Result<PathBuf, String> {
+        let asked = crate::infra::paths::canonicalize_plain(std::path::Path::new(path))
+            .map_err(|e| format!("cannot use {path}: {e}"))?;
+        if self.is_open(&asked) {
+            Ok(asked)
+        } else {
+            Err(format!("{path} is not an open folder"))
+        }
+    }
+
+    /// The folder a window-scoped command acts on (F-8): `Some(path)` is
+    /// canonicalized and accepted only as an open folder (invariant 1);
+    /// `None` is Chat mode's "no folder".
+    pub(crate) fn ui_workspace(&self, workspace: &Option<String>) -> Result<Option<PathBuf>, String> {
+        workspace.as_ref().map(|path| self.require_open(path)).transpose()
     }
 
     #[cfg(test)]
@@ -409,14 +461,17 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_waits_for_every_running_turn() {
+    fn a_folder_waits_only_for_its_own_turns() {
         let state = state();
-        state.ensure_tree_is_idle().expect("an idle tree can be switched");
-        let running = state.begin_running("c1", 2, Path::new("/repo")).expect("the turn runs");
-        let refused = state.ensure_tree_is_idle().expect_err("a running turn holds the tree");
+        let here = Path::new("/repo");
+        let there = Path::new("/other");
+        state.ensure_folder_idle(here).expect("an idle folder can be switched");
+        let running = state.begin_running("c1", 2, here).expect("the turn runs");
+        let refused = state.ensure_folder_idle(here).expect_err("a running turn holds its folder");
         assert!(refused.contains("worktree"), "{refused}");
+        state.ensure_folder_idle(there).expect("another folder is not held");
         drop(running);
-        state.ensure_tree_is_idle().expect("the finished turn releases the tree");
+        state.ensure_folder_idle(here).expect("the finished turn releases the folder");
     }
 
     /// The turn's thread dying with the guard frees the mark all the same —
@@ -484,5 +539,68 @@ mod tests {
 
         session.cancel.store(false, Ordering::SeqCst);
         assert!(!session.cancel.load(Ordering::SeqCst));
+    }
+
+    /// The registry holds each folder once, the last added first; closing
+    /// removes only the named folder.
+    #[test]
+    fn open_folders_register_once_most_recent_first() {
+        let state = state();
+        let a = PathBuf::from("/a");
+        let b = PathBuf::from("/b");
+        state.register_open(a.clone());
+        state.register_open(b.clone());
+        state.register_open(a.clone());
+        assert_eq!(state.open_folders(), vec![a.clone(), b.clone()]);
+
+        assert!(state.unregister_open(&b));
+        assert!(!state.unregister_open(&b), "a folder that is not open is not an error");
+        assert_eq!(state.open_folders(), vec![a]);
+    }
+
+    /// Invariant 1: a path from the window is canonicalized — over-qualified
+    /// spellings, `..` and symlinks resolve to what they really point at —
+    /// and accepted only as one of the open folders.
+    #[test]
+    fn require_open_resolves_spellings_and_rejects_what_is_not_open() {
+        let state = state();
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("require-open")).unwrap();
+        state.register_open(root.clone());
+        let shown = root.display().to_string();
+
+        // Over-qualified spellings of the same folder: the same folder.
+        assert_eq!(state.require_open(&format!("{shown}/.")).unwrap(), root);
+        std::fs::create_dir(root.join("inner")).unwrap();
+        assert_eq!(state.require_open(&format!("{shown}/inner/..")).unwrap(), root);
+
+        // A symlink at the window's spelling resolves to the folder itself.
+        #[cfg(unix)]
+        {
+            let links = temp_dir("require-open-links");
+            std::os::unix::fs::symlink(&root, links.join("link")).unwrap();
+            let spelled = links.join("link").display().to_string();
+            assert_eq!(state.require_open(&spelled).unwrap(), root);
+        }
+
+        // What resolves outside the open set — a parent, another existing
+        // folder, a path that does not exist — is refused, not acted on.
+        let parent = root.parent().unwrap().to_path_buf();
+        assert!(state.require_open(&parent.display().to_string()).is_err(), "the parent is not open");
+        let other = crate::infra::paths::canonicalize_plain(&temp_dir("require-open-other")).unwrap();
+        assert!(state.require_open(&other.display().to_string()).is_err(), "another existing folder is not open");
+        assert!(state.require_open(&root.join("gone").display().to_string()).is_err(), "a missing path resolves nowhere");
+    }
+
+    /// `ui_workspace` is `require_open` for a window that may be in Chat
+    /// mode: `Some` answers the folder or an error, `None` answers no folder.
+    #[test]
+    fn ui_workspace_accepts_only_open_folders_and_passes_none_through() {
+        let state = state();
+        assert_eq!(state.ui_workspace(&None), Ok(None));
+
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("ui-workspace")).unwrap();
+        state.register_open(root.clone());
+        assert_eq!(state.ui_workspace(&Some(root.display().to_string())).unwrap(), Some(root.clone()));
+        assert!(state.ui_workspace(&Some(root.join("elsewhere").display().to_string())).is_err());
     }
 }

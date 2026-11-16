@@ -118,6 +118,27 @@ export async function openWorkspace(path: string, keepRunning = false): Promise<
   return invoke<string>("workspace_open", { path, keepRunning });
 }
 
+/** An open folder. Mirrors `commands::workspace::OpenFolder`. */
+export type OpenFolder = { path: string; active: boolean };
+
+/** Opens a folder and makes it active — `workspace_open`, plus the folder joins the open set (F-8). */
+export async function addWorkspace(path: string, keepRunning = false): Promise<string> {
+  requireBackend();
+  return invoke<string>("workspace_add", { path, keepRunning });
+}
+
+/** Closes an open folder: its processes, terminals and MCP servers stop. Refused while a turn runs in it (F-8). */
+export async function closeWorkspace(path: string): Promise<void> {
+  requireBackend();
+  return invoke("workspace_close", { path });
+}
+
+/** The folders open in the window, the last added first. */
+export async function listWorkspaces(): Promise<OpenFolder[]> {
+  if (!inTauri()) return [];
+  return invoke<OpenFolder[]>("workspaces_list");
+}
+
 export async function currentWorkspace(): Promise<string | null> {
   if (!inTauri()) return null;
   return invoke<string | null>("workspace_current");
