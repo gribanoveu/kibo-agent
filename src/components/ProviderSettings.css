@@ -86,8 +86,7 @@
 }
 /* The card is a step up from the dialog, so a box on it steps back down. */
 .provider-card .modal-field input:not([type="range"]),
-.provider-card .segmented,
-.provider-cert {
+.provider-card .segmented {
   background: var(--bg-panel);
 }
 .provider-card > .modal-note:last-child {
@@ -310,35 +309,6 @@
 
 /* ------------------------------------------------------------ certificate */
 
-.provider-cert-actions {
-  display: flex;
-  gap: 6px;
-}
-.provider-cert-state {
-  margin-bottom: 8px;
-  font-size: var(--fs-sm);
-  color: var(--text-faint);
-}
-.provider-cert-state.set {
-  color: var(--text);
-}
-.provider-cert {
-  display: block;
-  width: 100%;
-  margin-bottom: 6px;
-  padding: 7px 9px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
-  line-height: 1.5;
-  resize: vertical;
-  outline: none;
-}
-.provider-cert:focus {
-  border-color: var(--text-faint);
-}
 
 /* ----------------------------------------------------------------- footer */
 
