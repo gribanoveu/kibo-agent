@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ChatPanel, Preview, Transcript, formatDuration, formatTokens } from "../components/ChatPanel";
 import { emptyTurn, type Block, type TurnState } from "../lib/chatTurnReducer";
+import type { AgentInfo } from "../lib/agents";
 
 // The transcript's own rules: who a block belongs to, and what the approval
 // card sends back. Both are decided here rather than by the backend, so both
@@ -389,6 +390,45 @@ describe("how long the agent worked", () => {
   test("says nothing of processes when none runs", () => {
     panel(state(turn, { status: "done" }));
     expect(screen.queryByText(/running/)).toBeNull();
+  });
+
+  /// The subagents' own line: their tokens are not the chat's context, and
+  /// while they stream their speed and tokens are the chat's own estimate.
+  const sub = (id: number, over: Partial<AgentInfo> = {}): AgentInfo => ({
+    id,
+    task: "t",
+    state: { state: "running" },
+    steps: [],
+    tokens: { prompt: 1000, cached: 0, completion: 100 },
+    answer: null,
+    progress: { streamSince: Date.now() - 2000, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } },
+    ...over,
+  });
+  const liveTurn = () => state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 });
+  const transcript = (subagents: AgentInfo[]) =>
+    render(<Transcript turn={liveTurn()} onDecide={() => {}} subagents={subagents} />);
+
+  test("a running subagent's speed and tokens beside the clock, estimated while it streams", () => {
+    transcript([sub(1)]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·subagent·~20 tok/s·~1.1k tokens");
+  });
+
+  test("several run at once: one line, summed, with the count", () => {
+    transcript([sub(1), sub(2, { tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·2 subagents·~30 tok/s·~1.7k tokens");
+  });
+
+  test("a subagent too young to estimate shows its tokens, no speed", () => {
+    transcript([sub(1, { progress: { streamSince: Date.now() - 500, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·subagent·~1.1k tokens");
+  });
+
+  test("no line with none running, and none once the turn ends", () => {
+    const live = transcript([sub(1, { state: { state: "done" } })]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
+    live.unmount();
+    render(<Transcript turn={state(turn, { status: "done" })} onDecide={() => {}} subagents={[sub(1)]} />);
+    expect(screen.queryByText(/subagent/)).toBeNull();
   });
 });
 

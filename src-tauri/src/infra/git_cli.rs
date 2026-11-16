@@ -24,6 +24,7 @@ pub fn blame(workdir: &Path, path: &str, start: u32, end: u32) -> Result<Vec<Cli
         .args(["blame", "--porcelain", "-L", &format!("{start},{end}"), "HEAD", "--", path])
         .current_dir(workdir);
     super::login_path::apply(&mut command);
+    super::process_runner::no_window(&mut command);
     let output = command.output().map_err(|e| format!("could not run git: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
