@@ -121,16 +121,13 @@ export async function openWorkspace(path: string, keepRunning = false): Promise<
 /** An open folder. Mirrors `commands::workspace::OpenFolder`. */
 export type OpenFolder = { path: string; active: boolean };
 
-/** Opens a folder and makes it active — `workspace_open`, plus the folder joins the open set (F-8). */
-export async function addWorkspace(path: string, keepRunning = false): Promise<string> {
+/** Adds a folder to the open set and makes it active; nothing of the folder active before stops (F-8). */
+export async function addWorkspace(path: string): Promise<string> {
   requireBackend();
-  return invoke<string>("workspace_add", { path, keepRunning });
+  return invoke<string>("workspace_add", { path });
 }
 
-/**
- * Closes an open folder: out of the open set, its index no longer followed. Refused while a turn runs
- * in it, and — until processes and terminals carry their folder (F-8.3) — while any of them runs (F-8).
- */
+/** Closes an open folder: out of the open set, its processes, terminals and index stopped. Refused while a turn runs in it (F-8). */
 export async function closeWorkspace(path: string): Promise<void> {
   requireBackend();
   return invoke("workspace_close", { path });

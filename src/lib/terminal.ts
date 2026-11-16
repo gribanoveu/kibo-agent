@@ -21,10 +21,10 @@ export async function onTerminalChanged(handler: (id: number) => void): Promise<
   return listen<{ id: number }>(TERMINAL_EVENT, ({ payload }) => handler(payload.id));
 }
 
-/** Oldest first. */
-export async function terminalList(): Promise<TerminalInfo[]> {
+/** The shells of the folder `workspace` names, oldest first; with no folder, none. */
+export async function terminalList(workspace: string | null): Promise<TerminalInfo[]> {
   if (!inTauri()) return [];
-  return invoke<TerminalInfo[]>("terminal_list");
+  return invoke<TerminalInfo[]>("terminal_list", { workspace });
 }
 
 /** The user's login shell in the folder `workspace` names. The screen resizes it once it has measured itself. */

@@ -87,14 +87,14 @@ describe("useProcesses", () => {
   test("lists the open chat's, reads again for another chat, and nothing for a chat not started", async () => {
     const { result, rerender } = renderHook(({ chat }) => useProcesses(true, chat), { initialProps: { chat: "a" as string | null } });
     await settle();
-    expect(calls).toEqual([{ command: "processes_list", args: { chatId: "a" } }]);
+    expect(calls).toEqual([{ command: "processes_list", args: { chatId: "a", workspace: null } }]);
 
     listed = [listed[1]];
     rerender({ chat: "b" });
     // Till b's list arrives, a's is not shown under it.
     expect(result.current.processes).toEqual([]);
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "processes_list", args: { chatId: "b" } });
+    expect(calls.at(-1)).toEqual({ command: "processes_list", args: { chatId: "b", workspace: null } });
     expect(result.current.processes.map((p) => p.id)).toEqual([1]);
 
     rerender({ chat: null });

@@ -3,17 +3,23 @@ import { act, fireEvent, render, renderHook, screen } from "@testing-library/rea
 import type { ProcessView } from "../lib/processes";
 import type { TerminalInfo } from "../lib/terminal";
 
-// Opening another folder stops the background processes, closes the user's
+// Opening another folder stops the background processes of the one left, closes its
 // terminals and would file a running turn's chat in the wrong folder. The
 // user is told before any of it.
 
 let processes: ProcessView[] = [];
 let terminals: TerminalInfo[] = [];
-let asked: Record<string, unknown>[] = [];
+let open = ["/work/kibo"];
+let asked: { command: string; args: Record<string, unknown> }[] = [];
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
-    if (command === "processes_list") asked.push(args ?? {});
-    return Promise.resolve(command === "processes_list" ? processes : command === "terminal_list" ? terminals : null);
+    if (command === "processes_list" || command === "terminal_list") asked.push({ command, args: args ?? {} });
+    if (command === "workspaces_list") return Promise.resolve(open.map((path, i) => ({ path, active: i === 0 })));
+    // Each folder answers with its own: the lists are the one folder's, read per folder.
+    const folder = args?.workspace;
+    if (command === "processes_list") return Promise.resolve(processes.filter((p) => p.cwd === folder));
+    if (command === "terminal_list") return Promise.resolve(folder === "/work/kibo" ? terminals : []);
+    return Promise.resolve(null);
   },
   transformCallback: (callback: unknown) => callback,
 }));
@@ -24,6 +30,8 @@ afterAll(() => {
 afterEach(() => {
   processes = [];
   terminals = [];
+  open = ["/work/kibo"];
+  asked = [];
 });
 
 const { useFolderSwitch } = await import("../hooks/useFolderSwitch");
@@ -41,7 +49,7 @@ describe("switching folders", () => {
   test("with nothing running, it just switches", async () => {
     processes = [proc(1, "bun test", { state: "exited", code: 0 })];
     let went = 0;
-    const { result } = renderHook(() => useFolderSwitch(false));
+    const { result } = renderHook(() => useFolderSwitch(null));
     await act(() => result.current.guard(() => went++));
     expect(went).toBe(1);
     expect(result.current.blocked).toBeNull();
@@ -50,19 +58,33 @@ describe("switching folders", () => {
   test("with processes running, it asks first and names only the running ones", async () => {
     processes = [proc(1, "bun run dev", { state: "running" }), proc(2, "bun test", { state: "exited", code: 0 })];
     let went = 0;
-    const { result } = renderHook(() => useFolderSwitch(false));
+    const { result } = renderHook(() => useFolderSwitch(null));
     await act(() => result.current.guard(() => went++));
     expect(went).toBe(0);
     const blocked = result.current.blocked;
     expect(blocked?.kind === "processes" && blocked.processes.map((p) => p.command)).toEqual(["bun run dev"]);
-    // Every chat's, not the open one's: the switch stops them all.
-    expect(asked.at(-1)).toEqual({ chatId: null });
+    // Every chat's of the folder left, not the open chat's: the switch closes that folder (F-8.3).
+    expect(asked).toContainEqual({ command: "processes_list", args: { chatId: null, workspace: "/work/kibo" } });
+    expect(asked).toContainEqual({ command: "terminal_list", args: { workspace: "/work/kibo" } });
+  });
+
+  test("names what runs in every open folder the switch closes, and not in the one it opens", async () => {
+    // A chat moved to its worktree left its folder open and running.
+    open = ["/work/kibo-wt", "/work/kibo", "/work/other"];
+    processes = [
+      { ...proc(1, "bun run dev", { state: "running" }), cwd: "/work/kibo" },
+      { ...proc(2, "cargo watch", { state: "running" }), cwd: "/work/other" },
+    ];
+    const { result } = renderHook(() => useFolderSwitch(null));
+    await act(() => result.current.guard(() => {}, undefined, "/work/other"));
+    const blocked = result.current.blocked;
+    expect(blocked?.kind === "processes" && blocked.processes.map((p) => p.command)).toEqual(["bun run dev"]);
   });
 
   test("an open shell asks too; one whose shell has ended does not", async () => {
     terminals = [{ id: 1, shell: "zsh", state: { state: "exited", code: 0 } }];
     let went = 0;
-    const { result } = renderHook(() => useFolderSwitch(false));
+    const { result } = renderHook(() => useFolderSwitch(null));
     await act(() => result.current.guard(() => went++));
     expect(went).toBe(1);
 
@@ -78,7 +100,7 @@ describe("switching folders", () => {
     processes = [proc(1, "bun run dev", { state: "running" })];
     let went = 0;
     let cancelled = 0;
-    const { result } = renderHook(() => useFolderSwitch(false));
+    const { result } = renderHook(() => useFolderSwitch(null));
     await act(() => result.current.guard(() => went++, () => cancelled++));
     act(() => result.current.close());
     expect([went, cancelled]).toEqual([0, 1]);

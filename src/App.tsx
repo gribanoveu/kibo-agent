@@ -457,7 +457,7 @@ export default function App() {
   const folderSwitch = useFolderSwitch(
     activities.includes("running") ? "running" : activities.includes("awaitingApproval") ? "waiting" : null,
   );
-  const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
+  const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path), undefined, path);
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
   // Before the first message the branch is where the chat starts; after it,
   // the chat's own branch — switched only between turns, never under one.

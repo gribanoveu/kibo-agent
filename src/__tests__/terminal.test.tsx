@@ -140,6 +140,16 @@ describe("useTerminals", () => {
     expect(asked("terminal_list")).toHaveLength(2);
   });
 
+  test("lists the folder's shells, and reads again for another folder (F-8.3)", async () => {
+    listed = [];
+    const { rerender } = renderHook(({ folder }) => useTerminals(true, folder), { initialProps: { folder: "/a" } });
+    await settle();
+    rerender({ folder: "/b" });
+    await settle();
+    const folders = calls.filter((c) => c.command === "terminal_list").map((c) => c.args?.workspace);
+    expect(folders).toEqual(["/a", "/b"]);
+  });
+
   test("opens one in the list and closes it out of it", async () => {
     const { result } = renderHook(() => useTerminals(true, "/repo"));
     await settle();

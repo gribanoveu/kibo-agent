@@ -8,8 +8,8 @@ import {
 } from "../lib/terminal";
 
 /**
- * The user's shells, read while the Terminal tab is open: when it opens, and
- * each time the backend says one opened, ended or closed.
+ * The shells of the folder `workspace`, read while the Terminal tab is open: when it opens,
+ * when the folder changes, and each time the backend says one opened, ended or closed.
  */
 export function useTerminals(visible: boolean, workspace: string | null) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
@@ -21,7 +21,7 @@ export function useTerminals(visible: boolean, workspace: string | null) {
     if (!visible) return;
     let live = true;
     const load = () =>
-      terminalList().then(
+      terminalList(workspace).then(
         (list) => {
           if (!live) return;
           setTerminals(list);
@@ -35,9 +35,11 @@ export function useTerminals(visible: boolean, workspace: string | null) {
     return () => {
       live = false;
       setLoaded(false);
+      // Another folder's shells are not this one's to draw while its list is read.
+      setTerminals([]);
       unlisten?.();
     };
-  }, [visible]);
+  }, [visible, workspace]);
 
   /** In the folder `workspace` names. The new one, or null when it did not start — the reason is in `error`. */
   const open = useCallback(async (): Promise<TerminalInfo | null> => {
