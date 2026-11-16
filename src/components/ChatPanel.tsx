@@ -105,9 +105,10 @@ type OpenProcess = (id: number) => void;
 type OpenAgent = (agent: AgentFocus) => void;
 
 /**
- * A background process that ended, as the model was told of it: how it
- * ended, what it was, where it ran. Opens it in the Terminal tab, where its
- * output is.
+ * A background process that ended, as the model was told of it: what it was
+ * for first, the command and the folder under it, how it ended in the badge.
+ * A quiet row, not a card — it is news, not an object. Opens the process in
+ * the Terminal tab, where its output is.
  */
 function ProcessEndedCard({ process, onOpen }: { process: ProcessInfo; onOpen?: OpenProcess }) {
   const state = process.state;
@@ -120,23 +121,27 @@ function ProcessEndedCard({ process, onOpen }: { process: ProcessInfo; onOpen?: 
       disabled={!onOpen}
       onClick={() => onOpen?.(process.id)}
     >
-      <span className="process-ended-ico" aria-hidden>
-        <TerminalSquare size={14} />
+      <span className="process-ended-eyebrow">
+        Background process
+        <span className="process-ended-exit">{processStatus(state)}</span>
       </span>
-      <span className="process-ended-body">
-        <code className="process-ended-command">{process.command}</code>
-        <span className="process-ended-meta">
-          <span className="process-ended-label">
-            Background process #{process.id} {state.state === "stopped" ? "stopped" : "ended"}
-          </span>
-          <span className="process-ended-cwd">
-            <Folder size={11} aria-hidden />
-            {process.cwd === "." ? "project root" : process.cwd}
-          </span>
+      <span className="process-ended-head">
+        {/* The title is the model's words when there are any; otherwise the line itself. */}
+        {process.description ? (
+          <span className="process-ended-name">{process.description}</span>
+        ) : (
+          <code className="process-ended-command solo">{process.command}</code>
+        )}
+        {onOpen && <ArrowUpRight className="process-ended-open" size={13} aria-hidden />}
+      </span>
+      {process.description && <code className="process-ended-command">{process.command}</code>}
+      <span className="process-ended-detail">
+        <span className="process-ended-num">#{process.id}</span>
+        <span className="process-ended-cwd">
+          <Folder size={11} aria-hidden />
+          {process.cwd === "." ? "project root" : process.cwd}
         </span>
       </span>
-      <span className="process-ended-state">{processStatus(state)}</span>
-      {onOpen && <ArrowUpRight className="process-ended-open" size={13} aria-hidden />}
     </button>
   );
 }
@@ -211,6 +216,8 @@ function ToolRow({
           detail && <ChevronRight className="chev" size={12} />
         )}
       </button>
+      {/* The model's words for the command, under the line they explain. */}
+      {shown.note && <div className="tool-note">{shown.note}</div>}
       {/* Unfolded rather than instead of it, as a process row does: the
           answer stays readable here after the app has forgotten the run. */}
       {open && shown.agent && onOpenAgent && (
@@ -413,7 +420,13 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
   }
 
   if (preview.kind === "command") {
-    return <p className="approval-preview">Runs in {preview.cwd}</p>;
+    return (
+      <>
+        {/* The model's own words for the line — the line itself stays the thing read before agreeing. */}
+        {preview.description && <p className="approval-preview approval-desc">{preview.description}</p>}
+        <p className="approval-preview">Runs in {preview.cwd}</p>
+      </>
+    );
   }
 
   return <DiffPreview title={preview.path} diff={preview.diff} />;

@@ -847,14 +847,14 @@ describe("a review while it runs", () => {
 });
 
 describe("a background process that ended", () => {
-  const ended = (code: number) =>
+  const ended = (code: number, description?: string) =>
     ({
       kind: "processEnded",
       id: "ended:0",
-      process: { id: 4, command: "cargo build", cwd: "src-tauri", state: { state: "exited", code } },
+      process: { id: 4, command: "cargo build", description, cwd: "src-tauri", state: { state: "exited", code } },
     }) as Block;
 
-  test("is a card with the command, the folder and how it ended, that opens the Terminal tab", () => {
+  test("is a two-line row — the command, the folder and how it ended — that opens the Terminal tab", () => {
     const opened: number[] = [];
     const { container } = render(
       <ChatPanel
@@ -866,8 +866,10 @@ describe("a background process that ended", () => {
       />,
     );
     const card = screen.getByTitle("Show in Terminal");
+    expect(card.className).toContain("process-ended");
     expect(card.className).toContain("failed");
-    expect(screen.getByText("Background process #4 ended")).toBeTruthy();
+    expect(screen.getByText("Background process")).toBeTruthy();
+    expect(screen.getByText("#4")).toBeTruthy();
     expect(screen.getByText("cargo build")).toBeTruthy();
     expect(screen.getByText("src-tauri")).toBeTruthy();
     expect(screen.getByText("exit 101")).toBeTruthy();
@@ -875,6 +877,23 @@ describe("a background process that ended", () => {
     expect(container.querySelector(".role")).toBeNull();
     fireEvent.click(card);
     expect(opened).toEqual([4]);
+  });
+
+  test("with a description, the description leads and the command sits under it", () => {
+    const { container } = render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([ended(0, "build the crate")])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        onOpenProcess={() => {}}
+      />,
+    );
+    const name = container.querySelector(".process-ended-name");
+    expect(name?.textContent).toBe("build the crate");
+    const command = container.querySelector(".process-ended-command");
+    expect(command?.textContent).toBe("cargo build");
+    expect(command?.className).not.toContain("solo");
   });
 
   test("a clean exit is not drawn as a failure", () => {
@@ -1086,5 +1105,26 @@ describe("a call with no body of its own", () => {
     expect(row.disabled).toBe(false);
     fireEvent.click(row);
     expect(container.querySelector(".tool-detail")?.textContent).toBe(fact);
+  });
+});
+
+describe("a command's own words for itself", () => {
+  test("stand under the row without unfolding it, and the line stays the row's text", () => {
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "rc1",
+          round: 1,
+          name: "runCommand",
+          arguments: JSON.stringify({ command: "python fix.py --apply", description: "Rewrites imports in place" }),
+          status: "done",
+          result: { stdout: "", stderr: "", exitCode: 0, timedOut: false },
+          output: "",
+        } as Block,
+      ]),
+    );
+    expect(container.querySelector(".tool-note")?.textContent).toBe("Rewrites imports in place");
+    expect(container.querySelector(".tool .arg")?.textContent).toBe("python fix.py --apply");
   });
 });

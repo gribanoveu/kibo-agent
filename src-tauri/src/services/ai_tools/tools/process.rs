@@ -117,6 +117,7 @@ mod tests {
     fn background(command: &str, cwd: Option<&str>) -> ToolCall {
         ToolCall::RunCommand(CommandRequest {
             command: command.into(),
+            description: None,
             cwd: cwd.map(Into::into),
             timeout_seconds: Some(1),
             background: Some(true),
@@ -205,7 +206,7 @@ mod tests {
         let root = temp_dir("tool-move-full");
         let processes = Arc::new(Processes::default());
         for _ in 0..crate::domain::background::MAX_RUNNING {
-            processes.start(&Default::default(), "sleep 30", &root, ".").unwrap();
+            processes.start(&Default::default(), "sleep 30", None, &root, ".").unwrap();
         }
         let deps = ToolDeps { processes: Some(processes), ..ToolDeps::default() };
         let mut call = background("echo before; sleep 30", None);
@@ -231,6 +232,7 @@ mod tests {
     fn foreground(command: &str, timeout: u32) -> ToolCall {
         ToolCall::RunCommand(CommandRequest {
             command: command.into(),
+            description: None,
             cwd: None,
             timeout_seconds: Some(timeout),
             background: None,
@@ -279,7 +281,7 @@ mod tests {
         let root = temp_dir("tool-move-note-full");
         let processes = Arc::new(Processes::default());
         for _ in 0..crate::domain::background::MAX_RUNNING {
-            processes.start(&Default::default(), "sleep 30", &root, ".").unwrap();
+            processes.start(&Default::default(), "sleep 30", None, &root, ".").unwrap();
         }
         let typed = typed_after(Duration::from_millis(100));
         let count = || typed.load(std::sync::atomic::Ordering::SeqCst);

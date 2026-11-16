@@ -285,6 +285,13 @@ export default function App() {
     chatTitle: chatName(history.chats, agent.chatId, agent.turn),
     prefs: alerts,
   });
+  // A turn with no model pinned pins the provider's first one
+  // (llm_session::effective_model). The settings are read again as a turn
+  // starts or ends, as the branch is, so the line names the model that went
+  // out rather than the auto guess.
+  useEffect(() => {
+    void llm.reload();
+  }, [agent.turn.status, plain.turn.status, llm.reload]);
   // Servers start with an Agent or Analyst turn and may stop during one.
   // Settings shows both in "Where your data goes".
   const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, agent.turn.status);

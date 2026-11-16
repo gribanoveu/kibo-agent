@@ -68,6 +68,7 @@ pub fn preview_tool_call(scope: &ToolScope, call: &LlmToolCall) -> ToolPreview {
             match resolve_existing(scope, &cwd) {
                 Ok(_) => ToolPreview::Command {
                     command: request.command,
+                    description: request.description,
                     cwd,
                 },
                 Err(e) => ToolPreview::Failed { reason: e.to_string() },
@@ -234,7 +235,28 @@ mod tests {
             shown,
             ToolPreview::Command {
                 command: "cargo test".to_string(),
+                description: None,
                 cwd: "crate".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn a_command_shows_the_models_own_words_beside_the_line() {
+        let root = temp_dir("preview-command-desc");
+
+        let shown = preview(
+            &root,
+            "runCommand",
+            r#"{"command":"python scripts/fix.py --apply","description":"regenerates the fixtures"}"#,
+        );
+
+        assert_eq!(
+            shown,
+            ToolPreview::Command {
+                command: "python scripts/fix.py --apply".to_string(),
+                description: Some("regenerates the fixtures".to_string()),
+                cwd: ".".to_string()
             }
         );
     }

@@ -397,7 +397,7 @@ export type FileDiffStats = {
 export type ToolPreview =
   | { kind: "diff"; path: string; diff: FileDiffStats }
   | { kind: "removes"; path: string; files: number }
-  | { kind: "command"; command: string; cwd: string }
+  | { kind: "command"; command: string; description?: string | null; cwd: string }
   /** A change to a cluster: where, what becomes of what, and what to know first. */
   | { kind: "change"; place: string; summary: string; notes: string[]; production?: boolean; diffs?: { title: string; diff: FileDiffStats }[] }
   | { kind: "failed"; reason: string }

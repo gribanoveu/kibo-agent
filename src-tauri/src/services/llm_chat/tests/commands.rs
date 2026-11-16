@@ -5,7 +5,7 @@ use super::*;
 /// Reports one ended process, once.
 pub(super) struct EndedOnce(Mutex<Vec<crate::domain::background::ProcessInfo>>);
 impl BackgroundProcesses for EndedOnce {
-    fn start(&self, _: &Shell, _: &str, _: &std::path::Path, _: &str) -> Result<crate::domain::background::ProcessInfo, crate::domain::background::BackgroundError> {
+    fn start(&self, _: &Shell, _: &str, _: Option<&str>, _: &std::path::Path, _: &str) -> Result<crate::domain::background::ProcessInfo, crate::domain::background::BackgroundError> {
         unreachable!()
     }
     fn read(&self, _: u32) -> Result<crate::domain::background::ProcessOutput, crate::domain::background::BackgroundError> {
@@ -24,6 +24,7 @@ impl BackgroundProcesses for EndedOnce {
         &self,
         _: std::process::Child,
         _: &str,
+        _: Option<&str>,
         _: &str,
         _: &str,
     ) -> Result<(crate::domain::background::ProcessInfo, [crate::domain::background::Feed; 2]), crate::domain::background::BackgroundError> {
@@ -89,6 +90,7 @@ fn a_process_that_ended_is_told_to_the_model_once() {
     h.processes = Some(Arc::new(EndedOnce(Mutex::new(vec![crate::domain::background::ProcessInfo {
         id: 2,
         command: "npm run dev".into(),
+        description: None,
         cwd: ".".into(),
         state: crate::domain::background::ProcessState::Exited { code: Some(1) },
     }]))));
@@ -313,6 +315,7 @@ fn each_note_of_the_loop_repeats_the_reply_language() {
     ended.processes = Some(Arc::new(EndedOnce(Mutex::new(vec![crate::domain::background::ProcessInfo {
         id: 2,
         command: "npm run dev".into(),
+        description: None,
         cwd: ".".into(),
         state: crate::domain::background::ProcessState::Exited { code: Some(1) },
     }]))));

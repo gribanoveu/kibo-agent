@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-16 With no model pinned (Auto), the line under the message box names the model that would go out — the provider's first — instead of "no model", and after a turn it shows the one actually sent
+- 2026-11-16 `runCommand` takes a `description` — the agent explains in a few words what a command it runs does, and the explanation stands on the approval card beside the command line and names a background process when one ends; the approval decision still reads the command line alone
 - 2026-11-16 A review's report in the chat shows its finding cards first: the reviewer's summary and the range it read fold behind a Summary toggle, open by default only when there are no findings
 - 2026-11-16 The review and explore cards in the chat wear the robot icon, the same as the agent's sheet and the Subagent button
 - 2026-11-16 A review subagent in Overview and the Agents tab is named by its focus when one was given, else by its brief's first line — not by a `task:` line of code that happened to be in the diff it reviews

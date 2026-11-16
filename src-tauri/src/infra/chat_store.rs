@@ -731,7 +731,7 @@ mod tests {
             save_one("four", "/repo", "d");
 
             let ran = |chat: &str| {
-                let info = ProcessInfo { id: chat.len() as u32, command: "x".into(), cwd: ".".into(), state: ProcessState::Stopped };
+                let info = ProcessInfo { id: chat.len() as u32, command: "x".into(), description: None, cwd: ".".into(), state: ProcessState::Stopped };
                 RunStore.save_process(chat, &ProcessView { info, tail: String::new() });
             };
             let runs = |chat: &str| RunStore.processes(chat).len();
