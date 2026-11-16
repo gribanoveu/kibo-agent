@@ -640,6 +640,7 @@ export default function App() {
             }
             onOpenSettings={ide ? () => openSettings() : undefined}
             workspace={workspace.path}
+            chatId={agent.chatId}
             turn={agent.turn}
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}

@@ -63,8 +63,8 @@ describe("Overview", () => {
             { id: 2, command: "cargo test", cwd: "/", state: { state: "exited", code: 0 } },
           ],
           agents: [
-            { id: 7, task: "Find the ranking code", state: { state: "running" }, steps: [], tokens, answer: null },
-            { id: 8, task: "Old", state: { state: "done" }, steps: [], tokens, answer: "x" },
+            { id: 7, task: "Find the ranking code", state: { state: "running" }, steps: [], tokens, answer: null, progress: { streamSince: null, streamChars: 0, timed: { tokens: 0, ms: 0, chars: 0 } } },
+            { id: 8, task: "Old", state: { state: "done" }, steps: [], tokens, answer: "x", progress: { streamSince: null, streamChars: 0, timed: { tokens: 0, ms: 0, chars: 0 } } },
           ],
           onOpenProcess: (id) => opened.push(id),
           onOpenAgent: (agent) => opened.push(agent),

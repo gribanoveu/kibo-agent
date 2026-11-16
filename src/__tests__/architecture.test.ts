@@ -56,6 +56,8 @@ const RULES: Rule[] = [
     known: [
       // The clock that redraws elapsed time — AGENTS.md says it is not polling.
       "components/ChatPanel.tsx",
+      // The same clock for a run's live speed estimate; the data is event-read.
+      "components/AgentSheet.tsx",
     ],
     why: "the frontend does not poll the backend: it listens for an event and reads again",
   },
