@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.13.1 — 2026-11-16
+
 - 2026-11-16 On Windows a command the agent runs no longer flashes a console window: the release app has none of its own, so `taskkill` — which ends what a command leaves behind, on every run — was opening one
 
 - 2026-11-15 The agent says what it started before a long build, test run or rollout wait, and looks for code by meaning first when it does not know where it lives
