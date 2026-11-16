@@ -134,3 +134,9 @@ export async function pullRequestUnwatch(root: string): Promise<void> {
   if (!inTauri()) return;
   return invoke<void>("pull_request_unwatch", { root });
 }
+
+/** `.git` changed: whether the strip should read again — only a switch of branch, a push or a fetch is news to the server. */
+export async function pullRequestGitChanged(): Promise<boolean> {
+  if (!inTauri()) return false;
+  return invoke<boolean>("pull_request_git_changed");
+}

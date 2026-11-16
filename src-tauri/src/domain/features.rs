@@ -25,6 +25,7 @@ pub enum Feature {
     Mongodb,
     VoiceInput,
     LayoutCorrection,
+    PullRequests,
 }
 
 /// Why a choice on the Catalog was not saved.
@@ -49,7 +50,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Mongodb, Feature::VoiceInput, Feature::LayoutCorrection];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Mongodb, Feature::VoiceInput, Feature::LayoutCorrection, Feature::PullRequests];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -132,6 +133,18 @@ impl Feature {
                 tools: &[],
                 data: None,
             },
+            Feature::PullRequests => Manifest {
+                id: "pull-requests",
+                name: "Pull requests",
+                description: "Above the Changes list: the pull request of the branch you are on, from your Bitbucket Data Center — \
+                    its reviewers and their decisions, the builds of its last commit, and whether it can be merged and why not. \
+                    Create, Approve, Merge and Open from there. You add the server and its HTTP access token; the token is sealed \
+                    on this computer as the API keys are, and goes to that server only. Read every 30 seconds while the strip is \
+                    on screen, every 10 while a build runs.",
+                enabled_by_default: false,
+                tools: &[],
+                data: Some("code_hosts.enc"),
+            },
         }
     }
 
@@ -210,7 +223,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "mongodb", "voice-input", "layout-correction"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "mongodb", "voice-input", "layout-correction", "pull-requests"]);
     }
 
     #[test]
@@ -231,6 +244,7 @@ mod tests {
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::VoiceMemory), "voice prints, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Mongodb), "a network client, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::LayoutCorrection), "an opt-in writing aid");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::PullRequests), "a token sent to a server, off until chosen");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));
         // An id from another build changes nothing here.

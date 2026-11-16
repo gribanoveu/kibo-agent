@@ -103,6 +103,15 @@ pub async fn pull_request_merge(id: u64, version: u64, state: Agent<'_>, prs: Pr
     blocking(move || PullRequests::merge(&prs, &root, id, version)).await
 }
 
+/// `.git` changed: whether the strip should read again — only a switch of
+/// branch, a push or a fetch is news to the server.
+#[tauri::command]
+pub async fn pull_request_git_changed(state: Agent<'_>, prs: Prs<'_>) -> Result<bool, String> {
+    let root = state.workspace()?;
+    let prs = prs.inner().clone();
+    blocking(move || Ok::<_, String>(PullRequests::git_changed(&prs, &root))).await
+}
+
 /// The strip is on screen: the open folder is watched until it says otherwise.
 /// Starts a thread and asks nothing yet, so it may stay on the main thread.
 #[tauri::command]

@@ -38,6 +38,9 @@ pub struct PullRequests {
     /// The window's last read, watched or not: a watch that starts after it
     /// starts from what the window already has.
     read_last: Mutex<Option<(PathBuf, Read)>>,
+    /// What the server could know of the repository when the window last
+    /// read: a change to `.git` is a reason to ask it only when this moved.
+    pushed: Mutex<Option<(PathBuf, Local)>>,
     watching: Mutex<Option<Watching>>,
     quiet: Duration,
     building: Duration,
@@ -56,6 +59,14 @@ struct Watching {
 }
 
 type Read = Result<PrStrip, CodeHostError>;
+
+/// The remote as written, the branch and where each remote's copy of it
+/// points: what a server could have heard of.
+type Local = (Option<String>, Option<(String, Vec<String>)>);
+
+fn local(root: &Path) -> Local {
+    (repository_identity::remote_url(root), git_head::pushed_state(root))
+}
 
 /// Where a folder's requests go, once a server is found for it.
 struct Target {
@@ -81,7 +92,16 @@ impl PullRequests {
     }
 
     fn with_ticks(host: Arc<dyn CodeHost>, changed: PullRequestEventSink, quiet: Duration, building: Duration) -> Self {
-        Self { host, changed, me: Mutex::default(), read_last: Mutex::default(), watching: Mutex::default(), quiet, building }
+        Self {
+            host,
+            changed,
+            me: Mutex::default(),
+            read_last: Mutex::default(),
+            pushed: Mutex::default(),
+            watching: Mutex::default(),
+            quiet,
+            building,
+        }
     }
 
     // ---------------------------------------------------------------- reading
@@ -89,6 +109,7 @@ impl PullRequests {
     /// What the strip shows for `root`. A server that does not answer is an
     /// `Err`: the strip keeps its last snapshot grey with the reason.
     pub fn strip(&self, root: &Path) -> Read {
+        *lock(&self.pushed) = Some((root.to_path_buf(), local(root)));
         let read = self.read(root);
         *lock(&self.read_last) = Some((root.to_path_buf(), read.clone()));
         if let Some(watching) = lock(&self.watching).as_ref().filter(|watching| watching.root == root) {
@@ -97,6 +118,16 @@ impl PullRequests {
             let _ = watching.wake.send(());
         }
         read
+    }
+
+    /// `.git` changed: whether the strip should read the server again — the
+    /// remote was added or changed, the branch switched, pushed or fetched
+    /// since its last read. Staging, a local commit or an editor's own
+    /// `git status` cost the server nothing.
+    pub fn git_changed(&self, root: &Path) -> bool {
+        let now = local(root);
+        let seen = lock(&self.pushed);
+        seen.as_ref().is_none_or(|(seen_root, seen)| seen_root != root || *seen != now)
     }
 
     fn read(&self, root: &Path) -> Read {
@@ -615,6 +646,39 @@ mod tests {
             };
             assert!(snapshot.branch_on_server && snapshot.pr.is_none());
             assert_eq!((double.asked("builds"), double.asked("me")), (1, 0));
+        });
+    }
+
+    /// Only what the server could know is a reason to ask it: a commit is
+    /// not, a push or a switch of branch is, and another folder always is.
+    #[test]
+    fn a_git_change_asks_the_server_only_when_something_was_pushed() {
+        with_app_dir("prs-git-changed", || {
+            let (service, double, _) = connected();
+            let root = repo("prs-git-changed-repo", Some(REMOTE));
+            assert!(service.git_changed(&root), "never read");
+            service.strip(&root).unwrap();
+            assert!(!service.git_changed(&root));
+            let twin = repo("prs-git-changed-twin", Some(REMOTE));
+            assert!(service.git_changed(&twin), "another folder, though its branch and remote are the same");
+
+            let git = git2::Repository::open(&root).unwrap();
+            let head = git.head().unwrap().target().unwrap();
+            let tree = git.find_commit(head).unwrap().tree().unwrap();
+            let sig = git2::Signature::now("T", "t@example.com").unwrap();
+            git.commit(Some("HEAD"), &sig, &sig, "local", &tree, &[&git.find_commit(head).unwrap()]).unwrap();
+            assert!(!service.git_changed(&root), "a local commit");
+
+            git.remote_set_url("origin", "ssh://git@git.server.com/corp/other.git").unwrap();
+            assert!(service.git_changed(&root), "another remote");
+            service.strip(&root).unwrap();
+
+            git.reference("refs/remotes/origin/feature/x", head, true, "push").unwrap();
+            assert!(service.git_changed(&root), "a push");
+            assert!(service.git_changed(&root), "still, until the window reads");
+            service.strip(&root).unwrap();
+            assert!(!service.git_changed(&root));
+            assert_eq!(double.asked("default_branch"), 3, "asking costs the server nothing");
         });
     }
 

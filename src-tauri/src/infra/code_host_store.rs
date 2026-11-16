@@ -170,6 +170,13 @@ mod tests {
     use crate::testing::with_app_dir;
     use secrecy::ExposeSecret;
 
+    /// The Catalog's "Delete data" for the pull request strip removes this file.
+    #[test]
+    fn the_feature_s_data_is_this_file() {
+        use crate::domain::features::Feature;
+        assert_eq!(Feature::PullRequests.manifest().data, Some(FILE));
+    }
+
     fn server(id: &str, base_url: &str) -> CodeHostServer {
         CodeHostServer {
             id: id.to_string(),
