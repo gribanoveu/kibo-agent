@@ -367,8 +367,12 @@ fn folder_in_repo(repo: &Repository, root: &Path) -> Option<std::path::PathBuf> 
 
 /// The `.git` directory of the repository `root` is in — what staging and
 /// committing write, and the tree's watcher leaves out. `None` outside one.
+///
+/// For a linked worktree, the shared one: its own HEAD and index sit under
+/// it (`worktrees/<name>`), and a push or a fetch writes the remote refs
+/// there and nowhere else.
 pub fn git_dir(root: &Path) -> Option<std::path::PathBuf> {
-    Repository::discover(root).ok().map(|repo| repo.path().to_path_buf())
+    Repository::discover(root).ok().map(|repo| repo.commondir().to_path_buf())
 }
 
 fn open(root: &Path) -> Result<Repository, GitChangesError> {
@@ -509,6 +513,22 @@ mod tests {
         config.set_str("user.name", "Test").unwrap();
         config.set_str("user.email", "test@example.com").unwrap();
         (dir, repo)
+    }
+
+    /// A worktree's own `.git/worktrees/<name>` misses a push: the remote refs
+    /// go to the shared directory, which holds that folder too.
+    #[test]
+    fn a_worktree_is_watched_through_the_shared_git_directory() {
+        let (dir, repo) = repo();
+        let sig = repo.signature().unwrap();
+        let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &[]).unwrap();
+        let linked = temp_dir("git-changes-linked").join("wt");
+        repo.worktree("wt", &linked, None).unwrap();
+
+        let shared = git_dir(&dir).unwrap();
+        assert_eq!(git_dir(&linked), Some(shared.clone()));
+        assert!(Repository::open(&linked).unwrap().path().starts_with(&shared), "its own HEAD is under it");
     }
 
     fn file(path: &str, add: usize, del: usize) -> ChangedFile {
