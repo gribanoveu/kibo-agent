@@ -38,6 +38,11 @@ pub(crate) struct SessionHandle {
     pub(super) running_root: Mutex<Option<PathBuf>>,
     /// A paused turn still owns the chat's history until its card is resumed.
     pub(super) paused: AtomicBool,
+    /// The folder an unsaved chat's first turn started in (F-8.7): until its
+    /// record names it, the chat belongs there, not to whichever folder the
+    /// window has made active since — its first save, its "always allow",
+    /// its context are that folder's. Set once; a saved record wins.
+    pub(super) home: Mutex<Option<PathBuf>>,
 }
 
 /// Counted while a chat's turn runs; clears itself on drop, however the turn
@@ -325,14 +330,17 @@ impl AgentState {
     }
 
     /// The checkout this chat belongs to, not whichever folder is open now.
-    /// An unsaved chat has no record yet and starts in the open folder.
+    /// An unsaved chat has no record yet: it is in the folder its first turn
+    /// started in, and before that in the active one.
     pub(crate) fn chat_workspace(&self, chat_id: &str) -> Result<(PathBuf, Option<String>), String> {
         let record = match crate::infra::chat_store::load(chat_id) {
             Ok(record) => Some(record),
             Err(crate::domain::chat_record::ChatError::NotFound(_)) => None,
             Err(e) => return Err(e.to_string()),
         };
-        let Some(record) = record else { return Ok((self.workspace()?, None)) };
+        let Some(record) = record else {
+            return Ok((self.unsaved_home(chat_id).map_or_else(|| self.workspace(), Ok)?, None));
+        };
         let root = crate::infra::paths::canonicalize_plain(std::path::Path::new(&record.workspace))
             .map_err(|e| format!("cannot open the chat's folder {}: {e}", record.workspace))?;
         if !root.is_dir() {
@@ -341,12 +349,25 @@ impl AgentState {
         Ok((root, record.worktree_base))
     }
 
+    /// Where an unsaved chat's first turn started, while that folder is open:
+    /// one closed since leaves the chat nowhere to be opened from, and it goes
+    /// on in the active folder as an unstarted chat would.
+    fn unsaved_home(&self, chat_id: &str) -> Option<PathBuf> {
+        let home = {
+            let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
+            let handle = sessions.get(chat_id)?;
+            let home = handle.home.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            home
+        };
+        home.filter(|root| self.is_open(root))
+    }
+
     /// Prompt measuring also works before any folder is open, as it did for
     /// an unsaved chat; a saved chat still reads only its own checkout.
     pub(super) fn chat_prompt_workspace(&self, chat_id: &str) -> Result<Option<PathBuf>, String> {
         match crate::infra::chat_store::load(chat_id) {
             Ok(_) => self.chat_workspace(chat_id).map(|(root, _)| Some(root)),
-            Err(crate::domain::chat_record::ChatError::NotFound(_)) => Ok(self.workspace().ok()),
+            Err(crate::domain::chat_record::ChatError::NotFound(_)) => Ok(self.unsaved_home(chat_id).or_else(|| self.workspace().ok())),
             Err(e) => Err(e.to_string()),
         }
     }

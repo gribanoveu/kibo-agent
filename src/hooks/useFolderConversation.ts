@@ -13,9 +13,9 @@ type Agent = {
  * conversation touched last (`latest` — the list is newest first). Once;
  * after that an empty thread is the user's choice.
  *
- * On a switch the thread starts fresh. A chat is saved under the folder open
- * at the time, so one carried across a switch would move there; left behind,
- * it stays in the old folder's list.
+ * On a switch the thread starts fresh: the thread shows a chat of the active
+ * folder. A chat left behind — its turn still working, too (F-8.7) — stays
+ * in its own folder's list and is saved there.
  */
 export function useFolderConversation(
   path: string | null,

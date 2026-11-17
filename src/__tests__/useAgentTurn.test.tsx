@@ -1619,6 +1619,41 @@ describe("parallel sessions", () => {
     });
   });
 
+  /// F-8.7: the window moves to another folder while A's turn works — the
+  /// thread starts afresh there, a message in it runs a turn of its own, and
+  /// A's turn ends and is saved in full in the background.
+  test("a turn left behind by a folder change runs on and saves in full beside a new chat's", async () => {
+    const ends = new Map<string, (text: string) => void>();
+    results.chat_start = (args: Record<string, unknown>) =>
+      new Promise((resolve) => ends.set(args.chatId as string, (text) => resolve(done(text)(args))));
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("task A"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const a = calls.find((call) => call.command === "chat_start")!.args.chatId as string;
+
+    act(() => void result.current.reset());
+    expect(result.current.turn.blocks).toEqual([]);
+    act(() => void result.current.send("task B"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const started = calls.filter((call) => call.command === "chat_start").map((call) => call.args.chatId);
+    expect(started).toHaveLength(2);
+    expect(started[1]).not.toBe(a);
+    expect(result.current.chatActivity[a]).toBe("running");
+
+    await act(async () => ends.get(a)?.("answer A"));
+    await waitFor(() => expect(result.current.chatActivity[a]).toBe("finished"));
+    const last = saved().filter((call) => call.args.id === a).at(-1);
+    expect(JSON.stringify(last?.args.messages)).toContain("answer A");
+    expect(result.current.turn.status).toBe("running");
+
+    // Stop for the folder that closes reaches only its chats.
+    await act(async () => result.current.cancelAll([a]));
+    expect(calls.filter((call) => call.command === "chat_cancel")).toEqual([]);
+    await act(async () => result.current.cancelAll([started[1] as string]));
+    expect(calls.filter((call) => call.command === "chat_cancel").map((call) => call.args)).toEqual([{ chatId: started[1] }]);
+    await act(async () => ends.get(started[1] as string)?.("answer B"));
+  });
+
   test("a chat's saves run in order and keep their own snapshots", async () => {
     const ends: (() => void)[] = [];
     results.chat_start = (args: Record<string, unknown>) =>

@@ -563,9 +563,12 @@ export function useAgentTurn({
   );
 
   const cancel = useCallback(() => cancelChat(active.current.key), []);
-  const cancelAll = useCallback(async () => {
+  /** Stops every running turn, or only those of the chats in `only`. */
+  const cancelAll = useCallback(async (only?: readonly string[]) => {
     const running = [...sessions.current.values()].filter(
-      (session) => session.turn.status === "running" || session.turn.status === "awaitingApproval",
+      (session) =>
+        (session.turn.status === "running" || session.turn.status === "awaitingApproval") &&
+        (!only || only.includes(session.key)),
     );
     await Promise.all(running.map((session) => cancelChat(session.key)));
   }, []);

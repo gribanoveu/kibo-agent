@@ -66,6 +66,8 @@ pub async fn chat_start<R: Runtime>(
     // start must leave the running turn's stop flag and journal alone.
     let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
     state.still_open(&workspace)?;
+    // An unsaved chat stays in this folder when the window moves to another.
+    session.home.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(|| workspace.clone());
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
     session.cancel.store(false, Ordering::SeqCst);
@@ -735,6 +737,83 @@ mod tests {
             ));
             let Ok(ChatStreamOutcome::Done(done)) = outcome else { panic!("the leftover stop ended the fresh turn: {outcome:?}") };
             assert_eq!(done.result.text, "hello");
+        });
+    }
+
+    /// F-8.7: a new chat whose turn started in A is A's while the window
+    /// moves to B — its first save, its next turn and its context count are
+    /// filed under A, while a chat that has not started yet goes to B.
+    #[test]
+    fn an_unsaved_chat_stays_in_the_folder_its_turn_started_in() {
+        crate::testing::with_app_dir("cmd-chat-home", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b) = (plain("cmd-chat-home-a"), plain("cmd-chat-home-b"));
+            state.set_workspace_for_test(a.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let start = |chat: &str| {
+                tauri::async_runtime::block_on(chat_start(
+                    app.handle().clone(),
+                    app.state(),
+                    "t1".into(),
+                    chat.into(),
+                    vec![LlmMessage::user("hi")],
+                    Vec::new(),
+                    None,
+                ))
+            };
+            assert!(matches!(start("c1"), Ok(ChatStreamOutcome::Done(_))));
+
+            state.set_workspace_for_test(b.clone());
+            assert_eq!(state.chat_workspace("c1").unwrap().0, a, "the started chat stays in A");
+            assert_eq!(state.chat_prompt_workspace("c1").unwrap(), Some(a.clone()));
+            assert_eq!(state.chat_workspace("c2").unwrap().0, b, "one not started yet is the active folder's");
+            assert!(matches!(start("c1"), Ok(ChatStreamOutcome::Done(_))), "its next turn runs in A");
+            assert_eq!(state.chat_workspace("c1").unwrap().0, a);
+
+            tauri::async_runtime::block_on(crate::commands::chat_history::chat_save(
+                app.state(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                serde_json::json!([]),
+                Vec::new(),
+                None,
+                None,
+            ))
+            .unwrap();
+            assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, a.display().to_string(), "filed under A");
+        });
+    }
+
+    /// An unsaved chat whose folder closed (its first save failed) is not
+    /// stranded there: it goes on in the active folder.
+    #[test]
+    fn an_unsaved_chat_whose_folder_closed_goes_on_in_the_active_one() {
+        crate::testing::with_app_dir("cmd-chat-home-closed", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b) = (plain("cmd-chat-home-closed-a"), plain("cmd-chat-home-closed-b"));
+            state.set_workspace_for_test(a.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let outcome = tauri::async_runtime::block_on(chat_start(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                Vec::new(),
+                None,
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))));
+            state.set_workspace_for_test(b.clone());
+            assert!(state.unregister_if_idle(&a), "A closes once its turn is over");
+
+            assert_eq!(state.chat_workspace("c1").unwrap().0, b);
+            assert_eq!(state.chat_prompt_workspace("c1").unwrap(), Some(b));
         });
     }
 

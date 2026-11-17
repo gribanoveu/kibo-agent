@@ -4,17 +4,16 @@ import "./FolderSwitchDialog.css";
 
 type Props = {
   blocked: SwitchBlock | null;
-  /** The active folder — where the turn that holds the window works. */
-  folder: string | null;
-  onStopAgent: () => void;
+  /** Stops the turns of these chats — the ones working in the folder that closes. */
+  onStopAgent: (chats: string[]) => void;
   onClose: () => void;
 };
 
 const nameOf = (path: string | null | undefined) => path?.split(/[\\/]/).filter(Boolean).pop();
 
-/** Says why the active folder cannot change yet, or what closing a folder would end, before it does. */
-export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Props) {
-  const name = nameOf(folder) ?? "this folder";
+/** Says why a folder cannot close yet, or what closing it would end, before it does. */
+export function FolderSwitchDialog({ blocked, onStopAgent, onClose }: Props) {
+  const name = blocked?.kind === "agent" ? (nameOf(blocked.folder) ?? blocked.folder) : "";
   const closing = blocked?.kind === "processes" ? blocked.folders.map((path) => nameOf(path) ?? path).join(", ") : "";
   const agent = blocked?.kind === "agent";
   // A paused turn is ended by answering its card, not by Stop.
@@ -35,7 +34,7 @@ export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Pr
               type="button"
               className="btn btn-primary"
               onClick={() => {
-                if (blocked?.kind === "agent") onStopAgent();
+                if (blocked?.kind === "agent") onStopAgent(blocked.chats);
                 else blocked?.go();
                 onClose();
               }}
@@ -48,13 +47,11 @@ export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Pr
     >
       {waiting ? (
         <p className="switch-text">
-          It is waiting for your answer on a card in <b>{name}</b>, and its chat is saved there when the turn ends.
-          Answer the card, then change folders.
+          A turn in <b>{name}</b> is waiting for your answer on a card. Answer the card, then close the folder.
         </p>
       ) : blocked?.kind === "agent" ? (
         <p className="switch-text">
-          It is working in <b>{name}</b>, and its chat is saved there when it finishes. Stop it first, then change
-          folders.
+          It is working in <b>{name}</b>. Stop it first, then close the folder.
         </p>
       ) : (
         blocked && (

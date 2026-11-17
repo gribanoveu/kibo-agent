@@ -69,7 +69,7 @@ import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedCha
 import { DEFAULT_TURN_LIMITS, withLanguageReminder } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
-import { useFolderSwitch } from "./hooks/useFolderSwitch";
+import { turnsIn, useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
 import { FolderSwitchDialog } from "./components/FolderSwitchDialog";
 import { FolderTrustDialog } from "./components/FolderTrustDialog";
@@ -470,13 +470,10 @@ export default function App() {
     if (workspace.error) toast.show(workspace.error);
   }, [workspace.error]);
 
-  // Leaving the folder ends every turn in it, including one in a background chat.
-  const activities = Object.values(agent.chatActivity);
-  const anyTurnBusy = activities.includes("running") || activities.includes("awaitingApproval");
-  const folderSwitch = useFolderSwitch(
-    activities.includes("running") ? "running" : activities.includes("awaitingApproval") ? "waiting" : null,
-    workspace.path,
-  );
+  // A turn keeps its own folder while the window moves (F-8.7): only closing
+  // that folder, or switching its branch, waits for it.
+  const turnsInFolder = turnsIn(agent.chatActivity, history.folderOf);
+  const folderSwitch = useFolderSwitch(turnsInFolder);
   // Opening a folder closes none (F-8.6); closing one stops what runs in it, and says so first.
   const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
@@ -713,9 +710,10 @@ export default function App() {
                   onPick: (name) => void branchPicker.pick(name),
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
-                  locked: anyTurnBusy
-                    ? "An agent is working in this folder — wait for every turn to finish, or use Worktree for a new chat"
-                    : undefined,
+                  locked:
+                    workspace.path && turnsInFolder(workspace.path).length > 0
+                      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
+                      : undefined,
                 }}
                 // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
                 chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
@@ -1025,8 +1023,7 @@ export default function App() {
 
       <FolderSwitchDialog
         blocked={folderSwitch.blocked}
-        folder={workspace.path}
-        onStopAgent={agent.cancelAll}
+        onStopAgent={(chats) => void agent.cancelAll(chats)}
         onClose={folderSwitch.close}
       />
       <FolderTrustDialog
