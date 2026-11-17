@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::infra::background::Processes;
 use crate::infra::terminal::Terminals;
+use crate::services::mcp_servers::McpServers;
 use crate::services::workspace_index::WorkspaceIndex;
 
 use super::workspace_events::index_event_sink;
@@ -59,9 +60,10 @@ async fn close_folder<R: Runtime>(
     forget_open(&root);
     let processes = app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes));
     let terminals = app.try_state::<Arc<Terminals>>().map(|terminals| Arc::clone(&terminals));
+    let mcp = app.try_state::<Arc<McpServers>>().map(|mcp| Arc::clone(&mcp));
     let index = Arc::clone(index);
     let _ = tauri::async_runtime::spawn_blocking(move || {
-        crate::services::folder_open::close(&root, processes.as_deref(), terminals.as_deref(), &index)
+        crate::services::folder_open::close(&root, processes.as_deref(), terminals.as_deref(), mcp.as_deref(), &index)
     })
     .await;
     Ok(())
@@ -298,6 +300,7 @@ fn snapshot(index: &WorkspaceIndex, root: &Path) -> Option<IndexSnapshot> {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use crate::domain::mcp::{McpCallResult, McpClient, McpConfig, McpError, McpServerConfig, McpTool};
     
     use crate::testing::temp_dir;
     
@@ -403,6 +406,11 @@ mod tests {
             app.manage(Arc::clone(&state));
             app.manage(Arc::clone(&index));
             app.manage(super::super::git::GitWatch::default());
+            let mcp = Arc::new(McpServers::new(Arc::new(|_, _, _| Ok(Arc::new(Server) as Arc<dyn McpClient>)), Arc::new(|_| {})));
+            app.manage(Arc::clone(&mcp));
+            let mut config = McpConfig::default();
+            config.mcp_servers.insert("s".into(), McpServerConfig { command: "x".into(), ..Default::default() });
+            let serves = |root: &Path| mcp.running(root).get("mcp__s__t").is_some();
             let plain = |dir: PathBuf| crate::infra::paths::canonicalize_plain(&dir).unwrap();
             let (a, b) = (plain(temp_dir("ws-close-a")), plain(temp_dir("ws-close-b")));
             let add = |root: &Path| {
@@ -418,6 +426,8 @@ mod tests {
             add(&a);
             add(&b);
             assert!(index.indexer(&a).is_some() && index.indexer(&b).is_some(), "both folders indexed");
+            mcp.for_turn(&config, &a, &|| false);
+            mcp.for_turn(&config, &b, &|| false);
 
             tauri::async_runtime::block_on(workspace_close(
                 b.display().to_string(),
@@ -430,6 +440,7 @@ mod tests {
 
             assert!(index.indexer(&b).is_none(), "the closed folder's index is closed");
             assert!(index.indexer(&a).is_some(), "the other folder's index stays");
+            assert!(!serves(&b) && serves(&a), "the closed folder's MCP servers stop, the other's stay");
             assert_eq!(state.open_folders(), vec![a.clone()]);
             assert_eq!(state.workspace().unwrap(), a);
         });
@@ -577,6 +588,16 @@ mod tests {
             assert!(!app.state::<super::super::git::GitWatch>().is_watching(), "the closed folder's .git is still watched");
             assert!(close(root.display().to_string()).is_err(), "a folder not open is refused");
         });
+    }
+
+    struct Server;
+    impl McpClient for Server {
+        fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
+            Ok(vec![McpTool { name: "t".into(), ..Default::default() }])
+        }
+        fn call_tool(&self, _: &str, _: serde_json::Value, _: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
+            Err(McpError::Cancelled)
+        }
     }
 
     struct Flat;

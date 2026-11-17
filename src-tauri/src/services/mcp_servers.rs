@@ -2,8 +2,9 @@
 //!
 //! Started for the first Agent or Analyst turn that needs them and kept between turns —
 //! a server's start can be a package download. An entry that changes, or is
-//! switched off, stops its server; a workspace that changes stops them all,
-//! because each runs in the workspace it was started for.
+//! switched off, stops its server. Each open folder has servers of its own,
+//! started in it (F-8.4): a turn in one folder neither stops nor uses another's,
+//! and closing a folder stops its servers and no others.
 //!
 //! **Failure**: a server that
 //! stops in the middle of a turn fails the call it was on — never retried,
@@ -35,14 +36,14 @@ pub type Start =
 
 pub struct McpServers {
     start: Start,
-    pool: Mutex<Pool>,
+    /// By the folder the servers run in.
+    pools: Mutex<BTreeMap<PathBuf, Pool>>,
     /// Told whenever what `state` reports may have changed.
     changed: McpEventSink,
 }
 
 #[derive(Default)]
 struct Pool {
-    cwd: Option<PathBuf>,
     slots: BTreeMap<String, Slot>,
 }
 
@@ -59,7 +60,7 @@ enum SlotState {
 
 impl McpServers {
     pub fn new(start: Start, changed: McpEventSink) -> Self {
-        Self { start, pool: Mutex::default(), changed }
+        Self { start, pools: Mutex::default(), changed }
     }
 
     fn report(&self) {
@@ -75,12 +76,9 @@ impl McpServers {
     /// by the user's Stop is simply tried again next turn.
     pub fn for_turn(&self, config: &McpConfig, cwd: &Path, cancelled: &(dyn Fn() -> bool + Sync)) -> McpTools {
         let (missing, moved) = {
-            let mut pool = lock(&self.pool);
+            let mut pools = lock(&self.pools);
+            let pool = pools.entry(cwd.to_path_buf()).or_default();
             let before = pool.slots.len();
-            if pool.cwd.as_deref() != Some(cwd) {
-                pool.slots.clear();
-                pool.cwd = Some(cwd.to_path_buf());
-            }
             let wanted = runnable(config);
             pool.slots.retain(|name, slot| keep(slot, wanted.get(name)));
             let gone = pool.slots.len() != before;
@@ -109,20 +107,21 @@ impl McpServers {
         });
 
         if !started.is_empty() {
-            let mut pool = lock(&self.pool);
+            let mut pools = lock(&self.pools);
+            // Switched off or edited while it started, or its folder closed:
+            // the slot is gone, and the server just started is dropped —
+            // which stops it, and waits for its process, so after the lock.
+            let mut orphans = Vec::new();
             for (name, state) in started {
-                // Switched off or edited while it started: `prune` has removed
-                // the slot, and the server just started is dropped — which
-                // stops it.
-                let Some(slot) = pool.slots.get_mut(&name) else { continue };
-                match state {
-                    Some(state) => slot.state = state,
-                    None => {
-                        pool.slots.remove(&name);
-                    }
+                let slot = pools.get_mut(cwd).and_then(|pool| pool.slots.get_mut(&name));
+                match (slot, state) {
+                    (Some(slot), Some(state)) => slot.state = state,
+                    (Some(_), None) => orphans.extend(pools.get_mut(cwd).and_then(|pool| pool.slots.remove(&name)).map(|slot| slot.state)),
+                    (None, state) => orphans.extend(state),
                 }
             }
-            drop(pool);
+            drop(pools);
+            drop(orphans);
             self.report();
         }
 
@@ -131,19 +130,24 @@ impl McpServers {
         // tools. Its start is bounded by the server's own timeout.
         // ponytail: polled, not signalled — a Condvar on the pool if the
         // 50 ms ever shows.
-        while !cancelled() && lock(&self.pool).slots.values().any(|slot| matches!(slot.state, SlotState::Starting)) {
+        while !cancelled()
+            && lock(&self.pools)
+                .get(cwd)
+                .is_some_and(|pool| pool.slots.values().any(|slot| matches!(slot.state, SlotState::Starting)))
+        {
             std::thread::sleep(STARTING_POLL);
         }
 
         self.refresh_stale(cwd);
 
-        let pool = lock(&self.pool);
+        let pools = lock(&self.pools);
+        let Some(pool) = pools.get(cwd) else { return McpTools::default() };
         for slot in pool.slots.values() {
             if let SlotState::Running { server, .. } = &slot.state {
                 server.restarted.store(false, Ordering::SeqCst);
             }
         }
-        connected(&pool)
+        connected(pool)
     }
 
     /// Reads again the tool list of every running server whose list may no
@@ -156,10 +160,8 @@ impl McpServers {
     /// whole timeout.
     fn refresh_stale(&self, cwd: &Path) {
         let stale: Vec<(String, Arc<Supervised>)> = {
-            let pool = lock(&self.pool);
-            if pool.cwd.as_deref() != Some(cwd) {
-                return;
-            }
+            let pools = lock(&self.pools);
+            let Some(pool) = pools.get(cwd) else { return };
             pool.slots
                 .iter()
                 .filter_map(|(name, slot)| match &slot.state {
@@ -172,9 +174,10 @@ impl McpServers {
         for (name, stale) in stale {
             let Ok(listed) = stale.list_tools() else { continue };
             let offered = stale.list_prompts();
-            let mut pool = lock(&self.pool);
+            let mut pools = lock(&self.pools);
             // Switched off or edited meanwhile: the slot is gone or another's.
-            if let Some(SlotState::Running { server, tools, prompts }) = pool.slots.get_mut(&name).map(|slot| &mut slot.state) {
+            let slot = pools.get_mut(cwd).and_then(|pool| pool.slots.get_mut(&name));
+            if let Some(SlotState::Running { server, tools, prompts }) = slot.map(|slot| &mut slot.state) {
                 if Arc::ptr_eq(server, &stale) {
                     *tools = listed;
                     if let Ok(offered) = offered {
@@ -192,11 +195,7 @@ impl McpServers {
     /// turn will offer, as far as can be known without starting anything.
     /// For the context meter: a server is not started to be measured.
     pub fn running(&self, cwd: &Path) -> McpTools {
-        let pool = lock(&self.pool);
-        if pool.cwd.as_deref() != Some(cwd) {
-            return McpTools::default();
-        }
-        connected(&pool)
+        lock(&self.pools).get(cwd).map(connected).unwrap_or_default()
     }
 
     /// Starts one server now, on its own, and says what came of it — the
@@ -211,11 +210,8 @@ impl McpServers {
             return McpServerState::NotStarted;
         };
         let start_now = {
-            let mut pool = lock(&self.pool);
-            if pool.cwd.as_deref() != Some(cwd) {
-                pool.slots.clear();
-                pool.cwd = Some(cwd.to_path_buf());
-            }
+            let mut pools = lock(&self.pools);
+            let pool = pools.entry(cwd.to_path_buf()).or_default();
             let known = pool.slots.get_mut(name).is_some_and(|slot| keep(slot, Some(&entry)));
             if !known {
                 pool.slots.insert(name.to_string(), Slot { config: entry.clone(), state: SlotState::Starting });
@@ -227,21 +223,22 @@ impl McpServers {
             // Nothing to stop it: the tab has no Stop for a server it asked
             // to start, and the start bounded by the server's own timeout.
             let started = self.start_one(&entry, cwd, &|| false);
-            let mut pool = lock(&self.pool);
-            match started {
-                Some(state) => {
-                    if let Some(slot) = pool.slots.get_mut(name) {
-                        slot.state = state;
-                    }
+            let mut pools = lock(&self.pools);
+            let slot = pools.get_mut(cwd).and_then(|pool| pool.slots.get_mut(name));
+            // As in `for_turn`: what is dropped is dropped after the lock.
+            let orphan = match (slot, started) {
+                (Some(slot), Some(state)) => {
+                    slot.state = state;
+                    None
                 }
-                None => {
-                    pool.slots.remove(name);
-                }
-            }
-            drop(pool);
+                (Some(_), None) => pools.get_mut(cwd).and_then(|pool| pool.slots.remove(name)).map(|slot| slot.state),
+                (None, state) => state,
+            };
+            drop(pools);
+            drop(orphan);
             self.report();
         }
-        self.state(name, &entry)
+        self.state(name, &entry, cwd)
     }
 
     /// `None` when the user's Stop cut the start short: that says nothing
@@ -274,22 +271,25 @@ impl McpServers {
     /// stop it.
     pub fn prune(&self, config: &McpConfig) {
         let wanted = runnable(config);
-        let mut pool = lock(&self.pool);
-        let before = pool.slots.len();
-        pool.slots.retain(|name, slot| keep(slot, wanted.get(name)));
-        let gone = pool.slots.len() != before;
-        drop(pool);
+        let mut pools = lock(&self.pools);
+        let mut gone = false;
+        for pool in pools.values_mut() {
+            let before = pool.slots.len();
+            pool.slots.retain(|name, slot| keep(slot, wanted.get(name)));
+            gone |= pool.slots.len() != before;
+        }
+        drop(pools);
         if gone {
             self.report();
         }
     }
 
-    /// What the tab says about a server whose entry is `entry` now. A server
-    /// running from an older entry is about to be replaced, so it is
-    /// reported as not started.
-    pub fn state(&self, name: &str, entry: &McpServerConfig) -> McpServerState {
-        let pool = lock(&self.pool);
-        let Some(slot) = pool.slots.get(name).filter(|slot| slot.config.launch() == entry.launch()) else {
+    /// What the tab says about a server whose entry is `entry` now, in the
+    /// folder `cwd`. A server running from an older entry is about to be
+    /// replaced, so it is reported as not started.
+    pub fn state(&self, name: &str, entry: &McpServerConfig, cwd: &Path) -> McpServerState {
+        let pools = lock(&self.pools);
+        let Some(slot) = pools.get(cwd).and_then(|pool| pool.slots.get(name)).filter(|slot| slot.config.launch() == entry.launch()) else {
             return McpServerState::NotStarted;
         };
         match &slot.state {
@@ -308,10 +308,8 @@ impl McpServers {
     /// The prompts of the servers running for `cwd`, by server — what the
     /// composer offers. Nothing is started to be asked.
     pub fn prompts(&self, cwd: &Path) -> Vec<(String, McpPrompt)> {
-        let pool = lock(&self.pool);
-        if pool.cwd.as_deref() != Some(cwd) {
-            return Vec::new();
-        }
+        let pools = lock(&self.pools);
+        let Some(pool) = pools.get(cwd) else { return Vec::new() };
         pool.slots
             .iter()
             .filter_map(|(name, slot)| match &slot.state {
@@ -326,8 +324,8 @@ impl McpServers {
     /// name — given to its arguments by `domain::mcp::prompt_arguments`.
     pub fn get_prompt(&self, server: &str, name: &str, typed: &str, cwd: &Path) -> Result<String, McpError> {
         let (client, prompt) = {
-            let pool = lock(&self.pool);
-            let running = pool.slots.get(server).filter(|_| pool.cwd.as_deref() == Some(cwd)).and_then(|slot| match &slot.state {
+            let pools = lock(&self.pools);
+            let running = pools.get(cwd).and_then(|pool| pool.slots.get(server)).and_then(|slot| match &slot.state {
                 SlotState::Running { server, prompts, .. } => Some((server, prompts)),
                 _ => None,
             });
@@ -342,9 +340,20 @@ impl McpServers {
         client.get_prompt(name, &prompt_arguments(&prompt, typed))
     }
 
+    /// When `cwd` closes: its servers stop, every other folder's keep
+    /// running.
+    pub fn stop(&self, cwd: &Path) {
+        let stopped = lock(&self.pools).remove(cwd);
+        // Dropped outside the lock: a server's process is waited for.
+        if stopped.is_some_and(|pool| !pool.slots.is_empty()) {
+            self.report();
+        }
+    }
+
     /// When the app quits.
     pub fn stop_all(&self) {
-        lock(&self.pool).slots.clear();
+        let stopped = std::mem::take(&mut *lock(&self.pools));
+        drop(stopped);
     }
 }
 
@@ -673,7 +682,7 @@ mod tests {
 
     fn starting(servers: &McpServers, config: &McpConfig) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while servers.state("a", &config.mcp_servers["a"]) != McpServerState::Starting {
+        while servers.state("a", &config.mcp_servers["a"], &cwd()) != McpServerState::Starting {
             assert!(std::time::Instant::now() < deadline, "the start never began");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -719,14 +728,14 @@ mod tests {
     fn a_server_starts_once_and_is_kept_between_turns() {
         let (servers, starts) = servers();
         let config = config(&[("a", "ok")]);
-        assert_eq!(servers.state("a", &config.mcp_servers["a"]), McpServerState::NotStarted);
+        assert_eq!(servers.state("a", &config.mcp_servers["a"], &cwd()), McpServerState::NotStarted);
 
         let tools = servers.for_turn(&config, &cwd(), NO);
         assert_eq!(call(&tools, "echo").unwrap(), "run 1");
         servers.for_turn(&config, &cwd(), NO);
         assert_eq!(starts.load(Ordering::SeqCst), 1);
         assert_eq!(
-            servers.state("a", &config.mcp_servers["a"]),
+            servers.state("a", &config.mcp_servers["a"], &cwd()),
             McpServerState::Running {
                 tools: vec![
                     McpToolInfo { name: "echo".into(), description: "Says it back".into(), ..Default::default() },
@@ -748,7 +757,7 @@ mod tests {
         let error = call(&tools, "crash").unwrap_err();
         assert!(matches!(error, McpError::Exited { .. }), "{error:?}");
         assert_eq!(starts.load(Ordering::SeqCst), 1, "the failed call is not repeated on a new server");
-        assert!(matches!(servers.state("a", &config.mcp_servers["a"]), McpServerState::Exited { error } if error.contains("boom")));
+        assert!(matches!(servers.state("a", &config.mcp_servers["a"], &cwd()), McpServerState::Exited { error } if error.contains("boom")));
 
         assert_eq!(call(&tools, "echo").unwrap(), "run 2");
         call(&tools, "crash").unwrap_err();
@@ -768,7 +777,7 @@ mod tests {
         assert!(matches!(call(&tools, "echo").unwrap_err(), McpError::NotStarted(_)));
         assert_eq!(call(&tools, "echo").unwrap_err(), McpError::NotRestarted);
         assert_eq!(starts.load(Ordering::SeqCst), 2);
-        assert!(matches!(servers.state("a", &config.mcp_servers["a"]), McpServerState::Exited { error } if error.contains("no such command")));
+        assert!(matches!(servers.state("a", &config.mcp_servers["a"], &cwd()), McpServerState::Exited { error } if error.contains("no such command")));
     }
 
     /// A server that hangs on start would otherwise cost every turn its
@@ -780,10 +789,10 @@ mod tests {
         assert!(servers.for_turn(&broken, &cwd(), NO).get("mcp__a__echo").is_none());
         servers.for_turn(&broken, &cwd(), NO);
         assert_eq!(starts.load(Ordering::SeqCst), 1);
-        assert!(matches!(servers.state("a", &broken.mcp_servers["a"]), McpServerState::Failed { error } if error.contains("no such command")));
+        assert!(matches!(servers.state("a", &broken.mcp_servers["a"], &cwd()), McpServerState::Failed { error } if error.contains("no such command")));
 
         let fixed = config(&[("a", "ok")]);
-        assert_eq!(servers.state("a", &fixed.mcp_servers["a"]), McpServerState::NotStarted);
+        assert_eq!(servers.state("a", &fixed.mcp_servers["a"], &cwd()), McpServerState::NotStarted);
         assert!(servers.for_turn(&fixed, &cwd(), NO).get("mcp__a__echo").is_some());
     }
 
@@ -792,7 +801,7 @@ mod tests {
         let (servers, starts) = servers();
         let config = config(&[("a", "ok")]);
         assert!(servers.for_turn(&config, &cwd(), &|| true).get("mcp__a__echo").is_none());
-        assert_eq!(servers.state("a", &config.mcp_servers["a"]), McpServerState::NotStarted);
+        assert_eq!(servers.state("a", &config.mcp_servers["a"], &cwd()), McpServerState::NotStarted);
         servers.for_turn(&config, &cwd(), NO);
         assert_eq!(starts.load(Ordering::SeqCst), 2, "tried again");
     }
@@ -849,7 +858,7 @@ mod tests {
         let mut after = before.clone();
         after.mcp_servers.get_mut("a").unwrap().show_tool("crash", false);
         assert!(
-            matches!(servers.state("a", &after.mcp_servers["a"]), McpServerState::Running { .. }),
+            matches!(servers.state("a", &after.mcp_servers["a"], &cwd()), McpServerState::Running { .. }),
             "the file changed outside the app: still the running server"
         );
 
@@ -893,7 +902,7 @@ mod tests {
         servers.prune(&config);
         let entry = &tools.get("mcp__a__echo").unwrap().client;
         assert_eq!(Arc::strong_count(entry), 2, "held by this turn's two tool entries alone, not by the pool");
-        assert_eq!(servers.state("a", &config.mcp_servers["a"]), McpServerState::NotStarted);
+        assert_eq!(servers.state("a", &config.mcp_servers["a"], &cwd()), McpServerState::NotStarted);
     }
 
     #[test]
@@ -910,7 +919,7 @@ mod tests {
             let (servers, config) = (Arc::clone(&servers), config.clone());
             std::thread::spawn(move || servers.for_turn(&config, &cwd(), NO).definitions(&Default::default()).len())
         };
-        while servers.state("a", &config.mcp_servers["a"]) != McpServerState::Starting {
+        while servers.state("a", &config.mcp_servers["a"], &cwd()) != McpServerState::Starting {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         config.mcp_servers.get_mut("a").unwrap().disabled = true;
@@ -919,7 +928,7 @@ mod tests {
 
         assert_eq!(turn.join().unwrap(), 0, "the turn does not get it");
         config.mcp_servers.get_mut("a").unwrap().disabled = false;
-        assert_eq!(servers.state("a", &config.mcp_servers["a"]), McpServerState::NotStarted, "nor does the pool keep it");
+        assert_eq!(servers.state("a", &config.mcp_servers["a"], &cwd()), McpServerState::NotStarted, "nor does the pool keep it");
     }
 
     /// On quit: the servers run in process groups of their own and would
@@ -930,16 +939,96 @@ mod tests {
         let config = config(&[("a", "ok")]);
         drop(servers.for_turn(&config, &cwd(), NO));
         servers.stop_all();
-        assert_eq!(servers.state("a", &config.mcp_servers["a"]), McpServerState::NotStarted);
+        assert_eq!(servers.state("a", &config.mcp_servers["a"], &cwd()), McpServerState::NotStarted);
     }
 
+    /// A start still running when its folder closes ends in nothing: the
+    /// server it brought up is stopped, and the folder has no pool again.
     #[test]
-    fn another_workspace_starts_the_servers_again() {
+    fn a_start_that_ends_after_its_folder_closed_is_dropped() {
+        let (servers, release) = gated();
+        let servers = Arc::new(servers);
+        let config = config(&[("a", "ok")]);
+        let (by_turn, cfg) = (Arc::clone(&servers), config.clone());
+        let turn = std::thread::spawn(move || by_turn.for_turn(&cfg, &cwd(), NO).get("mcp__a__echo").is_some());
+        starting(&servers, &config);
+
+        servers.stop(&cwd());
+        release.send(()).unwrap();
+
+        assert!(!turn.join().unwrap(), "the closed folder's turn got its server");
+        assert!(lock(&servers.pools).get(&cwd()).is_none(), "the pool came back");
+    }
+
+    /// F-8.4: each folder runs its own servers. A turn in B starts B's and
+    /// leaves A's running — A's next turn is served by the same process —
+    /// and closing A stops A's alone.
+    #[test]
+    fn a_turn_in_another_folder_leaves_the_first_folders_servers_running() {
         let (servers, starts) = servers();
         let config = config(&[("a", "ok")]);
+        let elsewhere = Path::new("/elsewhere");
         servers.for_turn(&config, &cwd(), NO);
-        servers.for_turn(&config, Path::new("/elsewhere"), NO);
+        let there = servers.for_turn(&config, elsewhere, NO);
+        assert_eq!(starts.load(Ordering::SeqCst), 2, "B's server is one of its own");
+        assert_eq!(call(&there, "echo").unwrap(), "run 2");
+
+        let here = servers.for_turn(&config, &cwd(), NO);
+        assert_eq!(call(&here, "echo").unwrap(), "run 1", "A's server kept running");
         assert_eq!(starts.load(Ordering::SeqCst), 2);
+
+        servers.stop(&cwd());
+        assert_eq!(servers.state("a", &config.mcp_servers["a"], &cwd()), McpServerState::NotStarted);
+        assert!(servers.running(&cwd()).get("mcp__a__echo").is_none());
+        assert!(matches!(servers.state("a", &config.mcp_servers["a"], elsewhere), McpServerState::Running { .. }), "B's kept");
+        assert!(servers.running(elsewhere).get("mcp__a__echo").is_some());
+    }
+
+    /// The tab's start and the `/` menu's prompts are of one folder too.
+    #[test]
+    fn connecting_and_prompts_are_of_one_folder() {
+        let (servers, starts) = servers();
+        let config = config(&[("a", "ok")]);
+        let elsewhere = Path::new("/elsewhere");
+        assert!(matches!(servers.connect("a", &config, &cwd()), McpServerState::Running { .. }));
+        assert_eq!(servers.state("a", &config.mcp_servers["a"], elsewhere), McpServerState::NotStarted);
+        assert!(servers.prompts(elsewhere).is_empty());
+        assert!(servers.get_prompt("a", "greet", "", elsewhere).is_err());
+        assert_eq!(servers.prompts(&cwd()).len(), 1);
+
+        assert!(matches!(servers.connect("a", &config, elsewhere), McpServerState::Running { .. }));
+        assert_eq!(starts.load(Ordering::SeqCst), 2);
+        assert!(servers.get_prompt("a", "greet", "", &cwd()).unwrap().contains("run 1"), "A's own process answers");
+    }
+
+    /// A server stuck starting in one folder does not hold up a turn in
+    /// another.
+    #[test]
+    fn a_turn_waits_only_for_its_own_folders_starts() {
+        let (servers, _) = servers();
+        let config = config(&[("a", "ok")]);
+        lock(&servers.pools)
+            .entry(PathBuf::from("/elsewhere"))
+            .or_default()
+            .slots
+            .insert("a".into(), Slot { config: config.mcp_servers["a"].clone(), state: SlotState::Starting });
+        let began = std::time::Instant::now();
+        let given_up = move || began.elapsed() > Duration::from_secs(2);
+        let tools = servers.for_turn(&config, &cwd(), &given_up);
+        assert!(!given_up(), "waited for another folder's start");
+        assert!(tools.get("mcp__a__echo").is_some());
+    }
+
+    /// Switching a server off stops it in every folder: the file is one.
+    #[test]
+    fn switching_off_stops_the_server_in_every_folder() {
+        let (servers, _) = servers();
+        let on = config(&[("a", "ok")]);
+        servers.for_turn(&on, &cwd(), NO);
+        servers.for_turn(&on, Path::new("/elsewhere"), NO);
+        servers.prune(&config(&[]));
+        assert!(servers.running(&cwd()).get("mcp__a__echo").is_none());
+        assert!(servers.running(Path::new("/elsewhere")).get("mcp__a__echo").is_none());
     }
 
     /// The done-when of M-4: a server that changed its list offers the new
@@ -960,7 +1049,7 @@ mod tests {
         let wipe = next.get("mcp__a__wipe").expect("the new tool is offered");
         assert!(wipe.tool.hints.destructive);
         assert_eq!(starts.load(Ordering::SeqCst), 1, "restarted to be asked");
-        let McpServerState::Running { tools: shown, .. } = servers.state("a", &config.mcp_servers["a"]) else { panic!("not running") };
+        let McpServerState::Running { tools: shown, .. } = servers.state("a", &config.mcp_servers["a"], &cwd()) else { panic!("not running") };
         assert_eq!(
             shown[2],
             McpToolInfo {
