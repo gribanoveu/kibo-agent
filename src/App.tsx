@@ -245,10 +245,13 @@ export default function App() {
   // On screen in either dock: what decides whether a pane's data is read.
   const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
   const toolLog = useToolLog(logOpen);
-  const history = useChatHistory(workspace.path);
-  const chatGroups = useChatGroups(agentMode ? workspace.path : null);
-  const [movedChat, setMovedChat] = useState<{ id: string; path: string } | null>(null);
-  const movedChatOpened = useCallback(() => setMovedChat(null), []);
+  const history = useChatHistory(workspace.folders, workspace.path);
+  const chatGroups = useChatGroups(agentMode ? workspace.folders : [null]);
+  // A chat to open once its folder is the active one: one moved to its
+  // worktree, or one of another folder picked in the sidebar. Opened only
+  // then, or the folder change's reset of the thread would close it again.
+  const [pendingChat, setPendingChat] = useState<{ id: string; path: string } | null>(null);
+  const pendingChatOpened = useCallback(() => setPendingChat(null), []);
   // The list is redrawn from disk after every save rather than guessed at
   // here: what belongs in it, and in what order, is the store's rule.
   // Queued messages that will not be sent after all go back to the box.
@@ -272,8 +275,8 @@ export default function App() {
     workspace.resumed,
     history.chats.find((one) => !one.archived)?.id,
     agent,
-    movedChat,
-    movedChatOpened,
+    pendingChat,
+    pendingChatOpened,
   );
   // Sounds and notifications when the agent finishes or asks, each switched in Settings.
   const [alerts, setAlerts] = useStoredState("turn-alerts", DEFAULT_ALERTS, isAlertPrefs);
@@ -369,8 +372,16 @@ export default function App() {
     ideLayout: agentMode ? toggleIde : undefined,
   });
 
-  const selectChat = (id: string) => {
+  // A chat of another folder makes that folder the active one first (F-8.6):
+  // the right panel and the next new chat follow the chat on screen.
+  const selectChat = (id: string, folder: string | null = agentMode ? history.folderOf(id) : null) => {
     setPage(null);
+    if (agentMode && folder && folder !== workspace.path) {
+      return void folderSwitch.guard(() => {
+        setPendingChat({ id, path: folder });
+        void workspace.open(folder).then((opened) => opened || setPendingChat(null));
+      });
+    }
     void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
   };
 
@@ -389,6 +400,14 @@ export default function App() {
     }
     if (!agent.reset()) return toast.show(STAY);
     focusComposer();
+  };
+
+  // The section's "+": in the active folder an ordinary new chat; in another
+  // one the folder becomes active, and its change starts the thread afresh.
+  const newChatIn = (folder: string) => {
+    if (folder === workspace.path) return newChat();
+    setPage(null);
+    void folderSwitch.guard(() => void workspace.open(folder));
   };
 
   // The window the meter is drawn against, and the provider a turn talks to.
@@ -456,9 +475,12 @@ export default function App() {
   const anyTurnBusy = activities.includes("running") || activities.includes("awaitingApproval");
   const folderSwitch = useFolderSwitch(
     activities.includes("running") ? "running" : activities.includes("awaitingApproval") ? "waiting" : null,
+    workspace.path,
   );
-  const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path), undefined, path);
+  // Opening a folder closes none (F-8.6); closing one stops what runs in it, and says so first.
+  const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
+  const closeFolder = (path: string) => void folderSwitch.guard(() => void workspace.close(path), undefined, [path]);
   // Before the first message the branch is where the chat starts; after it,
   // the chat's own branch — switched only between turns, never under one.
   const branchPicker = useBranchPicker({
@@ -512,16 +534,15 @@ export default function App() {
     if (!id) return;
     try {
       const path = await moveChatToWorktree(id);
-      setMovedChat({ id, path });
-      // This is not an ordinary folder switch: the neighbouring chat keeps
-      // its running processes, terminals and checkout.
-      if (!(await workspace.open(path, true))) {
-        setMovedChat(null);
-        return;
+      setPendingChat({ id, path });
+      // The worktree opens beside the folder: the neighbouring chat keeps its
+      // running processes, terminals and checkout.
+      if (!(await workspace.open(path))) {
+        setPendingChat(null);
       }
-      history.refresh();
+      // The lists re-read as the worktree joins the open folders.
     } catch (e) {
-      setMovedChat(null);
+      setPendingChat(null);
       toast.show(String(e));
     }
   };
@@ -910,9 +931,15 @@ export default function App() {
             setPageItem(undefined);
             setPage(next);
           }}
-          chats={agentMode ? history.chats : plain.chats}
-          groups={chatGroups.groups}
-          groupScope={workspace.path}
+          sections={
+            agentMode
+              ? workspace.folders.map((path) => ({ path, chats: history.byFolder[path] ?? [], groups: chatGroups.groupsOf(path) }))
+              : [{ path: null, chats: plain.chats, groups: chatGroups.groupsOf(null) }]
+          }
+          activeFolder={agentMode ? workspace.path : null}
+          onNewChatIn={agentMode ? newChatIn : undefined}
+          onCloseFolder={agentMode ? closeFolder : undefined}
+          onAddFolder={agentMode ? chooseFolder : undefined}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
@@ -925,23 +952,23 @@ export default function App() {
           onMoveChat={(id, group) =>
             agentMode ? history.move(id, group).catch((e) => toast.show(String(e))) : void plain.move(id, group)
           }
-          onCreateGroup={async (name) => {
+          onCreateGroup={async (scope, name) => {
             try {
-              return { id: (await chatGroups.create(name)).id };
+              return { id: (await chatGroups.create(scope, name)).id };
             } catch (e) {
               return { error: String(e) };
             }
           }}
-          onRenameGroup={async (id, name) => {
+          onRenameGroup={async (scope, id, name) => {
             try {
-              await chatGroups.rename(id, name);
+              await chatGroups.rename(scope, id, name);
               return {};
             } catch (e) {
               return { error: String(e) };
             }
           }}
-          onDeleteGroup={(id) =>
-            void chatGroups.remove(id).then(
+          onDeleteGroup={(scope, id) =>
+            void chatGroups.remove(scope, id).then(
               () => (agentMode ? history.refresh() : plain.refresh()),
               (e) => toast.show(String(e)),
             )

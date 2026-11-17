@@ -34,7 +34,12 @@ export function useFolderConversation(
 
   const shown = useRef(path);
   useEffect(() => {
-    if (shown.current && path !== shown.current) agent.reset();
+    if (shown.current && path !== shown.current) {
+      // The launch's comeback is over once the user moves: a folder opened
+      // later starts empty, even if the first one had no chat to reopen.
+      reopened.current = true;
+      agent.reset();
+    }
     shown.current = path;
     // A moved chat is reopened only once its worktree is actually open; doing
     // it after the invoke alone would race the folder-change reset above.

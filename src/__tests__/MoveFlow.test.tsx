@@ -51,8 +51,8 @@ import { useChatGroups } from "../hooks/useChatGroups";
 /** App.tsx's wiring, minus the rest of the app. */
 function Harness({ agentMode }: { agentMode: boolean }) {
   const workspace = "/repo";
-  const history = useChatHistory(agentMode ? workspace : null);
-  const chatGroups = useChatGroups(agentMode ? workspace : null);
+  const history = useChatHistory(agentMode ? [workspace] : [], agentMode ? workspace : null);
+  const chatGroups = useChatGroups([agentMode ? workspace : null]);
   const [, setToast] = useState<string | null>(null);
   return (
     <Sidebar
@@ -61,9 +61,8 @@ function Harness({ agentMode }: { agentMode: boolean }) {
       pages={PAGES}
       page={null}
       onPage={() => {}}
-      chats={history.chats}
-      groups={chatGroups.groups}
-      groupScope={workspace}
+      sections={[{ path: workspace, chats: history.chats, groups: chatGroups.groupsOf(workspace) }]}
+      activeFolder={workspace}
       activeChat={null}
       onSelectChat={() => {}}
       onArchiveChat={() => {}}
@@ -71,9 +70,9 @@ function Harness({ agentMode }: { agentMode: boolean }) {
       onMoveChat={(id, group) =>
         agentMode ? history.move(id, group).catch((e) => setToast(String(e))) : void Promise.resolve()
       }
-      onCreateGroup={async (name) => {
+      onCreateGroup={async (scope, name) => {
         try {
-          return { id: (await chatGroups.create(name)).id };
+          return { id: (await chatGroups.create(scope, name)).id };
         } catch (e) {
           return { error: String(e) };
         }

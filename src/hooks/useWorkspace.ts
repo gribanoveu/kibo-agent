@@ -1,30 +1,91 @@
 import { useCallback, useEffect, useState } from "react";
-import { currentWorkspace, forgetWorkspace, openWorkspace, type RecentFolder, recentWorkspaces } from "../lib/chat";
+import {
+  addWorkspace,
+  closeWorkspace,
+  currentWorkspace,
+  forgetWorkspace,
+  listWorkspaces,
+  type RecentFolder,
+  recentWorkspaces,
+} from "../lib/chat";
 import { pickFolder } from "../lib/dialog";
 
-/** The folder the agent acts on. Resolved by the backend, displayed here. */
+/**
+ * Where the sidebar's sections stay put: a folder keeps its place, and one
+ * opened since goes at the end — the backend lists the last activated first,
+ * and a list that reordered whenever a chat of another folder was opened
+ * would move under the pointer.
+ */
+export function keepOrder(shown: string[], open: string[]): string[] {
+  const kept = shown.filter((path) => open.includes(path));
+  const added = open.filter((path) => !shown.includes(path)).reverse();
+  return [...kept, ...added];
+}
+
+/**
+ * The folders open in the window (F-8) and the active one — the folder of the
+ * chat on screen, which the right panel and a new chat work in. Resolved by
+ * the backend, displayed here.
+ */
 export function useWorkspace() {
   const [path, setPath] = useState<string | null>(null);
+  const [folders, setFolders] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentFolder[]>([]);
   // Whether the folder is the one the app came back to rather than one the
   // user just chose: only then is its last conversation reopened too.
   const [resumed, setResumed] = useState(false);
 
-  const open = useCallback(async (next: string, keepRunning = false) => {
-    try {
-      setPath(await openWorkspace(next.trim(), keepRunning));
-      setError(null);
-      return true;
-    } catch (e) {
-      setError(String(e));
-      return false;
-    } finally {
-      recentWorkspaces().then(setRecent).catch(() => {});
-    }
+  /** The open set and the active mark as the backend has them now. */
+  const reread = useCallback(async () => {
+    const [open, active] = await Promise.all([listWorkspaces().catch(() => null), currentWorkspace().catch(() => null)]);
+    setFolders((shown) => {
+      const next = open ? keepOrder(shown, open.map((folder) => folder.path)) : shown;
+      // The active folder always has its section, even when the list could not be read.
+      return active && !next.includes(active) ? [...next, active] : next;
+    });
+    setPath(active);
   }, []);
 
-  // A reloaded window asks the backend, which still has its folder; a new
+  /**
+   * Opens a folder beside the others, or makes an open one active. Nothing
+   * of another folder stops: closing is `close`.
+   */
+  const open = useCallback(
+    async (next: string) => {
+      try {
+        setPath(await addWorkspace(next.trim()));
+        setError(null);
+        return true;
+      } catch (e) {
+        setError(String(e));
+        return false;
+      } finally {
+        recentWorkspaces().then(setRecent).catch(() => {});
+        await reread();
+      }
+    },
+    [reread],
+  );
+
+  /** Closes a folder: its processes, shells, servers and index stop; the next open one becomes active. */
+  const close = useCallback(
+    async (folder: string) => {
+      try {
+        await closeWorkspace(folder);
+        setError(null);
+        return true;
+      } catch (e) {
+        setError(String(e));
+        return false;
+      } finally {
+        await reread();
+      }
+    },
+    [reread],
+  );
+
+  // A reloaded window asks the backend, which still has its folders; a new
   // launch reopens the folder opened last. One that is gone is not in the
   // list, and the window starts empty as it would have.
   useEffect(() => {
@@ -33,13 +94,13 @@ export function useWorkspace() {
       setRecent(list);
       const current = await currentWorkspace().catch(() => null);
       if (current) {
-        setPath(current);
+        await reread();
         setResumed(true);
       } else if (list[0] && (await open(list[0].path))) {
         setResumed(true);
       }
     })();
-  }, [open]);
+  }, [open, reread]);
 
   /** Asks for a folder and opens it. `false` also means "the user cancelled". */
   const pick = useCallback(async () => {
@@ -68,5 +129,5 @@ export function useWorkspace() {
     [refreshRecent],
   );
 
-  return { path, error, recent, resumed, open, pick, refreshRecent, forget };
+  return { path, folders, error, recent, resumed, open, close, pick, refreshRecent, forget };
 }

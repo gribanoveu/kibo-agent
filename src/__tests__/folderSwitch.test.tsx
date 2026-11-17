@@ -3,9 +3,10 @@ import { act, fireEvent, render, renderHook, screen } from "@testing-library/rea
 import type { ProcessView } from "../lib/processes";
 import type { TerminalInfo } from "../lib/terminal";
 
-// Opening another folder stops the background processes of the one left, closes its
-// terminals and would file a running turn's chat in the wrong folder. The
-// user is told before any of it.
+// Closing a folder stops its background processes and closes its terminals;
+// changing the active folder under a running turn would file its chat in the
+// wrong folder. The user is told before any of it. Opening a folder closes
+// none (F-8.6), so it asks about nothing that runs.
 
 let processes: ProcessView[] = [];
 let terminals: TerminalInfo[] = [];
@@ -45,12 +46,26 @@ const proc = (id: number, command: string, state: ProcessView["state"]): Process
   tail: "",
 });
 
+const KIBO = ["/work/kibo"];
+
 describe("switching folders", () => {
-  test("with nothing running, it just switches", async () => {
-    processes = [proc(1, "bun test", { state: "exited", code: 0 })];
+  test("opening a folder asks about nothing, whatever runs in the others", async () => {
+    open = ["/work/kibo", "/work/other"];
+    processes = [proc(1, "bun run dev", { state: "running" })];
+    terminals = [{ id: 1, shell: "zsh", state: { state: "running" } }];
     let went = 0;
     const { result } = renderHook(() => useFolderSwitch(null));
     await act(() => result.current.guard(() => went++));
+    expect(went).toBe(1);
+    expect(result.current.blocked).toBeNull();
+    expect(asked).toEqual([]);
+  });
+
+  test("closing a folder with nothing running just closes it", async () => {
+    processes = [proc(1, "bun test", { state: "exited", code: 0 })];
+    let went = 0;
+    const { result } = renderHook(() => useFolderSwitch(null));
+    await act(() => result.current.guard(() => went++, undefined, KIBO));
     expect(went).toBe(1);
     expect(result.current.blocked).toBeNull();
   });
@@ -59,24 +74,24 @@ describe("switching folders", () => {
     processes = [proc(1, "bun run dev", { state: "running" }), proc(2, "bun test", { state: "exited", code: 0 })];
     let went = 0;
     const { result } = renderHook(() => useFolderSwitch(null));
-    await act(() => result.current.guard(() => went++));
+    await act(() => result.current.guard(() => went++, undefined, KIBO));
     expect(went).toBe(0);
     const blocked = result.current.blocked;
     expect(blocked?.kind === "processes" && blocked.processes.map((p) => p.command)).toEqual(["bun run dev"]);
-    // Every chat's of the folder left, not the open chat's: the switch closes that folder (F-8.3).
+    expect(blocked?.kind === "processes" && blocked.folders).toEqual(KIBO);
+    // Every chat's of the folder closed, not the open chat's (F-8.3).
     expect(asked).toContainEqual({ command: "processes_list", args: { chatId: null, workspace: "/work/kibo" } });
     expect(asked).toContainEqual({ command: "terminal_list", args: { workspace: "/work/kibo" } });
   });
 
-  test("names what runs in every open folder the switch closes, and not in the one it opens", async () => {
-    // A chat moved to its worktree left its folder open and running.
+  test("names what runs in the folder that closes, and not in the others", async () => {
     open = ["/work/kibo-wt", "/work/kibo", "/work/other"];
     processes = [
       { ...proc(1, "bun run dev", { state: "running" }), cwd: "/work/kibo" },
       { ...proc(2, "cargo watch", { state: "running" }), cwd: "/work/other" },
     ];
     const { result } = renderHook(() => useFolderSwitch(null));
-    await act(() => result.current.guard(() => {}, undefined, "/work/other"));
+    await act(() => result.current.guard(() => {}, undefined, KIBO));
     const blocked = result.current.blocked;
     expect(blocked?.kind === "processes" && blocked.processes.map((p) => p.command)).toEqual(["bun run dev"]);
   });
@@ -85,11 +100,11 @@ describe("switching folders", () => {
     terminals = [{ id: 1, shell: "zsh", state: { state: "exited", code: 0 } }];
     let went = 0;
     const { result } = renderHook(() => useFolderSwitch(null));
-    await act(() => result.current.guard(() => went++));
+    await act(() => result.current.guard(() => went++, undefined, KIBO));
     expect(went).toBe(1);
 
     terminals.push({ id: 2, shell: "zsh", state: { state: "running" } });
-    await act(() => result.current.guard(() => went++));
+    await act(() => result.current.guard(() => went++, undefined, KIBO));
     expect(went).toBe(1);
     const blocked = result.current.blocked;
     expect(blocked?.kind === "processes" && blocked.terminals.map((t) => t.id)).toEqual([2]);
@@ -101,11 +116,11 @@ describe("switching folders", () => {
     let went = 0;
     let cancelled = 0;
     const { result } = renderHook(() => useFolderSwitch(null));
-    await act(() => result.current.guard(() => went++, () => cancelled++));
+    await act(() => result.current.guard(() => went++, () => cancelled++, KIBO));
     act(() => result.current.close());
     expect([went, cancelled]).toEqual([0, 1]);
 
-    await act(() => result.current.guard(() => went++, () => cancelled++));
+    await act(() => result.current.guard(() => went++, () => cancelled++, KIBO));
     act(() => {
       const blocked = result.current.blocked;
       if (blocked?.kind === "processes") blocked.go();
@@ -127,6 +142,19 @@ describe("switching folders", () => {
     expect(result.current.blocked).toEqual({ kind: "agent", waiting: false });
   });
 
+  /// Closing another folder leaves the active one, and the turn's chat, where they are.
+  test("a turn blocks closing the active folder, not another one", async () => {
+    let went = 0;
+    const { result } = renderHook(() => useFolderSwitch("running", "/work/kibo"));
+    await act(() => result.current.guard(() => went++, undefined, ["/work/other"]));
+    expect(went).toBe(1);
+    expect(result.current.blocked).toBeNull();
+
+    await act(() => result.current.guard(() => went++, undefined, ["/work/kibo"]));
+    expect(went).toBe(1);
+    expect(result.current.blocked).toEqual({ kind: "agent", waiting: false });
+  });
+
   /// A turn paused on an approval card is a turn too: leaving would drop the card.
   test("a turn waiting on a card is refused as well, and said to be waiting", async () => {
     let went = 0;
@@ -138,11 +166,12 @@ describe("switching folders", () => {
 });
 
 describe("the dialog", () => {
-  test("switches only when the user agrees to stop the processes", () => {
+  test("closes only when the user agrees to stop the processes", () => {
     let went = 0;
     let closed = 0;
     const blocked = {
       kind: "processes" as const,
+      folders: ["/work/other"],
       processes: [proc(1, "bun run dev", { state: "running" })],
       terminals: [{ id: 3, shell: "zsh", state: { state: "running" as const } }],
       go: () => went++,
@@ -152,9 +181,11 @@ describe("the dialog", () => {
     );
     expect(screen.getByText("bun run dev")).toBeTruthy();
     expect(screen.getByText("terminal: zsh")).toBeTruthy();
+    // The folder closing, not the active one.
+    expect(screen.getByText("other")).toBeTruthy();
     fireEvent.click(screen.getByText("Cancel"));
     expect(went).toBe(0);
-    fireEvent.click(screen.getByText("Stop them and switch"));
+    fireEvent.click(screen.getByText("Stop them and close"));
     expect(went).toBe(1);
     expect(closed).toBe(2);
     unmount();

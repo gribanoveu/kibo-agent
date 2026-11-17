@@ -8,6 +8,7 @@ import {
   CircleCheck,
   CodeXml,
   FolderInput,
+  FolderPlus,
   GitBranch,
   Info,
   Keyboard,
@@ -19,7 +20,9 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Plus,
   Search,
+  X,
   Settings,
   ShipWheel,
   Sun,
@@ -81,6 +84,16 @@ function byDay(chats: ChatSummary[]) {
   ].filter((group) => group.chats.length > 0);
 }
 
+/** One section of the list: an open folder's chats and chat folders, or Chat mode's (`path` null). */
+export type ChatSection = { path: string | null; chats: ChatSummary[]; groups: ChatGroup[] };
+
+/** The last part of a folder's path, as its section head names it. */
+const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/** Whether the filter and the search leave a chat in the list. */
+const shownBy = (chat: ChatSummary, filter: Filter, wanted: string) =>
+  (filter === "all" || chat.archived === (filter === "archived")) && chat.title.toLowerCase().includes(wanted);
+
 /** `useStoredState`'s screen for the collapsed-folder list. */
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 
@@ -92,22 +105,27 @@ type Props = {
   /** The page open in place of the chat (pages.tsx); no mode is lit then. */
   page: PageId | null;
   onPage: (page: PageId) => void;
-  chats: ChatSummary[];
-  /** The folders of the current list — the open folder's, or Chat mode's shared set. */
-  groups: ChatGroup[];
-  /** What the collapsed-folder memory is scoped by: the open folder's path, null for Chat mode. */
-  groupScope: string | null;
+  /** The list, a section per open folder in Agent mode (F-8.6); Chat mode's one set has `path` null. */
+  sections: ChatSection[];
+  /** The folder the chat on screen is in — its section's head is lit. */
+  activeFolder?: string | null;
   activeChat: string | null;
   chatActivity?: Record<string, ChatActivity>;
-  onSelectChat: (id: string) => void;
+  /** `folder` is the section the row is in: opening its chat makes it the active folder. */
+  onSelectChat: (id: string, folder: string | null) => void;
   onArchiveChat: (id: string, archived: boolean) => void;
   onPinChat: (id: string, pinned: boolean) => void;
   onMoveChat: (id: string, groupId: string | null) => void;
-  /** Makes a folder; resolves to its id, or the refusal as `error` (the dialog stays open). */
-  onCreateGroup: (name: string) => Promise<{ id?: string; error?: string }>;
-  /** Renames a folder; a refusal comes back as `error` and keeps the dialog open. */
-  onRenameGroup: (id: string, name: string) => Promise<{ error?: string }>;
-  onDeleteGroup: (id: string) => void;
+  /** Makes a chat folder in `scope`'s list; resolves to its id, or the refusal as `error` (the dialog stays open). */
+  onCreateGroup: (scope: string | null, name: string) => Promise<{ id?: string; error?: string }>;
+  /** Renames a chat folder; a refusal comes back as `error` and keeps the dialog open. */
+  onRenameGroup: (scope: string | null, id: string, name: string) => Promise<{ error?: string }>;
+  onDeleteGroup: (scope: string | null, id: string) => void;
+  /** Agent mode's section heads: a new chat in that folder, and closing it. */
+  onNewChatIn?: (folder: string) => void;
+  onCloseFolder?: (folder: string) => void;
+  /** Agent mode: opens another folder beside the others. */
+  onAddFolder?: () => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
   onOnboardingAction: (tab: AsideTab) => void;
@@ -122,9 +140,8 @@ export function Sidebar({
   pages,
   page,
   onPage,
-  chats,
-  groups,
-  groupScope,
+  sections,
+  activeFolder = null,
   activeChat,
   chatActivity = {},
   onSelectChat,
@@ -134,6 +151,9 @@ export function Sidebar({
   onCreateGroup,
   onRenameGroup,
   onDeleteGroup,
+  onNewChatIn,
+  onCloseFolder,
+  onAddFolder,
   onDeleteChat,
   onOpenSettings,
   onOnboardingAction,
@@ -146,12 +166,11 @@ export function Sidebar({
   const [deleting, setDeleting] = useState<ChatSummary | null>(null);
   /** A folder being named: `group` set is a rename, unset a new one; a new
       one made from a chat's Move to folder carries `chat` into it. */
-  const [naming, setNaming] = useState<{ group: ChatGroup | null; name: string; chat: ChatSummary | null } | null>(null);
+  const [naming, setNaming] = useState<{ scope: string | null; group: ChatGroup | null; name: string; chat: ChatSummary | null } | null>(
+    null,
+  );
   const [nameError, setNameError] = useState<string | null>(null);
-  const [deletingGroup, setDeletingGroup] = useState<ChatGroup | null>(null);
-  // A folder shut by id, remembered per list: collapse is about the view,
-  // not the chats, so it lives in window storage and not in the store.
-  const [collapsed, setCollapsed] = useStoredState<string[]>(`kibo-chat-groups-${groupScope ?? ""}`, [], isStringArray);
+  const [deletingGroup, setDeletingGroup] = useState<{ scope: string | null; group: ChatGroup } | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   useShortcuts({ shortcuts: () => setShortcutsOpen((v) => !v) });
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -160,19 +179,7 @@ export function Sidebar({
     if (aboutOpen && version === null) void appVersion().then(setVersion, () => setVersion("unknown"));
   }, [aboutOpen, version]);
   const wanted = query.trim().toLowerCase();
-  const listed = chats.filter(
-    (chat) => (filter === "all" || chat.archived === (filter === "archived")) && chat.title.toLowerCase().includes(wanted),
-  );
-  // Pinned first, then the folders, then the days — and a row shown twice
-  // reads as two chats, so each of the three takes a chat out of the rest.
-  // Folders are the working view: only the active filter draws them. A chat
-  // whose folder is not among the known ones (a folder deleted mid-move, a
-  // list fresher than the folders) is never lost: it falls into the days.
-  const groupIds = new Set(groups.map((group) => group.id));
-  const pinnedRows = filter === "active" ? listed.filter((chat) => chat.pinned) : [];
-  const folderRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group != null && groupIds.has(chat.group)) : [];
-  const dayRows =
-    filter === "active" ? listed.filter((chat) => !chat.pinned && (chat.group == null || !groupIds.has(chat.group))) : listed;
+  const anything = sections.some((section) => section.chats.length > 0 || section.groups.length > 0);
   const userWrap = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -189,12 +196,12 @@ export function Sidebar({
     };
   }, [menuOpen]);
 
-  const chatRow = (chat: ChatSummary) => (
+  const chatRow = (chat: ChatSummary, { path: scope, groups }: ChatSection) => (
     <div key={chat.id} className={`chat-row${chat.archived ? " archived" : ""}`}>
       <button
         type="button"
         className={`chat${page === null && chat.id === activeChat ? " active" : ""}`}
-        onClick={() => onSelectChat(chat.id)}
+        onClick={() => onSelectChat(chat.id, scope)}
         title={chat.archived ? "Archived" : chat.branchedFrom ? "A branch of an earlier chat" : undefined}
       >
         {chatActivity[chat.id] === "running" ? (
@@ -236,7 +243,7 @@ export function Sidebar({
                 label: "New folder…",
                 divided: true,
                 onSelect: () => {
-                  setNaming({ group: null, name: "", chat });
+                  setNaming({ scope, group: null, name: "", chat });
                   setNameError(null);
                 },
               },
@@ -286,17 +293,14 @@ export function Sidebar({
     </div>
   );
 
-  const toggleFolder = (id: string) =>
-    setCollapsed((shut) => (shut.includes(id) ? shut.filter((one) => one !== id) : [...shut, id]));
-
   const saveName = async () => {
     if (!naming?.name.trim()) return;
     let error: string | undefined;
     let id: string | undefined;
     if (naming.group) {
-      ({ error } = await onRenameGroup(naming.group.id, naming.name));
+      ({ error } = await onRenameGroup(naming.scope, naming.group.id, naming.name));
     } else {
-      ({ error, id } = await onCreateGroup(naming.name));
+      ({ error, id } = await onCreateGroup(naming.scope, naming.name));
     }
     if (error) {
       // The refusal names the fix; the dialog stays open with it.
@@ -365,83 +369,51 @@ export function Sidebar({
       </div>
 
       <div className="group">
-        {(chats.length > 0 || groups.length > 0) && (
+        {(anything || onAddFolder) && (
           <div className="group-head">
             <span>Chats</span>
-            <Dropdown
-              label={FILTERS.find((f) => f.value === filter)?.label}
-              title="Which chats to list"
-              options={FILTERS}
-              value={filter}
-              onPick={(value) => setFilter(value as Filter)}
-              below
-              right
-            />
+            <span className="group-head-tools">
+              {onAddFolder && (
+                <button type="button" className="group-head-add" title="Open a folder beside these" aria-label="Add folder" onClick={onAddFolder}>
+                  <FolderPlus size={14} />
+                </button>
+              )}
+              {anything && (
+                <Dropdown
+                  label={FILTERS.find((f) => f.value === filter)?.label}
+                  title="Which chats to list"
+                  options={FILTERS}
+                  value={filter}
+                  onPick={(value) => setFilter(value as Filter)}
+                  below
+                  right
+                />
+              )}
+            </span>
           </div>
         )}
-        {/* With folders alive below, their Empty lines are the state — a
-            "No chats yet." above them contradicts what is on screen. */}
-        {listed.length === 0 && !(chats.length === 0 && groups.length > 0) && (
-          <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
-        )}
-        {pinnedRows.length > 0 && (
-          <section>
-            <div className="chat-day">Pinned</div>
-            {pinnedRows.map(chatRow)}
-          </section>
-        )}
-        {filter === "active" &&
-          groups.map((group) => {
-            const rows = folderRows.filter((chat) => chat.group === group.id);
-            // Searching, a folder with nothing matching is noise — the days
-            // disappear whole the same way; "Empty" is for a folder at rest.
-            if (wanted && rows.length === 0) return null;
-            const shut = collapsed.includes(group.id);
-            return (
-              <section key={group.id}>
-                <div className="chat-day chat-folder-head">
-                  <button
-                    type="button"
-                    className="chat-folder-toggle"
-                    aria-expanded={!shut}
-                    onClick={() => toggleFolder(group.id)}
-                  >
-                    <span className="chat-folder-name">{group.name}</span>
-                    <span className="chat-folder-count">{rows.length}</span>
-                    <ChevronRight size={12} className={shut ? "chat-folder-chev" : "chat-folder-chev chat-folder-open"} aria-hidden />
-                  </button>
-                  <ChatMenu
-                    items={[
-                      {
-                        id: "rename",
-                        label: "Rename…",
-                        icon: <Pencil size={14} />,
-                        onSelect: () => {
-                          setNaming({ group, name: group.name, chat: null });
-                          setNameError(null);
-                        },
-                      },
-                      {
-                        id: "delete",
-                        label: "Delete…",
-                        icon: <Trash2 size={14} />,
-                        divided: true,
-                        onSelect: () => setDeletingGroup(group),
-                      },
-                    ]}
-                  />
-                </div>
-                {!shut && (rows.length > 0 ? rows.map(chatRow) : !wanted && <div className="chat-folder-empty">Empty</div>)}
-              </section>
-            );
-          })}
-        {listed.length > 0 &&
-          byDay(dayRows).map(({ day, chats: rows }) => (
-            <section key={day}>
-              <div className="chat-day">{day}</div>
-              {rows.map(chatRow)}
-            </section>
-          ))}
+        {sections.length === 0 && <div className="empty">No chats yet.</div>}
+        {/* An open folder with nothing matching draws no section; with none matching anywhere, the list says so. */}
+        {wanted &&
+          sections.every((section) => section.path !== null) &&
+          !sections.some((section) => section.chats.some((chat) => shownBy(chat, filter, wanted))) && <div className="empty">No chats match.</div>}
+        {sections.map((section) => (
+          <SectionList
+            key={section.path ?? ""}
+            section={section}
+            filter={filter}
+            wanted={wanted}
+            active={section.path !== null && section.path === activeFolder}
+            row={(chat) => chatRow(chat, section)}
+            onRenameGroup={(group) => {
+              setNaming({ scope: section.path, group, name: group.name, chat: null });
+              setNameError(null);
+            }}
+            onDeleteGroup={(group) => setDeletingGroup({ scope: section.path, group })}
+            onNewChat={section.path !== null && onNewChatIn ? () => onNewChatIn(section.path as string) : undefined}
+            onClose={section.path !== null && onCloseFolder ? () => onCloseFolder(section.path as string) : undefined}
+          />
+        ))}
       </div>
 
       <Modal
@@ -512,7 +484,7 @@ export function Sidebar({
       </Modal>
 
       <Modal
-        title={`Delete folder “${deletingGroup?.name ?? ""}”?`}
+        title={`Delete folder “${deletingGroup?.group.name ?? ""}”?`}
         open={deletingGroup !== null}
         onClose={() => setDeletingGroup(null)}
         footer={
@@ -524,7 +496,7 @@ export function Sidebar({
               type="button"
               className="btn btn-primary"
               onClick={() => {
-                if (deletingGroup) onDeleteGroup(deletingGroup.id);
+                if (deletingGroup) onDeleteGroup(deletingGroup.scope, deletingGroup.group.id);
                 setDeletingGroup(null);
               }}
             >
@@ -656,5 +628,128 @@ export function Sidebar({
         </div>
       </div>
     </nav>
+  );
+}
+
+type SectionProps = {
+  section: ChatSection;
+  filter: Filter;
+  wanted: string;
+  /** The active folder's section: its head is lit. */
+  active: boolean;
+  row: (chat: ChatSummary) => React.ReactNode;
+  onRenameGroup: (group: ChatGroup) => void;
+  onDeleteGroup: (group: ChatGroup) => void;
+  /** Set for an open folder's section — the head that names it. */
+  onNewChat?: () => void;
+  onClose?: () => void;
+};
+
+/**
+ * One section's rows: pinned first, then the chat folders, then the days —
+ * and a row shown twice reads as two chats, so each of the three takes a
+ * chat out of the rest. Chat folders are the working view: only the active
+ * filter draws them. A chat whose folder is not among the known ones (a
+ * folder deleted mid-move, a list fresher than the folders) is never lost:
+ * it falls into the days.
+ */
+function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDeleteGroup, onNewChat, onClose }: SectionProps) {
+  const { path, chats, groups } = section;
+  // A chat folder shut by id, remembered per list: collapse is about the
+  // view, not the chats, so it lives in window storage and not in the store.
+  const [collapsed, setCollapsed] = useStoredState<string[]>(`kibo-chat-groups-${path ?? ""}`, [], isStringArray);
+  const toggleFolder = (id: string) =>
+    setCollapsed((shut) => (shut.includes(id) ? shut.filter((one) => one !== id) : [...shut, id]));
+  const listed = chats.filter((chat) => shownBy(chat, filter, wanted));
+  const groupIds = new Set(groups.map((group) => group.id));
+  const pinnedRows = filter === "active" ? listed.filter((chat) => chat.pinned) : [];
+  const folderRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group != null && groupIds.has(chat.group)) : [];
+  const dayRows =
+    filter === "active" ? listed.filter((chat) => !chat.pinned && (chat.group == null || !groupIds.has(chat.group))) : listed;
+  // Searching, a folder with nothing matching says nothing — its head stays
+  // out of the way the days do.
+  if (path !== null && wanted && listed.length === 0) return null;
+
+  return (
+    <div className="chat-section">
+      {path !== null && (
+        <div className={`chat-workspace-head${active ? " active" : ""}`} title={path}>
+          <span className="chat-workspace-name">{folderName(path)}</span>
+          {onNewChat && (
+            <button type="button" className="chat-workspace-new" title={`New chat in ${folderName(path)}`} aria-label={`New chat in ${folderName(path)}`} onClick={onNewChat}>
+              <Plus size={14} />
+            </button>
+          )}
+          {onClose && (
+            <ChatMenu
+              items={[
+                ...(onNewChat ? [{ id: "new", label: "New chat", icon: <Plus size={14} />, onSelect: onNewChat }] : []),
+                { id: "close", label: "Close folder", icon: <X size={14} />, divided: !!onNewChat, onSelect: onClose },
+              ]}
+            />
+          )}
+        </div>
+      )}
+      {/* With folders alive below, their Empty lines are the state — a
+          "No chats yet." above them contradicts what is on screen. */}
+      {listed.length === 0 && !(chats.length === 0 && groups.length > 0) && (
+        <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
+      )}
+      {pinnedRows.length > 0 && (
+        <section>
+          <div className="chat-day">Pinned</div>
+          {pinnedRows.map(row)}
+        </section>
+      )}
+      {filter === "active" &&
+        groups.map((group) => {
+          const rows = folderRows.filter((chat) => chat.group === group.id);
+          // Searching, a folder with nothing matching is noise — the days
+          // disappear whole the same way; "Empty" is for a folder at rest.
+          if (wanted && rows.length === 0) return null;
+          const shut = collapsed.includes(group.id);
+          return (
+            <section key={group.id}>
+              <div className="chat-day chat-folder-head">
+                <button
+                  type="button"
+                  className="chat-folder-toggle"
+                  aria-expanded={!shut}
+                  onClick={() => toggleFolder(group.id)}
+                >
+                  <span className="chat-folder-name">{group.name}</span>
+                  <span className="chat-folder-count">{rows.length}</span>
+                  <ChevronRight size={12} className={shut ? "chat-folder-chev" : "chat-folder-chev chat-folder-open"} aria-hidden />
+                </button>
+                <ChatMenu
+                  items={[
+                    {
+                      id: "rename",
+                      label: "Rename…",
+                      icon: <Pencil size={14} />,
+                      onSelect: () => onRenameGroup(group),
+                    },
+                    {
+                      id: "delete",
+                      label: "Delete…",
+                      icon: <Trash2 size={14} />,
+                      divided: true,
+                      onSelect: () => onDeleteGroup(group),
+                    },
+                  ]}
+                />
+              </div>
+              {!shut && (rows.length > 0 ? rows.map(row) : !wanted && <div className="chat-folder-empty">Empty</div>)}
+            </section>
+          );
+        })}
+      {listed.length > 0 &&
+        byDay(dayRows).map(({ day, chats: rows }) => (
+          <section key={day}>
+            <div className="chat-day">{day}</div>
+            {rows.map(row)}
+          </section>
+        ))}
+    </div>
   );
 }

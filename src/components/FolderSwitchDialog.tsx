@@ -4,15 +4,18 @@ import "./FolderSwitchDialog.css";
 
 type Props = {
   blocked: SwitchBlock | null;
-  /** The folder open now — the one that would be left. */
+  /** The active folder — where the turn that holds the window works. */
   folder: string | null;
   onStopAgent: () => void;
   onClose: () => void;
 };
 
-/** Says what opening another folder would end, before it does. */
+const nameOf = (path: string | null | undefined) => path?.split(/[\\/]/).filter(Boolean).pop();
+
+/** Says why the active folder cannot change yet, or what closing a folder would end, before it does. */
 export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Props) {
-  const name = folder?.split(/[\\/]/).filter(Boolean).pop() ?? "this folder";
+  const name = nameOf(folder) ?? "this folder";
+  const closing = blocked?.kind === "processes" ? blocked.folders.map((path) => nameOf(path) ?? path).join(", ") : "";
   const agent = blocked?.kind === "agent";
   // A paused turn is ended by answering its card, not by Stop.
   const waiting = blocked?.kind === "agent" && blocked.waiting;
@@ -37,7 +40,7 @@ export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Pr
                 onClose();
               }}
             >
-              {agent ? "Stop the agent" : "Stop them and switch"}
+              {agent ? "Stop the agent" : "Stop them and close"}
             </button>
           )}
         </>
@@ -46,18 +49,18 @@ export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Pr
       {waiting ? (
         <p className="switch-text">
           It is waiting for your answer on a card in <b>{name}</b>, and its chat is saved there when the turn ends.
-          Answer the card, then open the other folder.
+          Answer the card, then change folders.
         </p>
       ) : blocked?.kind === "agent" ? (
         <p className="switch-text">
-          It is working in <b>{name}</b>, and its chat is saved there when it finishes. Stop it first, then open the
-          other folder.
+          It is working in <b>{name}</b>, and its chat is saved there when it finishes. Stop it first, then change
+          folders.
         </p>
       ) : (
         blocked && (
           <>
             <p className="switch-text">
-              Opening another folder stops what runs in <b>{name}</b>:
+              Closing <b>{closing}</b> stops what runs in it:
             </p>
             <ul className="switch-processes">
               {blocked.processes.map((p) => (

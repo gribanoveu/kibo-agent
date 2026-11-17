@@ -437,6 +437,61 @@
   font-size: var(--fs-sm);
 }
 
+/* The list's head tools: Add folder beside the filter. */
+.group-head-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.group-head-add,
+.chat-workspace-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.group-head-add:hover,
+.chat-workspace-new:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* An open folder's section (F-8.6): its name, a new chat in it, its ⋮. */
+.chat-section + .chat-section {
+  margin-top: 10px;
+}
+.chat-workspace-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--control);
+  padding: 0 4px 0 8px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.chat-workspace-head.active {
+  color: var(--text);
+}
+.chat-workspace-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-workspace-head .chat-menu-button {
+  width: 24px;
+  height: 24px;
+}
+
 /* The folder-name field and the refusal, kept in the dialog. */
 .sidebar-field {
   display: flex;
