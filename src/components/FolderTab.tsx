@@ -59,6 +59,9 @@ type Props = {
   /** The branch the open chat works on. Another chat of the folder may have
       moved the folder off it since: then it is said, with the way back. */
   chatBranch?: string | null;
+  /** The chat on screen has started: its folder is its own, shown and not
+      chosen here — a new chat is where a folder is picked. */
+  folderFixed?: boolean;
 };
 
 /** Where the next message will be worked on: the folder and its branch. Sits
@@ -75,16 +78,19 @@ export function FolderTab({
   worktreeOf = null,
   branchPicker,
   chatBranch = null,
+  folderFixed = false,
 }: Props) {
   const shownBranch = (branchPicker?.worktree && branchPicker.base) || branch || "";
   const away = chatBranch && branch && chatBranch !== branch ? chatBranch : null;
   return (
     <div className={`folder-tab${path ? "" : " no-folder"}`}>
       <Dropdown
+        locked={folderFixed && !!path}
         title={
-          path && worktreeOf
+          (folderFixed && path ? `This chat works in ${path}\nA new chat picks its folder` : null) ??
+          (path && worktreeOf
             ? `A worktree of ${worktreeOf}\nThis folder: ${path}`
-            : path ?? "Choose the folder the agent works in"
+            : path ?? "Choose the folder the agent works in")
         }
         heading="Folder"
         label={

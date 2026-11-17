@@ -509,7 +509,7 @@ describe("pages", () => {
 // own chats and chat folders, a "+" for a new chat there and a way to close it.
 describe("open folders", () => {
   const folders = (
-    on: { select?: (id: string, folder: string | null) => void; newChat?: (f: string) => void; close?: (f: string) => void; add?: () => void; createGroup?: (scope: string | null, name: string) => void } = {},
+    on: { select?: (id: string, folder: string | null) => void; newChat?: (f: string) => void; close?: (f: string) => void; createGroup?: (scope: string | null, name: string) => void } = {},
   ) =>
     render(
       <Sidebar
@@ -533,7 +533,6 @@ describe("open folders", () => {
         onDeleteGroup={() => {}}
         onNewChatIn={on.newChat}
         onCloseFolder={on.close}
-        onAddFolder={on.add}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
         onOnboardingAction={() => {}}
@@ -619,14 +618,15 @@ describe("open folders", () => {
     expect(picked).toEqual([["a1", "/work/api"]]);
   });
 
-  test("+ starts a chat in its folder, the menu closes it, and the head adds one", () => {
+  /// A folder is added from a new chat's folder picker, not from the list's head.
+  test("+ starts a chat in its folder, the menu closes it, and the head adds none", () => {
     const asked: string[] = [];
-    folders({ newChat: (f) => asked.push(`new ${f}`), close: (f) => asked.push(`close ${f}`), add: () => asked.push("add") });
+    folders({ newChat: (f) => asked.push(`new ${f}`), close: (f) => asked.push(`close ${f}`) });
     fireEvent.click(screen.getByRole("button", { name: "New chat in api" }));
     fireEvent.click(within(section("web")).getAllByRole("button", { name: /menu|More/i }).at(0)!);
     fireEvent.click(screen.getByRole("menuitem", { name: "Close folder" }));
-    fireEvent.click(screen.getByRole("button", { name: "Add folder" }));
-    expect(asked).toEqual(["new /work/api", "close /work/web", "add"]);
+    expect(screen.queryByRole("button", { name: "Add folder" })).toBeNull();
+    expect(asked).toEqual(["new /work/api", "close /work/web"]);
   });
 
   test("a chat folder is made in the list it was asked for from", async () => {

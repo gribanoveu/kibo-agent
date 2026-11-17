@@ -721,6 +721,8 @@ export default function App() {
                 }}
                 // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
                 chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
+                // A started chat stays in its folder: only a new one picks.
+                folderFixed={!unstarted}
               />
             }
             end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
@@ -946,7 +948,6 @@ export default function App() {
           activeFolder={agentMode ? workspace.path : null}
           onNewChatIn={agentMode ? newChatIn : undefined}
           onCloseFolder={agentMode ? closeFolder : undefined}
-          onAddFolder={agentMode ? chooseFolder : undefined}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}

@@ -443,7 +443,6 @@
   align-items: center;
   gap: 2px;
 }
-.group-head-add,
 .chat-workspace-new {
   display: inline-flex;
   align-items: center;
@@ -457,7 +456,6 @@
   color: var(--text-faint);
   cursor: pointer;
 }
-.group-head-add:hover,
 .chat-workspace-new:hover {
   background: var(--bg-hover);
   color: var(--text);

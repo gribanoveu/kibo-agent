@@ -8,7 +8,6 @@ import {
   CircleCheck,
   CodeXml,
   FolderInput,
-  FolderPlus,
   GitBranch,
   Info,
   Keyboard,
@@ -120,8 +119,6 @@ type Props = {
   /** Agent mode's section heads: a new chat in that folder, and closing it. */
   onNewChatIn?: (folder: string) => void;
   onCloseFolder?: (folder: string) => void;
-  /** Agent mode: opens another folder beside the others. */
-  onAddFolder?: () => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
   onOnboardingAction: (tab: AsideTab) => void;
@@ -149,7 +146,6 @@ export function Sidebar({
   onDeleteGroup,
   onNewChatIn,
   onCloseFolder,
-  onAddFolder,
   onDeleteChat,
   onOpenSettings,
   onOnboardingAction,
@@ -365,15 +361,10 @@ export function Sidebar({
       </div>
 
       <div className="group">
-        {(anything || onAddFolder) && (
+        {anything && (
           <div className="group-head">
             <span>Chats</span>
             <span className="group-head-tools">
-              {onAddFolder && (
-                <button type="button" className="group-head-add" title="Open a folder beside these" aria-label="Add folder" onClick={onAddFolder}>
-                  <FolderPlus size={14} />
-                </button>
-              )}
               {anything && (
                 <Dropdown
                   label={FILTERS.find((f) => f.value === filter)?.label}
