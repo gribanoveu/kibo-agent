@@ -58,9 +58,10 @@ pub async fn chat_start<R: Runtime>(
     messages: Vec<LlmMessage>,
     todos: Vec<Task>,
     plan: Option<String>,
+    workspace: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
+    let (workspace, worktree_base) = state.chat_workspace_in(&chat_id, workspace.as_deref())?;
     let session = state.session(&chat_id);
     // Admission before anything about the session is touched: a refused
     // start must leave the running turn's stop flag and journal alone.
@@ -468,6 +469,7 @@ mod tests {
                 vec![LlmMessage::user("hi")],
                 Vec::new(),
                 None,
+                None,
             ));
             assert!(matches!(&started, Err(e) if e.contains("not an open folder")), "{started:?}");
             let checkpoint = PendingApproval {
@@ -577,6 +579,7 @@ mod tests {
                 vec![LlmMessage::user("hi"), LlmMessage::assistant("done")],
                 serde_json::json!([]),
                 Vec::new(),
+                None,
                 None,
                 None,
             ))
@@ -734,6 +737,7 @@ mod tests {
                 vec![LlmMessage::user("hi")],
                 Vec::new(),
                 None,
+                None,
             ));
             let Ok(ChatStreamOutcome::Done(done)) = outcome else { panic!("the leftover stop ended the fresh turn: {outcome:?}") };
             assert_eq!(done.result.text, "hello");
@@ -762,6 +766,7 @@ mod tests {
                     vec![LlmMessage::user("hi")],
                     Vec::new(),
                     None,
+                    None,
                 ))
             };
             assert!(matches!(start("c1"), Ok(ChatStreamOutcome::Done(_))));
@@ -781,9 +786,62 @@ mod tests {
                 Vec::new(),
                 None,
                 None,
+                None,
             ))
             .unwrap();
             assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, a.display().to_string(), "filed under A");
+        });
+    }
+
+    /// A new chat's message typed in A while the backend already made B
+    /// active (an open of B on its way): saved and run in A, the folder the
+    /// window showed it in. A folder that closed meanwhile is refused.
+    #[test]
+    fn a_new_chat_goes_to_the_folder_it_was_typed_in() {
+        crate::testing::with_app_dir("cmd-chat-typed-in", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b) = (plain("cmd-chat-typed-in-a"), plain("cmd-chat-typed-in-b"));
+            state.set_workspace_for_test(a.clone());
+            state.set_workspace_for_test(b.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let typed_in = Some(a.display().to_string());
+
+            tauri::async_runtime::block_on(crate::commands::chat_history::chat_save(
+                app.state(),
+                "n1".into(),
+                vec![LlmMessage::user("hi")],
+                serde_json::json!([]),
+                Vec::new(),
+                None,
+                None,
+                typed_in.clone(),
+            ))
+            .unwrap();
+            assert_eq!(crate::infra::chat_store::load("n1").unwrap().workspace, a.display().to_string(), "saved under A");
+
+            let start = |chat: &str, folder: Option<String>| {
+                tauri::async_runtime::block_on(chat_start(
+                    app.handle().clone(),
+                    app.state(),
+                    "t1".into(),
+                    chat.into(),
+                    vec![LlmMessage::user("hi")],
+                    Vec::new(),
+                    None,
+                    folder,
+                ))
+            };
+            assert!(matches!(start("n2", typed_in.clone()), Ok(ChatStreamOutcome::Done(_))));
+            assert_eq!(state.chat_workspace("n2").unwrap().0, a, "its turn ran in A");
+            let shown_elsewhere = b.display().to_string();
+            assert_eq!(state.chat_workspace_in("n2", Some(&shown_elsewhere)).unwrap().0, a, "a started chat keeps its folder");
+
+            assert!(state.unregister_if_idle(&a));
+            let refused = start("n3", typed_in).expect_err("A is closed");
+            assert!(refused.contains("not an open folder"), "{refused}");
         });
     }
 
@@ -807,12 +865,15 @@ mod tests {
                 vec![LlmMessage::user("hi")],
                 Vec::new(),
                 None,
+                None,
             ));
             assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))));
             state.set_workspace_for_test(b.clone());
             assert!(state.unregister_if_idle(&a), "A closes once its turn is over");
 
             assert_eq!(state.chat_workspace("c1").unwrap().0, b);
+            let typed_in = a.display().to_string();
+            assert_eq!(state.chat_workspace_in("c1", Some(&typed_in)).unwrap().0, b, "the window's closed folder is not asked");
             assert_eq!(state.chat_prompt_workspace("c1").unwrap(), Some(b));
         });
     }
@@ -834,6 +895,7 @@ mod tests {
                 "c1".into(),
                 vec![LlmMessage::user("hi")],
                 Vec::new(),
+                None,
                 None,
             ));
             assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "{outcome:?}");
@@ -1085,6 +1147,7 @@ mod tests {
             vec![LlmMessage::user(said)],
             Vec::new(),
             None,
+            None,
         ))
     }
 
@@ -1219,6 +1282,7 @@ mod tests {
                 vec![LlmMessage::user("hi")],
                 serde_json::json!([]),
                 Vec::new(),
+                None,
                 None,
                 None,
             ))

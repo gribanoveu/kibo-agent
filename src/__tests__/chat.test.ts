@@ -59,7 +59,7 @@ describe("command wrappers", () => {
     const outcome = await chat.startChat("turn-1", "c1", messages, [], "# Plan");
 
     expect(calls).toEqual([
-      { command: "chat_start", args: { turnId: "turn-1", chatId: "c1", messages, todos: [], plan: "# Plan" } },
+      { command: "chat_start", args: { turnId: "turn-1", chatId: "c1", messages, todos: [], plan: "# Plan", workspace: null } },
     ]);
     expect(outcome.status).toBe("done");
   });
@@ -179,7 +179,7 @@ describe("saved chats", () => {
     const summary = await savedChats.saveChat("c1", messages, blocks, [], null);
 
     expect(calls).toEqual([
-      { command: "chat_save", args: { id: "c1", messages, blocks, todos: [], plan: null, branchedFrom: null } },
+      { command: "chat_save", args: { id: "c1", messages, blocks, todos: [], plan: null, branchedFrom: null, workspace: null } },
     ]);
     expect(summary.title).toBe("fix the parser");
   });

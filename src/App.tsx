@@ -257,6 +257,7 @@ export default function App() {
   // Queued messages that will not be sent after all go back to the box.
   const agent = useAgentTurn({
     model,
+    folder: workspace.path,
     onSaved: history.refresh,
     onGiveBack: giveBack,
     spentShown: agentMode && shown("overview"),
@@ -280,12 +281,15 @@ export default function App() {
   );
   // Sounds and notifications when the agent finishes or asks, each switched in Settings.
   const [alerts, setAlerts] = useStoredState("turn-alerts", DEFAULT_ALERTS, isAlertPrefs);
+  // Every chat's, the ones left working in another chat or folder too.
+  const everyChat = Object.values(history.byFolder).flat();
   useTurnAlerts({
-    sessionKey: agent.sessionKey,
-    status: agent.turn.status,
-    failed: agent.error !== null,
-    queued: agent.queued.length,
-    chatTitle: chatName(history.chats, agent.chatId, agent.turn),
+    turns: Object.fromEntries(
+      Object.entries(agent.turns).map(([key, one]) => [
+        key,
+        { status: one.turn.status, failed: one.failed, queued: one.queued, chatTitle: chatName(everyChat, key, one.turn) },
+      ]),
+    ),
     prefs: alerts,
   });
   // Servers start with an Agent or Analyst turn and may stop during one.
@@ -931,7 +935,12 @@ export default function App() {
           }}
           sections={
             agentMode
-              ? workspace.folders.map((path) => ({ path, chats: history.byFolder[path] ?? [], groups: chatGroups.groupsOf(path) }))
+              ? workspace.folders.map((path) => ({
+                  path,
+                  worktreeOf: workspace.worktrees[path] ?? null,
+                  chats: history.byFolder[path] ?? [],
+                  groups: chatGroups.groupsOf(path),
+                }))
               : [{ path: null, chats: plain.chats, groups: chatGroups.groupsOf(null) }]
           }
           activeFolder={agentMode ? workspace.path : null}

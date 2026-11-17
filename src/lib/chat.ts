@@ -114,7 +114,12 @@ export const CHAT_TURN_EVENT = "chat:turn-event";
 // ------------------------------------------------------------- the commands
 
 /** An open folder. Mirrors `commands::workspace::OpenFolder`. */
-export type OpenFolder = { path: string; active: boolean };
+export type OpenFolder = {
+  path: string;
+  active: boolean;
+  /** The main checkout, when the folder is a linked worktree of it. */
+  worktreeOf: string | null;
+};
 
 /** Adds a folder to the open set and makes it active; nothing of the folder active before stops (F-8). */
 export async function addWorkspace(path: string): Promise<string> {
@@ -218,9 +223,11 @@ export async function startChat(
   messages: LlmMessage[],
   todos: Task[] = [],
   plan: string | null = null,
+  /** The folder a new chat was typed in; ignored once the chat is saved or its turn has started. */
+  workspace: string | null = null,
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("chat_start", { turnId, chatId, messages, todos, plan });
+  return invoke<Outcome>("chat_start", { turnId, chatId, messages, todos, plan, workspace });
 }
 
 /**

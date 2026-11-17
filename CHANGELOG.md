@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-17 Hear and see when a turn ends or waits in a chat off screen, in any open folder; a worktree's section in the sidebar says whose worktree it is
 - 2026-11-17 Come back to every folder open last time: the app reopens them all at launch, on the folder of the chat viewed last
 - 2026-11-17 Move between folders and their chats while agents work: a turn goes on in its own folder and is saved there
 - 2026-11-17 Keep several folders open at once: the sidebar lists each folder's chats, a chat opens in its own folder, and a folder is added beside the others or closed on its own

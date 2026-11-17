@@ -487,6 +487,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.chat-workspace-of {
+  color: var(--text-box-hint);
+}
 .chat-workspace-head .chat-menu-button {
   width: 24px;
   height: 24px;

@@ -550,6 +550,41 @@ describe("open folders", () => {
     );
   const section = (name: string) => screen.getByText(name).closest(".chat-section") as HTMLElement;
 
+  /// A linked worktree is a folder of its own, and its head says whose it is.
+  test("a worktree's section says whose worktree it is", () => {
+    render(
+      <Sidebar
+        mode="agent"
+        onMode={() => {}}
+        pages={[]}
+        page={null}
+        onPage={() => {}}
+        sections={[
+          { path: "/work/api", chats: [], groups: [] },
+          { path: "/wt/api/fix-login", worktreeOf: "/work/api", chats: [], groups: [] },
+        ]}
+        activeFolder="/work/api"
+        activeChat={null}
+        onSelectChat={() => {}}
+        onArchiveChat={() => {}}
+        onPinChat={() => {}}
+        onMoveChat={() => {}}
+        onCreateGroup={async () => ({})}
+        onRenameGroup={async () => ({})}
+        onDeleteGroup={() => {}}
+        onDeleteChat={() => {}}
+        onOpenSettings={() => {}}
+        onOnboardingAction={() => {}}
+        themeSide="dark"
+        onToggleTheme={() => {}}
+      />,
+    );
+    const head = screen.getByText(/worktree of api/).closest(".chat-workspace-head") as HTMLElement;
+    expect(head.textContent).toContain("fix-login");
+    expect(head.title).toContain("A worktree of /work/api");
+    expect(screen.getAllByText(/worktree of/)).toHaveLength(1);
+  });
+
   test("each folder heads its own chats and chat folders, and the active one is lit", () => {
     folders();
     expect(within(section("api")).getByText("api chat")).toBeTruthy();

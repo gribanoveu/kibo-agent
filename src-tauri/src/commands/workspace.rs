@@ -209,18 +209,26 @@ pub struct OpenFolder {
     /// The one the window's panes read by default; at most one while any
     /// folder is open.
     active: bool,
+    /// The main checkout, when the folder is a linked worktree of it — so its
+    /// section says whose it is.
+    worktree_of: Option<String>,
 }
 
 /// The folders open in the window, the last added first. `workspaces_list`,
-/// not `workspace_list` — the latter is the Files tab's tree command.
+/// not `workspace_list` — the latter is the Files tab's tree command. Async:
+/// whose worktree a folder is, git reads off the UI thread.
 #[tauri::command]
-pub fn workspaces_list(state: State<'_, Arc<AgentState>>) -> Vec<OpenFolder> {
+pub async fn workspaces_list(state: State<'_, Arc<AgentState>>) -> Result<Vec<OpenFolder>, String> {
     let active = state.workspace().ok();
-    state
-        .open_folders()
-        .into_iter()
+    let open = state.open_folders();
+    super::blocking(move || Ok::<_, String>(open_folders(open, active.as_deref()))).await
+}
+
+fn open_folders(open: Vec<PathBuf>, active: Option<&Path>) -> Vec<OpenFolder> {
+    open.into_iter()
         .map(|path| OpenFolder {
-            active: active.as_deref() == Some(path.as_path()),
+            active: active == Some(path.as_path()),
+            worktree_of: crate::infra::git_head::worktree_of(&path).map(|main| main.display().to_string()),
             path: path.display().to_string(),
         })
         .collect()
@@ -599,6 +607,25 @@ mod tests {
             tauri::async_runtime::block_on(open_index_behind(closed.clone(), app.handle(), &state, &index)).unwrap();
             assert!(index.indexer(&closed).is_none(), "one closed meanwhile does not");
         });
+    }
+
+    /// A linked worktree open beside its main checkout says whose it is; the
+    /// main checkout and a plain folder say nothing.
+    #[test]
+    fn an_open_worktree_names_its_main_checkout() {
+        let main = git_repo("ws-open-wt-main");
+        let repo = git2::Repository::open(&main).unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        let home = crate::infra::paths::canonicalize_plain(&temp_dir("ws-open-wt-home")).unwrap();
+        let linked = crate::infra::paths::canonicalize_plain(&crate::infra::git_branches::add_worktree(&main, "main", "fix", &home).unwrap()).unwrap();
+        let plain = crate::infra::paths::canonicalize_plain(&temp_dir("ws-open-wt-plain")).unwrap();
+
+        let listed = open_folders(vec![linked.clone(), main.clone(), plain.clone()], Some(&main));
+        let whose: Vec<_> = listed.iter().map(|one| (one.active, one.worktree_of.clone())).collect();
+        assert_eq!(whose, vec![(false, Some(main.display().to_string())), (true, None), (false, None)]);
     }
 
     /// A build that kept no open set: the folder opened last comes back.

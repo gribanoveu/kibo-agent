@@ -333,13 +333,29 @@ impl AgentState {
     /// An unsaved chat has no record yet: it is in the folder its first turn
     /// started in, and before that in the active one.
     pub(crate) fn chat_workspace(&self, chat_id: &str) -> Result<(PathBuf, Option<String>), String> {
+        self.chat_workspace_in(chat_id, None)
+    }
+
+    /// As `chat_workspace`, with the folder the window shows the chat in
+    /// (`typed_in`), for a chat with neither a record nor a started turn:
+    /// the window's active folder may already be another one, which the
+    /// backend made active while the message was on its way. A folder closed
+    /// meanwhile is refused, like any folder from the window (invariant 1).
+    pub(crate) fn chat_workspace_in(&self, chat_id: &str, typed_in: Option<&str>) -> Result<(PathBuf, Option<String>), String> {
         let record = match crate::infra::chat_store::load(chat_id) {
             Ok(record) => Some(record),
             Err(crate::domain::chat_record::ChatError::NotFound(_)) => None,
             Err(e) => return Err(e.to_string()),
         };
         let Some(record) = record else {
-            return Ok((self.unsaved_home(chat_id).map_or_else(|| self.workspace(), Ok)?, None));
+            // A started chat's home wins; closed since, the chat goes on in
+            // the active folder — the folder it was typed in is that closed one.
+            let root = match (self.pinned_home(chat_id), typed_in) {
+                (Some(home), _) if self.is_open(&home) => home,
+                (Some(_), _) | (None, None) => self.workspace()?,
+                (None, Some(folder)) => self.require_open(folder)?,
+            };
+            return Ok((root, None));
         };
         let root = crate::infra::paths::canonicalize_plain(std::path::Path::new(&record.workspace))
             .map_err(|e| format!("cannot open the chat's folder {}: {e}", record.workspace))?;
@@ -353,13 +369,15 @@ impl AgentState {
     /// one closed since leaves the chat nowhere to be opened from, and it goes
     /// on in the active folder as an unstarted chat would.
     fn unsaved_home(&self, chat_id: &str) -> Option<PathBuf> {
-        let home = {
-            let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
-            let handle = sessions.get(chat_id)?;
-            let home = handle.home.lock().unwrap_or_else(PoisonError::into_inner).clone();
-            home
-        };
-        home.filter(|root| self.is_open(root))
+        self.pinned_home(chat_id).filter(|root| self.is_open(root))
+    }
+
+    /// Where an unsaved chat's first turn started, open or not.
+    fn pinned_home(&self, chat_id: &str) -> Option<PathBuf> {
+        let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
+        let handle = sessions.get(chat_id)?;
+        let home = handle.home.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        home
     }
 
     /// Prompt measuring also works before any folder is open, as it did for

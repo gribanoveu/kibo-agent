@@ -49,10 +49,12 @@ pub async fn chat_save(
     todos: Vec<Task>,
     plan: Option<String>,
     branched_from: Option<String>,
+    workspace: Option<String>,
 ) -> Result<ChatSummary, String> {
     // A background chat still saves under its own checkout, even if another
-    // chat has since opened a different folder in the window.
-    let (workspace, _) = state.chat_workspace(&id)?;
+    // chat has since opened a different folder in the window; a new one under
+    // the folder it was typed in (`workspace`).
+    let (workspace, _) = state.chat_workspace_in(&id, workspace.as_deref())?;
     let state = Arc::clone(&state);
     blocking(move || {
         let first = !chat_store::exists(&id).map_err(|e| e.to_string())?;

@@ -15,6 +15,7 @@ let openSet: string[] = [];
 // `workspaces.json`: the folders open last time, the last activated first;
 // `null` when it was never written.
 let saved: string[] | null = null;
+let worktreeOf: Record<string, string> = {};
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: unknown) => {
@@ -22,7 +23,8 @@ mock.module("@tauri-apps/api/core", () => ({
     const path = (args as { path?: string } | undefined)?.path ?? "";
     if (command === "workspace_recent") return Promise.resolve(folders(recent));
     if (command === "workspace_current") return Promise.resolve(current);
-    if (command === "workspaces_list") return Promise.resolve(openSet.map((one) => ({ path: one, active: one === current })));
+    if (command === "workspaces_list")
+      return Promise.resolve(openSet.map((one) => ({ path: one, active: one === current, worktreeOf: worktreeOf[one] ?? null })));
     if (command === "workspace_add") {
       if (failOpen) return Promise.reject("cannot open: gone");
       openSet = [path, ...openSet.filter((one) => one !== path)];
@@ -73,6 +75,7 @@ afterEach(() => {
   failOpen = false;
   openSet = [];
   saved = null;
+  worktreeOf = {};
 });
 
 const settle = () => act(async () => {
@@ -198,6 +201,18 @@ describe("picking a folder", () => {
 
 // F-8.6: a folder opens beside the others, and closes on its own.
 describe("open folders", () => {
+  test("a worktree among them is known by its main checkout", async () => {
+    worktreeOf = { "/wt/api/fix": "/work/api" };
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    for (const path of ["/work/api", "/wt/api/fix"]) {
+      await act(async () => {
+        await result.current.open(path);
+      });
+    }
+    expect(result.current.worktrees).toEqual({ "/wt/api/fix": "/work/api" });
+  });
+
   test("opening a folder adds it and makes it active; the others stay open, in their places", async () => {
     const { result } = renderHook(() => useWorkspace());
     await settle();

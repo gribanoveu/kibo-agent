@@ -85,7 +85,13 @@ function byDay(chats: ChatSummary[]) {
 }
 
 /** One section of the list: an open folder's chats and chat folders, or Chat mode's (`path` null). */
-export type ChatSection = { path: string | null; chats: ChatSummary[]; groups: ChatGroup[] };
+export type ChatSection = {
+  path: string | null;
+  chats: ChatSummary[];
+  groups: ChatGroup[];
+  /** The main checkout, when the folder is a linked worktree of it. */
+  worktreeOf?: string | null;
+};
 
 /** The last part of a folder's path, as its section head names it. */
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -654,7 +660,7 @@ type SectionProps = {
  * it falls into the days.
  */
 function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDeleteGroup, onNewChat, onClose }: SectionProps) {
-  const { path, chats, groups } = section;
+  const { path, chats, groups, worktreeOf } = section;
   // A chat folder shut by id, remembered per list: collapse is about the
   // view, not the chats, so it lives in window storage and not in the store.
   const [collapsed, setCollapsed] = useStoredState<string[]>(`kibo-chat-groups-${path ?? ""}`, [], isStringArray);
@@ -673,8 +679,14 @@ function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDe
   return (
     <div className="chat-section">
       {path !== null && (
-        <div className={`chat-workspace-head${active ? " active" : ""}`} title={path}>
-          <span className="chat-workspace-name">{folderName(path)}</span>
+        <div
+          className={`chat-workspace-head${active ? " active" : ""}`}
+          title={worktreeOf ? `A worktree of ${worktreeOf}\nThis folder: ${path}` : path}
+        >
+          <span className="chat-workspace-name">
+            {folderName(path)}
+            {worktreeOf && <span className="chat-workspace-of"> · worktree of {folderName(worktreeOf)}</span>}
+          </span>
           {onNewChat && (
             <button type="button" className="chat-workspace-new" title={`New chat in ${folderName(path)}`} aria-label={`New chat in ${folderName(path)}`} onClick={onNewChat}>
               <Plus size={14} />

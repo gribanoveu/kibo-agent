@@ -31,6 +31,8 @@ export function keepOrder(shown: string[], open: string[]): string[] {
 export function useWorkspace() {
   const [path, setPath] = useState<string | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
+  // An open folder that is a linked worktree → its main checkout.
+  const [worktrees, setWorktrees] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentFolder[]>([]);
   // Whether the folder is the one the app came back to rather than one the
@@ -45,6 +47,7 @@ export function useWorkspace() {
       // The active folder always has its section, even when the list could not be read.
       return active && !next.includes(active) ? [...next, active] : next;
     });
+    if (open) setWorktrees(Object.fromEntries(open.flatMap((one) => (one.worktreeOf ? [[one.path, one.worktreeOf]] : []))));
     setPath(active);
   }, []);
 
@@ -128,5 +131,5 @@ export function useWorkspace() {
     [refreshRecent],
   );
 
-  return { path, folders, error, recent, resumed, open, close, pick, refreshRecent, forget };
+  return { path, folders, worktrees, error, recent, resumed, open, close, pick, refreshRecent, forget };
 }

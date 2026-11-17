@@ -721,6 +721,21 @@ describe("branching", () => {
     expect(saved()[3].args.messages).toHaveLength(6);
   });
 
+  /// A fork is saved at once: in the folder on screen, not the backend's active one.
+  test("a fork is saved in the folder the window shows", async () => {
+    results.chat_start = done("answer");
+    const { result } = renderHook(() => useAgentTurn({ folder: "/a" }));
+    await act(async () => {
+      await result.current.send("first");
+    });
+    await waitFor(() => expect(result.current.chatId).not.toBeNull());
+    const before = saved().length;
+    act(() => result.current.branch());
+    await waitFor(() => expect(saved()).toHaveLength(before + 1));
+    expect(saved().at(-1)?.args.branchedFrom).not.toBeNull();
+    expect(saved().at(-1)?.args.workspace).toBe("/a");
+  });
+
   /// The plan the original wrote in its last turn is copied with the fork.
   test("a fork of a chat whose last turn wrote a plan keeps it", async () => {
     results.chat_load = branchRecord;
@@ -1619,6 +1634,30 @@ describe("parallel sessions", () => {
     });
   });
 
+  /// A new chat's folder is the one the window showed when its message was
+  /// typed, kept for its start and every save after the window moves on; a
+  /// saved chat opened sends none — its record says where it lives.
+  test("a new chat carries the folder it was typed in; a saved one carries none", async () => {
+    let end = () => {};
+    results.chat_start = (args: Record<string, unknown>) => new Promise((resolve) => (end = () => resolve(done("ok")(args))));
+    const { result, rerender } = renderHook(({ folder }) => useAgentTurn({ folder }), { initialProps: { folder: "/a" } });
+    act(() => void result.current.send("task"));
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect(calls.find((call) => call.command === "chat_start")?.args.workspace).toBe("/a");
+    expect(saved()[0].args.workspace).toBe("/a");
+
+    rerender({ folder: "/b" });
+    await act(async () => end());
+    await waitFor(() => expect(saved()).toHaveLength(2));
+    expect(saved()[1].args.workspace).toBe("/a");
+
+    results.chat_load = { id: "old", title: "Old", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    results.chat_start = done("ok");
+    await act(async () => result.current.open("old"));
+    await act(async () => result.current.send("more"));
+    expect(calls.filter((call) => call.command === "chat_start").at(-1)?.args.workspace).toBeNull();
+  });
+
   /// F-8.7: the window moves to another folder while A's turn works — the
   /// thread starts afresh there, a message in it runs a turn of its own, and
   /// A's turn ends and is saved in full in the background.
@@ -1630,9 +1669,13 @@ describe("parallel sessions", () => {
     act(() => void result.current.send("task A"));
     await waitFor(() => expect(result.current.turn.status).toBe("running"));
     const a = calls.find((call) => call.command === "chat_start")!.args.chatId as string;
+    act(() => result.current.queue("then the docs"));
+    expect(result.current.turns[a].queued).toBe(1);
 
     act(() => void result.current.reset());
     expect(result.current.turn.blocks).toEqual([]);
+    // Off screen its queue waits for the user: its end is told regardless.
+    expect(result.current.turns[a].queued).toBe(0);
     act(() => void result.current.send("task B"));
     await waitFor(() => expect(result.current.turn.status).toBe("running"));
     const started = calls.filter((call) => call.command === "chat_start").map((call) => call.args.chatId);

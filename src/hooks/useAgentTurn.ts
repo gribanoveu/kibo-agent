@@ -77,6 +77,12 @@ type Session = {
   writeTail: Promise<unknown>;
   /** Finished while another chat was on screen; cleared when this one opens. */
   finished: boolean;
+  /**
+   * The folder a new chat's first message was typed in, sent with its first
+   * start and saves: the backend's active folder may already be the next one
+   * while a folder opens. Unused once the chat is saved — its record says.
+   */
+  folder: string | null;
 };
 
 const fresh = (key: string = crypto.randomUUID()): Session => ({
@@ -103,6 +109,7 @@ const fresh = (key: string = crypto.randomUUID()): Session => ({
   writes: new Set(),
   writeTail: Promise.resolve(),
   finished: false,
+  folder: null,
 });
 
 const restored = (record: ChatRecord): Session => ({
@@ -122,10 +129,13 @@ const turnCounts = new Map<string, number>();
 
 export function useAgentTurn({
   model,
+  folder = null,
   onSaved,
   onGiveBack,
   spentShown = false,
 }: {
+  /** The folder the window shows — where a new chat's message is typed. */
+  folder?: string | null;
   /** The model turns run on — `acceptEvent` says when a cache miss came with a switch. */
   model?: string;
   onSaved?: () => void;
@@ -149,6 +159,8 @@ export function useAgentTurn({
   giveBackRef.current = onGiveBack;
   const modelRef = useRef(model);
   modelRef.current = model;
+  const folderRef = useRef(folder);
+  folderRef.current = folder;
 
   // Background deltas need no render of the chat on screen. A status change
   // does: it is what the sidebar's per-chat indicator is derived from.
@@ -237,6 +249,7 @@ export function useAgentTurn({
           snapshot.todos,
           snapshot.plan,
           snapshot.branchedFrom,
+          snapshot.folder,
         )
           .then(() => {
             savedRef.current?.();
@@ -268,7 +281,7 @@ export function useAgentTurn({
       }
       trackWrite(
         session,
-        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom)
+        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom, snapshot.folder)
           .then(() => savedRef.current?.())
           .catch((e) => {
             session.error = String(e);
@@ -383,9 +396,12 @@ export function useAgentTurn({
 
       const id = mint(session, "turn");
       session.lastTurn = { id, user: trimmed };
+      // Where a new chat is typed is where it lives (F-8): taken now, with the
+      // window still on that folder.
+      if (session.chatId === null) session.folder ??= folderRef.current;
       try {
         await listen(session, id);
-        finish(session, await startChat(id, session.key, session.history, session.todos, session.plan));
+        finish(session, await startChat(id, session.key, session.history, session.todos, session.plan, session.folder));
       } catch (e) {
         session.error = String(e);
         stop(session);
@@ -605,6 +621,9 @@ export function useAgentTurn({
       from.journaled = null;
       const session = fresh();
       session.branchedFrom = from.chatId;
+      // Saved at once when whole: in the folder on screen, not the backend's
+      // active one, which an open on its way may have moved already.
+      session.folder = folderRef.current;
       session.history = cut.history;
       session.todos = whole ? from.todos : [];
       session.plan = whole ? from.plan : writtenPlan(cut.blocks);
@@ -689,7 +708,7 @@ export function useAgentTurn({
       if (!session.chatId || session.turn.status === "running") return;
       trackWrite(
         session,
-        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, value, snapshot.branchedFrom).catch((e) => {
+        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, value, snapshot.branchedFrom, snapshot.folder).catch((e) => {
           session.error = String(e);
           changed(session);
         }),
@@ -703,7 +722,7 @@ export function useAgentTurn({
     if (!session.chatId || session.turn.status === "running") return;
     trackWrite(
       session,
-      (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom)
+      (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom, snapshot.folder)
         .then(() => savedRef.current?.())
         .catch((e) => {
           session.error = String(e);
@@ -720,7 +739,14 @@ export function useAgentTurn({
     !current.turn.blocks.some((block) => block.kind === "steer" && block.id === `steer:${note.id}`),
   );
   const chatActivity: Record<string, ChatActivity> = {};
+  // Every chat's turn, the ones off screen too, by session key: what the
+  // alerts follow — a turn ending in another chat or folder is told as well.
+  const turns: Record<string, { turn: TurnState; failed: boolean; queued: number }> = {};
   for (const session of sessions.current.values()) {
+    // Only the chat on screen sends its queue when its turn ends; one off
+    // screen waits for the user, so its end is told even with messages queued.
+    const queued = session === active.current ? session.queued.length : 0;
+    turns[session.key] = { turn: session.turn, failed: session.error !== null, queued };
     if (!session.chatId) continue;
     if (session.turn.status === "running" || session.turn.status === "awaitingApproval") {
       chatActivity[session.chatId] = session.turn.status;
@@ -733,6 +759,7 @@ export function useAgentTurn({
     /** The session's identity: `chatId` is null until a fresh chat is first saved. */
     sessionKey: current.key,
     chatActivity,
+    turns,
     spent,
     error: current.error,
     context: busy ? (current.turn.estimate ?? current.context) : current.context,

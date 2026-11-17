@@ -85,9 +85,11 @@ export async function saveChat(
   todos: Task[],
   plan: string | null = null,
   branchedFrom: string | null = null,
+  /** The folder a new chat was typed in; ignored once the chat is saved or its turn has started. */
+  workspace: string | null = null,
 ): Promise<ChatSummary> {
   requireBackend();
-  return invoke<ChatSummary>("chat_save", { id, messages, blocks, todos, plan, branchedFrom });
+  return invoke<ChatSummary>("chat_save", { id, messages, blocks, todos, plan, branchedFrom, workspace });
 }
 
 /**
