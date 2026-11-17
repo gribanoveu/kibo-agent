@@ -282,9 +282,10 @@ export async function cancelSteer(id: string, chatId: string): Promise<boolean> 
   return invoke<boolean>("chat_cancel_steer", { id, chatId });
 }
 
-export async function alwaysAllow(tool: string): Promise<void> {
+/** "Always allow" from a card of a turn in `chatId`: it holds in that chat's folder only. */
+export async function alwaysAllow(tool: string, chatId: string): Promise<void> {
   requireBackend();
-  return invoke<void>("approval_always_allow", { tool });
+  return invoke<void>("approval_always_allow", { tool, chatId });
 }
 
 /**

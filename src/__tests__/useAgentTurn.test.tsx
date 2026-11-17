@@ -356,6 +356,25 @@ describe("the session's tokens", () => {
     expect(calls.find((call) => call.command === "chat_resume")?.args.plan).toBe("# Current");
   });
 
+  // F-8.5: "always allow" holds in the folder of the chat whose card it was,
+  // and the backend finds that folder by the chat — the same one the resume names.
+  test("always allow names the card's chat, as the resume does", async () => {
+    results.chat_start = {
+      status: "pendingApproval",
+      value: { history: [], round: 1, budgetUsed: 1, eventSeq: 1, calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }], todos: [], reads: {} },
+    };
+    results.chat_resume = done("written");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.send("write it"));
+    await act(async () => result.current.decide([{ id: "w1", approved: true }], ["writeFile"]));
+
+    const allowed = calls.find((call) => call.command === "approval_always_allow")?.args;
+    const resumed = calls.find((call) => call.command === "chat_resume")?.args;
+    expect(allowed?.tool).toBe("writeFile");
+    expect(allowed?.chatId).toBeTruthy();
+    expect(allowed?.chatId).toBe(resumed?.chatId);
+  });
+
   test("a refused resume keeps the approval card and its checkpoint", async () => {
     const checkpoint = {
       history: [],

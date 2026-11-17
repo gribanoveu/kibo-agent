@@ -549,7 +549,7 @@ export function useAgentTurn({
       setTurn(session, clearApproval);
       const id = `${session.key}/turn-${session.turnId}`;
       try {
-        for (const tool of always) await alwaysAllow(tool);
+        for (const tool of always) await alwaysAllow(tool, session.key);
         const plan = writtenPlan(session.turn.blocks.slice(session.turnStart)) ?? session.plan;
         finish(session, await resumeChat(id, session.key, checkpoint, decisions, plan));
       } catch (e) {

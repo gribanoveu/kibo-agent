@@ -96,7 +96,7 @@ describe("command wrappers", () => {
     await chat.steer("use the helper", undefined, "c1");
     await chat.steer("", undefined, "c1", [picture]);
     await chat.cancelSteer("note-1", "c1");
-    await chat.alwaysAllow("writeFile");
+    await chat.alwaysAllow("writeFile", "c1");
     await chat.setUnattended(true);
     await chat.openWorkspace("/tmp/project");
 
@@ -111,6 +111,7 @@ describe("command wrappers", () => {
     ]);
     expect(calls[1]?.args).toEqual({ text: "use the helper", shown: null, images: [], chatId: "c1" });
     expect(calls[2]?.args).toEqual({ text: "", shown: null, images: [picture], chatId: "c1" });
+    expect(calls[4]?.args).toEqual({ tool: "writeFile", chatId: "c1" });
     expect(calls[6]?.args).toEqual({ path: "/tmp/project", keepRunning: false });
   });
 });
