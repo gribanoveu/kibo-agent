@@ -59,6 +59,9 @@ const sidebar = (
     />,
   );
 
+/** The rows under no heading — every chat neither pinned nor in a chat folder. */
+const rest = () => document.querySelector(".chat-rest")?.textContent ?? "";
+
 const pickFilter = (label: string) => {
   fireEvent.click(screen.getByTitle("Which chats to list"));
   fireEvent.click(screen.getByRole("option", { name: label }));
@@ -79,17 +82,17 @@ describe("the chat list", () => {
     expect(screen.getByText("filed away")).toBeTruthy();
   });
 
-  /// What was touched today comes under its own heading; a heading with nothing under it is not drawn.
-  test("sorts the list by day", () => {
+  /// The rest is one list in the order the store gives, under no day heading.
+  test("lists the rest in order, without day headings", () => {
     const now = Date.now();
     sidebar({}, "dark", {}, [
       { id: "t", title: "from today", updatedAt: now, archived: false },
       { id: "e", title: "from before", updatedAt: now - 3 * 86_400_000, archived: false },
     ]);
-    const under = (day: string) => screen.getByText(day).closest("section")?.textContent;
-    expect(under("Today")).toContain("from today");
-    expect(under("Today")).not.toContain("from before");
-    expect(under("Earlier")).toContain("from before");
+    expect(rest().indexOf("from today")).toBeGreaterThanOrEqual(0);
+    expect(rest().indexOf("from today")).toBeLessThan(rest().indexOf("from before"));
+    expect(screen.queryByText("Today")).toBeNull();
+    expect(screen.queryByText("Earlier")).toBeNull();
   });
 
   /// Typed, the list narrows to what matches; Escape gives it all back.
@@ -105,12 +108,6 @@ describe("the chat list", () => {
 
     fireEvent.keyDown(box, { code: "Escape", key: "Escape" });
     expect(screen.getByText("kept in view")).toBeTruthy();
-  });
-
-  test("a day with no chats has no heading", () => {
-    sidebar();
-    expect(screen.queryByText("Today")).toBeNull();
-    expect(screen.getByText("Earlier")).toBeTruthy();
   });
 
   test("archives from a row's menu, and an archived row offers to bring it back", () => {
@@ -175,8 +172,7 @@ describe("the chat list", () => {
       sidebar({}, "dark", {}, rows());
       const under = (heading: string) => screen.queryByText(heading)?.closest("section")?.textContent ?? "";
       expect(under("Pinned")).toContain("kept on top");
-      expect(under("Today")).not.toContain("kept on top");
-      expect(under("Earlier")).not.toContain("kept on top");
+      expect(rest()).not.toContain("kept on top");
       expect(screen.getByLabelText("Pinned")).toBeTruthy();
     });
 
@@ -198,13 +194,12 @@ describe("the chat list", () => {
     });
 
     /// The pinned group is the working view; "All" is for finding, and
-    /// there a pinned chat stays a row of its day.
-    test("has no group in All: rows stay under their days", () => {
+    /// there a pinned chat stays a row of the rest.
+    test("has no group in All: rows stay in the rest", () => {
       sidebar({}, "dark", {}, rows());
       pickFilter("All");
       expect(screen.queryByText("Pinned")).toBeNull();
-      const under = (day: string) => screen.getByText(day).closest("section")?.textContent ?? "";
-      expect(under("Earlier")).toContain("kept on top");
+      expect(rest()).toContain("kept on top");
     });
 
     test("the search narrows the pinned group like the days", () => {
@@ -236,8 +231,7 @@ describe("the chat list", () => {
       sidebar({}, "dark", {}, rows(), groupList);
       const under = (heading: string) => screen.queryByText(heading)?.closest("section")?.textContent ?? "";
       expect(under("release")).toContain("in release");
-      expect(under("Today")).not.toContain("in release");
-      expect(under("Earlier")).not.toContain("in release");
+      expect(rest()).not.toContain("in release");
     });
 
     /// A folder made ahead of its first chat stays reachable: listed, with
@@ -257,12 +251,11 @@ describe("the chat list", () => {
     });
 
     /// Folders are the working view: All and Archived stay plain lists.
-    test("has no folders outside Active: a foldered chat is a row of its day", () => {
+    test("has no folders outside Active: a foldered chat is a row of the rest", () => {
       sidebar({}, "dark", {}, rows(), groupList);
       pickFilter("All");
       expect(screen.queryByText("launch")).toBeNull();
-      const under = (day: string) => screen.getByText(day).closest("section")?.textContent ?? "";
-      expect(under("Earlier")).toContain("in release");
+      expect(rest()).toContain("in release");
     });
 
     test("a collapsed folder keeps its heading and count but hides the rows", () => {
@@ -347,11 +340,11 @@ describe("the chat list", () => {
 
     /// A chat pointing at a folder the window does not know — deleted
     /// mid-move, folders list staler than the chats — is never lost: it
-    /// falls into the days rather than vanish from the working view.
-    test("a chat whose folder is unknown falls into the days", () => {
+    /// falls into the rest rather than vanish from the working view.
+    test("a chat whose folder is unknown falls into the rest", () => {
       sidebar({}, "dark", {}, [{ id: "x", title: "orphan", updatedAt: 2, archived: false, group: "gone" }], groupList);
       const under = (heading: string) => screen.queryByText(heading)?.closest("section")?.textContent ?? "";
-      expect(under("Earlier")).toContain("orphan");
+      expect(rest()).toContain("orphan");
       expect(under("release")).not.toContain("orphan");
     });
 
@@ -549,6 +542,29 @@ describe("open folders", () => {
       />,
     );
   const section = (name: string) => screen.getByText(name).closest(".chat-section") as HTMLElement;
+
+  /// A folder's section folds under its head and stays folded; a search
+  /// still finds what is in it.
+  test("a folder's section folds under its head, remembered, and a search sees through it", () => {
+    try {
+      const { unmount } = folders();
+      const toggle = section("api").querySelector(".chat-workspace-toggle") as HTMLElement;
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(toggle);
+      expect(screen.queryByText("api chat")).toBeNull();
+      expect(screen.queryByText("Ops")).toBeNull();
+      expect(screen.getByText("web chat")).toBeTruthy();
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      unmount();
+
+      folders();
+      expect(screen.queryByText("api chat")).toBeNull();
+      fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), { target: { value: "api" } });
+      expect(screen.getByText("api chat")).toBeTruthy();
+    } finally {
+      localStorage.removeItem("kibo-folder-folded-/work/api");
+    }
+  });
 
   /// A linked worktree is a folder of its own, and its head says whose it is.
   test("a worktree's section says whose worktree it is", () => {

@@ -472,7 +472,7 @@
   align-items: center;
   gap: 2px;
   height: var(--control);
-  padding: 0 4px 0 8px;
+  padding: 0 4px 0 4px;
   color: var(--text-dim);
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -480,12 +480,38 @@
 .chat-workspace-head.active {
   color: var(--text);
 }
+.chat-workspace-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.chat-workspace-toggle:hover {
+  color: var(--text);
+}
+.chat-workspace-chev {
+  flex: none;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+.chat-workspace-chev.chat-workspace-open {
+  transform: rotate(90deg);
+}
 .chat-workspace-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 .chat-workspace-of {
   color: var(--text-box-hint);

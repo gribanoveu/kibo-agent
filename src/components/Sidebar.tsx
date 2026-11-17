@@ -35,7 +35,7 @@ import { GettingStarted } from "./GettingStarted";
 import { type PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
-import { useStoredState } from "../hooks/useStoredState";
+import { isBoolean, useStoredState } from "../hooks/useStoredState";
 import { comboKeys, matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { ChatGroup, ChatSummary } from "../lib/savedChats";
 import { APP_MODES, type AppMode, type AsideTab, type ChatActivity } from "../types";
@@ -73,16 +73,6 @@ const EMPTY: Record<Filter, string> = {
   archived: "No archived chats.",
   all: "No chats yet.",
 };
-
-/** The list under its headings: what was touched today, and the rest, each in the order it came. */
-function byDay(chats: ChatSummary[]) {
-  const today = new Date().toDateString();
-  const isToday = (chat: ChatSummary) => new Date(chat.updatedAt).toDateString() === today;
-  return [
-    { day: "Today", chats: chats.filter(isToday) },
-    { day: "Earlier", chats: chats.filter((chat) => !isToday(chat)) },
-  ].filter((group) => group.chats.length > 0);
-}
 
 /** One section of the list: an open folder's chats and chat folders, or Chat mode's (`path` null). */
 export type ChatSection = {
@@ -652,12 +642,12 @@ type SectionProps = {
 };
 
 /**
- * One section's rows: pinned first, then the chat folders, then the days —
+ * One section's rows: pinned first, then the chat folders, then the rest —
  * and a row shown twice reads as two chats, so each of the three takes a
  * chat out of the rest. Chat folders are the working view: only the active
  * filter draws them. A chat whose folder is not among the known ones (a
  * folder deleted mid-move, a list fresher than the folders) is never lost:
- * it falls into the days.
+ * it falls into the rest.
  */
 function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDeleteGroup, onNewChat, onClose }: SectionProps) {
   const { path, chats, groups, worktreeOf } = section;
@@ -666,14 +656,18 @@ function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDe
   const [collapsed, setCollapsed] = useStoredState<string[]>(`kibo-chat-groups-${path ?? ""}`, [], isStringArray);
   const toggleFolder = (id: string) =>
     setCollapsed((shut) => (shut.includes(id) ? shut.filter((one) => one !== id) : [...shut, id]));
+  // An open folder's whole section folds under its head, remembered per
+  // folder; a search shows what matches in it all the same.
+  const [folded, setFolded] = useStoredState(`kibo-folder-folded-${path ?? ""}`, false, isBoolean);
+  const open = path === null || !folded || !!wanted;
   const listed = chats.filter((chat) => shownBy(chat, filter, wanted));
   const groupIds = new Set(groups.map((group) => group.id));
   const pinnedRows = filter === "active" ? listed.filter((chat) => chat.pinned) : [];
   const folderRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group != null && groupIds.has(chat.group)) : [];
-  const dayRows =
+  const restRows =
     filter === "active" ? listed.filter((chat) => !chat.pinned && (chat.group == null || !groupIds.has(chat.group))) : listed;
   // Searching, a folder with nothing matching says nothing — its head stays
-  // out of the way the days do.
+  // out of the way the rest does.
   if (path !== null && wanted && listed.length === 0) return null;
 
   return (
@@ -683,10 +677,13 @@ function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDe
           className={`chat-workspace-head${active ? " active" : ""}`}
           title={worktreeOf ? `A worktree of ${worktreeOf}\nThis folder: ${path}` : path}
         >
-          <span className="chat-workspace-name">
-            {folderName(path)}
-            {worktreeOf && <span className="chat-workspace-of"> · worktree of {folderName(worktreeOf)}</span>}
-          </span>
+          <button type="button" className="chat-workspace-toggle" aria-expanded={open} onClick={() => setFolded(!folded)}>
+            <ChevronRight size={12} className={open ? "chat-workspace-chev chat-workspace-open" : "chat-workspace-chev"} aria-hidden />
+            <span className="chat-workspace-name">
+              {folderName(path)}
+              {worktreeOf && <span className="chat-workspace-of"> · worktree of {folderName(worktreeOf)}</span>}
+            </span>
+          </button>
           {onNewChat && (
             <button type="button" className="chat-workspace-new" title={`New chat in ${folderName(path)}`} aria-label={`New chat in ${folderName(path)}`} onClick={onNewChat}>
               <Plus size={14} />
@@ -702,66 +699,66 @@ function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDe
           )}
         </div>
       )}
-      {/* With folders alive below, their Empty lines are the state — a
-          "No chats yet." above them contradicts what is on screen. */}
-      {listed.length === 0 && !(chats.length === 0 && groups.length > 0) && (
-        <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
-      )}
-      {pinnedRows.length > 0 && (
-        <section>
-          <div className="chat-day">Pinned</div>
-          {pinnedRows.map(row)}
-        </section>
-      )}
-      {filter === "active" &&
-        groups.map((group) => {
-          const rows = folderRows.filter((chat) => chat.group === group.id);
-          // Searching, a folder with nothing matching is noise — the days
-          // disappear whole the same way; "Empty" is for a folder at rest.
-          if (wanted && rows.length === 0) return null;
-          const shut = collapsed.includes(group.id);
-          return (
-            <section key={group.id}>
-              <div className="chat-day chat-folder-head">
-                <button
-                  type="button"
-                  className="chat-folder-toggle"
-                  aria-expanded={!shut}
-                  onClick={() => toggleFolder(group.id)}
-                >
-                  <span className="chat-folder-name">{group.name}</span>
-                  <span className="chat-folder-count">{rows.length}</span>
-                  <ChevronRight size={12} className={shut ? "chat-folder-chev" : "chat-folder-chev chat-folder-open"} aria-hidden />
-                </button>
-                <ChatMenu
-                  items={[
-                    {
-                      id: "rename",
-                      label: "Rename…",
-                      icon: <Pencil size={14} />,
-                      onSelect: () => onRenameGroup(group),
-                    },
-                    {
-                      id: "delete",
-                      label: "Delete…",
-                      icon: <Trash2 size={14} />,
-                      divided: true,
-                      onSelect: () => onDeleteGroup(group),
-                    },
-                  ]}
-                />
-              </div>
-              {!shut && (rows.length > 0 ? rows.map(row) : !wanted && <div className="chat-folder-empty">Empty</div>)}
+      {open && (
+        <>
+          {/* With folders alive below, their Empty lines are the state — a
+              "No chats yet." above them contradicts what is on screen. */}
+          {listed.length === 0 && !(chats.length === 0 && groups.length > 0) && (
+            <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
+          )}
+          {pinnedRows.length > 0 && (
+            <section>
+              <div className="chat-day">Pinned</div>
+              {pinnedRows.map(row)}
             </section>
-          );
-        })}
-      {listed.length > 0 &&
-        byDay(dayRows).map(({ day, chats: rows }) => (
-          <section key={day}>
-            <div className="chat-day">{day}</div>
-            {rows.map(row)}
-          </section>
-        ))}
+          )}
+          {filter === "active" &&
+            groups.map((group) => {
+              const rows = folderRows.filter((chat) => chat.group === group.id);
+              // Searching, a folder with nothing matching is noise — the rest
+              // disappear whole the same way; "Empty" is for a folder at rest.
+              if (wanted && rows.length === 0) return null;
+              const shut = collapsed.includes(group.id);
+              return (
+                <section key={group.id}>
+                  <div className="chat-day chat-folder-head">
+                    <button
+                      type="button"
+                      className="chat-folder-toggle"
+                      aria-expanded={!shut}
+                      onClick={() => toggleFolder(group.id)}
+                    >
+                      <span className="chat-folder-name">{group.name}</span>
+                      <span className="chat-folder-count">{rows.length}</span>
+                      <ChevronRight size={12} className={shut ? "chat-folder-chev" : "chat-folder-chev chat-folder-open"} aria-hidden />
+                    </button>
+                    <ChatMenu
+                      items={[
+                        {
+                          id: "rename",
+                          label: "Rename…",
+                          icon: <Pencil size={14} />,
+                          onSelect: () => onRenameGroup(group),
+                        },
+                        {
+                          id: "delete",
+                          label: "Delete…",
+                          icon: <Trash2 size={14} />,
+                          divided: true,
+                          onSelect: () => onDeleteGroup(group),
+                        },
+                      ]}
+                    />
+                  </div>
+                  {!shut && (rows.length > 0 ? rows.map(row) : !wanted && <div className="chat-folder-empty">Empty</div>)}
+                </section>
+              );
+            })}
+          {/* The rest under no heading, in the order the store gives — the
+              last touched first. */}
+          {restRows.length > 0 && <section className="chat-rest">{restRows.map(row)}</section>}
+        </>
+      )}
     </div>
   );
 }
