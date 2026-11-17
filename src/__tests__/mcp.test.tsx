@@ -8,10 +8,14 @@ import type { McpView } from "../lib/mcp";
 
 let disk: McpView;
 let calls: string[] = [];
+let folders: unknown[] = [];
+/** What a start waits on before it answers — a first `npx` run takes seconds. */
+let connectGate: Promise<unknown> = Promise.resolve();
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push(command);
+    if (command.startsWith("mcp_")) folders.push(args?.workspace);
     if (command === "mcp_config_get") return Promise.resolve(structuredClone(disk));
     if (command === "mcp_config_save") {
       const text = args!.text as string;
@@ -23,13 +27,15 @@ mock.module("@tauri-apps/api/core", () => ({
       disk = { ...disk, text, servers: [{ name: "pasted", command: "npx x", enabled: true, error: null, warning: null, state: { state: "notStarted" } }] };
       return Promise.resolve(structuredClone(disk));
     }
+    // Started in the folder it names: another folder's rows do not change.
     if (command === "mcp_server_connect") {
-      disk.servers = disk.servers.map((s) =>
+      const servers = disk.servers.map((s) =>
         s.name === args!.name
-          ? { ...s, state: { state: "running", tools: [{ name: "echo", description: "Says it back" }] } }
+          ? { ...s, state: { state: "running" as const, tools: [{ name: "echo", description: "Says it back" }] } }
           : s,
       );
-      return Promise.resolve(structuredClone(disk));
+      const answer = structuredClone({ ...disk, servers });
+      return connectGate.then(() => answer);
     }
     if (command === "mcp_tool_set_shown") {
       disk.servers = disk.servers.map((s) =>
@@ -84,6 +90,8 @@ beforeEach(() => {
     ],
   };
   calls = [];
+  folders = [];
+  connectGate = Promise.resolve();
 });
 
 describe("useMcp", () => {
@@ -134,6 +142,38 @@ describe("useMcp", () => {
     });
     expect(result.current.view?.servers[0].state).toEqual(before, "not blanked to \"starting\"");
     await act(() => answered);
+  });
+
+  // F-8.4: each open folder runs servers of its own, so every row is asked
+  // for in the folder shown, and another folder reads again.
+  test("every call names the folder, and another folder reads again", async () => {
+    const { result, rerender } = renderHook(({ folder }) => useMcp(true, folder), { initialProps: { folder: "/a" } });
+    await settle();
+    await act(() => result.current.setEnabled("github", false));
+    await act(() => result.current.setToolShown("github", "search_code", true));
+    await act(() => result.current.connect("idle"));
+    await act(async () => void (await result.current.save(disk.text)));
+    expect(folders).toEqual(["/a", "/a", "/a", "/a", "/a"]);
+    rerender({ folder: "/b" });
+    await settle();
+    expect(calls.at(-1)).toBe("mcp_config_get");
+    expect(folders.at(-1)).toBe("/b");
+  });
+
+  test("a start answered after the folder changed does not show under the new one", async () => {
+    const { result, rerender } = renderHook(({ folder }) => useMcp(true, folder), { initialProps: { folder: "/a" } });
+    await settle();
+    let release = () => {};
+    connectGate = new Promise<void>((resolve) => (release = resolve));
+    let answered: Promise<void> = Promise.resolve();
+    act(() => {
+      answered = result.current.connect("idle");
+    });
+    rerender({ folder: "/b" });
+    await settle();
+    release();
+    await act(() => answered);
+    expect(result.current.view?.servers[1].state).toEqual({ state: "notStarted" });
   });
 
   test("a turn starting or ending re-reads what the servers are doing", async () => {
