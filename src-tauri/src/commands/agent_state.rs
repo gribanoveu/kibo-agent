@@ -117,9 +117,17 @@ pub struct AgentState {
     /// for a folder no longer in the registry, or the reverse. Async: held
     /// across the index's open, which reads the store.
     pub(super) folder_change: tokio::sync::Mutex<()>,
-    /// Grows as the user answers "always allow"; not persisted, because a
-    /// saved "never ask me" is a brake released a month ago and forgotten.
+    /// Auto (`skip_all`): one for the app, as the composer's one chip is
+    /// (F-8, decisions). Its "always allow" sets stay empty — those are
+    /// `allowed`, by folder.
     pub(super) approval: Mutex<ApprovalPolicy>,
+    /// "Always allow" answers, by the folder of the turn whose card was
+    /// answered (F-8.5): a permission given in one's own project does not
+    /// carry over to a stranger's repository open beside it. Only the two
+    /// sets are read. Not persisted — a saved "never ask me" is a brake
+    /// released a month ago and forgotten — and dropped with the folder
+    /// (invariant 4). Locked after `open`, never before.
+    pub(super) allowed: Mutex<HashMap<PathBuf, ApprovalPolicy>>,
     /// What the composer's panel says right now. Resident rather than sent
     /// with each turn for the same reason as the approval policy: a paused
     /// turn is resumed from a checkpoint that predates the choice, and a mode
@@ -262,7 +270,21 @@ impl AgentState {
             return false;
         }
         open.retain(|known| known != root);
+        self.allowed.lock().unwrap_or_else(PoisonError::into_inner).remove(root);
         true
+    }
+
+    /// "Always allow `tool`" from a card of a turn in `root` — refused for a
+    /// folder no longer open, which would otherwise get the answer back when
+    /// opened again. Checked and written under the registry's lock, as a
+    /// close removes the folder and its answers under it.
+    pub(super) fn allow_always(&self, root: &std::path::Path, tool: &str) -> Result<(), String> {
+        let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        if !open.iter().any(|known| known == root) {
+            return Err(format!("{} is not an open folder", root.display()));
+        }
+        let mut allowed = self.allowed.lock().unwrap_or_else(PoisonError::into_inner);
+        allowed.entry(root.to_path_buf()).or_default().allow_always(tool)
     }
 
     /// A turn just admitted in `root` may run only while `root` is open:
@@ -338,12 +360,15 @@ impl AgentState {
         self.picked().into()
     }
 
-    pub(super) fn approval(&self) -> Result<ApprovalPolicy, String> {
-        Ok(self
-            .approval
-            .lock()
-            .map_err(|_| "approval lock poisoned".to_string())?
-            .clone())
+    /// The policy a turn in `root` runs under: Auto as the app has it, and
+    /// "always allow" as given in that folder.
+    pub(super) fn approval(&self, root: &std::path::Path) -> Result<ApprovalPolicy, String> {
+        let mut policy = self.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
+        let allowed = self.allowed.lock().unwrap_or_else(PoisonError::into_inner);
+        let here = allowed.get(root);
+        policy.always_allowed = here.map(|here| here.always_allowed.clone()).unwrap_or_default();
+        policy.always_allowed_mcp = here.map(|here| here.always_allowed_mcp.clone()).unwrap_or_default();
+        Ok(policy)
     }
 }
 

@@ -383,7 +383,7 @@ where
     R: Runtime,
     F: FnOnce(&Turn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
-    let approval = state.approval()?;
+    let approval = state.approval(&workspace)?;
     let mode = state.mode();
     let _running = running;
     let (processes, agents) = chats_own(
@@ -801,6 +801,47 @@ mod tests {
                 None,
             ));
             assert!(matches!(outcome, Ok(ChatStreamOutcome::Cancelled(_))), "{outcome:?}");
+        });
+    }
+
+    /// F-8.5: a turn runs under the "always allow" of its own folder — not
+    /// the active one's — and under the app's one Auto.
+    #[test]
+    fn a_turn_runs_under_its_folders_always_allow() {
+        crate::testing::with_app_dir("cmd-turn-allowed", || {
+            crate::testing::spending_provider("unused", 10, 2);
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (active, background) = (plain("cmd-turn-allowed-a"), plain("cmd-turn-allowed-b"));
+            state.register_open(background.clone());
+            state.set_workspace_for_test(active.clone());
+            state.allow_always(&background, "writeFile").unwrap();
+            state.allow_always(&active, "delete").unwrap();
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let running = state.begin_running("c1", 3, &background).expect("the turn runs");
+            let seen = Arc::new(Mutex::new(None));
+            let record = Arc::clone(&seen);
+
+            let outcome = tauri::async_runtime::block_on(run_off_the_event_loop(
+                app.handle().clone(),
+                Arc::clone(&state),
+                state.session("c1"),
+                running,
+                "t1".into(),
+                "c1".into(),
+                background.clone(),
+                None,
+                None,
+                move |turn| {
+                    let asks = |tool| turn.approval.requires_approval(tool, true);
+                    *record.lock().unwrap() = Some((asks(crate::domain::tools::ToolName::WriteFile), asks(crate::domain::tools::ToolName::Delete)));
+                    Err(TurnError::BadResume("only looking".into()))
+                },
+            ));
+
+            assert!(outcome.is_err());
+            assert_eq!(*seen.lock().unwrap(), Some((false, true)), "B's answer lets writeFile through, A's does not reach B");
         });
     }
 
