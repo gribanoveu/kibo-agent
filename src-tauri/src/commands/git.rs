@@ -22,7 +22,7 @@ use crate::services::{commit_message, llm_session};
 /// The open folder's repository changed its index, HEAD or refs.
 pub const GIT_EVENT: &str = "workspace-git:changed";
 
-/// The folder it is about, the string `workspace_open` returned: an event from
+/// The folder it is about, the string `workspace_add` returned: an event from
 /// the folder just left must not refresh the one opened after it.
 #[derive(Clone, Serialize)]
 struct GitChanged {
@@ -220,7 +220,7 @@ pub async fn git_worktree_remove(path: String, state: State<'_, Arc<AgentState>>
 }
 
 /// The folder first: chats deleted for a worktree that then stayed would be
-/// lost for nothing. Keyed by the same canonical spelling `workspace_open`
+/// lost for nothing. Keyed by the same canonical spelling `workspace_add`
 /// saved them under — `target` is already canonical.
 fn remove_with_chats(target: &Path) -> Result<WorktreeRemoved, String> {
     let saved_under = target.display().to_string();

@@ -253,7 +253,7 @@ pub fn run() {
             commands::artifacts::artifact_reveal,
             commands::viewer::viewer_text_scale_get,
             commands::viewer::viewer_text_scale_set,
-            commands::workspace::workspace_open,
+            commands::workspace::workspaces_restore,
             commands::workspace::workspace_add,
             commands::workspace::workspace_close,
             commands::workspace::workspaces_list,

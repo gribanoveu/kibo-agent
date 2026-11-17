@@ -6,7 +6,7 @@ import { applyIndexEvent, fromSnapshot, type IndexState } from "../lib/indexStat
  * The index of the folder at `path`, kept current from its events.
  *
  * Listens from mount, for every folder: the first sync starts inside
- * `workspace_open`, before the window learns the path, and on a small folder
+ * `workspace_add`, before the window learns the path, and on a small folder
  * it is over by then. The snapshot covers a window that was not listening at
  * all — a reload — and never overrides what an event has already said.
  *

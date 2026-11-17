@@ -12,6 +12,9 @@ let current: string | null = null;
 let failOpen = false;
 // The backend's registry: the last activated first, as `workspaces_list` answers.
 let openSet: string[] = [];
+// `workspaces.json`: the folders open last time, the last activated first;
+// `null` when it was never written.
+let saved: string[] | null = null;
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: unknown) => {
@@ -25,6 +28,16 @@ mock.module("@tauri-apps/api/core", () => ({
       openSet = [path, ...openSet.filter((one) => one !== path)];
       current = path;
       return Promise.resolve(path);
+    }
+    if (command === "workspaces_restore") {
+      if (current) return Promise.resolve(current);
+      // As the backend: with no open set saved, the folder opened last.
+      const reopen = saved ?? (recent[0] && !failOpen ? [recent[0]] : []);
+      for (const one of [...reopen].reverse()) {
+        openSet = [one, ...openSet.filter((other) => other !== one)];
+        current = one;
+      }
+      return Promise.resolve(current);
     }
     if (command === "workspace_close") {
       openSet = openSet.filter((one) => one !== path);
@@ -59,6 +72,7 @@ afterEach(() => {
   current = null;
   failOpen = false;
   openSet = [];
+  saved = null;
 });
 
 const settle = () => act(async () => {
@@ -66,11 +80,22 @@ const settle = () => act(async () => {
 });
 
 describe("coming back", () => {
-  test("a new launch reopens the folder opened last, and says it came back", async () => {
+  /// F-8.8: every folder open last time, the one activated last active.
+  test("a launch reopens every folder open last time, the last activated active", async () => {
+    saved = ["/work/b", "/work/a"];
+    recent = ["/work/c"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    expect(result.current.path).toBe("/work/b");
+    expect(result.current.folders).toEqual(["/work/a", "/work/b"]);
+    expect(result.current.resumed).toBe(true);
+    expect(calls.filter((call) => call.command === "workspace_add")).toEqual([]);
+  });
+
+  test("with none open last time, a launch reopens the folder opened last, and says it came back", async () => {
     recent = ["/work/b", "/work/a"];
     const { result } = renderHook(() => useWorkspace());
     await settle();
-    expect(calls).toContainEqual({ command: "workspace_add", args: { path: "/work/b" } });
     expect(result.current.path).toBe("/work/b");
     expect(result.current.recent).toEqual(folders(["/work/b", "/work/a"]));
     expect(result.current.resumed).toBe(true);
@@ -86,6 +111,18 @@ describe("coming back", () => {
     expect(result.current.path).toBe("/work/a");
     expect(result.current.folders).toEqual(["/work/c", "/work/a"]);
     expect(result.current.resumed).toBe(true);
+  });
+
+  /// Closing every folder is deliberate: the recent one does not come back either.
+  test("every folder closed last time: the window starts empty", async () => {
+    saved = [];
+    recent = ["/work/b"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    expect(result.current.path).toBeNull();
+    expect(result.current.folders).toEqual([]);
+    expect(result.current.resumed).toBe(false);
+    expect(result.current.recent).toEqual(folders(["/work/b"]));
   });
 
   test("nothing opened before: nothing open, nothing resumed", async () => {
@@ -170,7 +207,6 @@ describe("open folders", () => {
       });
     }
     expect(result.current.folders).toEqual(["/work/a", "/work/b", "/work/c"]);
-    expect(calls.filter((call) => call.command === "workspace_open")).toEqual([]);
 
     // Back to a folder already open: active again, and its section does not move.
     await act(async () => {

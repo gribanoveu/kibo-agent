@@ -98,7 +98,8 @@ describe("command wrappers", () => {
     await chat.cancelSteer("note-1", "c1");
     await chat.alwaysAllow("writeFile", "c1");
     await chat.setUnattended(true);
-    await chat.openWorkspace("/tmp/project");
+    await chat.addWorkspace("/tmp/project");
+    await chat.restoreWorkspaces();
 
     expect(calls.map((c) => c.command)).toEqual([
       "chat_cancel",
@@ -107,12 +108,13 @@ describe("command wrappers", () => {
       "chat_cancel_steer",
       "approval_always_allow",
       "approval_set_unattended",
-      "workspace_open",
+      "workspace_add",
+      "workspaces_restore",
     ]);
     expect(calls[1]?.args).toEqual({ text: "use the helper", shown: null, images: [], chatId: "c1" });
     expect(calls[2]?.args).toEqual({ text: "", shown: null, images: [picture], chatId: "c1" });
     expect(calls[4]?.args).toEqual({ tool: "writeFile", chatId: "c1" });
-    expect(calls[6]?.args).toEqual({ path: "/tmp/project", keepRunning: false });
+    expect(calls[6]?.args).toEqual({ path: "/tmp/project" });
   });
 });
 

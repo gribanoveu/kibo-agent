@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import type { IndexEvent, IndexSnapshot } from "../lib/chat";
 
-// The first sync starts inside `workspace_open`, before the window knows the
+// The first sync starts inside `workspace_add`, before the window knows the
 // folder's path; the hook must not lose what it said meanwhile.
 
 let emit: (event: IndexEvent) => void = () => {};

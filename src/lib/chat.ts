@@ -113,11 +113,6 @@ export const CHAT_TURN_EVENT = "chat:turn-event";
 
 // ------------------------------------------------------------- the commands
 
-export async function openWorkspace(path: string, keepRunning = false): Promise<string> {
-  requireBackend();
-  return invoke<string>("workspace_open", { path, keepRunning });
-}
-
 /** An open folder. Mirrors `commands::workspace::OpenFolder`. */
 export type OpenFolder = { path: string; active: boolean };
 
@@ -125,6 +120,12 @@ export type OpenFolder = { path: string; active: boolean };
 export async function addWorkspace(path: string): Promise<string> {
   requireBackend();
   return invoke<string>("workspace_add", { path });
+}
+
+/** At launch, reopens the folders open last time; answers the active one — the folder of the chat viewed last (F-8.8). */
+export async function restoreWorkspaces(): Promise<string | null> {
+  requireBackend();
+  return invoke<string | null>("workspaces_restore");
 }
 
 /** Closes an open folder: out of the open set, its processes, terminals and index stopped. Refused while a turn runs in it (F-8). */
@@ -179,7 +180,7 @@ export async function forgetWorkspace(path: string): Promise<void> {
  */
 export const INDEX_EVENT = "workspace-index:event";
 
-/** One report of a sync. `root` is the string `openWorkspace` returned. */
+/** One report of a sync. `root` is the string `addWorkspace` returned. */
 export type IndexEvent = { root: string } & (
   | { kind: "syncStarted" }
   | { kind: "keywordsReady"; indexed: number; unchanged: number; removed: number; skipped: number }

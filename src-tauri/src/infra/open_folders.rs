@@ -31,16 +31,25 @@ fn path() -> Result<PathBuf, RecentFoldersError> {
 /// Open folders that still exist, the last added first. A missing or damaged
 /// file is an empty list: the window starts closed, as after a fresh install.
 pub fn load() -> Vec<String> {
-    let Ok(text) = path().and_then(|p| fs::read_to_string(p).map_err(|e| RecentFoldersError(e.to_string()))) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Vec<String>>(&text)
+    saved().unwrap_or_default()
+}
+
+/// As `load`, but `None` when the file has never been written — a build
+/// that kept no open set — rather than when every folder was closed.
+pub fn saved() -> Option<Vec<String>> {
+    let path = path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let folders = serde_json::from_str::<Vec<String>>(&text)
         .unwrap_or_default()
         .into_iter()
         // `\\?\C:\…` is how older builds saved a folder on Windows; the plain
         // spelling is what the app opens and registers under.
         .filter(|folder| !folder.starts_with(r"\\?\") && Path::new(folder).is_dir())
-        .collect()
+        .collect();
+    Some(folders)
 }
 
 pub fn record(opened: &str) -> Result<(), RecentFoldersError> {
@@ -90,6 +99,7 @@ mod tests {
             let kept = std::env::temp_dir();
             let kept = kept.to_str().unwrap();
             assert!(load().is_empty(), "nothing open yet");
+            assert_eq!(saved(), None, "and never saved");
             record("/no/such/folder/anymore").unwrap();
             record(kept).unwrap();
             assert_eq!(load(), list(&[kept]));
@@ -120,6 +130,8 @@ mod tests {
 
             remove(&linked).unwrap();
             assert_eq!(load(), list(&[other.as_str()]));
+            remove(&other).unwrap();
+            assert_eq!(saved(), Some(Vec::new()), "every folder closed is not never saved");
         });
     }
 

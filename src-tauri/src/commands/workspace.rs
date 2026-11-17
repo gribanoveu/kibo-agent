@@ -14,34 +14,61 @@ use crate::services::workspace_index::WorkspaceIndex;
 use super::workspace_events::index_event_sink;
 use super::agent_state::AgentState;
 
-/// Opens a folder as the workspace — the frontend's entry point until F-8.6,
-/// while it shows one folder at a time. A switch, not an add: every other
-/// open folder is closed — out of the open set and `workspaces.json`, its
-/// processes, shells and index stopped — unless a turn still runs there.
-/// Every other, not only the one left: `keep_running` — a chat moved to its
-/// worktree — leaves the neighbouring chat its folder open and running, and
-/// the next switch is what closes it. Kept open, every folder visited stayed
-/// open with no way to close it until F-8.6: a worktree once opened could not
-/// be removed, a dev server ran on unseen, and the next launch (F-8.8) would
-/// reopen them all.
+/// At launch, reopens every folder of `workspaces.json` still on disk (F-8.8):
+/// all go into the open set in their order, the first — the one activated
+/// last, the folder of the chat viewed last — is made active, and the others'
+/// indexes open in the background, so the window does not wait for every
+/// store to load. The file is left as it was. With no file yet (a build that
+/// kept no open set) the recent list's first folder opens, as launches did
+/// before; with every folder closed, none. A reloaded window, its folders
+/// still open, keeps them as they are. Answers the active folder.
 #[tauri::command]
-pub async fn workspace_open<R: Runtime>(
-    path: String,
-    keep_running: Option<bool>,
+pub async fn workspaces_restore<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
     index: State<'_, Arc<WorkspaceIndex>>,
     git_watch: State<'_, super::git::GitWatch>,
-) -> Result<String, String> {
+) -> Result<Option<String>, String> {
     let _changing = state.folder_change.lock().await;
-    let shown = add(path, &app, &state, &index, &git_watch).await?;
-    if keep_running != Some(true) {
-        for left in state.open_folders().into_iter().filter(|folder| *folder != Path::new(&shown)) {
-            // Refused while a turn runs there: that folder stays open.
-            let _ = close_folder(left, &app, &state, &index).await;
-        }
+    if let Ok(active) = state.workspace() {
+        return Ok(Some(active.display().to_string()));
     }
-    Ok(shown)
+    let Some(saved) = crate::infra::open_folders::saved() else {
+        let Some(last) = crate::infra::recent_workspaces::load().into_iter().next() else { return Ok(None) };
+        return add(last, &app, &state, &index, &git_watch).await.map(Some);
+    };
+    let folders: Vec<PathBuf> = saved
+        .iter()
+        .filter_map(|folder| crate::infra::paths::canonicalize_plain(Path::new(folder)).ok())
+        .filter(|root| root.is_dir())
+        .collect();
+    for root in folders.iter().rev() {
+        state.register_open(root.clone());
+    }
+    let Some((active, background)) = folders.split_first() else { return Ok(None) };
+    for root in background {
+        drop(open_index_behind(root.clone(), &app, &state, &index));
+    }
+    activate(active.clone(), &app, &state, &index, &git_watch).await.map(Some)
+}
+
+/// Opens a folder's index without waiting for its store. A close of the
+/// folder meanwhile has nothing to close yet: the index is closed here, once
+/// open, if the folder is no longer.
+fn open_index_behind<R: Runtime>(
+    root: PathBuf,
+    app: &AppHandle<R>,
+    state: &Arc<AgentState>,
+    index: &Arc<WorkspaceIndex>,
+) -> tauri::async_runtime::JoinHandle<()> {
+    let sink = index_event_sink(app, root.display().to_string());
+    let (state, index) = (Arc::clone(state), Arc::clone(index));
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = index.open(&root, sink);
+        if !state.is_open(&root) {
+            index.close(&root);
+        }
+    })
 }
 
 /// Out of the open set and `workspaces.json`, and everything of it stopped
@@ -265,7 +292,7 @@ pub async fn workspace_worktree_of(workspace: Option<String>, state: State<'_, A
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexSnapshot {
-    /// The same string `workspace_open` returned, which the events carry too.
+    /// The same string `workspace_add` returned, which the events carry too.
     root: String,
     syncing: bool,
     embedded: usize,
@@ -505,59 +532,85 @@ mod tests {
         root
     }
 
-    /// Until F-8.6 the window shows one folder: `workspace_open` switches, so
-    /// the folder left goes out of the open set — unless a turn runs there —
-    /// and a worktree once visited can still be removed.
+    /// F-8.8: a launch reopens every folder still on disk, in the order they
+    /// were, the one activated last active; a reloaded window keeps its own.
     #[test]
-    fn the_legacy_open_switches_and_leaves_no_idle_folder_behind() {
-        crate::testing::with_app_dir("ws-legacy-open", || {
-            let (app, state, index) = folder_app();
-            let processes = Arc::new(Processes::default());
-            app.manage(Arc::clone(&processes));
-            let open_with = |root: &Path, keep_running: Option<bool>| {
-                tauri::async_runtime::block_on(workspace_open(
-                    root.display().to_string(),
-                    keep_running,
-                    app.handle().clone(),
-                    app.state(),
-                    app.state(),
-                    app.state(),
-                ))
-                .unwrap()
-            };
-            let open = |root: &Path| open_with(root, None);
+    fn a_launch_reopens_every_folder_the_last_activated_active() {
+        crate::testing::with_app_dir("ws-restore", || {
             let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
-            let (a, b, c, d) = (plain("ws-legacy-a"), plain("ws-legacy-b"), plain("ws-legacy-c"), plain("ws-legacy-d"));
-            let runs_in = |root: &Path| {
-                use crate::domain::background::BackgroundProcesses;
-                processes.for_chat("c", root).start(&crate::domain::command_exec::Shell::default(), "sleep 30", root, ".").unwrap()
+            let (a, b, gone) = (git_repo("ws-restore-a"), plain("ws-restore-b"), plain("ws-restore-gone"));
+            {
+                let (app, _, _) = folder_app();
+                for root in [&a, &gone, &b, &a] {
+                    tauri::async_runtime::block_on(workspace_add(
+                        root.display().to_string(),
+                        app.handle().clone(),
+                        app.state(),
+                        app.state(),
+                        app.state(),
+                    ))
+                    .unwrap();
+                }
+            }
+            std::fs::remove_dir_all(&gone).unwrap();
+
+            let (app, state, index) = folder_app();
+            let restore = || {
+                tauri::async_runtime::block_on(workspaces_restore(app.handle().clone(), app.state(), app.state(), app.state())).unwrap()
             };
-            let running = |root: &Path| processes.list_in(root).iter().filter(|p| p.info.running()).count();
-            open(&a);
-            runs_in(&a);
-            open(&b);
-            assert_eq!(state.open_folders(), vec![b.clone()], "A was left");
-            assert!(index.indexer(&a).is_none(), "and its index closed");
-            assert_eq!(running(&a), 0, "and what ran in it stopped");
-            assert_eq!(crate::infra::open_folders::load(), vec![b.display().to_string()]);
-            open(&b);
-            assert_eq!(state.open_folders(), vec![b.clone()], "reopening the active folder keeps it");
+            let file = crate::infra::open_folders::saved();
+            assert_eq!(restore(), Some(a.display().to_string()), "the folder activated last is active");
+            assert_eq!(state.open_folders(), vec![a.clone(), b.clone()], "every folder still on disk, in its order");
+            assert_eq!(crate::infra::open_folders::saved(), file, "the file is left as it was");
+            assert!(index.indexer(&a).is_some(), "the active folder is indexed once restored");
+            let waited = std::time::Instant::now();
+            while index.indexer(&b).is_none() && waited.elapsed() < std::time::Duration::from_secs(5) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(index.indexer(&b).is_some(), "a folder in the background is indexed too, behind");
+            assert!(app.state::<super::super::git::GitWatch>().is_watching(), "the active folder's .git is watched");
 
-            let running_turn = state.begin_running("c1", 1, &b).unwrap();
-            open(&c);
-            assert_eq!(state.open_folders(), vec![c.clone(), b.clone()], "a folder with a running turn stays open");
-            drop(running_turn);
+            state.set_workspace_for_test(b.clone());
+            assert_eq!(restore(), Some(b.display().to_string()), "a reloaded window keeps its folders as they are");
+            assert_eq!(state.open_folders(), vec![b.clone(), a.clone()]);
 
-            // A chat moved to its worktree: the folder it leaves stays open, running.
-            runs_in(&c);
-            open_with(&d, Some(true));
-            assert_eq!(state.open_folders(), vec![d.clone(), c.clone(), b.clone()]);
-            assert_eq!(running(&c), 1, "keep_running keeps C's process");
-            // The next switch closes every other folder, the one kept running too.
-            open(&a);
-            assert_eq!(state.open_folders(), vec![a.clone()]);
-            assert_eq!(running(&c), 0, "C's process stopped on the next switch");
-            processes.stop_all();
+            // Every folder closed by hand: none comes back, not even the recent one.
+            let (app, _, _) = folder_app();
+            crate::infra::open_folders::remove(&a.display().to_string()).unwrap();
+            crate::infra::open_folders::remove(&b.display().to_string()).unwrap();
+            let none = tauri::async_runtime::block_on(workspaces_restore(app.handle().clone(), app.state(), app.state(), app.state()));
+            assert_eq!(none, Ok(None), "every folder was closed");
+        });
+    }
+
+    /// A folder closed while its index opens behind the launch is not left
+    /// with an index nobody closes.
+    #[test]
+    fn an_index_opened_behind_a_folder_closed_meanwhile_is_closed() {
+        crate::testing::with_app_dir("ws-restore-behind", || {
+            let (app, state, index) = folder_app();
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("ws-restore-behind-a")).unwrap();
+            let state = Arc::clone(&state);
+            state.register_open(root.clone());
+            tauri::async_runtime::block_on(open_index_behind(root.clone(), app.handle(), &state, &index)).unwrap();
+            assert!(index.indexer(&root).is_some(), "an open folder keeps its index");
+
+            let closed = crate::infra::paths::canonicalize_plain(&temp_dir("ws-restore-behind-b")).unwrap();
+            tauri::async_runtime::block_on(open_index_behind(closed.clone(), app.handle(), &state, &index)).unwrap();
+            assert!(index.indexer(&closed).is_none(), "one closed meanwhile does not");
+        });
+    }
+
+    /// A build that kept no open set: the folder opened last comes back.
+    #[test]
+    fn a_launch_with_no_open_set_saved_reopens_the_recent_folder() {
+        crate::testing::with_app_dir("ws-restore-recent", || {
+            let a = crate::infra::paths::canonicalize_plain(&temp_dir("ws-restore-recent-a")).unwrap();
+            crate::infra::recent_workspaces::record(&a.display().to_string()).unwrap();
+            let (app, state, _) = folder_app();
+            let restored = tauri::async_runtime::block_on(workspaces_restore(app.handle().clone(), app.state(), app.state(), app.state()));
+            assert_eq!(restored, Ok(Some(a.display().to_string())));
+            assert_eq!(state.open_folders(), vec![a]);
         });
     }
 

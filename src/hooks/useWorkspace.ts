@@ -7,6 +7,7 @@ import {
   listWorkspaces,
   type RecentFolder,
   recentWorkspaces,
+  restoreWorkspaces,
 } from "../lib/chat";
 import { pickFolder } from "../lib/dialog";
 
@@ -85,22 +86,20 @@ export function useWorkspace() {
     [reread],
   );
 
-  // A reloaded window asks the backend, which still has its folders; a new
-  // launch reopens the folder opened last. One that is gone is not in the
-  // list, and the window starts empty as it would have.
+  // A launch reopens every folder open last time, the folder of the chat
+  // viewed last active (F-8.8); a reloaded window keeps the backend's. The
+  // backend decides which: with every folder closed by hand the window starts
+  // empty.
   useEffect(() => {
     void (async () => {
-      const list = await recentWorkspaces().catch(() => []);
-      setRecent(list);
-      const current = await currentWorkspace().catch(() => null);
-      if (current) {
+      const restored = await restoreWorkspaces().catch(() => null);
+      recentWorkspaces().then(setRecent).catch(() => {});
+      if (restored) {
         await reread();
-        setResumed(true);
-      } else if (list[0] && (await open(list[0].path))) {
         setResumed(true);
       }
     })();
-  }, [open, reread]);
+  }, [reread]);
 
   /** Asks for a folder and opens it. `false` also means "the user cancelled". */
   const pick = useCallback(async () => {
