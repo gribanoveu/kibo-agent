@@ -393,7 +393,6 @@ export function Sidebar({
               section={section}
               filter={filter}
               wanted={wanted}
-              named={sections.filter((one) => one.path !== null).length > 1}
               row={(chat) => chatRow(chat, section)}
               onRenameGroup={(group) => {
                 setNaming({ scope: section.path, group, name: group.name, chat: null });
@@ -666,15 +665,13 @@ type FoldersProps = {
   section: ChatSection;
   filter: Filter;
   wanted: string;
-  /** More than one open folder: each chat folder says whose it is. */
-  named: boolean;
   row: (chat: ChatSummary) => React.ReactNode;
   onRenameGroup: (group: ChatGroup) => void;
   onDeleteGroup: (group: ChatGroup) => void;
 };
 
 /** One section's chat folders, drawn above every section. */
-function ChatFolders({ section, filter, wanted, named, row, onRenameGroup, onDeleteGroup }: FoldersProps) {
+function ChatFolders({ section, filter, wanted, row, onRenameGroup, onDeleteGroup }: FoldersProps) {
   const { path, groups } = section;
   // A chat folder shut by id, remembered per list: collapse is about the
   // view, not the chats, so it lives in window storage and not in the store.
@@ -690,12 +687,11 @@ function ChatFolders({ section, filter, wanted, named, row, onRenameGroup, onDel
     const shut = collapsed.includes(group.id);
     return (
       <section key={group.id} className="chat-folder">
-        <div className="chat-day chat-folder-head" title={path ?? undefined}>
+        {/* The name is cut to one line; the whole of it, and whose folder it
+            is, on hover — the chat open says the rest. */}
+        <div className="chat-day chat-folder-head" title={path === null ? group.name : `${group.name}\n${path}`}>
           <button type="button" className="chat-folder-toggle" aria-expanded={!shut} onClick={() => toggleFolder(group.id)}>
-            <span className="chat-folder-name">
-              {group.name}
-              {named && path !== null && <span className="chat-folder-of"> · {folderName(path)}</span>}
-            </span>
+            <span className="chat-folder-name">{group.name}</span>
             <span className="chat-folder-count">{rows.length}</span>
             <ChevronRight size={12} className={shut ? "chat-folder-chev" : "chat-folder-chev chat-folder-open"} aria-hidden />
           </button>

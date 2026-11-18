@@ -617,16 +617,16 @@ describe("open folders", () => {
   });
 
   /// The chat folders the user made stand above every open folder's
-  /// section, as pinned chats stand above the rest of theirs; with several
-  /// folders open, each says whose it is.
-  test("chat folders stand above the folders' sections, named by their folder", () => {
+  /// section, as pinned chats stand above the rest of theirs; whose each is
+  /// shows on hover, not in a line a long name would push over.
+  test("chat folders stand above the folders' sections, whose on hover", () => {
     folders();
     const ops = screen.getByText("Ops").closest(".chat-folder") as HTMLElement;
     expect(ops.closest(".chat-section")).toBeNull();
     const first = document.querySelector(".chat-section") as HTMLElement;
     expect(ops.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(ops.textContent).toContain("· api");
-    expect(ops.querySelector(".chat-folder-head")?.getAttribute("title")).toBe("/work/api");
+    expect(ops.textContent).not.toContain("api");
+    expect(ops.querySelector(".chat-folder-head")?.getAttribute("title")).toBe("Ops\n/work/api");
   });
 
   /// A folder is added from a new chat's folder picker, not from the list's head.
