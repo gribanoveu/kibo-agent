@@ -551,7 +551,7 @@ describe("open folders", () => {
       expect(toggle.getAttribute("aria-expanded")).toBe("true");
       fireEvent.click(toggle);
       expect(screen.queryByText("api chat")).toBeNull();
-      expect(screen.queryByText("Ops")).toBeNull();
+      expect(screen.getByText("Ops")).toBeTruthy();
       expect(screen.getByText("web chat")).toBeTruthy();
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       unmount();
@@ -600,15 +600,13 @@ describe("open folders", () => {
     expect(screen.getAllByText(/worktree of/)).toHaveLength(1);
   });
 
-  test("each folder heads its own chats and chat folders, and the active one is lit", () => {
+  test("each folder heads its own chats, and the active one is lit", () => {
     folders();
     expect(within(section("api")).getByText("api chat")).toBeTruthy();
-    expect(within(section("api")).getByText("Ops")).toBeTruthy();
     expect(within(section("web")).getByText("web chat")).toBeTruthy();
-    expect(within(section("web")).queryByText("Ops")).toBeNull();
     expect(section("web").querySelector(".chat-workspace-head.active")).toBeTruthy();
     expect(section("api").querySelector(".chat-workspace-head.active")).toBeNull();
-    expect(screen.getByTitle("/work/api")).toBeTruthy();
+    expect(section("api").querySelector(".chat-workspace-head")?.getAttribute("title")).toBe("/work/api");
   });
 
   test("a row opens its chat named with its folder", () => {
@@ -616,6 +614,19 @@ describe("open folders", () => {
     folders({ select: (id, folder) => picked.push([id, folder]) });
     fireEvent.click(screen.getByText("api chat"));
     expect(picked).toEqual([["a1", "/work/api"]]);
+  });
+
+  /// The chat folders the user made stand above every open folder's
+  /// section, as pinned chats stand above the rest of theirs; with several
+  /// folders open, each says whose it is.
+  test("chat folders stand above the folders' sections, named by their folder", () => {
+    folders();
+    const ops = screen.getByText("Ops").closest(".chat-folder") as HTMLElement;
+    expect(ops.closest(".chat-section")).toBeNull();
+    const first = document.querySelector(".chat-section") as HTMLElement;
+    expect(ops.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(ops.textContent).toContain("· api");
+    expect(ops.querySelector(".chat-folder-head")?.getAttribute("title")).toBe("/work/api");
   });
 
   /// A folder is added from a new chat's folder picker, not from the list's head.

@@ -384,6 +384,24 @@ export function Sidebar({
         {wanted &&
           sections.every((section) => section.path !== null) &&
           !sections.some((section) => section.chats.some((chat) => shownBy(chat, filter, wanted))) && <div className="empty">No chats match.</div>}
+        {/* The chat folders the user made, every folder's, above the folders'
+            sections — kept on top as pinned chats are within theirs. */}
+        {filter === "active" &&
+          sections.map((section) => (
+            <ChatFolders
+              key={`folders-${section.path ?? ""}`}
+              section={section}
+              filter={filter}
+              wanted={wanted}
+              named={sections.filter((one) => one.path !== null).length > 1}
+              row={(chat) => chatRow(chat, section)}
+              onRenameGroup={(group) => {
+                setNaming({ scope: section.path, group, name: group.name, chat: null });
+                setNameError(null);
+              }}
+              onDeleteGroup={(group) => setDeletingGroup({ scope: section.path, group })}
+            />
+          ))}
         {sections.map((section) => (
           <SectionList
             key={section.path ?? ""}
@@ -392,11 +410,6 @@ export function Sidebar({
             wanted={wanted}
             active={section.path !== null && section.path === activeFolder}
             row={(chat) => chatRow(chat, section)}
-            onRenameGroup={(group) => {
-              setNaming({ scope: section.path, group, name: group.name, chat: null });
-              setNameError(null);
-            }}
-            onDeleteGroup={(group) => setDeletingGroup({ scope: section.path, group })}
             onNewChat={section.path !== null && onNewChatIn ? () => onNewChatIn(section.path as string) : undefined}
             onClose={section.path !== null && onCloseFolder ? () => onCloseFolder(section.path as string) : undefined}
           />
@@ -625,38 +638,89 @@ type SectionProps = {
   /** The active folder's section: its head is lit. */
   active: boolean;
   row: (chat: ChatSummary) => React.ReactNode;
-  onRenameGroup: (group: ChatGroup) => void;
-  onDeleteGroup: (group: ChatGroup) => void;
   /** Set for an open folder's section — the head that names it. */
   onNewChat?: () => void;
   onClose?: () => void;
 };
 
-/**
- * One section's rows: pinned first, then the chat folders, then the rest —
- * and a row shown twice reads as two chats, so each of the three takes a
- * chat out of the rest. Chat folders are the working view: only the active
- * filter draws them. A chat whose folder is not among the known ones (a
- * folder deleted mid-move, a list fresher than the folders) is never lost:
- * it falls into the rest.
- */
-function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDeleteGroup, onNewChat, onClose }: SectionProps) {
-  const { path, chats, groups, worktreeOf } = section;
+/** A section's rows the filter and search leave, split three ways: pinned,
+ * in one of the chat folders, and the rest — a row shown twice reads as two
+ * chats, so each takes a chat out of the rest. Chat folders are the working
+ * view: only the active filter splits. A chat whose folder is not among the
+ * known ones (a folder deleted mid-move, a list fresher than the folders) is
+ * never lost: it falls into the rest. */
+function rowsOf({ chats, groups }: ChatSection, filter: Filter, wanted: string) {
+  const listed = chats.filter((chat) => shownBy(chat, filter, wanted));
+  if (filter !== "active") return { listed, pinned: [], foldered: [], rest: listed };
+  const groupIds = new Set(groups.map((group) => group.id));
+  const foldered = (chat: ChatSummary) => !chat.pinned && chat.group != null && groupIds.has(chat.group);
+  return {
+    listed,
+    pinned: listed.filter((chat) => chat.pinned),
+    foldered: listed.filter(foldered),
+    rest: listed.filter((chat) => !chat.pinned && !foldered(chat)),
+  };
+}
+
+type FoldersProps = {
+  section: ChatSection;
+  filter: Filter;
+  wanted: string;
+  /** More than one open folder: each chat folder says whose it is. */
+  named: boolean;
+  row: (chat: ChatSummary) => React.ReactNode;
+  onRenameGroup: (group: ChatGroup) => void;
+  onDeleteGroup: (group: ChatGroup) => void;
+};
+
+/** One section's chat folders, drawn above every section. */
+function ChatFolders({ section, filter, wanted, named, row, onRenameGroup, onDeleteGroup }: FoldersProps) {
+  const { path, groups } = section;
   // A chat folder shut by id, remembered per list: collapse is about the
   // view, not the chats, so it lives in window storage and not in the store.
   const [collapsed, setCollapsed] = useStoredState<string[]>(`kibo-chat-groups-${path ?? ""}`, [], isStringArray);
   const toggleFolder = (id: string) =>
     setCollapsed((shut) => (shut.includes(id) ? shut.filter((one) => one !== id) : [...shut, id]));
+  const { foldered } = rowsOf(section, filter, wanted);
+  return groups.map((group) => {
+    const rows = foldered.filter((chat) => chat.group === group.id);
+    // Searching, a folder with nothing matching is noise — the rest
+    // disappear whole the same way; "Empty" is for a folder at rest.
+    if (wanted && rows.length === 0) return null;
+    const shut = collapsed.includes(group.id);
+    return (
+      <section key={group.id} className="chat-folder">
+        <div className="chat-day chat-folder-head" title={path ?? undefined}>
+          <button type="button" className="chat-folder-toggle" aria-expanded={!shut} onClick={() => toggleFolder(group.id)}>
+            <span className="chat-folder-name">
+              {group.name}
+              {named && path !== null && <span className="chat-folder-of"> · {folderName(path)}</span>}
+            </span>
+            <span className="chat-folder-count">{rows.length}</span>
+            <ChevronRight size={12} className={shut ? "chat-folder-chev" : "chat-folder-chev chat-folder-open"} aria-hidden />
+          </button>
+          <ChatMenu
+            items={[
+              { id: "rename", label: "Rename…", icon: <Pencil size={14} />, onSelect: () => onRenameGroup(group) },
+              { id: "delete", label: "Delete…", icon: <Trash2 size={14} />, divided: true, onSelect: () => onDeleteGroup(group) },
+            ]}
+          />
+        </div>
+        {!shut && (rows.length > 0 ? rows.map(row) : !wanted && <div className="chat-folder-empty">Empty</div>)}
+      </section>
+    );
+  });
+}
+
+/** One section's rows under its head: pinned first, then the rest — its chat
+ * folders stand above every section (`ChatFolders`). */
+function SectionList({ section, filter, wanted, active, row, onNewChat, onClose }: SectionProps) {
+  const { path, chats, groups, worktreeOf } = section;
   // An open folder's whole section folds under its head, remembered per
   // folder; a search shows what matches in it all the same.
   const [folded, setFolded] = useStoredState(`kibo-folder-folded-${path ?? ""}`, false, isBoolean);
   const open = path === null || !folded || !!wanted;
-  const listed = chats.filter((chat) => shownBy(chat, filter, wanted));
-  const groupIds = new Set(groups.map((group) => group.id));
-  const pinnedRows = filter === "active" ? listed.filter((chat) => chat.pinned) : [];
-  const folderRows = filter === "active" ? listed.filter((chat) => !chat.pinned && chat.group != null && groupIds.has(chat.group)) : [];
-  const restRows =
-    filter === "active" ? listed.filter((chat) => !chat.pinned && (chat.group == null || !groupIds.has(chat.group))) : listed;
+  const { listed, pinned: pinnedRows, rest: restRows } = rowsOf(section, filter, wanted);
   // Searching, a folder with nothing matching says nothing — its head stays
   // out of the way the rest does.
   if (path !== null && wanted && listed.length === 0) return null;
@@ -692,8 +756,8 @@ function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDe
       )}
       {open && (
         <>
-          {/* With folders alive below, their Empty lines are the state — a
-              "No chats yet." above them contradicts what is on screen. */}
+          {/* With chat folders alive above, their Empty lines are the state —
+              a "No chats yet." under them contradicts what is on screen. */}
           {listed.length === 0 && !(chats.length === 0 && groups.length > 0) && (
             <div className="empty">{chats.length === 0 ? "No chats yet." : wanted ? "No chats match." : EMPTY[filter]}</div>
           )}
@@ -703,48 +767,6 @@ function SectionList({ section, filter, wanted, active, row, onRenameGroup, onDe
               {pinnedRows.map(row)}
             </section>
           )}
-          {filter === "active" &&
-            groups.map((group) => {
-              const rows = folderRows.filter((chat) => chat.group === group.id);
-              // Searching, a folder with nothing matching is noise — the rest
-              // disappear whole the same way; "Empty" is for a folder at rest.
-              if (wanted && rows.length === 0) return null;
-              const shut = collapsed.includes(group.id);
-              return (
-                <section key={group.id}>
-                  <div className="chat-day chat-folder-head">
-                    <button
-                      type="button"
-                      className="chat-folder-toggle"
-                      aria-expanded={!shut}
-                      onClick={() => toggleFolder(group.id)}
-                    >
-                      <span className="chat-folder-name">{group.name}</span>
-                      <span className="chat-folder-count">{rows.length}</span>
-                      <ChevronRight size={12} className={shut ? "chat-folder-chev" : "chat-folder-chev chat-folder-open"} aria-hidden />
-                    </button>
-                    <ChatMenu
-                      items={[
-                        {
-                          id: "rename",
-                          label: "Rename…",
-                          icon: <Pencil size={14} />,
-                          onSelect: () => onRenameGroup(group),
-                        },
-                        {
-                          id: "delete",
-                          label: "Delete…",
-                          icon: <Trash2 size={14} />,
-                          divided: true,
-                          onSelect: () => onDeleteGroup(group),
-                        },
-                      ]}
-                    />
-                  </div>
-                  {!shut && (rows.length > 0 ? rows.map(row) : !wanted && <div className="chat-folder-empty">Empty</div>)}
-                </section>
-              );
-            })}
           {/* The rest under no heading, in the order the store gives — the
               last touched first. */}
           {restRows.length > 0 && <section className="chat-rest">{restRows.map(row)}</section>}

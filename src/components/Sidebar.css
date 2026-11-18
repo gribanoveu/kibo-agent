@@ -427,6 +427,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Whose chat folder it is, when more than one folder is open. */
+.chat-folder-of {
+  color: var(--text-faint);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+}
 .chat-folder-count {
   color: var(--text-faint);
   font-weight: 400;
