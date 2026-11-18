@@ -50,7 +50,9 @@ const shareOf = (context: ContextUsage) => (context.limit ? Math.min(1, context.
     last request's cache hit as a row (the Overview's — the ring says it in a sentence); `children`
     go under the rows. `spent` adds what the whole session has cost, every model call of it;
     `subagents` the share of it the chat's subagents spent, under it.
-    `onOpenPane` makes a part's row a link to the pane it is made in. */
+    `onOpenPane` makes a part's row a link to the pane it is made in. A `null` context is one
+    still being read: the same rows with placeholders where the numbers go, so nothing moves
+    when they arrive. */
 export function ContextDetails({
   context,
   cache,
@@ -59,15 +61,16 @@ export function ContextDetails({
   onOpenPane,
   children,
 }: {
-  context: ContextUsage;
+  context: ContextUsage | null;
   cache?: ChatUsage | null;
   spent?: number | null;
   subagents?: number | null;
   onOpenPane?: (pane: AsideTab) => void;
   children?: ReactNode;
 }) {
-  const share = shareOf(context);
-  const percent = share === null ? null : Math.round(share * 100);
+  const share = context && shareOf(context);
+  const percent = share == null ? null : Math.round(share * 100);
+  const reading = <span className="ctx-skeleton" />;
   return (
     <>
       <div className="ctx-head">
@@ -75,7 +78,12 @@ export function ContextDetails({
         {percent !== null && <span className="ctx-percent">{percent}%</span>}
       </div>
 
-      {context.limit ? (
+      {!context ? (
+        <>
+          <div className="ctx-bar" aria-hidden="true" />
+          <p className="ctx-total">{reading}</p>
+        </>
+      ) : context.limit ? (
         <>
           <div className="ctx-bar" aria-hidden="true">
             {PARTS.map(({ key }) => (
@@ -112,7 +120,7 @@ export function ContextDetails({
                   label
                 )}
               </dt>
-              <dd>{compactTokens(context[key])}</dd>
+              <dd>{context ? compactTokens(context[key]) : reading}</dd>
             </div>
           );
         })}
@@ -122,7 +130,7 @@ export function ContextDetails({
               <i className="ctx-dot ctx-dot--cache" />
               Cache hit
             </dt>
-            <dd>{cache ? cacheShare(cache) : "—"}</dd>
+            <dd>{cache ? cacheShare(cache) : context ? "—" : reading}</dd>
           </div>
         )}
         {spent !== undefined && (
@@ -131,7 +139,7 @@ export function ContextDetails({
               <i className="ctx-dot ctx-dot--spent" />
               Session tokens
             </dt>
-            <dd>{spent === null ? "—" : compactTokens(spent)}</dd>
+            <dd>{spent !== null ? compactTokens(spent) : context ? "—" : reading}</dd>
           </div>
         )}
         {subagents !== undefined && (
@@ -141,7 +149,7 @@ export function ContextDetails({
               Subagents tokens
               <InfoTip text="Only this chat's subagents' model calls. Session tokens above count every call of the chat — these included." />
             </dt>
-            <dd>{subagents === null ? "—" : compactTokens(subagents)}</dd>
+            <dd>{subagents !== null ? compactTokens(subagents) : context ? "—" : reading}</dd>
           </div>
         )}
       </dl>

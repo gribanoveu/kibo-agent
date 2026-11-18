@@ -57,6 +57,8 @@ type Session = {
   turn: TurnState;
   error: string | null;
   context: ContextUsage | null;
+  /** Whether `context` has been read for this session at all — until then the Overview draws a placeholder. */
+  contextRead: boolean;
   history: LlmMessage[];
   todos: Task[];
   plan: string | null;
@@ -91,6 +93,7 @@ const fresh = (key: string = crypto.randomUUID()): Session => ({
   turn: emptyTurn(),
   error: null,
   context: null,
+  contextRead: false,
   history: [],
   todos: [],
   plan: null,
@@ -297,11 +300,13 @@ export function useAgentTurn({
       contextUsage(session.key, session.history).then(
         (context) => {
           session.context = context;
+          session.contextRead = true;
           changed(session);
         },
         () => {
           // A meter that cannot be drawn is not worth an error banner.
           session.context = null;
+          session.contextRead = true;
           changed(session);
         },
       );
@@ -765,6 +770,8 @@ export function useAgentTurn({
     subagents,
     error: current.error,
     context: busy ? (current.turn.estimate ?? current.context) : current.context,
+    /** The open chat's estimate not read yet — a chat just opened. */
+    contextPending: !current.contextRead && !(busy && current.turn.estimate),
     send: (text: string, sent?: string, images: ImagePart[] = [], keepChecklist = false) =>
       sendSession(active.current, text, sent, images, keepChecklist),
     queued: current.queued,

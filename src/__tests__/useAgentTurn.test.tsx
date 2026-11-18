@@ -460,6 +460,17 @@ describe("the context estimate", () => {
     });
   });
 
+  /// A chat just opened has no estimate yet: the Overview holds the card's
+  /// place until the first read lands — and lets it go when that read fails,
+  /// or the placeholder would stand for good.
+  test("is pending until its first read lands, and not after one fails", async () => {
+    results.chat_context_usage = new Error("no model");
+    const { result } = renderHook(() => useAgentTurn());
+    expect(result.current.contextPending).toBe(true);
+    await waitFor(() => expect(result.current.contextPending).toBe(false));
+    expect(result.current.context).toBeNull();
+  });
+
   /// It is an estimate over the history, so it has to be asked again once the
   /// history is shorter — otherwise the meter still reads full after a fold.
   test("is asked again after the conversation was folded", async () => {

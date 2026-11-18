@@ -638,6 +638,7 @@ export default function App() {
       branch,
       changes: changeTotals,
       context: agent.context,
+      contextPending: agent.contextPending,
       usage: agent.turn.usage,
       spent: agent.spent,
       subagents: agent.subagents,

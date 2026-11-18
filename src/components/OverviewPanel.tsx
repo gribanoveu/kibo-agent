@@ -14,8 +14,11 @@ export type OverviewProps = {
   branch: string | null;
   /** `null` outside a repository. */
   changes: ChangeTotals | null;
-  /** `null` until the first estimate arrives. */
+  /** `null` until the first estimate arrives, and when none can be made. */
   context: ContextUsage | null;
+  /** The estimate is on its way: the card keeps its place with a placeholder,
+      so switching chats does not shift the cards under it. */
+  contextPending?: boolean;
   usage: ChatUsage | null;
   /** Every model call of the open chat, in tokens — helpers, title and checks included; `null` until read. */
   spent: number | null;
@@ -57,6 +60,7 @@ export function OverviewPanel({
   branch,
   changes,
   context,
+  contextPending = false,
   usage,
   spent,
   subagents,
@@ -74,8 +78,8 @@ export function OverviewPanel({
   const ended = processes.length - busyProcesses.length + agents.length - busyAgents.length;
   return (
     <div className="overview">
-      {context && (
-        <section className="overview-card overview-ctx">
+      {(context || contextPending) && (
+        <section className="overview-card overview-ctx" aria-busy={!context}>
           <ContextDetails context={context} cache={usage} spent={spent} subagents={subagents} onOpenPane={onOpenPanel} />
         </section>
       )}

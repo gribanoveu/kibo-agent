@@ -30,6 +30,33 @@ const props = (over: Partial<OverviewProps> = {}): OverviewProps => ({
 });
 
 describe("Overview", () => {
+  /// Switching to a chat whose estimate is still being read: the card keeps
+  /// its rows, with placeholders for the numbers, so nothing below it moves
+  /// when they arrive.
+  test("holds the context card's place while its estimate is read", () => {
+    const { rerender } = render(<OverviewPanel {...props({ contextPending: true, spent: 10 })} />);
+    const card = () => document.querySelector(".overview-ctx") as HTMLElement;
+    expect(card().getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText("Context window")).toBeTruthy();
+    // Every number not known yet waits in its row; the one already read shows.
+    const unread = [...card().querySelectorAll(".ctx-rows > div")]
+      .filter((row) => !row.querySelector(".ctx-skeleton"))
+      .map((row) => row.querySelector("dt")?.textContent);
+    expect(unread).toEqual(["Session tokens"]);
+    const rows = card().querySelectorAll(".ctx-rows > div").length;
+
+    const context = { instructions: 1, skills: 2, tools: 3, mcp: 4, conversation: 5, total: 15, limit: 100, compactsAt: null };
+    rerender(<OverviewPanel {...props({ context, spent: 10 })} />);
+    expect(card().getAttribute("aria-busy")).toBe("false");
+    expect(card().querySelectorAll(".ctx-skeleton")).toHaveLength(0);
+    expect(card().querySelectorAll(".ctx-rows > div")).toHaveLength(rows);
+  });
+
+  test("draws no context card when there is no estimate to wait for", () => {
+    render(<OverviewPanel {...props()} />);
+    expect(screen.queryByText("Context window")).toBeNull();
+  });
+
   test("lists the MCP servers that are on, with what they are doing", () => {
     const tools = [{ name: "a", description: "" }, { name: "b", description: "" }];
     render(
