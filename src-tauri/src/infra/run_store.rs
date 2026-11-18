@@ -114,7 +114,7 @@ impl RunLog for RunStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::agents::{AgentState, AgentTokens};
+    use crate::domain::agents::{AgentProgress, AgentState, AgentTimed, AgentTokens};
     use crate::domain::background::{ProcessInfo, ProcessState};
     use crate::testing::with_app_dir;
 
@@ -126,11 +126,12 @@ mod tests {
             steps: vec!["grep X".into()],
             tokens: AgentTokens { prompt: 10, cached: 4, completion: 2 },
             answer: Some("a.rs:1".into()),
+            progress: AgentProgress { stream_since: Some(1000), stream_chars: 15, timed: AgentTimed { tokens: 50, ms: 1000, chars: 15 } },
         }
     }
 
     fn process(id: u32, state: ProcessState) -> ProcessView {
-        ProcessView { info: ProcessInfo { id, command: "npm test".into(), cwd: "web".into(), state }, tail: "ok\n".into() }
+        ProcessView { info: ProcessInfo { id, command: "npm test".into(), description: None, cwd: "web".into(), state }, tail: "ok\n".into() }
     }
 
     fn row(kind: &str, id: u32) -> (String, i64, Option<i64>, String) {

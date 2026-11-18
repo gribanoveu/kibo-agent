@@ -292,6 +292,13 @@ export default function App() {
     ),
     prefs: alerts,
   });
+  // A turn with no model pinned pins the provider's first one
+  // (llm_session::effective_model). The settings are read again as a turn
+  // starts or ends, as the branch is, so the line names the model that went
+  // out rather than the auto guess.
+  useEffect(() => {
+    void llm.reload();
+  }, [agent.turn.status, plain.turn.status, llm.reload]);
   // Servers start with an Agent or Analyst turn and may stop during one.
   // Settings shows both in "Where your data goes".
   const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, workspace.path, agent.turn.status);
@@ -633,6 +640,7 @@ export default function App() {
       context: agent.context,
       usage: agent.turn.usage,
       spent: agent.spent,
+      subagents: agent.subagents,
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.
       onOpenProcesses: () => openProcess(null),
@@ -669,6 +677,7 @@ export default function App() {
             }
             onOpenSettings={ide ? () => openSettings() : undefined}
             workspace={workspace.path}
+            chatId={agent.chatId}
             turn={agent.turn}
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}

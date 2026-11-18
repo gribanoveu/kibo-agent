@@ -36,6 +36,11 @@ pub const TAIL_BYTES: usize = 8 * 1024;
 pub struct ProcessInfo {
     pub id: u32,
     pub command: String,
+    /// What the model said the command does — carried from the `runCommand`
+    /// call that started it, for the user reading the list and the ended
+    /// card. `None` for processes saved before the field, and for hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Relative to the workspace, as it was asked for; `.` for the root.
     pub cwd: String,
     pub state: ProcessState,
@@ -119,7 +124,16 @@ pub enum BackgroundError {
 }
 
 pub trait BackgroundProcesses: Send + Sync {
-    fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError>;
+    /// `description` is the call's own `description`, carried into the
+    /// [`ProcessInfo`] untouched — for showing, never for deciding.
+    fn start(
+        &self,
+        shell: &Shell,
+        command: &str,
+        description: Option<&str>,
+        cwd: &Path,
+        shown_cwd: &str,
+    ) -> Result<ProcessInfo, BackgroundError>;
 
     /// Takes over a `runCommand` still running at its timeout: it goes on as
     /// one of these, `backlog` — what it wrote so far — unread in its output.
@@ -129,6 +143,7 @@ pub trait BackgroundProcesses: Send + Sync {
         &self,
         child: std::process::Child,
         command: &str,
+        description: Option<&str>,
         shown_cwd: &str,
         backlog: &str,
     ) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError>;
@@ -252,7 +267,7 @@ mod tests {
 
     #[test]
     fn ended_processes_are_told_one_line_each() {
-        let info = |id, state| ProcessInfo { id, command: format!("cmd{id}"), cwd: ".".into(), state };
+        let info = |id, state| ProcessInfo { id, command: format!("cmd{id}"), description: None, cwd: ".".into(), state };
         assert_eq!(ended_note(&[]), None);
         let note = ended_note(&[
             info(1, ProcessState::Exited { code: Some(1) }),

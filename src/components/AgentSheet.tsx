@@ -1,9 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bot, ChevronRight, Square } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { PageSheet } from "./Page";
 import { useAgents } from "../hooks/useAgents";
-import { type AgentInfo, agentStatus, briefTitle, splitStep, tokensSpent } from "../lib/agents";
+import { type AgentInfo, agentSpeed, agentStatus, briefTitle, splitStep, tokensSpent } from "../lib/agents";
 import { toolLabel, type AgentFocus } from "../lib/describeTool";
 import "./AgentSheet.css";
 
@@ -46,6 +46,15 @@ export function AgentRun({
 }) {
   const running = a.state.state === "running";
   const spent = tokensSpent(a.tokens);
+  // The speed estimate moves with the clock even between the backend's
+  // signals, as the chat's own Working panel does.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [running]);
+  const speed = running ? agentSpeed(a, now) : null;
   return (
     <div className={`agent-detail ${a.state.state}`}>
       {/* The brief is a prompt, not an answer — a review's wraps a whole diff in
@@ -65,6 +74,7 @@ export function AgentRun({
           {a.steps.length} {a.steps.length === 1 ? "step" : "steps"}
         </span>
         {spent && <span>{spent}</span>}
+        {speed !== null && <span>~{Math.round(speed)} tok/s</span>}
         {running && (
           <button type="button" className="agent-detail-stop" title="Stop this helper — the agent carries on without its answer" onClick={() => onStop(a.id)}>
             <Square size={9} fill="currentColor" aria-hidden />

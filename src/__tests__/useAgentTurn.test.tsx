@@ -244,18 +244,26 @@ describe("making room before a turn", () => {
 
 describe("the session's tokens", () => {
   const sentId = () => calls.find((call) => call.command === "chat_start")?.args.chatId;
-  const reads = () => calls.filter((call) => call.command === "daily_metrics").length;
+  // The session total's own reads: the subagents' row reads its own counter
+  // alongside, and is not what these tests count.
+  const reads = () => calls.filter((call) => call.command === "daily_metrics" && (call.args.metrics as string[])[0] === "chatTokens").length;
 
   /// A new chat has no id until its first save, after its first turn has
   /// started: the turn is sent the id the save then uses, or what it spends
   /// is counted under nothing the Overview reads.
   test("a new chat's first turn is counted under the id it is saved with", async () => {
     results.chat_start = done("ok");
-    results.daily_metrics = () => [
-      { day: "2026-10-26", metric: "chatTokens", key: sentId(), value: 1200 },
-      { day: "2026-10-27", metric: "chatTokens", key: sentId(), value: 34 },
-      { day: "2026-10-27", metric: "chatTokens", key: "another chat", value: 5 },
-    ];
+    results.daily_metrics = (args: Record<string, unknown>) =>
+      (args.metrics as string[])[0] === "chatTokens"
+        ? [
+            { day: "2026-10-26", metric: "chatTokens", key: sentId(), value: 1200 },
+            { day: "2026-10-27", metric: "chatTokens", key: sentId(), value: 34 },
+            { day: "2026-10-27", metric: "chatTokens", key: "another chat", value: 5 },
+          ]
+        : [
+            { day: "2026-10-27", metric: "subagentTokens", key: sentId(), value: 300 },
+            { day: "2026-10-27", metric: "subagentTokens", key: "another chat", value: 50 },
+          ];
     const { result } = renderHook(() => useAgentTurn({ spentShown: true }));
 
     await act(async () => {
@@ -266,6 +274,8 @@ describe("the session's tokens", () => {
     expect(typeof sentId()).toBe("string");
     expect(saved().every((call) => call.args.id === sentId())).toBe(true);
     await waitFor(() => expect(result.current.spent).toBe(1234));
+    // The subagents' row reads its own counter, under the same chat only.
+    await waitFor(() => expect(result.current.subagents).toBe(300));
   });
 
   /// Nothing on screen shows it: no read, however much the turn spends.
@@ -402,7 +412,8 @@ describe("the session's tokens", () => {
     results.chat_load = { id: "kept", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
     results.chat_compact = null;
     const pending: ((rows: unknown) => void)[] = [];
-    results.daily_metrics = () => new Promise((resolve) => pending.push(resolve));
+    results.daily_metrics = (args: Record<string, unknown>) =>
+      (args.metrics as string[])[0] === "chatTokens" ? new Promise((resolve) => pending.push(resolve)) : Promise.resolve([]);
     const row = (value: number) => [{ day: "2026-10-26", metric: "chatTokens", key: "kept", value }];
     const { result } = renderHook(() => useAgentTurn({ spentShown: true }));
     await act(async () => {

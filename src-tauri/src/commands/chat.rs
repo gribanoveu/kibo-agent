@@ -525,7 +525,7 @@ mod tests {
         let (processes, agents) = (Arc::new(Processes::default()), Arc::new(crate::domain::agents::Agents::default()));
         let dir = crate::testing::temp_dir("cmd-chat-owned");
         let (theirs, helpers) = chats_own(Some(Arc::clone(&processes)), Some(Arc::clone(&agents)), "c1", &dir);
-        theirs.unwrap().start(&crate::domain::command_exec::Shell::default(), "sleep 30", &dir, ".").unwrap();
+        theirs.unwrap().start(&crate::domain::command_exec::Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         helpers.unwrap().start("where is X");
         assert_eq!((processes.list_for("c1").len(), agents.list_for("c1").len()), (1, 1));
         assert_eq!(processes.list_in(&dir).len(), 1, "and its folder's");

@@ -731,7 +731,7 @@ mod tests {
             save_one("four", "/repo", "d");
 
             let ran = |chat: &str| {
-                let info = ProcessInfo { id: chat.len() as u32, command: "x".into(), cwd: ".".into(), state: ProcessState::Stopped };
+                let info = ProcessInfo { id: chat.len() as u32, command: "x".into(), description: None, cwd: ".".into(), state: ProcessState::Stopped };
                 RunStore.save_process(chat, &ProcessView { info, tail: String::new() });
             };
             let runs = |chat: &str| RunStore.processes(chat).len();
@@ -994,7 +994,7 @@ mod tests {
         with_app_dir("chat-store-delete", || {
             save_one("one", "/repo", "first");
             save_one("two", "/repo", "second");
-            let run = |id| AgentInfo { id, task: "t".into(), state: AgentState::Done, steps: Vec::new(), tokens: Default::default(), answer: None };
+            let run = |id| AgentInfo { id, task: "t".into(), state: AgentState::Done, steps: Vec::new(), tokens: Default::default(), answer: None, progress: Default::default() };
             RunStore.save_agent("one", &run(1));
             RunStore.save_agent("two", &run(2));
             delete("one").unwrap();

@@ -1,5 +1,5 @@
 //! The indexes of the open folders that something reads (F-8.2, LZ-4 of
-//! `docs/53-lazy-index.md`).
+//! `docs/54-lazy-index.md`).
 //!
 //! One per app. It owns the embedding model — one [`EmbeddingProvider`] for
 //! every folder, so opening another project does not load a second copy — and

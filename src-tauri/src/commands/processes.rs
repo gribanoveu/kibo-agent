@@ -113,7 +113,7 @@ mod tests {
             let _ = tx.send(event.payload().to_string());
         });
         let processes = Processes::new(process_event_sink(app.handle()));
-        processes.start(&Shell::default(), "sleep 30", &crate::testing::temp_dir("cmd-processes-event"), ".").unwrap();
+        processes.start(&Shell::default(), "sleep 30", None, &crate::testing::temp_dir("cmd-processes-event"), ".").unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), r#"{"id":1}"#);
     }
 
@@ -122,8 +122,8 @@ mod tests {
         let processes = Arc::new(Processes::default());
         let dir = crate::testing::temp_dir("cmd-processes");
         let chat = processes.for_chat("c", &dir);
-        chat.start(&Shell::default(), "printf 'zero\\rfirst\\n'; sleep 30", &dir, ".").unwrap();
-        chat.start(&Shell::default(), "sleep 30", &dir, "sub").unwrap();
+        chat.start(&Shell::default(), "printf 'zero\\rfirst\\n'; sleep 30", None, &dir, ".").unwrap();
+        chat.start(&Shell::default(), "sleep 30", None, &dir, "sub").unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !views(&processes, Whose::Chat("c"))[1].tail.contains("first") {
             assert!(std::time::Instant::now() < deadline);
@@ -135,9 +135,9 @@ mod tests {
         let json = serde_json::to_value(&shown[1]).unwrap();
         assert_eq!((json["id"].clone(), json["tail"].clone()), (serde_json::json!(1), serde_json::json!("first\n")));
 
-        processes.for_chat("other", &dir).start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        processes.for_chat("other", &dir).start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         let elsewhere = crate::testing::temp_dir("cmd-processes-elsewhere");
-        processes.for_chat("far", &elsewhere).start(&Shell::default(), "sleep 30", &elsewhere, ".").unwrap();
+        processes.for_chat("far", &elsewhere).start(&Shell::default(), "sleep 30", None, &elsewhere, ".").unwrap();
         assert_eq!(views(&processes, Whose::Chat("c")).len(), 2);
         // Without a chat, the folder's — what closing it stops — and not another's.
         assert_eq!(views(&processes, Whose::Folder(&dir)).len(), 3);
@@ -149,10 +149,10 @@ mod tests {
         let processes = Arc::new(Processes::default());
         let dir = crate::testing::temp_dir("cmd-processes-running");
         let (chat, other) = (processes.for_chat("c", &dir), processes.for_chat("other", &dir));
-        chat.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
-        chat.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
-        chat.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
-        other.start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        chat.start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
+        chat.start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
+        chat.start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
+        other.start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         processes.stop(2).unwrap();
         assert_eq!(running(&processes, "c").iter().map(|p| p.id).collect::<Vec<_>>(), [3, 1]);
     }
@@ -162,8 +162,8 @@ mod tests {
     fn a_stop_from_the_tab_is_told_to_the_model() {
         let processes = Arc::new(Processes::default());
         let dir = crate::testing::temp_dir("cmd-processes-stop");
-        processes.for_chat("c", &dir).start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
-        processes.for_chat("other", &dir).start(&Shell::default(), "sleep 30", &dir, ".").unwrap();
+        processes.for_chat("c", &dir).start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
+        processes.for_chat("other", &dir).start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         let shown = stop(&processes, 1, "c").unwrap();
         // Answered with the open chat's list, which the tab draws as it is.
         assert_eq!(shown.len(), 1);

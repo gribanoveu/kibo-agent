@@ -23,7 +23,7 @@ import {
 } from "../lib/chat";
 import type { ImagePart } from "../lib/images";
 import { answerMcpQuestion, type McpAnswer } from "../lib/mcp";
-import { useChatTokens } from "./useChatTokens";
+import { useChatTokens, useSubagentTokens } from "./useChatTokens";
 import { generateChatTitle, loadChat, logNextPrompt, nextPromptSent, saveChat, type ChatRecord } from "../lib/savedChats";
 import {
   acceptEvent,
@@ -316,6 +316,7 @@ export function useAgentTurn({
     [current, current.chatId, current.turn.status, refreshContext],
   );
   const spent = useChatTokens(current.chatId ?? current.key, spentShown, current.turn.usage, current.turn.status, spentTick);
+  const subagents = useSubagentTokens(current.chatId ?? current.key, spentShown, current.turn.usage, current.turn.status, spentTick);
 
   const mint = useCallback((session: Session, prefix: string) => {
     const n = (turnCounts.get(session.key) ?? 0) + 1;
@@ -761,6 +762,7 @@ export function useAgentTurn({
     chatActivity,
     turns,
     spent,
+    subagents,
     error: current.error,
     context: busy ? (current.turn.estimate ?? current.context) : current.context,
     send: (text: string, sent?: string, images: ImagePart[] = [], keepChecklist = false) =>

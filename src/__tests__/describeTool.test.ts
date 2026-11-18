@@ -150,6 +150,22 @@ describe("what each call shows", () => {
     expect(briefTitle("")).toBe("");
   });
 
+  test("a review brief is named by its first line, not a `task:` line of code in its diff", () => {
+    const task =
+      'Review the change in this repository.\nRange: HEAD → working tree, 2 files.\n\n<changes>\n=== src-tauri/src/infra/run_store.rs (modified) ===\n@@ -120,4 +120,4 @@\n     fn agent(id: u32) {\n         task: format!("t{id}"),\n</changes>';
+    expect(briefTitle(task)).toBe("Review the change in this repository.");
+    // The rule is the line's start, not a marker: an indented snippet in any
+    // brief is material too, and a `+` line of a diff is not a label either.
+    expect(briefTitle('Where is the retry?\nSnippet:\n    task: format!("t{id}"),')).toBe("Where is the retry?");
+    expect(briefTitle("What changed?\n+task: run the tests")).toBe("What changed?");
+  });
+
+  test("a review with a focus is named by the focus, without the template's dot", () => {
+    const task =
+      "Review the change in this repository.\nRange: HEAD → working tree, 2 files.\nThe one asking for this review asks to pay particular attention to: error handling in the loader.\n\n<changes>\n@@ -1 +1 @@\n-a\n+b\n</changes>";
+    expect(briefTitle(task)).toBe("error handling in the loader");
+  });
+
   test("a note to memory shows the note, and says when it was there already", () => {
     const args = '{"fact":"bench needs --release"}';
     expect(describeTool(tool({ name: "remember", arguments: args, result: { result: "remembered", already: false } }))).toMatchObject({
@@ -561,6 +577,23 @@ describe("what each call shows", () => {
     );
     expect(shown).toMatchObject({ name: "Diff", arg: "src", meta: "3 files +3 -1", diff: true });
     expect(shown.detail).toBe("--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-a\n+b\n--- a/src/c.rs\n+++ b/src/c.rs\n@@ -0,0 +1,2 @@\n+x\n+y\n");
+  });
+
+  test("a command's description is its note, in every shape the row takes", () => {
+    const described = (args: string, over: Partial<Extract<Block, { kind: "tool" }>> = {}) =>
+      describeTool(tool({ name: "runCommand", arguments: args, ...over })).note;
+    const finished = { result: { stdout: "", stderr: "", exitCode: 0, timedOut: false } };
+    expect(described('{"command":"python fix.py --apply","description":"Rewrites imports in place"}', finished)).toBe("Rewrites imports in place");
+    expect(described('{"command":"npm run dev","background":true,"description":"Dev server"}')).toBe("Dev server");
+    expect(
+      described('{"command":"cargo test","description":"The whole suite"}', {
+        result: { result: "commandMoved", id: 4, command: "cargo test", cwd: ".", state: { state: "running" }, afterMs: 120000 },
+      }),
+    ).toBe("The whole suite");
+    // Nothing said, or an empty string: no note under the row.
+    expect(described('{"command":"make"}', finished)).toBeUndefined();
+    expect(described('{"command":"make","description":null}', finished)).toBeUndefined();
+    expect(described('{"command":"make","description":""}', finished)).toBeUndefined();
   });
 
   test("a command says how long it took next to how it ended", () => {

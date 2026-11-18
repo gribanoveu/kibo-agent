@@ -1,5 +1,5 @@
 //! The bundled model's Unigram tokenizer over a flat trie (LZ-1,
-//! `docs/53-lazy-index.md`).
+//! `docs/54-lazy-index.md`).
 //!
 //! `tokenizers` keeps a Unigram vocabulary as a trie with a hash map of
 //! children in every node: the 2.9 MB of strings of this model's 271 538

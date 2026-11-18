@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   AppWindow,
   ArrowUpRight,
+  Bot,
   Brain,
   Loader2,
   ChevronRight,
@@ -56,7 +57,8 @@ import { ImageThumbs } from "./ImageThumbs";
 import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
 import { describeActive, describeHelperStep, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
-import { type AgentTokens, tokensSpent } from "../lib/agents";
+import { type AgentInfo, type AgentTokens, subagentMeter, tokensSpent } from "../lib/agents";
+import { useAgents } from "../hooks/useAgents";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
@@ -103,9 +105,10 @@ type OpenProcess = (id: number) => void;
 type OpenAgent = (agent: AgentFocus) => void;
 
 /**
- * A background process that ended, as the model was told of it: how it
- * ended, what it was, where it ran. Opens it in the Terminal tab, where its
- * output is.
+ * A background process that ended, as the model was told of it: what it was
+ * for first, the command and the folder under it, how it ended in the badge.
+ * A quiet row, not a card — it is news, not an object. Opens the process in
+ * the Terminal tab, where its output is.
  */
 function ProcessEndedCard({ process, onOpen }: { process: ProcessInfo; onOpen?: OpenProcess }) {
   const state = process.state;
@@ -118,23 +121,27 @@ function ProcessEndedCard({ process, onOpen }: { process: ProcessInfo; onOpen?: 
       disabled={!onOpen}
       onClick={() => onOpen?.(process.id)}
     >
-      <span className="process-ended-ico" aria-hidden>
-        <TerminalSquare size={14} />
+      <span className="process-ended-eyebrow">
+        Background process
+        <span className="process-ended-exit">{processStatus(state)}</span>
       </span>
-      <span className="process-ended-body">
-        <code className="process-ended-command">{process.command}</code>
-        <span className="process-ended-meta">
-          <span className="process-ended-label">
-            Background process #{process.id} {state.state === "stopped" ? "stopped" : "ended"}
-          </span>
-          <span className="process-ended-cwd">
-            <Folder size={11} aria-hidden />
-            {process.cwd === "." ? "project root" : process.cwd}
-          </span>
+      <span className="process-ended-head">
+        {/* The title is the model's words when there are any; otherwise the line itself. */}
+        {process.description ? (
+          <span className="process-ended-name">{process.description}</span>
+        ) : (
+          <code className="process-ended-command solo">{process.command}</code>
+        )}
+        {onOpen && <ArrowUpRight className="process-ended-open" size={13} aria-hidden />}
+      </span>
+      {process.description && <code className="process-ended-command">{process.command}</code>}
+      <span className="process-ended-detail">
+        <span className="process-ended-num">#{process.id}</span>
+        <span className="process-ended-cwd">
+          <Folder size={11} aria-hidden />
+          {process.cwd === "." ? "project root" : process.cwd}
         </span>
       </span>
-      <span className="process-ended-state">{processStatus(state)}</span>
-      {onOpen && <ArrowUpRight className="process-ended-open" size={13} aria-hidden />}
     </button>
   );
 }
@@ -209,6 +216,8 @@ function ToolRow({
           detail && <ChevronRight className="chev" size={12} />
         )}
       </button>
+      {/* The model's words for the command, under the line they explain. */}
+      {shown.note && <div className="tool-note">{shown.note}</div>}
       {/* Unfolded rather than instead of it, as a process row does: the
           answer stays readable here after the app has forgotten the run. */}
       {open && shown.agent && onOpenAgent && (
@@ -263,12 +272,11 @@ function SubagentCard({
     .join(" · ");
   // A call with no body of its own unfolds to its argument in full.
   const detail = shown.detail || shown.arg;
-  const Icon = block.name === "review" ? SearchCheck : Telescope;
   return (
     <div className={`subagent-card ${block.status}${open ? " open" : ""}`}>
       <button type="button" className="subagent-row" onClick={() => setOpen((v) => !v)}>
         <span className="subagent-ico" aria-hidden>
-          <Icon size={14} />
+          <Bot size={14} />
         </span>
         <span className="subagent-body">
           <span className="subagent-title">{block.name === "review" ? shown.name : shown.arg}</span>
@@ -412,7 +420,13 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
   }
 
   if (preview.kind === "command") {
-    return <p className="approval-preview">Runs in {preview.cwd}</p>;
+    return (
+      <>
+        {/* The model's own words for the line — the line itself stays the thing read before agreeing. */}
+        {preview.description && <p className="approval-preview approval-desc">{preview.description}</p>}
+        <p className="approval-preview">Runs in {preview.cwd}</p>
+      </>
+    );
   }
 
   return <DiffPreview title={preview.path} diff={preview.diff} />;
@@ -541,6 +555,28 @@ function Spent({ spent }: { spent: number }) {
   );
 }
 
+/**
+ * "· subagent ~42 tok/s · 3.1k tokens": what the chat's running subagents
+ * spend, estimated while they stream — their own, not the chat's context.
+ * Several run at once; the line is theirs together.
+ */
+function SubagentLine({ agents, now }: { agents: AgentInfo[]; now: number }) {
+  const meter = subagentMeter(agents, now);
+  if (!meter) return null;
+  return (
+    <>
+      <span className="turn-clock-sep">·</span>
+      <span className="turn-clock-time">{meter.count === 1 ? "subagent" : `${meter.count} subagents`}</span>
+      <Speed rate={meter.speed} prefix="~" />
+      <span className="turn-clock-sep">·</span>
+      <span className="turn-clock-time">
+        {meter.streaming ? "~" : ""}
+        {formatTokens(meter.tokens)} tokens
+      </span>
+    </>
+  );
+}
+
 /** The session's average output speed, or `null` before anything was timed. */
 const averageSpeed = ({ speed }: TurnState) => (speed.ms > 0 ? (speed.tokens * 1000) / speed.ms : null);
 
@@ -552,11 +588,13 @@ function WorkingClock({
   since,
   before,
   turn,
+  subagents = [],
   children,
 }: {
   since: number;
   before: number;
   turn: TurnState;
+  subagents?: AgentInfo[];
   children?: ReactNode;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -572,6 +610,7 @@ function WorkingClock({
       <span className="turn-clock-time">{formatDuration(before + Math.max(0, now - since))}</span>
       {live === null ? <Speed rate={turn.speed.last} /> : <Speed rate={live} prefix="~" />}
       <Spent spent={turn.spent} />
+      <SubagentLine agents={subagents} now={now} />
       {children}
     </div>
   );
@@ -741,6 +780,8 @@ type Props = {
   /** Settings from the "…" menu, where the window has no sidebar to open them from. */
   onOpenSettings?: () => void;
   workspace: string | null;
+  /** The open chat: its running subagents feed the Working panel's line. */
+  chatId?: string | null;
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
   onOpenRepo: () => void;
@@ -807,6 +848,8 @@ type TranscriptProps = Pick<
   preview?: PreviewCalls;
   /** Opens the Preview panel on a version a `present` card kept; a Prototype chat's. */
   onOpenVersion?: (version: number) => void;
+  /** The chat's subagent runs, read while a turn runs; the Working panel's line. */
+  subagents?: AgentInfo[];
 };
 
 type PreviewCalls = (calls: PendingToolCall[]) => Promise<ToolPreview[]>;
@@ -858,6 +901,7 @@ export function Transcript({
   onOpenVersion,
   steered = [],
   onWithdraw,
+  subagents = [],
 }: TranscriptProps) {
   const groups = group(turn.blocks);
   // Under a finished answer only, gathered from the whole last turn — a notice
@@ -920,7 +964,7 @@ export function Transcript({
       {turn.status === "running" && turn.runningSince !== null && (
         <>
           <TaskTicker checklist={checklist} />
-          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn}>
+          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn} subagents={subagents}>
             <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
           </WorkingClock>
         </>
@@ -941,6 +985,7 @@ export function ChatPanel({
   heading,
   onOpenSettings,
   workspace,
+  chatId = null,
   turn,
   onDecide,
   onOpenRepo,
@@ -963,6 +1008,9 @@ export function ChatPanel({
   headSlot = null,
 }: Props) {
   const groups = group(turn.blocks);
+  // The subagents' live meter, read only while a turn runs: the line is the
+  // running ones', and a turn at rest has none.
+  const { agents: subagents } = useAgents(turn.status === "running", chatId);
   // The thread follows the answer as it grows, until the user scrolls up to
   // read; scrolling back to the end picks it up again.
   const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
@@ -1087,6 +1135,7 @@ export function ChatPanel({
               checklist={checklist}
               steered={steered}
               onWithdraw={onWithdraw}
+              subagents={subagents}
             />
           </div>
         )}

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ChatPanel, Preview, Transcript, formatDuration, formatTokens } from "../components/ChatPanel";
 import { emptyTurn, type Block, type TurnState } from "../lib/chatTurnReducer";
+import type { AgentInfo } from "../lib/agents";
 
 // The transcript's own rules: who a block belongs to, and what the approval
 // card sends back. Both are decided here rather than by the backend, so both
@@ -389,6 +390,45 @@ describe("how long the agent worked", () => {
   test("says nothing of processes when none runs", () => {
     panel(state(turn, { status: "done" }));
     expect(screen.queryByText(/running/)).toBeNull();
+  });
+
+  /// The subagents' own line: their tokens are not the chat's context, and
+  /// while they stream their speed and tokens are the chat's own estimate.
+  const sub = (id: number, over: Partial<AgentInfo> = {}): AgentInfo => ({
+    id,
+    task: "t",
+    state: { state: "running" },
+    steps: [],
+    tokens: { prompt: 1000, cached: 0, completion: 100 },
+    answer: null,
+    progress: { streamSince: Date.now() - 2000, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } },
+    ...over,
+  });
+  const liveTurn = () => state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 });
+  const transcript = (subagents: AgentInfo[]) =>
+    render(<Transcript turn={liveTurn()} onDecide={() => {}} subagents={subagents} />);
+
+  test("a running subagent's speed and tokens beside the clock, estimated while it streams", () => {
+    transcript([sub(1)]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·subagent·~20 tok/s·~1.1k tokens");
+  });
+
+  test("several run at once: one line, summed, with the count", () => {
+    transcript([sub(1), sub(2, { tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·2 subagents·~30 tok/s·~1.7k tokens");
+  });
+
+  test("a subagent too young to estimate shows its tokens, no speed", () => {
+    transcript([sub(1, { progress: { streamSince: Date.now() - 500, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·subagent·~1.1k tokens");
+  });
+
+  test("no line with none running, and none once the turn ends", () => {
+    const live = transcript([sub(1, { state: { state: "done" } })]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
+    live.unmount();
+    render(<Transcript turn={state(turn, { status: "done" })} onDecide={() => {}} subagents={[sub(1)]} />);
+    expect(screen.queryByText(/subagent/)).toBeNull();
   });
 });
 
@@ -807,14 +847,14 @@ describe("a review while it runs", () => {
 });
 
 describe("a background process that ended", () => {
-  const ended = (code: number) =>
+  const ended = (code: number, description?: string) =>
     ({
       kind: "processEnded",
       id: "ended:0",
-      process: { id: 4, command: "cargo build", cwd: "src-tauri", state: { state: "exited", code } },
+      process: { id: 4, command: "cargo build", description, cwd: "src-tauri", state: { state: "exited", code } },
     }) as Block;
 
-  test("is a card with the command, the folder and how it ended, that opens the Terminal tab", () => {
+  test("is a two-line row — the command, the folder and how it ended — that opens the Terminal tab", () => {
     const opened: number[] = [];
     const { container } = render(
       <ChatPanel
@@ -826,8 +866,10 @@ describe("a background process that ended", () => {
       />,
     );
     const card = screen.getByTitle("Show in Terminal");
+    expect(card.className).toContain("process-ended");
     expect(card.className).toContain("failed");
-    expect(screen.getByText("Background process #4 ended")).toBeTruthy();
+    expect(screen.getByText("Background process")).toBeTruthy();
+    expect(screen.getByText("#4")).toBeTruthy();
     expect(screen.getByText("cargo build")).toBeTruthy();
     expect(screen.getByText("src-tauri")).toBeTruthy();
     expect(screen.getByText("exit 101")).toBeTruthy();
@@ -835,6 +877,23 @@ describe("a background process that ended", () => {
     expect(container.querySelector(".role")).toBeNull();
     fireEvent.click(card);
     expect(opened).toEqual([4]);
+  });
+
+  test("with a description, the description leads and the command sits under it", () => {
+    const { container } = render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([ended(0, "build the crate")])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        onOpenProcess={() => {}}
+      />,
+    );
+    const name = container.querySelector(".process-ended-name");
+    expect(name?.textContent).toBe("build the crate");
+    const command = container.querySelector(".process-ended-command");
+    expect(command?.textContent).toBe("cargo build");
+    expect(command?.className).not.toContain("solo");
   });
 
   test("a clean exit is not drawn as a failure", () => {
@@ -1046,5 +1105,26 @@ describe("a call with no body of its own", () => {
     expect(row.disabled).toBe(false);
     fireEvent.click(row);
     expect(container.querySelector(".tool-detail")?.textContent).toBe(fact);
+  });
+});
+
+describe("a command's own words for itself", () => {
+  test("stand under the row without unfolding it, and the line stays the row's text", () => {
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "rc1",
+          round: 1,
+          name: "runCommand",
+          arguments: JSON.stringify({ command: "python fix.py --apply", description: "Rewrites imports in place" }),
+          status: "done",
+          result: { stdout: "", stderr: "", exitCode: 0, timedOut: false },
+          output: "",
+        } as Block,
+      ]),
+    );
+    expect(container.querySelector(".tool-note")?.textContent).toBe("Rewrites imports in place");
+    expect(container.querySelector(".tool .arg")?.textContent).toBe("python fix.py --apply");
   });
 });

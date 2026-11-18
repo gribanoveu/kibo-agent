@@ -95,7 +95,7 @@ mod tests {
             let mut config = McpConfig::default();
             config.mcp_servers.insert("s".into(), McpServerConfig { command: "x".into(), ..Default::default() });
             let in_folder = |root: &Path| {
-                processes.for_chat("c", root).start(&Shell::default(), "sleep 30", root, ".").unwrap();
+                processes.for_chat("c", root).start(&Shell::default(), "sleep 30", None, root, ".").unwrap();
                 terminals.open(root, size).unwrap();
                 mcp.for_turn(&config, root, &|| false);
             };
