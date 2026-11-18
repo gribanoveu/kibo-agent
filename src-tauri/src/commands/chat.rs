@@ -316,9 +316,12 @@ pub fn chat_cancel_steer(id: String, chat_id: String, state: State<'_, Arc<Agent
 }
 
 /// The chat folder's search, for the turn's tools — that folder's index and no
-/// other open one's (F-8.2).
+/// other open one's (F-8.2). Opens the index if the folder is in the
+/// background, and keeps it open while the turn, or a helper of it, holds the
+/// searcher (LZ-4). Blocking: it may read the folder's store.
 fn searcher_of<R: Runtime>(app: &AppHandle<R>, workspace: &std::path::Path) -> Option<CodeSearchFn> {
-    app.try_state::<Arc<WorkspaceIndex>>()?.searcher(workspace)
+    let sink = super::workspace_events::index_event_sink(app, workspace.display().to_string());
+    app.try_state::<Arc<WorkspaceIndex>>()?.searcher(workspace, sink)
 }
 
 /// The chat folder's shells, for the turn's terminal tool — not another open
@@ -396,7 +399,8 @@ where
         &workspace,
     );
     let handles = FolderHandles {
-        search: searcher_of(&app, &workspace),
+        // On the turn's thread, below: it may read a store.
+        search: None,
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
         processes,
@@ -410,6 +414,7 @@ where
     };
 
     tauri::async_runtime::spawn_blocking(move || {
+        let handles = FolderHandles { search: searcher_of(&app, &workspace), ..handles };
         let emit = chat_event_sink(&app, turn_id.clone());
         let observed = Arc::clone(&session);
         let events: ChatEventSink = Arc::new(move |event: ChatTurnEvent| {
@@ -1294,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_gets_the_search_of_the_open_folder() {
+    fn a_turn_opens_the_search_of_its_folder() {
         use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
         struct NoModel;
         impl EmbeddingProvider for NoModel {
@@ -1311,11 +1316,10 @@ mod tests {
 
         let index = Arc::new(WorkspaceIndex::new(temp_dir("cmd-search-index"), Arc::new(NoModel)));
         tauri::Manager::manage(&app, Arc::clone(&index));
-        assert!(searcher_of(app.handle(), &root).is_none(), "no folder open");
-
-        index.open(&root, Arc::new(|_| {})).unwrap();
-        index.open(&temp_dir("cmd-search-neighbour"), Arc::new(|_| {})).unwrap();
-        assert!(searcher_of(app.handle(), &root).is_some(), "a neighbour opened after it leaves the chat's folder searched");
-        assert!(searcher_of(app.handle(), &temp_dir("cmd-search-other-repo")).is_none(), "a background chat cannot borrow another folder's index");
+        let search = searcher_of(app.handle(), &root).expect("a cold folder is opened for the turn");
+        assert!(index.indexer(&root).is_some(), "the turn's folder is indexed while its search lives");
+        assert!(index.indexer(&temp_dir("cmd-search-other-repo")).is_none(), "and no other folder is");
+        drop(search);
+        assert!(index.indexer(&root).is_none(), "a folder in the background cools once its turn's search goes");
     }
 }

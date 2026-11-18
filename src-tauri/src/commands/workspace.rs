@@ -15,10 +15,10 @@ use super::workspace_events::index_event_sink;
 use super::agent_state::AgentState;
 
 /// At launch, reopens every folder of `workspaces.json` still on disk (F-8.8):
-/// all go into the open set in their order, the first — the one activated
-/// last, the folder of the chat viewed last — is made active, and the others'
-/// indexes open in the background, so the window does not wait for every
-/// store to load. The file is left as it was. With no file yet (a build that
+/// all go into the open set in their order, and the first — the one activated
+/// last, the folder of the chat viewed last — is made active. Only its index
+/// opens; another folder's opens when a turn searches it (LZ-4). The file is
+/// left as it was. With no file yet (a build that
 /// kept no open set) the recent list's first folder opens, as launches did
 /// before; with every folder closed, none. A reloaded window, its folders
 /// still open, keeps them as they are. Answers the active folder.
@@ -45,30 +45,8 @@ pub async fn workspaces_restore<R: Runtime>(
     for root in folders.iter().rev() {
         state.register_open(root.clone());
     }
-    let Some((active, background)) = folders.split_first() else { return Ok(None) };
-    for root in background {
-        drop(open_index_behind(root.clone(), &app, &state, &index));
-    }
+    let Some(active) = folders.first() else { return Ok(None) };
     activate(active.clone(), &app, &state, &index, &git_watch).await.map(Some)
-}
-
-/// Opens a folder's index without waiting for its store. A close of the
-/// folder meanwhile has nothing to close yet: the index is closed here, once
-/// open, if the folder is no longer.
-fn open_index_behind<R: Runtime>(
-    root: PathBuf,
-    app: &AppHandle<R>,
-    state: &Arc<AgentState>,
-    index: &Arc<WorkspaceIndex>,
-) -> tauri::async_runtime::JoinHandle<()> {
-    let sink = index_event_sink(app, root.display().to_string());
-    let (state, index) = (Arc::clone(state), Arc::clone(index));
-    tauri::async_runtime::spawn_blocking(move || {
-        let _ = index.open(&root, sink);
-        if !state.is_open(&root) {
-            index.close(&root);
-        }
-    })
 }
 
 /// Out of the open set and `workspaces.json`, and everything of it stopped
@@ -106,8 +84,9 @@ fn forget_open(root: &Path) {
 /// here, once, so every path a tool resolves later is measured against a real
 /// directory rather than against whatever spelling the caller used.
 ///
-/// Nothing of the folder active before stops: it stays open, its processes,
-/// shells and index running (F-8.3). The rest — the git watch, the recent
+/// The folder active before stays open, its processes and shells running
+/// (F-8.3); its index closes unless a turn there still searches it (LZ-4).
+/// The rest — the git watch, the recent
 /// list, the index — is `activate`, awaited off the UI thread; the index's
 /// first sync is not awaited, and its failures arrive on `workspace-index:event`.
 #[tauri::command]
@@ -148,7 +127,8 @@ async fn add<R: Runtime>(
 }
 
 /// Makes `root` the folder the window's panes read: the git watch and the
-/// index. Nothing of the folder active before stops.
+/// index. The folder active before keeps everything but its index, which a
+/// turn still running there holds open.
 async fn activate<R: Runtime>(
     root: PathBuf,
     app: &AppHandle<R>,
@@ -372,7 +352,7 @@ mod tests {
                 2
             }
         }
-        let index = WorkspaceIndex::new(temp_dir("cmd-snapshot-index"), Arc::new(NoModel));
+        let index = Arc::new(WorkspaceIndex::new(temp_dir("cmd-snapshot-index"), Arc::new(NoModel)));
         let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-snapshot-repo")).unwrap();
         assert_eq!(snapshot(&index, &root), None);
 
@@ -381,7 +361,7 @@ mod tests {
         let (tx, finished) = std::sync::mpsc::channel();
         let tx = Mutex::new(tx);
         index
-            .open(
+            .activate(
                 &root,
                 Arc::new(move |event| {
                     if matches!(event, crate::domain::workspace_index::IndexEvent::SyncFinished { .. }) {
@@ -403,7 +383,7 @@ mod tests {
         assert_eq!((shot.embedded, shot.skipped), (0, 1));
         assert!(shot.embedding_error.as_deref().is_some_and(|e| e.contains("no model")), "{shot:?}");
         let neighbour = temp_dir("cmd-snapshot-neighbour");
-        index.open(&neighbour, Arc::new(|_| {})).unwrap();
+        let _held = index.searcher(&neighbour, Arc::new(|_| {})).unwrap();
         assert_eq!(snapshot(&index, &root).unwrap().root, root.display().to_string(), "the folder asked about, not the last opened");
     }
 
@@ -430,8 +410,8 @@ mod tests {
     }
 
     /// Closing a folder stops following its index and leaves the other open
-    /// folder's index followed (F-8.2, invariant 4); the folder left active is
-    /// the one still open.
+    /// folder's things alone (F-8.2, invariant 4); the folder left active is
+    /// the one still open, and its index is followed again (LZ-4).
     #[test]
     fn closing_a_folder_closes_its_index_and_no_other() {
         crate::testing::with_app_dir("ws-close-index", || {
@@ -460,7 +440,7 @@ mod tests {
             };
             add(&a);
             add(&b);
-            assert!(index.indexer(&a).is_some() && index.indexer(&b).is_some(), "both folders indexed");
+            assert!(index.indexer(&a).is_none() && index.indexer(&b).is_some(), "only the active folder is indexed");
             mcp.for_turn(&config, &a, &|| false);
             mcp.for_turn(&config, &b, &|| false);
 
@@ -474,7 +454,7 @@ mod tests {
             .unwrap();
 
             assert!(index.indexer(&b).is_none(), "the closed folder's index is closed");
-            assert!(index.indexer(&a).is_some(), "the other folder's index stays");
+            assert!(index.indexer(&a).is_some(), "the folder left active is indexed");
             assert!(!serves(&b) && serves(&a), "the closed folder's MCP servers stop, the other's stay");
             assert_eq!(state.open_folders(), vec![a.clone()]);
             assert_eq!(state.workspace().unwrap(), a);
@@ -571,11 +551,7 @@ mod tests {
             assert_eq!(state.open_folders(), vec![a.clone(), b.clone()], "every folder still on disk, in its order");
             assert_eq!(crate::infra::open_folders::saved(), file, "the file is left as it was");
             assert!(index.indexer(&a).is_some(), "the active folder is indexed once restored");
-            let waited = std::time::Instant::now();
-            while index.indexer(&b).is_none() && waited.elapsed() < std::time::Duration::from_secs(5) {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            assert!(index.indexer(&b).is_some(), "a folder in the background is indexed too, behind");
+            assert!(index.indexer(&b).is_none(), "a folder in the background stays cold until a turn runs in it");
             assert!(app.state::<super::super::git::GitWatch>().is_watching(), "the active folder's .git is watched");
 
             state.set_workspace_for_test(b.clone());
@@ -588,24 +564,6 @@ mod tests {
             crate::infra::open_folders::remove(&b.display().to_string()).unwrap();
             let none = tauri::async_runtime::block_on(workspaces_restore(app.handle().clone(), app.state(), app.state(), app.state()));
             assert_eq!(none, Ok(None), "every folder was closed");
-        });
-    }
-
-    /// A folder closed while its index opens behind the launch is not left
-    /// with an index nobody closes.
-    #[test]
-    fn an_index_opened_behind_a_folder_closed_meanwhile_is_closed() {
-        crate::testing::with_app_dir("ws-restore-behind", || {
-            let (app, state, index) = folder_app();
-            let root = crate::infra::paths::canonicalize_plain(&temp_dir("ws-restore-behind-a")).unwrap();
-            let state = Arc::clone(&state);
-            state.register_open(root.clone());
-            tauri::async_runtime::block_on(open_index_behind(root.clone(), app.handle(), &state, &index)).unwrap();
-            assert!(index.indexer(&root).is_some(), "an open folder keeps its index");
-
-            let closed = crate::infra::paths::canonicalize_plain(&temp_dir("ws-restore-behind-b")).unwrap();
-            tauri::async_runtime::block_on(open_index_behind(closed.clone(), app.handle(), &state, &index)).unwrap();
-            assert!(index.indexer(&closed).is_none(), "one closed meanwhile does not");
         });
     }
 

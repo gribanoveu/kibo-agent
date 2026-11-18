@@ -9,9 +9,10 @@ use crate::infra::terminal::Terminals;
 use crate::services::mcp_servers::McpServers;
 use crate::services::workspace_index::WorkspaceIndex;
 
-/// Makes `root` a folder the window works in: it goes on the recent list,
-/// and its index opens beside the other open folders'. Nothing of another
-/// folder stops (F-8.3). Blocking: the index reads what was embedded before.
+/// Makes `root` the folder the window works in: it goes on the recent list,
+/// and its index opens. The index of the folder active before closes unless a
+/// turn searches it (LZ-4); nothing else of that folder stops (F-8.3).
+/// Blocking: the index reads what was embedded before.
 /// An index that cannot open does not stop the folder opening: the reason
 /// goes out on `sink`, and the agent works without search.
 pub fn open(root: &Path, index: &WorkspaceIndex, sink: IndexEventSink) {
@@ -21,7 +22,7 @@ pub fn open(root: &Path, index: &WorkspaceIndex, sink: IndexEventSink) {
         eprintln!("recent folders not saved: {e}");
     }
     // Reported through the sink; see above.
-    let _ = index.open(root, sink);
+    let _ = index.activate(root, sink);
 }
 
 /// Everything of `root` stops (F-8 invariant 4): its processes, its shells,
@@ -77,16 +78,16 @@ mod tests {
         }
     }
 
-    /// F-8.3, F-8.4: opening B leaves A's processes running and A indexed;
-    /// closing A stops A's processes, shells, MCP servers and index, and
-    /// nothing of B's.
+    /// F-8.3, F-8.4: opening B leaves A's processes running, and A indexed
+    /// while a turn there holds its search (LZ-4); closing A stops A's
+    /// processes, shells, MCP servers and index, and nothing of B's.
     #[cfg(unix)]
     #[test]
     fn closing_a_folder_stops_its_things_and_no_others() {
         crate::testing::with_app_dir("folder-close", || {
             let processes = Arc::new(Processes::default());
             let terminals = Terminals::with_shell("/bin/sh");
-            let index = WorkspaceIndex::new(temp_dir("folder-close-index"), Arc::new(NoModel));
+            let index = Arc::new(WorkspaceIndex::new(temp_dir("folder-close-index"), Arc::new(NoModel)));
             let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
             let (a, b) = (plain("folder-close-a"), plain("folder-close-b"));
             let size = TerminalSize::new(80, 24).unwrap();
@@ -101,6 +102,7 @@ mod tests {
             let serves = |root: &Path| mcp.running(root).get("mcp__s__t").is_some();
             open(&a, &index, Arc::new(|_| {}));
             in_folder(&a);
+            let _turn_in_a = index.searcher(&a, Arc::new(|_| {})).unwrap();
             open(&b, &index, Arc::new(|_| {}));
             in_folder(&b);
             let running = |root: &Path| processes.list_in(root).iter().filter(|p| p.info.state == ProcessState::Running).count();
