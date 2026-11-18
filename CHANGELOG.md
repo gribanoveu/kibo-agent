@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-18 Keep many folders open for little memory: only the folder on screen and folders with a turn running are indexed and watched, and search by meaning loads a model a third the size it was
 - 2026-11-17 Pick a chat's folder when it starts: a new chat chooses its folder under the composer, a started one only names it; the list's head no longer has an Add folder button
 - 2026-11-17 Fold a folder's section in the sidebar under its head; the chats below the pinned ones and the chat folders are one list, without Today and Earlier headings
 - 2026-11-17 Hear and see when a turn ends or waits in a chat off screen, in any open folder; a worktree's section in the sidebar says whose worktree it is
