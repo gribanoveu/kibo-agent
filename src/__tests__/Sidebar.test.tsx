@@ -41,16 +41,17 @@ const sidebar = (
       pages={PAGES}
       page={null}
       onPage={() => {}}
-      sections={[{ path: null, chats: rows, groups }]}
+      sections={[{ path: null, chats: rows }]}
+      groups={groups}
       activeChat={null}
       chatActivity={chatActivity}
       onSelectChat={(id) => on.select?.(id)}
       onArchiveChat={on.archive ?? (() => {})}
       onPinChat={on.pin ?? (() => {})}
       onMoveChat={on.move ?? (() => {})}
-      onCreateGroup={(_, name) => on.createGroup?.(name) ?? Promise.resolve({})}
-      onRenameGroup={(_, id, name) => on.renameGroup?.(id, name) ?? Promise.resolve({})}
-      onDeleteGroup={(_, id) => on.deleteGroup?.(id)}
+      onCreateGroup={(name) => on.createGroup?.(name) ?? Promise.resolve({})}
+      onRenameGroup={(id, name) => on.renameGroup?.(id, name) ?? Promise.resolve({})}
+      onDeleteGroup={(id) => on.deleteGroup?.(id)}
       onDeleteChat={on.remove ?? (() => {})}
       onOpenSettings={() => {}}
       onOnboardingAction={() => {}}
@@ -259,7 +260,7 @@ describe("the chat list", () => {
     });
 
     test("a collapsed folder keeps its heading and count but hides the rows", () => {
-      localStorage.setItem("kibo-chat-groups-", JSON.stringify(["g1"]));
+      localStorage.setItem("kibo-chat-groups-agent", JSON.stringify(["g1"]));
       try {
         sidebar({}, "dark", {}, rows(), groupList);
         const release = screen.getByText("release").closest("section");
@@ -269,7 +270,7 @@ describe("the chat list", () => {
         fireEvent.click(screen.getByRole("button", { name: /release/ }));
         expect(screen.getByText("in release")).toBeTruthy();
       } finally {
-        localStorage.removeItem("kibo-chat-groups-");
+        localStorage.removeItem("kibo-chat-groups-agent");
       }
     });
 
@@ -456,7 +457,8 @@ describe("pages", () => {
         pages={pagesShown((feature) => board && feature === "board")}
         page={page}
         onPage={on.page ?? (() => {})}
-        sections={[{ path: null, chats, groups: [] }]}
+        sections={[{ path: null, chats }]}
+        groups={[]}
         activeChat={null}
         onSelectChat={() => {}}
         onArchiveChat={() => {}}
@@ -509,7 +511,7 @@ describe("pages", () => {
 // own chats and chat folders, a "+" for a new chat there and a way to close it.
 describe("open folders", () => {
   const folders = (
-    on: { select?: (id: string, folder: string | null) => void; newChat?: (f: string) => void; close?: (f: string) => void; createGroup?: (scope: string | null, name: string) => void } = {},
+    on: { select?: (id: string, folder: string | null) => void; newChat?: (f: string) => void; close?: (f: string) => void } = {},
   ) =>
     render(
       <Sidebar
@@ -519,16 +521,17 @@ describe("open folders", () => {
         page={null}
         onPage={() => {}}
         sections={[
-          { path: "/work/api", chats: [{ id: "a1", title: "api chat", updatedAt: 2, archived: false }], groups: [{ id: "g1", name: "Ops" }] },
-          { path: "/work/web", chats: [{ id: "w1", title: "web chat", updatedAt: 1, archived: false }], groups: [] },
+          { path: "/work/api", chats: [{ id: "a1", title: "api chat", updatedAt: 2, archived: false, group: "g1" }, { id: "a2", title: "api loose", updatedAt: 1, archived: false }] },
+          { path: "/work/web", chats: [{ id: "w1", title: "web chat", updatedAt: 3, archived: false }, { id: "w2", title: "web shipped", updatedAt: 1, archived: false, group: "g1" }] },
         ]}
+        groups={[{ id: "g1", name: "Ops", position: 1 }]}
         activeFolder="/work/web"
         activeChat="w1"
         onSelectChat={on.select ?? (() => {})}
         onArchiveChat={() => {}}
         onPinChat={() => {}}
         onMoveChat={() => {}}
-        onCreateGroup={async (scope, name) => (on.createGroup?.(scope, name), {})}
+        onCreateGroup={async () => ({})}
         onRenameGroup={async () => ({})}
         onDeleteGroup={() => {}}
         onNewChatIn={on.newChat}
@@ -550,16 +553,16 @@ describe("open folders", () => {
       const toggle = section("api").querySelector(".chat-workspace-toggle") as HTMLElement;
       expect(toggle.getAttribute("aria-expanded")).toBe("true");
       fireEvent.click(toggle);
-      expect(screen.queryByText("api chat")).toBeNull();
+      expect(screen.queryByText("api loose")).toBeNull();
       expect(screen.getByText("Ops")).toBeTruthy();
       expect(screen.getByText("web chat")).toBeTruthy();
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       unmount();
 
       folders();
-      expect(screen.queryByText("api chat")).toBeNull();
+      expect(screen.queryByText("api loose")).toBeNull();
       fireEvent.change(screen.getByRole("textbox", { name: "Search chats" }), { target: { value: "api" } });
-      expect(screen.getByText("api chat")).toBeTruthy();
+      expect(screen.getByText("api loose")).toBeTruthy();
     } finally {
       localStorage.removeItem("kibo-folder-folded-/work/api");
     }
@@ -575,9 +578,10 @@ describe("open folders", () => {
         page={null}
         onPage={() => {}}
         sections={[
-          { path: "/work/api", chats: [], groups: [] },
-          { path: "/wt/api/fix-login", worktreeOf: "/work/api", chats: [], groups: [] },
+          { path: "/work/api", chats: [] },
+          { path: "/wt/api/fix-login", worktreeOf: "/work/api", chats: [] },
         ]}
+        groups={[]}
         activeFolder="/work/api"
         activeChat={null}
         onSelectChat={() => {}}
@@ -602,7 +606,7 @@ describe("open folders", () => {
 
   test("each folder heads its own chats, and the active one is lit", () => {
     folders();
-    expect(within(section("api")).getByText("api chat")).toBeTruthy();
+    expect(within(section("api")).getByText("api loose")).toBeTruthy();
     expect(within(section("web")).getByText("web chat")).toBeTruthy();
     expect(section("web").querySelector(".chat-workspace-head.active")).toBeTruthy();
     expect(section("api").querySelector(".chat-workspace-head.active")).toBeNull();
@@ -612,21 +616,62 @@ describe("open folders", () => {
   test("a row opens its chat named with its folder", () => {
     const picked: [string, string | null][] = [];
     folders({ select: (id, folder) => picked.push([id, folder]) });
-    fireEvent.click(screen.getByText("api chat"));
-    expect(picked).toEqual([["a1", "/work/api"]]);
+    fireEvent.click(screen.getByText("api loose"));
+    expect(picked).toEqual([["a2", "/work/api"]]);
   });
 
-  /// The chat folders the user made stand above every open folder's
-  /// section, as pinned chats stand above the rest of theirs; whose each is
-  /// shows on hover, not in a line a long name would push over.
-  test("chat folders stand above the folders' sections, whose on hover", () => {
-    folders();
+  /// The chat folders stand above every open folder's section, as pinned
+  /// chats stand above the rest of theirs, and one holds chats of several
+  /// folders; each row still opens in its own folder.
+  test("a chat folder above the sections holds chats of several folders", () => {
+    const picked: [string, string | null][] = [];
+    folders({ select: (id, folder) => picked.push([id, folder]) });
     const ops = screen.getByText("Ops").closest(".chat-folder") as HTMLElement;
     expect(ops.closest(".chat-section")).toBeNull();
     const first = document.querySelector(".chat-section") as HTMLElement;
     expect(ops.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(ops.textContent).not.toContain("api");
-    expect(ops.querySelector(".chat-folder-head")?.getAttribute("title")).toBe("Ops\n/work/api");
+    expect(within(ops).getByText("api chat")).toBeTruthy();
+    expect(within(ops).getByText("web shipped")).toBeTruthy();
+    expect(ops.querySelector(".chat-folder-count")?.textContent).toBe("2");
+    expect(within(section("api")).queryByText("api chat")).toBeNull();
+    expect(within(section("api")).getByText("api loose")).toBeTruthy();
+
+    fireEvent.click(within(ops).getByText("web shipped"));
+    expect(picked).toEqual([["w2", "/work/web"]]);
+  });
+
+  /// Moving a chat offers every folder, whichever project made it.
+  test("a chat of any folder moves into the shared folders", () => {
+    const moves: [string, string | null][] = [];
+    render(
+      <Sidebar
+        mode="agent"
+        onMode={() => {}}
+        pages={[]}
+        page={null}
+        onPage={() => {}}
+        sections={[{ path: "/work/web", chats: [{ id: "w1", title: "web chat", updatedAt: 1, archived: false }] }]}
+        groups={[{ id: "g1", name: "Ops", position: 1 }]}
+        activeChat={null}
+        onSelectChat={() => {}}
+        onArchiveChat={() => {}}
+        onPinChat={() => {}}
+        onMoveChat={(id, group) => moves.push([id, group])}
+        onCreateGroup={async () => ({})}
+        onRenameGroup={async () => ({})}
+        onDeleteGroup={() => {}}
+        onDeleteChat={() => {}}
+        onOpenSettings={() => {}}
+        onOnboardingAction={() => {}}
+        themeSide="dark"
+        onToggleTheme={() => {}}
+      />,
+    );
+    const row = screen.getByText("web chat").closest(".chat-row") as HTMLElement;
+    fireEvent.click(within(row).getByTitle("More"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "To folder" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Ops" }));
+    expect(moves).toEqual([["w1", "g1"]]);
   });
 
   /// A folder is added from a new chat's folder picker, not from the list's head.
@@ -638,18 +683,6 @@ describe("open folders", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Close folder" }));
     expect(screen.queryByRole("button", { name: "Add folder" })).toBeNull();
     expect(asked).toEqual(["new /work/api", "close /work/web"]);
-  });
-
-  test("a chat folder is made in the list it was asked for from", async () => {
-    const made: [string | null, string][] = [];
-    folders({ createGroup: (scope, name) => made.push([scope, name]) });
-    const row = screen.getByText("api chat").closest(".chat-row") as HTMLElement;
-    fireEvent.click(within(row).getByRole("button", { name: /menu|More/i }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "To folder" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "New folder…" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Later" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
-    await waitFor(() => expect(made).toEqual([["/work/api", "Later"]]));
   });
 
   test("a search matching nothing anywhere says so", () => {

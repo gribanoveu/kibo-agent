@@ -3,7 +3,7 @@
 ## Unreleased
 
 - 2026-11-18 Switching chats no longer shifts the Overview: the context card keeps its place with placeholders while the new chat's numbers are read
-- 2026-11-18 Chat folders you made stand at the top of the sidebar, above the open folders' sections; a long name is cut to one line, whole on hover
+- 2026-11-18 Chat folders you made stand at the top of the sidebar, above the open folders' sections, and are shared by every project: one folder holds chats of several, each still opening in its own; folders of the same name made per project before become one
 - 2026-11-18 Keep many folders open for little memory: only the folder on screen and folders with a turn running are indexed and watched, and search by meaning loads a model a third the size it was
 - 2026-11-17 Pick a chat's folder when it starts: a new chat chooses its folder under the composer, a started one only names it; the list's head no longer has an Add folder button
 - 2026-11-17 Fold a folder's section in the sidebar under its head; the chats below the pinned ones and the chat folders are one list, without Today and Earlier headings

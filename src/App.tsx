@@ -246,7 +246,7 @@ export default function App() {
   const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
   const toolLog = useToolLog(logOpen);
   const history = useChatHistory(workspace.folders, workspace.path);
-  const chatGroups = useChatGroups(agentMode ? workspace.folders : [null]);
+  const chatGroups = useChatGroups(agentMode ? "projects" : "chat");
   // A chat to open once its folder is the active one: one moved to its
   // worktree, or one of another folder picked in the sidebar. Opened only
   // then, or the folder change's reset of the thread would close it again.
@@ -951,10 +951,10 @@ export default function App() {
                   path,
                   worktreeOf: workspace.worktrees[path] ?? null,
                   chats: history.byFolder[path] ?? [],
-                  groups: chatGroups.groupsOf(path),
                 }))
-              : [{ path: null, chats: plain.chats, groups: chatGroups.groupsOf(null) }]
+              : [{ path: null, chats: plain.chats }]
           }
+          groups={chatGroups.groups}
           activeFolder={agentMode ? workspace.path : null}
           onNewChatIn={agentMode ? newChatIn : undefined}
           onCloseFolder={agentMode ? closeFolder : undefined}
@@ -970,23 +970,23 @@ export default function App() {
           onMoveChat={(id, group) =>
             agentMode ? history.move(id, group).catch((e) => toast.show(String(e))) : void plain.move(id, group)
           }
-          onCreateGroup={async (scope, name) => {
+          onCreateGroup={async (name) => {
             try {
-              return { id: (await chatGroups.create(scope, name)).id };
+              return { id: (await chatGroups.create(name)).id };
             } catch (e) {
               return { error: String(e) };
             }
           }}
-          onRenameGroup={async (scope, id, name) => {
+          onRenameGroup={async (id, name) => {
             try {
-              await chatGroups.rename(scope, id, name);
+              await chatGroups.rename(id, name);
               return {};
             } catch (e) {
               return { error: String(e) };
             }
           }}
-          onDeleteGroup={(scope, id) =>
-            void chatGroups.remove(scope, id).then(
+          onDeleteGroup={(id) =>
+            void chatGroups.remove(id).then(
               () => (agentMode ? history.refresh() : plain.refresh()),
               (e) => toast.show(String(e)),
             )

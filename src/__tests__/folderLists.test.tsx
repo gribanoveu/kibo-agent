@@ -16,7 +16,7 @@ let asked: { command: string; args: Record<string, unknown> }[] = [];
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: Record<string, unknown> = {}) => {
     asked.push({ command, args });
-    const scope = (args.workspace as string | null) ?? "";
+    const scope = (args.workspace as string | null) ?? (args.list as string | undefined) ?? "";
     if (scope === failing) return Promise.reject("unreadable");
     if (command === "chat_list") {
       const read = chats[scope] ?? [];
@@ -113,24 +113,27 @@ describe("useChatHistory", () => {
 });
 
 describe("useChatGroups", () => {
-  test("each scope's chat folders, Chat mode's under null", async () => {
-    groups = { "/a": [{ id: "g", name: "Ops" }], "": [{ id: "c", name: "Mine" }] };
-    const { result } = renderHook(() => useChatGroups(["/a", "/b", null]));
+  /// Chat mode's folders and the ones every project shares are two sets: the
+  /// hook reads the one asked for, and another one once the mode changes.
+  test("reads the set asked for, and the other one when it changes", async () => {
+    groups = { projects: [{ id: "g", name: "Ops", position: 1 }], chat: [{ id: "c", name: "Mine", position: 1 }] };
+    const { result, rerender } = renderHook(({ list }) => useChatGroups(list), { initialProps: { list: "projects" as "projects" | "chat" } });
     await settle();
-    expect(result.current.groupsOf("/a")).toEqual([{ id: "g", name: "Ops" }]);
-    expect(result.current.groupsOf("/b")).toEqual([]);
-    expect(result.current.groupsOf(null)).toEqual([{ id: "c", name: "Mine" }]);
+    expect(result.current.groups.map((g) => g.name)).toEqual(["Ops"]);
+    rerender({ list: "chat" });
+    expect(result.current.groups).toEqual([]);
+    await settle();
+    expect(result.current.groups.map((g) => g.name)).toEqual(["Mine"]);
   });
 
-  test("a chat folder is made in the scope asked, and read again", async () => {
-    const { result } = renderHook(() => useChatGroups(["/a", "/b"]));
+  test("a chat folder is made in the set on screen, and read again", async () => {
+    const { result } = renderHook(() => useChatGroups("projects"));
     await settle();
     await act(async () => {
-      await result.current.create("/b", "Later");
+      await result.current.create("Later");
     });
     await settle();
-    expect(asked).toContainEqual({ command: "chat_group_create", args: { workspace: "/b", name: "Later" } });
-    expect(result.current.groupsOf("/b").map((g) => g.name)).toEqual(["Later"]);
-    expect(result.current.groupsOf("/a")).toEqual([]);
+    expect(asked).toContainEqual({ command: "chat_group_create", args: { list: "projects", name: "Later" } });
+    expect(result.current.groups.map((g) => g.name)).toEqual(["Later"]);
   });
 });

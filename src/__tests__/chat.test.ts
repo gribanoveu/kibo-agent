@@ -213,20 +213,20 @@ describe("saved chats", () => {
     ]);
   });
 
-  test("folders are listed for the workspace given, and moved by id", async () => {
+  test("folders are listed for the set given, and moved by id", async () => {
     invokeResult = [];
-    await savedChats.listChatGroups("/repo");
-    expect(calls).toEqual([{ command: "chat_group_list", args: { workspace: "/repo" } }]);
+    await savedChats.listChatGroups("projects");
+    expect(calls).toEqual([{ command: "chat_group_list", args: { list: "projects" } }]);
 
     invokeResult = { id: "g1", name: "release", position: 1 };
-    const made = await savedChats.createChatGroup("/repo", "release");
-    expect(calls[1]).toEqual({ command: "chat_group_create", args: { workspace: "/repo", name: "release" } });
+    const made = await savedChats.createChatGroup("projects", "release");
+    expect(calls[1]).toEqual({ command: "chat_group_create", args: { list: "projects", name: "release" } });
     expect(made.name).toBe("release");
 
-    await savedChats.renameChatGroup("/repo", "g1", "launch");
-    expect(calls[2]).toEqual({ command: "chat_group_rename", args: { workspace: "/repo", id: "g1", name: "launch" } });
-    await savedChats.deleteChatGroup("/repo", "g1");
-    expect(calls[3]).toEqual({ command: "chat_group_delete", args: { workspace: "/repo", id: "g1" } });
+    await savedChats.renameChatGroup("projects", "g1", "launch");
+    expect(calls[2]).toEqual({ command: "chat_group_rename", args: { list: "projects", id: "g1", name: "launch" } });
+    await savedChats.deleteChatGroup("projects", "g1");
+    expect(calls[3]).toEqual({ command: "chat_group_delete", args: { list: "projects", id: "g1" } });
 
     await savedChats.setChatGroup("c1", "g1");
     await savedChats.setChatGroup("c1", null);
