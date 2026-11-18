@@ -14,26 +14,34 @@ const SAY_STARTING_AFTER_MS = 150;
 export function useMcpPrompts(workspace: string | null, turnStatus: unknown) {
   const [prompts, setPrompts] = useState<McpPromptItem[]>([]);
   const [starting, setStarting] = useState(false);
-  const pending = useRef(false);
+  // A start in flight, by folder: another folder's does not hold this one's.
+  const pending = useRef<string | null | undefined>(undefined);
+  // An answer for a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
+  const take = useCallback((next: McpPromptItem[]) => shown.current === workspace && setPrompts(next), [workspace]);
 
   const reload = useCallback(() => {
-    mcpPrompts(workspace).then(setPrompts, () => setPrompts([]));
-  }, [workspace]);
+    mcpPrompts(workspace).then(take, () => take([]));
+  }, [workspace, take]);
 
   useEffect(reload, [workspace, turnStatus, reload]);
 
   const start = useCallback(() => {
-    if (pending.current) return;
-    pending.current = true;
-    const say = setTimeout(() => setStarting(true), SAY_STARTING_AFTER_MS);
+    if (pending.current === workspace) return;
+    pending.current = workspace;
+    const say = setTimeout(() => shown.current === workspace && setStarting(true), SAY_STARTING_AFTER_MS);
     startMcpPrompts(workspace)
-      .then(setPrompts, () => setPrompts([]))
+      .then(take, () => take([]))
       .finally(() => {
         clearTimeout(say);
-        pending.current = false;
-        setStarting(false);
+        if (pending.current === workspace) pending.current = undefined;
+        if (shown.current === workspace) setStarting(false);
       });
-  }, [workspace]);
+  }, [workspace, take]);
+
+  // A start of the folder left says nothing over this one.
+  useEffect(() => setStarting(false), [workspace]);
 
   return { prompts, reload, start, starting };
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { setSkillEnabled, setSkillSourceEnabled, skillsList, type SkillSourceItem, type SkillsView } from "../lib/skills";
 
 /**
@@ -11,11 +11,16 @@ export function useSkills(visible: boolean, workspace: string | null = null) {
   const [view, setView] = useState<SkillsView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // An answer for a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
+
   const reload = useCallback(async () => {
     try {
-      setView(await skillsList(workspace));
+      const read = await skillsList(workspace);
+      if (shown.current === workspace) setView(read);
     } catch (e) {
-      setError(String(e));
+      if (shown.current === workspace) setError(String(e));
     }
   }, [workspace]);
 

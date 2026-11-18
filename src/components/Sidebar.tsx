@@ -366,22 +366,19 @@ export function Sidebar({
         {anything && (
           <div className="group-head">
             <span>Chats</span>
-            <span className="group-head-tools">
-              {anything && (
-                <Dropdown
-                  label={FILTERS.find((f) => f.value === filter)?.label}
-                  title="Which chats to list"
-                  options={FILTERS}
-                  value={filter}
-                  onPick={(value) => setFilter(value as Filter)}
-                  below
-                  right
-                />
-              )}
-            </span>
+            <Dropdown
+              label={FILTERS.find((f) => f.value === filter)?.label}
+              title="Which chats to list"
+              options={FILTERS}
+              value={filter}
+              onPick={(value) => setFilter(value as Filter)}
+              below
+              right
+            />
           </div>
         )}
-        {sections.length === 0 && <div className="empty">No chats yet.</div>}
+        {/* Chat folders on screen are the state; "No chats yet." above them contradicts it. */}
+        {sections.length === 0 && groups.length === 0 && <div className="empty">No chats yet.</div>}
         {/* An open folder with nothing matching draws no section; with none matching anywhere, the list says so. */}
         {wanted &&
           sections.every((section) => section.path !== null) &&
@@ -390,6 +387,9 @@ export function Sidebar({
             sections — kept on top as pinned chats are within theirs. */}
         {filter === "active" && (
           <ChatFolders
+            // Keyed by mode: the folded set is read from storage when it mounts,
+            // and Chat mode's is not Agent mode's.
+            key={mode}
             mode={mode}
             groups={groups}
             sections={sections}

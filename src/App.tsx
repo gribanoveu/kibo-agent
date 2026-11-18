@@ -393,6 +393,9 @@ export default function App() {
         void workspace.open(folder).then((opened) => opened || setPendingChat(null));
       });
     }
+    // A chat of another folder still on its way is not opened over this one,
+    // picked since.
+    setPendingChat(null);
     void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
   };
 
@@ -416,6 +419,7 @@ export default function App() {
   // The section's "+": in the active folder an ordinary new chat; in another
   // one the folder becomes active, and its change starts the thread afresh.
   const newChatIn = (folder: string) => {
+    setPendingChat(null);
     if (folder === workspace.path) return newChat();
     setPage(null);
     void folderSwitch.guard(() => void workspace.open(folder));

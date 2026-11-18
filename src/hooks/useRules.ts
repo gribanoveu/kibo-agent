@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type RuleListItem, rulesList, setRuleEnabled } from "../lib/skills";
 
 /**
@@ -9,11 +9,16 @@ export function useRules(visible: boolean, workspace: string | null) {
   const [rules, setRules] = useState<RuleListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // An answer for a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
+
   const reload = useCallback(async () => {
     try {
-      setRules(await rulesList(workspace));
+      const read = await rulesList(workspace);
+      if (shown.current === workspace) setRules(read);
     } catch (e) {
-      setError(String(e));
+      if (shown.current === workspace) setError(String(e));
     }
   }, [workspace]);
 

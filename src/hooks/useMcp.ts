@@ -17,10 +17,12 @@ export function useMcp(visible: boolean, workspace: string | null, refreshKey?: 
 
   const reload = useCallback(async () => {
     try {
-      setView(await mcpConfig(workspace));
+      const read = await mcpConfig(workspace);
+      if (shownFolder.current !== workspace) return;
+      setView(read);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      if (shownFolder.current === workspace) setError(String(e));
     }
   }, [workspace]);
 
@@ -42,11 +44,14 @@ export function useMcp(visible: boolean, workspace: string | null, refreshKey?: 
   /** Resolves to whether it was stored; a refusal is left in `error` for the editor to show. */
   const save = useCallback(async (text: string) => {
     try {
-      setView(await saveMcpConfig(text, workspace));
-      setError(null);
+      const saved = await saveMcpConfig(text, workspace);
+      if (shownFolder.current === workspace) {
+        setView(saved);
+        setError(null);
+      }
       return true;
     } catch (e) {
-      setError(String(e));
+      if (shownFolder.current === workspace) setError(String(e));
       return false;
     }
   }, [workspace]);
@@ -54,7 +59,9 @@ export function useMcp(visible: boolean, workspace: string | null, refreshKey?: 
   const setEnabled = useCallback(async (name: string, enabled: boolean) => {
     setView((v) => v && { ...v, servers: v.servers.map((s) => (s.name === name ? { ...s, enabled } : s)) });
     try {
-      setView(await setMcpServerEnabled(name, enabled, workspace));
+      const next = await setMcpServerEnabled(name, enabled, workspace);
+      if (shownFolder.current !== workspace) return;
+      setView(next);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -65,7 +72,9 @@ export function useMcp(visible: boolean, workspace: string | null, refreshKey?: 
   /** One tool's switch. Not drawn ahead of the answer: whether it ends up direct or deferred is the backend's to say. */
   const setToolShown = useCallback(async (server: string, tool: string, shown: boolean) => {
     try {
-      setView(await setMcpToolShown(server, tool, shown, workspace));
+      const next = await setMcpToolShown(server, tool, shown, workspace);
+      if (shownFolder.current !== workspace) return;
+      setView(next);
       setError(null);
     } catch (e) {
       setError(String(e));

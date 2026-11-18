@@ -438,12 +438,6 @@
   font-size: var(--fs-sm);
 }
 
-/* The list's head tools: Add folder beside the filter. */
-.group-head-tools {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
 .chat-workspace-new {
   display: inline-flex;
   align-items: center;
