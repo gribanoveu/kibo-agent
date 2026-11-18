@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::State;
 
-use crate::domain::chat_record::{ChatGroup, ChatRecord, ChatSummary, NO_FOLDER};
+use crate::domain::chat_record::{ChatGroup, ChatRecord, ChatSummary, GroupList};
 use crate::domain::llm::LlmMessage;
 use crate::domain::tools::Task;
 use crate::infra::chat_store;
@@ -141,49 +141,27 @@ pub async fn chat_set_pinned(id: String, pinned: bool) -> Result<(), String> {
     blocking(move || chat_store::set_pinned(&id, pinned)).await
 }
 
-/// Which workspace a folder command works on: `None` is Chat mode's shared
-/// set, filed under no folder; `Some` names the folder — canonicalized and
-/// accepted only as an open folder (F-8, invariant 1), not taken on faith.
-fn group_workspace(state: &AgentState, workspace: &Option<String>) -> Result<String, String> {
-    match workspace {
-        None => Ok(NO_FOLDER.to_string()),
-        Some(path) => state.require_open(path).map(|root| root.display().to_string()),
-    }
-}
-
-/// The chat folders of a list, in the user's order.
+/// The chat folders of a set — Chat mode's, or the one every project shares —
+/// in the user's order.
 #[tauri::command]
-pub async fn chat_group_list(state: State<'_, Arc<AgentState>>, workspace: Option<String>) -> Result<Vec<ChatGroup>, String> {
-    let workspace = group_workspace(&state, &workspace)?;
-    blocking(move || chat_store::groups(&workspace)).await
+pub async fn chat_group_list(list: GroupList) -> Result<Vec<ChatGroup>, String> {
+    blocking(move || chat_store::groups(list)).await
 }
 
 #[tauri::command]
-pub async fn chat_group_create(
-    state: State<'_, Arc<AgentState>>,
-    workspace: Option<String>,
-    name: String,
-) -> Result<ChatGroup, String> {
-    let workspace = group_workspace(&state, &workspace)?;
-    blocking(move || chat_store::create_group(&workspace, &name)).await
+pub async fn chat_group_create(list: GroupList, name: String) -> Result<ChatGroup, String> {
+    blocking(move || chat_store::create_group(list, &name)).await
 }
 
 #[tauri::command]
-pub async fn chat_group_rename(
-    state: State<'_, Arc<AgentState>>,
-    workspace: Option<String>,
-    id: String,
-    name: String,
-) -> Result<(), String> {
-    let workspace = group_workspace(&state, &workspace)?;
-    blocking(move || chat_store::rename_group(&workspace, &id, &name)).await
+pub async fn chat_group_rename(list: GroupList, id: String, name: String) -> Result<(), String> {
+    blocking(move || chat_store::rename_group(list, &id, &name)).await
 }
 
 /// Removing the folder files its chats under no folder — the chats stay.
 #[tauri::command]
-pub async fn chat_group_delete(state: State<'_, Arc<AgentState>>, workspace: Option<String>, id: String) -> Result<(), String> {
-    let workspace = group_workspace(&state, &workspace)?;
-    blocking(move || chat_store::delete_group(&workspace, &id)).await
+pub async fn chat_group_delete(list: GroupList, id: String) -> Result<(), String> {
+    blocking(move || chat_store::delete_group(list, &id)).await
 }
 
 /// Moves a chat into a folder, or out to no folder with `None`.
@@ -328,22 +306,5 @@ mod tests {
             tauri::async_runtime::block_on(chat_generate_title("t1".into())).unwrap();
             assert_eq!(crate::testing::chat_tokens("t1"), 23);
         });
-    }
-
-    /// Chat mode's groups live under no folder; a folder's groups only under
-    /// a folder the window has open (F-8, invariant 1) — not whichever path
-    /// the window names.
-    #[test]
-    fn groups_are_filed_under_no_folder_or_an_open_one() {
-        let state = AgentState::default();
-        assert_eq!(group_workspace(&state, &None).unwrap(), NO_FOLDER);
-
-        let root = crate::infra::paths::canonicalize_plain(&temp_dir("group-ws")).unwrap();
-        state.register_open(root.clone());
-        assert_eq!(group_workspace(&state, &Some(root.display().to_string())).unwrap(), root.display().to_string());
-        // A spelling of the same folder resolves to it; another folder is refused.
-        assert_eq!(group_workspace(&state, &Some(format!("{}/.", root.display()))).unwrap(), root.display().to_string());
-        let elsewhere = temp_dir("group-ws-elsewhere");
-        assert!(group_workspace(&state, &Some(elsewhere.display().to_string())).unwrap_err().contains("not an open folder"));
     }
 }
