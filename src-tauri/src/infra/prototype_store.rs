@@ -1,7 +1,7 @@
 //! `<app dir>/prototypes/<chat id>/`: a Prototype chat's folder
 //! (`docs/31-prototype-role.md`). `files/` is what its tools work in; the
-//! presented versions sit beside it in `versions/`, and `prototype.json`
-//! (`docs/38-artifacts.md`), out of their reach. Made on the chat's first
+//! presented versions sit beside it in `versions/`, and `prototype.json`,
+//! out of their reach. Made on the chat's first
 //! turn, gone with the chat.
 
 use std::fs;

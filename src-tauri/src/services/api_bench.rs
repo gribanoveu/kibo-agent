@@ -1,5 +1,4 @@
-//! The bench for the API role (`docs/45-http-client.md`, HC-10d; A-6 of
-//! `docs/28-api-tester-role.md`): a stand with a bug planted against its spec — or,
+//! The bench for the API role (`docs/45-http-client.md`, HC-10d): a stand with a bug planted against its spec — or,
 //! for a draft task, one to write scripts against —, the user's Postman environment
 //! and collection for it, a request in the user's words, and a hidden check of the
 //! answer or the drafts, of what reached the stand and of what the model read.

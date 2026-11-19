@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- 2026-11-19 The box under the message field picks a folder and a branch only for a new chat: a started chat shows its folder there and its branch in Overview
+- 2026-11-18 Switching chats no longer shifts the Overview: the context card keeps its place with placeholders while the new chat's numbers are read
+- 2026-11-18 Chat folders you made stand at the top of the sidebar, above the open folders' sections, and are shared by every project: one folder holds chats of several, each still opening in its own; folders of the same name made per project before become one
+- 2026-11-18 Keep many folders open for little memory: only the folder on screen and folders with a turn running are indexed and watched, and search by meaning loads a model a third the size it was
+- 2026-11-17 Pick a chat's folder when it starts: a new chat chooses its folder under the composer, a started one only names it; the list's head no longer has an Add folder button
+- 2026-11-17 Fold a folder's section in the sidebar under its head; the chats below the pinned ones and the chat folders are one list, without Today and Earlier headings
+- 2026-11-17 Hear and see when a turn ends or waits in a chat off screen, in any open folder; a worktree's section in the sidebar says whose worktree it is
+- 2026-11-17 Come back to every folder open last time: the app reopens them all at launch, on the folder of the chat viewed last
+- 2026-11-17 Move between folders and their chats while agents work: a turn goes on in its own folder and is saved there
+- 2026-11-17 Keep several folders open at once: the sidebar lists each folder's chats, a chat opens in its own folder, and a folder is added beside the others or closed on its own
+- 2026-11-16 With no model pinned (Auto), the line under the message box names the model that would go out — the provider's first — instead of "no model", and after a turn it shows the one actually sent
+- 2026-11-16 `runCommand` takes a `description` — the agent explains in a few words what a command it runs does, and the explanation stands on the approval card beside the command line and names a background process when one ends; the approval decision still reads the command line alone
+- 2026-11-16 A review's report in the chat shows its finding cards first: the reviewer's summary and the range it read fold behind a Summary toggle, open by default only when there are no findings
+- 2026-11-16 The review and explore cards in the chat wear the robot icon, the same as the agent's sheet and the Subagent button
+- 2026-11-16 A review subagent in Overview and the Agents tab is named by its focus when one was given, else by its brief's first line — not by a `task:` line of code that happened to be in the diff it reviews
+- 2026-11-16 While subagents run, the Working panel shows their live speed and tokens as a line of its own, the run's sheet shows its speed too, and Overview gains a Subagents tokens row under Session tokens with an info icon explaining what each counts
 - 2026-11-14 An HTTP environment trusts several certificates, each a file of its own: load them from files or paste them, and export or remove each one
 - 2026-11-14 A script's editor suggests the variable names of the scope it reads — `pm.environment.get('`, `pm.collectionVariables.set('`… — and an HTTP request's menu copies its place and id for pasting into a chat with the API role
 - 2026-11-14 Every Postman dynamic variable in an HTTP request — `{{$randomEmail}}`, `{{$randomFirstName}}` and the rest of the 118 — is made as Postman makes it when the request goes; `{{$` lists them with what each makes, and a script's own editor suggests `pm.*` as you type, with each method's arguments and what it does
@@ -27,6 +43,13 @@
 - 2026-11-07 The agent reads the HTTP stands you open to it: an environment set to Read only takes its GET, HEAD and OPTIONS with no card, the app fills in `{{token}}` and scrubs secrets from what the model reads, and each send shows in History under its chat
 - 2026-11-05 The HTTP page signs in the way a collection says: OAuth 2.0 tokens are got by client credentials or password, kept sealed and renewed as requests go, digest answers its challenge, cookies a server sets go back to it and are listed by domain under Cookies, and form-data bodies with text fields go out
 - 2026-11-04 HTTP page in the Catalog: import Postman collections and environments, send requests, see each request's last response and the history, and run the collection's pre-request and test scripts once you trust them
+
+## v0.13.1 — 2026-11-16
+
+- 2026-11-16 On Windows a command the agent runs no longer flashes a console window: the release app has none of its own, so `taskkill` — which ends what a command leaves behind, on every run — was opening one
+
+- 2026-11-15 The agent says what it started before a long build, test run or rollout wait, and looks for code by meaning first when it does not know where it lives
+- 2026-11-15 Frost, a dark theme of frozen glass: on macOS the desktop shows through the window, blurred
 
 ## v0.13.0 — 2026-11-14
 

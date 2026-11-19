@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::State;
 
-use crate::domain::chat_record::{ChatGroup, ChatRecord, ChatSummary, NO_FOLDER};
+use crate::domain::chat_record::{ChatGroup, ChatRecord, ChatSummary, GroupList};
 use crate::domain::llm::LlmMessage;
 use crate::domain::tools::Task;
 use crate::infra::chat_store;
@@ -17,11 +17,16 @@ use crate::services::{chat_title, llm_session};
 use super::blocking;
 use super::agent_state::AgentState;
 
-/// Chats of the open folder, newest first. No folder open is an empty list:
-/// there is nothing to be wrong about yet, and the sidebar already says so.
+/// Chats of the folder `workspace` names, newest first. `None` (Chat mode)
+/// and no folder are an empty list: there is nothing to be wrong about yet,
+/// and the sidebar already says so. The path is canonicalized and accepted
+/// only as an open folder (F-8, invariant 1).
 #[tauri::command]
-pub async fn chat_list(state: State<'_, Arc<AgentState>>) -> Result<Vec<ChatSummary>, String> {
-    let Ok(workspace) = state.workspace() else {
+pub async fn chat_list(
+    workspace: Option<String>,
+    state: State<'_, Arc<AgentState>>,
+) -> Result<Vec<ChatSummary>, String> {
+    let Some(workspace) = state.ui_workspace(&workspace)? else {
         return Ok(Vec::new());
     };
     blocking(move || chat_store::list(&workspace.display().to_string())).await
@@ -44,10 +49,12 @@ pub async fn chat_save(
     todos: Vec<Task>,
     plan: Option<String>,
     branched_from: Option<String>,
+    workspace: Option<String>,
 ) -> Result<ChatSummary, String> {
     // A background chat still saves under its own checkout, even if another
-    // chat has since opened a different folder in the window.
-    let (workspace, _) = state.chat_workspace(&id)?;
+    // chat has since opened a different folder in the window; a new one under
+    // the folder it was typed in (`workspace`).
+    let (workspace, _) = state.chat_workspace_in(&id, workspace.as_deref())?;
     let state = Arc::clone(&state);
     blocking(move || {
         let first = !chat_store::exists(&id).map_err(|e| e.to_string())?;
@@ -95,8 +102,9 @@ fn move_to_worktree(id: &str, state: &AgentState) -> Result<String, String> {
         .ok_or_else(|| "the chat's folder is not on a git branch".to_string())?;
     let worktrees = crate::infra::app_dir::ensure()?.join("worktrees");
     let path = crate::infra::git_branches::add_agent_worktree(&root, &base, id, &worktrees).map_err(|e| e.to_string())?;
-    // Store the same canonical spelling cleanup and later turns compare against.
-    let shown = path.canonicalize().map_err(|e| e.to_string())?.display().to_string();
+    // Store the plain spelling `chat_workspace`, cleanup and later turns
+    // read it back under (no `\\?\` on Windows).
+    let shown = crate::infra::paths::canonicalize_plain(&path).map_err(|e| e.to_string())?.display().to_string();
     chat_store::relocate(id, &shown, &base).map_err(|e| e.to_string())?;
     Ok(shown)
 }
@@ -133,52 +141,27 @@ pub async fn chat_set_pinned(id: String, pinned: bool) -> Result<(), String> {
     blocking(move || chat_store::set_pinned(&id, pinned)).await
 }
 
-/// Which workspace a folder command works on: `None` is Chat mode's shared
-/// set, filed under no folder; `Some` is the open folder — and the open
-/// folder is read from the state, not taken from the window on faith.
-fn group_workspace(state: &AgentState, workspace: &Option<String>) -> Option<String> {
-    match workspace {
-        None => Some(NO_FOLDER.to_string()),
-        Some(_) => state.workspace().ok().map(|root| root.display().to_string()),
-    }
-}
-
-/// The chat folders of a list, in the user's order. No folder open and Chat
-/// mode was not asked for: an empty list, as `chat_list` has it.
+/// The chat folders of a set — Chat mode's, or the one every project shares —
+/// in the user's order.
 #[tauri::command]
-pub async fn chat_group_list(state: State<'_, Arc<AgentState>>, workspace: Option<String>) -> Result<Vec<ChatGroup>, String> {
-    let Some(workspace) = group_workspace(&state, &workspace) else {
-        return Ok(Vec::new());
-    };
-    blocking(move || chat_store::groups(&workspace)).await
+pub async fn chat_group_list(list: GroupList) -> Result<Vec<ChatGroup>, String> {
+    blocking(move || chat_store::groups(list)).await
 }
 
 #[tauri::command]
-pub async fn chat_group_create(
-    state: State<'_, Arc<AgentState>>,
-    workspace: Option<String>,
-    name: String,
-) -> Result<ChatGroup, String> {
-    let workspace = group_workspace(&state, &workspace).ok_or_else(|| "no folder is open".to_string())?;
-    blocking(move || chat_store::create_group(&workspace, &name)).await
+pub async fn chat_group_create(list: GroupList, name: String) -> Result<ChatGroup, String> {
+    blocking(move || chat_store::create_group(list, &name)).await
 }
 
 #[tauri::command]
-pub async fn chat_group_rename(
-    state: State<'_, Arc<AgentState>>,
-    workspace: Option<String>,
-    id: String,
-    name: String,
-) -> Result<(), String> {
-    let workspace = group_workspace(&state, &workspace).ok_or_else(|| "no folder is open".to_string())?;
-    blocking(move || chat_store::rename_group(&workspace, &id, &name)).await
+pub async fn chat_group_rename(list: GroupList, id: String, name: String) -> Result<(), String> {
+    blocking(move || chat_store::rename_group(list, &id, &name)).await
 }
 
 /// Removing the folder files its chats under no folder — the chats stay.
 #[tauri::command]
-pub async fn chat_group_delete(state: State<'_, Arc<AgentState>>, workspace: Option<String>, id: String) -> Result<(), String> {
-    let workspace = group_workspace(&state, &workspace).ok_or_else(|| "no folder is open".to_string())?;
-    blocking(move || chat_store::delete_group(&workspace, &id)).await
+pub async fn chat_group_delete(list: GroupList, id: String) -> Result<(), String> {
+    blocking(move || chat_store::delete_group(list, &id)).await
 }
 
 /// Moves a chat into a folder, or out to no folder with `None`.
@@ -206,8 +189,9 @@ pub async fn chat_delete(
     Ok(())
 }
 
-/// A clean, unshared, closed worktree made for this chat can go with it.
-/// Anything else stays on disk: deleting a transcript never deletes work.
+/// A clean, unshared worktree no folder of the window is open in (F-8) can
+/// go with its chat. Anything else stays on disk: deleting a transcript
+/// never deletes work.
 fn cleanup_worktree(id: &str, state: &AgentState) -> Result<(), String> {
     let record = chat_store::load(id).map_err(|e| e.to_string())?;
     if record.role.is_none() {
@@ -216,8 +200,11 @@ fn cleanup_worktree(id: &str, state: &AgentState) -> Result<(), String> {
     if record.worktree_base.is_none() {
         return Ok(());
     }
-    let Ok(root) = std::path::Path::new(&record.workspace).canonicalize() else { return Ok(()) };
-    if state.workspace().ok().and_then(|open| open.canonicalize().ok()).as_deref() == Some(root.as_path()) {
+    let Ok(root) = crate::infra::paths::canonicalize_plain(std::path::Path::new(&record.workspace)) else { return Ok(()) };
+    // One plain spelling for every check: the registry, the turn's running
+    // root and the chat store's keys all come from `chat_workspace`, which
+    // canonicalizes plain (no `\\?\` on Windows).
+    if state.is_open(&root) {
         return Ok(());
     }
     if !state.root_is_idle(&root) {
@@ -239,7 +226,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     fn save_agent(id: &str, workspace: &Path) {
-        chat_store::save(id, &workspace.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+        let shown = crate::infra::paths::canonicalize_plain(workspace).unwrap();
+        chat_store::save(id, &shown.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
     }
 
     fn git_repo(label: &str) -> (PathBuf, String) {
@@ -290,8 +278,8 @@ mod tests {
             let clean = moved("clean", &root, &state);
             std::fs::write(dirty.join("a.rs"), "do not delete\n").unwrap();
             save_agent("shared-too", &shared);
-            state.set_workspace_for_test(open.clone());
-            let guard = state.begin_running("running", 3, &running.canonicalize().unwrap()).unwrap();
+            state.set_workspace_for_test(crate::infra::paths::canonicalize_plain(&open).unwrap());
+            let guard = state.begin_running("running", 3, &crate::infra::paths::canonicalize_plain(&running).unwrap()).unwrap();
 
             cleanup_worktree("dirty", &state).unwrap();
             cleanup_worktree("shared", &state).unwrap();
@@ -303,6 +291,9 @@ mod tests {
 
             drop(guard);
             state.set_workspace_for_test(temp_dir("chat-delete-elsewhere"));
+            // Still open beside the active one: the registry holds it, not the active mark.
+            cleanup_worktree("open", &state).unwrap();
+            assert!(open.exists(), "a folder still open stays even when another is active");
             cleanup_worktree("clean", &state).unwrap();
             assert!(!clean.exists());
             assert_eq!(std::fs::read_to_string(dirty.join("a.rs")).unwrap(), "do not delete\n");

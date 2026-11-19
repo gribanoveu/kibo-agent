@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
-// The Artifacts page's wrappers (docs/38-artifacts.md): the signals it reads
+// The Artifacts page's wrappers: the signals it reads
 // again on — no channel of its own — where a file loads from, and Save as
 // going through the system's dialog.
 

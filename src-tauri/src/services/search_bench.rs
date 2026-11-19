@@ -9,8 +9,8 @@
 //!
 //! `SEARCH_BENCH_RERANK=1` also has a model reorder the first
 //! `search_rerank::POOL` of each list, as `semanticSearch` does, and prints
-//! how that ranks beside the index's own order. The provider is the agent
-//! bench's (`AGENT_BENCH_*`).
+//! how that ranks beside the index's own order — under every configuration,
+//! the words-only one too. The provider is the agent bench's (`AGENT_BENCH_*`).
 //!
 //! `bench/search-queries.json` holds the questions; a repository missing from
 //! disk is skipped. `SEARCH_BENCH_MODELS` adds models beside the bundled one,
@@ -20,7 +20,7 @@
 //!
 //! What it measures is `code_search::search` itself, the ranking the tool
 //! ships. The grid that chose its constants was a variant of the pipeline
-//! beside it; its results are in `docs/06-port-plan.md` (F-5.13c, F-5.13c-2).
+//! beside it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -306,8 +306,9 @@ fn search_bench() {
                 for (count, depth) in within.iter_mut().zip([10, 20, 30, 50]) {
                     *count += usize::from(in_pool.is_some_and(|r| r <= depth));
                 }
-                // Over the model the tool ships with, not the words-only one.
-                if let Some(session) = reranker.as_ref().filter(|_| model != "bm25") {
+                // Over every configuration, words-only included: whether the
+                // embeddings earn their cost is how the reranked lists compare.
+                if let Some(session) = reranker.as_ref() {
                     let started = Instant::now();
                     let order = search_rerank::rerank(session, &[&query.q], pool.clone());
                     rerank_time += started.elapsed();

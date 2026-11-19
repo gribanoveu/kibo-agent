@@ -194,7 +194,7 @@ pub struct Meeting {
     /// A few words on what it was about, written with the notes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// The title is the user's (`docs/38-artifacts.md`): notes written again keep it.
+    /// The title is the user's: notes written again keep it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub title_by_user: bool,
     /// When it was recognized, RFC 3339.

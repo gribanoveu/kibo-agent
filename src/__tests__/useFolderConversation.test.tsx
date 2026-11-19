@@ -37,6 +37,15 @@ describe("coming back to a folder", () => {
     expect(h.opened).toEqual([]);
   });
 
+  // F-8.6: the comeback is the launch's. A folder with no chat to reopen
+  // leaves it armed, and a folder opened later must not take it.
+  test("not after the user has moved to another folder", () => {
+    const h = setup({ path: "/a", resumed: true });
+    h.rerender({ path: "/b", resumed: true });
+    h.rerender({ path: "/b", resumed: true, latest: "b1" });
+    expect(h.opened).toEqual([]);
+  });
+
   test("not for a folder chosen by hand", () => {
     const h = setup({ path: "/a", resumed: false, latest: "c2" });
     expect(h.opened).toEqual([]);

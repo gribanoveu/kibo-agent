@@ -11,7 +11,7 @@
 //! that carried the keystroke would block the window with it.
 
 use std::io::{ErrorKind, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -55,6 +55,9 @@ struct Registry {
 struct Entry {
     id: u32,
     shell: String,
+    /// The folder it was opened in (F-8.3): closing the folder closes it,
+    /// and the tab and the agent of that folder alone see it.
+    workspace: PathBuf,
     master: Box<dyn MasterPty + Send>,
     /// To the writer thread; dropping it ends that thread.
     input: Sender<Vec<u8>>,
@@ -113,10 +116,10 @@ impl Terminals {
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_else(|| "shell".to_string());
         prepare(&mut command, cwd);
-        self.spawn(command, shell, size)
+        self.spawn(command, shell, cwd, size)
     }
 
-    fn spawn(&self, command: CommandBuilder, shell: String, size: TerminalSize) -> Result<TerminalInfo, TerminalError> {
+    fn spawn(&self, command: CommandBuilder, shell: String, workspace: &Path, size: TerminalSize) -> Result<TerminalInfo, TerminalError> {
         let pair = native_pty_system().openpty(pty_size(size)).map_err(not_started)?;
         let reader = pair.master.try_clone_reader().map_err(not_started)?;
         let writer = pair.master.take_writer().map_err(not_started)?;
@@ -141,7 +144,7 @@ impl Terminals {
         write(writer, typed);
         wait(child, Arc::clone(&shared), Arc::clone(&self.changed), id);
         let info = TerminalInfo { id, shell: shell.clone(), state: TerminalState::Running };
-        registry.entries.push(Entry { id, shell, master: pair.master, input, killer, shared });
+        registry.entries.push(Entry { id, shell, workspace: workspace.to_path_buf(), master: pair.master, input, killer, shared });
         drop(registry);
         (self.changed)(TerminalChanged { id });
         Ok(info)
@@ -150,6 +153,16 @@ impl Terminals {
     /// Oldest first, the order they were opened in.
     pub fn list(&self) -> Vec<TerminalInfo> {
         lock(&self.registry).entries.iter().map(Entry::info).collect()
+    }
+
+    /// The ones opened in `workspace`, oldest first: what its tab shows.
+    pub fn list_in(&self, workspace: &Path) -> Vec<TerminalInfo> {
+        lock(&self.registry).entries.iter().filter(|e| e.workspace == workspace).map(Entry::info).collect()
+    }
+
+    /// What a turn in `workspace` reads the terminals through: that folder's.
+    pub fn for_workspace(self: &Arc<Self>, workspace: &Path) -> FolderTerminals {
+        FolderTerminals { terminals: Arc::clone(self), workspace: workspace.to_path_buf() }
     }
 
     /// Sends `screen` what the terminal wrote so far, then everything it
@@ -208,9 +221,24 @@ impl Terminals {
         Ok(())
     }
 
-    /// The folder changed or the app is quitting.
+    /// The app is quitting.
     pub fn close_all(&self) {
-        let entries = std::mem::take(&mut lock(&self.registry).entries);
+        self.close_where(|_| true);
+    }
+
+    /// `workspace` was closed (F-8 invariant 4): its shells hang up, and no
+    /// other folder's.
+    pub fn close_workspace(&self, workspace: &Path) {
+        self.close_where(|entry| entry.workspace == workspace);
+    }
+
+    fn close_where(&self, which: impl Fn(&Entry) -> bool) {
+        let entries: Vec<Entry> = {
+            let mut registry = lock(&self.registry);
+            let (closing, kept) = std::mem::take(&mut registry.entries).into_iter().partition(|entry| which(entry));
+            registry.entries = kept;
+            closing
+        };
         for entry in entries {
             let id = entry.id;
             hang_up(entry);
@@ -229,10 +257,36 @@ impl UserTerminals for Terminals {
     }
 
     fn screen(&self, id: Option<u32>, lines: usize) -> Result<TerminalScreen, TerminalError> {
+        self.screen_in(None, id, lines)
+    }
+}
+
+/// One folder's terminals, as a turn in it reads them (F-8.3): another
+/// folder's shell is not there — listed nowhere, and read by id it answers
+/// as no such terminal.
+pub struct FolderTerminals {
+    terminals: Arc<Terminals>,
+    workspace: PathBuf,
+}
+
+impl UserTerminals for FolderTerminals {
+    fn list(&self) -> Vec<TerminalInfo> {
+        self.terminals.list_in(&self.workspace)
+    }
+
+    fn screen(&self, id: Option<u32>, lines: usize) -> Result<TerminalScreen, TerminalError> {
+        self.terminals.screen_in(Some(&self.workspace), id, lines)
+    }
+}
+
+impl Terminals {
+    /// Terminal `id`, or the newest — of `workspace`'s alone, when given.
+    fn screen_in(&self, workspace: Option<&Path>, id: Option<u32>, lines: usize) -> Result<TerminalScreen, TerminalError> {
         let registry = lock(&self.registry);
+        let mut seen = registry.entries.iter().filter(|e| workspace.is_none_or(|workspace| e.workspace == workspace));
         let entry = match id {
-            Some(id) => registry.entry(id)?,
-            None => registry.entries.last().ok_or(TerminalError::NoneOpen)?,
+            Some(id) => seen.find(|e| e.id == id).ok_or(TerminalError::NotFound(id))?,
+            None => seen.next_back().ok_or(TerminalError::NoneOpen)?,
         };
         let mut shared = lock(&entry.shared);
         let state = shared.state;
@@ -396,7 +450,31 @@ mod tests {
     fn open_sh(terminals: &Terminals, cwd: &Path) -> u32 {
         let mut command = CommandBuilder::new("/bin/sh");
         prepare(&mut command, cwd);
-        terminals.spawn(command, "sh".into(), SIZE).expect("opens").id
+        terminals.spawn(command, "sh".into(), cwd, SIZE).expect("opens").id
+    }
+
+    /// F-8.3: a folder's tab and turn see its shells alone — another's, by
+    /// id, is no such terminal; closing a folder hangs up its shells only.
+    #[test]
+    fn a_folder_sees_and_closes_only_its_own_shells() {
+        let terminals = Arc::new(Terminals::default());
+        let (a, b) = (folder("term-folder-a"), folder("term-folder-b"));
+        // B's first: the newest shell of all is A's.
+        let in_b = open_sh(&terminals, &b);
+        let in_a = open_sh(&terminals, &a);
+        let ids = |list: Vec<TerminalInfo>| list.iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!((ids(terminals.list_in(&a)), ids(terminals.list_in(&b))), (vec![in_a], vec![in_b]));
+
+        let seen_from_b = terminals.for_workspace(&b);
+        assert_eq!(ids(seen_from_b.list()), [in_b]);
+        assert!(matches!(seen_from_b.screen(Some(in_a), 10), Err(TerminalError::NotFound(id)) if id == in_a));
+        assert_eq!(seen_from_b.screen(None, 10).unwrap().id, in_b, "the newest of its own, not A's");
+        assert_eq!(terminals.for_workspace(&a).screen(None, 10).unwrap().id, in_a);
+
+        terminals.close_workspace(&a);
+        assert!(terminals.list_in(&a).is_empty());
+        assert_eq!(ids(terminals.list_in(&b)), [in_b], "B's untouched");
+        assert!(matches!(terminals.for_workspace(&a).screen(None, 10), Err(TerminalError::NoneOpen)));
     }
 
     fn folder(label: &str) -> PathBuf {

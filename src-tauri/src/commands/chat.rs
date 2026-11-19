@@ -58,13 +58,17 @@ pub async fn chat_start<R: Runtime>(
     messages: Vec<LlmMessage>,
     todos: Vec<Task>,
     plan: Option<String>,
+    workspace: Option<String>,
 ) -> Result<ChatStreamOutcome, String> {
     let state = state.inner().clone();
-    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
+    let (workspace, worktree_base) = state.chat_workspace_in(&chat_id, workspace.as_deref())?;
     let session = state.session(&chat_id);
     // Admission before anything about the session is touched: a refused
     // start must leave the running turn's stop flag and journal alone.
     let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
+    state.still_open(&workspace)?;
+    // An unsaved chat stays in this folder when the window moves to another.
+    session.home.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(|| workspace.clone());
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
     session.cancel.store(false, Ordering::SeqCst);
@@ -92,6 +96,14 @@ pub async fn chat_resume<R: Runtime>(
     let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let session = state.session(&chat_id);
     let running = state.begin_resume(&chat_id, parallel_limit(), &workspace)?;
+    if let Err(closed) = state.still_open(&workspace) {
+        // `begin_resume` took the card's pause: given back while the turn
+        // still counts as running, so no fresh start slips in between and
+        // orphans the card.
+        session.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(running);
+        return Err(closed);
+    }
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
     })
@@ -310,12 +322,20 @@ pub fn chat_cancel_steer(id: String, chat_id: String, state: State<'_, Arc<Agent
     state.session(&chat_id).steering.cancel(&id)
 }
 
-/// The chat folder's search, for the turn's tools. A background chat never
-/// searches through the index of a folder opened after its turn started.
+/// The chat folder's search, for the turn's tools — that folder's index and no
+/// other open one's (F-8.2). Opens the index if the folder is in the
+/// background, and keeps it open while the turn, or a helper of it, holds the
+/// searcher (LZ-4). Blocking: it may read the folder's store.
 fn searcher_of<R: Runtime>(app: &AppHandle<R>, workspace: &std::path::Path) -> Option<CodeSearchFn> {
-    let index = app.try_state::<Arc<WorkspaceIndex>>()?;
-    let current = index.current()?;
-    (current.root() == workspace).then(|| index.searcher()).flatten()
+    let sink = super::workspace_events::index_event_sink(app, workspace.display().to_string());
+    app.try_state::<Arc<WorkspaceIndex>>()?.searcher(workspace, sink)
+}
+
+/// The chat folder's shells, for the turn's terminal tool — not another open
+/// folder's (F-8.3).
+fn terminals_of<R: Runtime>(app: &AppHandle<R>, workspace: &std::path::Path) -> Option<Arc<dyn crate::domain::terminal::UserTerminals>> {
+    let terminals = app.try_state::<Arc<crate::infra::terminal::Terminals>>()?;
+    Some(Arc::new(terminals.for_workspace(workspace)))
 }
 
 /// The HTTP page's environments, as this chat's HTTP tools reach them.
@@ -332,14 +352,18 @@ pub(super) fn mongo_servers_of<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<dyn
 /// Assembles a turn and runs it on a blocking thread.
 ///
 /// The processes and helpers a turn of `chat_id` starts through: recorded as
-/// that chat's, for the Processes and Agents tabs to list the open chat's.
+/// that chat's, for the Processes and Agents tabs to list the open chat's,
+/// and the processes as `workspace`'s — the only ones the turn sees (F-8.3).
 fn chats_own(
     processes: Option<Arc<Processes>>,
     agents: Option<Arc<crate::domain::agents::Agents>>,
     chat_id: &str,
+    workspace: &std::path::Path,
 ) -> (Option<Arc<dyn crate::domain::background::BackgroundProcesses>>, Option<Arc<crate::domain::agents::Agents>>) {
     (
-        processes.map(|processes| Arc::new(processes.for_chat(chat_id)) as Arc<dyn crate::domain::background::BackgroundProcesses>),
+        processes.map(|processes| {
+            Arc::new(processes.for_chat(chat_id, workspace)) as Arc<dyn crate::domain::background::BackgroundProcesses>
+        }),
         agents.map(|agents| Arc::new(agents.for_chat(chat_id))),
     )
 }
@@ -377,24 +401,24 @@ where
     R: Runtime,
     F: FnOnce(&Turn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
-    let approval = state.approval()?;
+    let approval = state.approval(&workspace)?;
     let mode = state.mode();
     let _running = running;
     let (processes, agents) = chats_own(
         app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes)),
         app.try_state::<Arc<crate::domain::agents::Agents>>().map(|agents| Arc::clone(&agents)),
         &chat_id,
+        &workspace,
     );
     let handles = FolderHandles {
-        search: searcher_of(&app, &workspace),
+        // On the turn's thread, below: it may read a store.
+        search: None,
         embeddings: app.try_state::<Arc<WorkspaceIndex>>().map(|index| index.embeddings()),
         mcp_servers: app.try_state::<Arc<McpServers>>().map(|servers| Arc::clone(&servers)),
         processes,
         agents,
         questions: app.try_state::<Arc<McpQuestions>>().map(|questions| Arc::clone(&questions)),
-        terminals: app
-            .try_state::<Arc<crate::infra::terminal::Terminals>>()
-            .map(|terminals| Arc::clone(&terminals) as Arc<dyn crate::domain::terminal::UserTerminals>),
+        terminals: terminals_of(&app, &workspace),
         board: app
             .try_state::<Arc<crate::infra::board_store::Board>>()
             .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
@@ -403,6 +427,7 @@ where
     };
 
     tauri::async_runtime::spawn_blocking(move || {
+        let handles = FolderHandles { search: searcher_of(&app, &workspace), ..handles };
         let emit = chat_event_sink(&app, turn_id.clone());
         let observed = Arc::clone(&session);
         let events: ChatEventSink = Arc::new(move |event: ChatTurnEvent| {
@@ -440,16 +465,83 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    /// A saved chat whose folder is not open does not run (F-8.3): a turn
+    /// there would start processes nothing could stop or list. Refused after
+    /// admission, so the mark is cleared again.
+    #[test]
+    fn a_turn_in_a_folder_not_open_is_refused() {
+        crate::testing::with_app_dir("cmd-chat-closed-folder", || {
+            let closed = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-closed")).unwrap();
+            crate::infra::chat_store::save("c1", &closed.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None)
+                .unwrap();
+            let state = state();
+            state.set_workspace_for_test(temp_dir("cmd-chat-closed-active"));
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            let started = tauri::async_runtime::block_on(chat_start(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                Vec::new(),
+                None,
+                None,
+            ));
+            assert!(matches!(&started, Err(e) if e.contains("not an open folder")), "{started:?}");
+            let checkpoint = PendingApproval {
+                history: vec![LlmMessage::user("hi")],
+                round: 1,
+                budget_used: 0,
+                event_seq: 0,
+                calls: Vec::new(),
+                todos: Vec::new(),
+                reads: Default::default(),
+            };
+            let resumed = tauri::async_runtime::block_on(chat_resume(
+                app.handle().clone(),
+                app.state(),
+                "t2".into(),
+                "c1".into(),
+                checkpoint,
+                Vec::new(),
+                None,
+            ));
+            assert!(matches!(&resumed, Err(e) if e.contains("not an open folder")), "{resumed:?}");
+            assert!(state.root_is_idle(&closed), "the refused turn left its mark");
+        });
+    }
+
+    /// A turn reads its own folder's shells, not a neighbour's (F-8.3).
+    #[cfg(unix)]
+    #[test]
+    fn a_turn_reads_its_folders_shells_only() {
+        let app = tauri::test::mock_app();
+        let terminals = Arc::new(crate::infra::terminal::Terminals::with_shell("/bin/sh"));
+        tauri::Manager::manage(&app, Arc::clone(&terminals));
+        let (mine, theirs) = (temp_dir("cmd-shells-mine"), temp_dir("cmd-shells-theirs"));
+        let size = crate::domain::terminal::TerminalSize::new(80, 24).unwrap();
+        let own = terminals.open(&mine, size).unwrap();
+        terminals.open(&theirs, size).unwrap();
+
+        let seen = terminals_of(app.handle(), &mine).unwrap().list();
+
+        assert_eq!(seen.iter().map(|t| t.id).collect::<Vec<_>>(), [own.id]);
+        terminals.close_all();
+    }
+
     /// A turn's starts are its chat's, so the tabs list them under it.
     #[cfg(unix)]
     #[test]
     fn what_a_turn_starts_is_its_chats() {
         let (processes, agents) = (Arc::new(Processes::default()), Arc::new(crate::domain::agents::Agents::default()));
-        let (theirs, helpers) = chats_own(Some(Arc::clone(&processes)), Some(Arc::clone(&agents)), "c1");
         let dir = crate::testing::temp_dir("cmd-chat-owned");
-        theirs.unwrap().start(&crate::domain::command_exec::Shell::default(), "sleep 30", &dir, ".").unwrap();
+        let (theirs, helpers) = chats_own(Some(Arc::clone(&processes)), Some(Arc::clone(&agents)), "c1", &dir);
+        theirs.unwrap().start(&crate::domain::command_exec::Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         helpers.unwrap().start("where is X");
         assert_eq!((processes.list_for("c1").len(), agents.list_for("c1").len()), (1, 1));
+        assert_eq!(processes.list_in(&dir).len(), 1, "and its folder's");
         processes.stop_all();
     }
     
@@ -491,8 +583,8 @@ mod tests {
     #[test]
     fn a_background_chat_saves_under_its_own_checkout() {
         crate::testing::with_app_dir("cmd-chat-save-own-root", || {
-            let own = temp_dir("cmd-chat-save-own").canonicalize().unwrap();
-            let other = temp_dir("cmd-chat-save-other").canonicalize().unwrap();
+            let own = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-save-own")).unwrap();
+            let other = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-save-other")).unwrap();
             crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
             let state = state();
             state.set_workspace_for_test(other);
@@ -507,6 +599,7 @@ mod tests {
                 Vec::new(),
                 None,
                 None,
+                None,
             ))
             .unwrap();
             assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, own.display().to_string());
@@ -517,12 +610,14 @@ mod tests {
     fn preview_and_resume_read_the_saved_chats_checkout() {
         crate::testing::with_app_dir("cmd-chat-resume-own-root", || {
             crate::testing::spending_provider("done", 10, 2);
-            let own = temp_dir("cmd-chat-resume-own").canonicalize().unwrap();
-            let other = temp_dir("cmd-chat-resume-other").canonicalize().unwrap();
+            let own = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-resume-own")).unwrap();
+            let other = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-resume-other")).unwrap();
             std::fs::write(own.join("a.txt"), "own\n").unwrap();
             std::fs::write(other.join("a.txt"), "other\n").unwrap();
             crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
             let state = state();
+            // Open beside the active folder, as every chat's folder is (F-8).
+            state.register_open(own.clone());
             state.set_workspace_for_test(other);
             let app = tauri::test::mock_app();
             app.manage(state);
@@ -570,8 +665,8 @@ mod tests {
     fn compaction_measures_the_saved_chats_prompt_not_the_open_folders() {
         crate::testing::with_app_dir("cmd-chat-compact-own-root", || {
             crate::testing::spending_provider("the earlier part", 10, 2);
-            let own = temp_dir("cmd-chat-compact-own").canonicalize().unwrap();
-            let other = temp_dir("cmd-chat-compact-other").canonicalize().unwrap();
+            let own = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-compact-own")).unwrap();
+            let other = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-compact-other")).unwrap();
             std::fs::write(own.join("AGENTS.md"), "x".repeat(1_000_000)).unwrap();
             crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
             let state = state();
@@ -647,7 +742,7 @@ mod tests {
         crate::testing::with_app_dir("cmd-chat-fresh-turn", || {
             crate::testing::spending_provider("hello", 10, 2);
             let state = state();
-            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-fresh").canonicalize().unwrap());
+            state.set_workspace_for_test(crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-fresh")).unwrap());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
             state.session("c1").cancel.store(true, Ordering::SeqCst);
@@ -660,9 +755,144 @@ mod tests {
                 vec![LlmMessage::user("hi")],
                 Vec::new(),
                 None,
+                None,
             ));
             let Ok(ChatStreamOutcome::Done(done)) = outcome else { panic!("the leftover stop ended the fresh turn: {outcome:?}") };
             assert_eq!(done.result.text, "hello");
+        });
+    }
+
+    /// F-8.7: a new chat whose turn started in A is A's while the window
+    /// moves to B — its first save, its next turn and its context count are
+    /// filed under A, while a chat that has not started yet goes to B.
+    #[test]
+    fn an_unsaved_chat_stays_in_the_folder_its_turn_started_in() {
+        crate::testing::with_app_dir("cmd-chat-home", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b) = (plain("cmd-chat-home-a"), plain("cmd-chat-home-b"));
+            state.set_workspace_for_test(a.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let start = |chat: &str| {
+                tauri::async_runtime::block_on(chat_start(
+                    app.handle().clone(),
+                    app.state(),
+                    "t1".into(),
+                    chat.into(),
+                    vec![LlmMessage::user("hi")],
+                    Vec::new(),
+                    None,
+                    None,
+                ))
+            };
+            assert!(matches!(start("c1"), Ok(ChatStreamOutcome::Done(_))));
+
+            state.set_workspace_for_test(b.clone());
+            assert_eq!(state.chat_workspace("c1").unwrap().0, a, "the started chat stays in A");
+            assert_eq!(state.chat_prompt_workspace("c1").unwrap(), Some(a.clone()));
+            assert_eq!(state.chat_workspace("c2").unwrap().0, b, "one not started yet is the active folder's");
+            assert!(matches!(start("c1"), Ok(ChatStreamOutcome::Done(_))), "its next turn runs in A");
+            assert_eq!(state.chat_workspace("c1").unwrap().0, a);
+
+            tauri::async_runtime::block_on(crate::commands::chat_history::chat_save(
+                app.state(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                serde_json::json!([]),
+                Vec::new(),
+                None,
+                None,
+                None,
+            ))
+            .unwrap();
+            assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, a.display().to_string(), "filed under A");
+        });
+    }
+
+    /// A new chat's message typed in A while the backend already made B
+    /// active (an open of B on its way): saved and run in A, the folder the
+    /// window showed it in. A folder that closed meanwhile is refused.
+    #[test]
+    fn a_new_chat_goes_to_the_folder_it_was_typed_in() {
+        crate::testing::with_app_dir("cmd-chat-typed-in", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b) = (plain("cmd-chat-typed-in-a"), plain("cmd-chat-typed-in-b"));
+            state.set_workspace_for_test(a.clone());
+            state.set_workspace_for_test(b.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let typed_in = Some(a.display().to_string());
+
+            tauri::async_runtime::block_on(crate::commands::chat_history::chat_save(
+                app.state(),
+                "n1".into(),
+                vec![LlmMessage::user("hi")],
+                serde_json::json!([]),
+                Vec::new(),
+                None,
+                None,
+                typed_in.clone(),
+            ))
+            .unwrap();
+            assert_eq!(crate::infra::chat_store::load("n1").unwrap().workspace, a.display().to_string(), "saved under A");
+
+            let start = |chat: &str, folder: Option<String>| {
+                tauri::async_runtime::block_on(chat_start(
+                    app.handle().clone(),
+                    app.state(),
+                    "t1".into(),
+                    chat.into(),
+                    vec![LlmMessage::user("hi")],
+                    Vec::new(),
+                    None,
+                    folder,
+                ))
+            };
+            assert!(matches!(start("n2", typed_in.clone()), Ok(ChatStreamOutcome::Done(_))));
+            assert_eq!(state.chat_workspace("n2").unwrap().0, a, "its turn ran in A");
+            let shown_elsewhere = b.display().to_string();
+            assert_eq!(state.chat_workspace_in("n2", Some(&shown_elsewhere)).unwrap().0, a, "a started chat keeps its folder");
+
+            assert!(state.unregister_if_idle(&a));
+            let refused = start("n3", typed_in).expect_err("A is closed");
+            assert!(refused.contains("not an open folder"), "{refused}");
+        });
+    }
+
+    /// An unsaved chat whose folder closed (its first save failed) is not
+    /// stranded there: it goes on in the active folder.
+    #[test]
+    fn an_unsaved_chat_whose_folder_closed_goes_on_in_the_active_one() {
+        crate::testing::with_app_dir("cmd-chat-home-closed", || {
+            crate::testing::spending_provider("hello", 10, 2);
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b) = (plain("cmd-chat-home-closed-a"), plain("cmd-chat-home-closed-b"));
+            state.set_workspace_for_test(a.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let outcome = tauri::async_runtime::block_on(chat_start(
+                app.handle().clone(),
+                app.state(),
+                "t1".into(),
+                "c1".into(),
+                vec![LlmMessage::user("hi")],
+                Vec::new(),
+                None,
+                None,
+            ));
+            assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))));
+            state.set_workspace_for_test(b.clone());
+            assert!(state.unregister_if_idle(&a), "A closes once its turn is over");
+
+            assert_eq!(state.chat_workspace("c1").unwrap().0, b);
+            let typed_in = a.display().to_string();
+            assert_eq!(state.chat_workspace_in("c1", Some(&typed_in)).unwrap().0, b, "the window's closed folder is not asked");
+            assert_eq!(state.chat_prompt_workspace("c1").unwrap(), Some(b));
         });
     }
 
@@ -673,7 +903,7 @@ mod tests {
         crate::testing::with_app_dir("cmd-chat-journal-own", || {
             crate::testing::spending_provider("hello", 10, 2);
             let state = state();
-            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-journal").canonicalize().unwrap());
+            state.set_workspace_for_test(crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-journal")).unwrap());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
             let outcome = tauri::async_runtime::block_on(chat_start(
@@ -683,6 +913,7 @@ mod tests {
                 "c1".into(),
                 vec![LlmMessage::user("hi")],
                 Vec::new(),
+                None,
                 None,
             ));
             assert!(matches!(outcome, Ok(ChatStreamOutcome::Done(_))), "{outcome:?}");
@@ -702,7 +933,7 @@ mod tests {
         crate::testing::with_app_dir("cmd-chat-resume-stop", || {
             crate::testing::spending_provider("hello", 10, 2);
             let state = state();
-            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-chat-resume").canonicalize().unwrap());
+            state.set_workspace_for_test(crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-resume")).unwrap());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
             let call = |id: &str| LlmToolCall { id: id.into(), name: "readFile".into(), arguments: "{\"path\":\"a.txt\"}".into() };
@@ -732,12 +963,53 @@ mod tests {
         });
     }
 
+    /// F-8.5: a turn runs under the "always allow" of its own folder — not
+    /// the active one's — and under the app's one Auto.
+    #[test]
+    fn a_turn_runs_under_its_folders_always_allow() {
+        crate::testing::with_app_dir("cmd-turn-allowed", || {
+            crate::testing::spending_provider("unused", 10, 2);
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (active, background) = (plain("cmd-turn-allowed-a"), plain("cmd-turn-allowed-b"));
+            state.register_open(background.clone());
+            state.set_workspace_for_test(active.clone());
+            state.allow_always(&background, "writeFile").unwrap();
+            state.allow_always(&active, "delete").unwrap();
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let running = state.begin_running("c1", 3, &background).expect("the turn runs");
+            let seen = Arc::new(Mutex::new(None));
+            let record = Arc::clone(&seen);
+
+            let outcome = tauri::async_runtime::block_on(run_off_the_event_loop(
+                app.handle().clone(),
+                Arc::clone(&state),
+                state.session("c1"),
+                running,
+                "t1".into(),
+                "c1".into(),
+                background.clone(),
+                None,
+                None,
+                move |turn| {
+                    let asks = |tool| turn.approval.requires_approval(tool, true);
+                    *record.lock().unwrap() = Some((asks(crate::domain::tools::ToolName::WriteFile), asks(crate::domain::tools::ToolName::Delete)));
+                    Err(TurnError::BadResume("only looking".into()))
+                },
+            ));
+
+            assert!(outcome.is_err());
+            assert_eq!(*seen.lock().unwrap(), Some((false, true)), "B's answer lets writeFile through, A's does not reach B");
+        });
+    }
+
     #[test]
     fn a_paused_turn_refuses_a_fresh_start_until_it_is_resumed() {
         crate::testing::with_app_dir("cmd-paused-chat-turn", || {
             crate::testing::spending_provider("unused", 10, 2);
             let state = state();
-            let root = temp_dir("cmd-paused-chat-root").canonicalize().unwrap();
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-paused-chat-root")).unwrap();
             state.set_workspace_for_test(root.clone());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
@@ -768,6 +1040,31 @@ mod tests {
 
             let refused = state.begin_running("c1", 3, &root).expect_err("a fresh start cannot orphan the card");
             assert!(refused.contains("waiting for approval"), "{refused}");
+            // A resume refused because the folder was closed leaves the card
+            // waiting, not resumable by nothing.
+            state.register_open(root.clone());
+            assert!(state.unregister_if_idle(&root), "a card does not hold its folder open");
+            let refused = tauri::async_runtime::block_on(chat_resume(
+                app.handle().clone(),
+                app.state(),
+                "t2".into(),
+                "c1".into(),
+                PendingApproval {
+                    history: vec![LlmMessage::user("go")],
+                    round: 1,
+                    budget_used: 0,
+                    event_seq: 0,
+                    calls: Vec::new(),
+                    todos: Vec::new(),
+                    reads: Default::default(),
+                },
+                Vec::new(),
+                None,
+            ))
+            .expect_err("a closed folder resumes nothing");
+            assert!(refused.contains("not an open folder"), "{refused}");
+            let still = state.begin_running("c1", 3, &root).expect_err("the card still waits");
+            assert!(still.contains("waiting for approval"), "{still}");
             drop(state.begin_resume("c1", 3, &root).expect("the card resumes its own turn"));
             state.begin_running("c1", 3, &root).expect("after the resume ends, a fresh turn may start");
         });
@@ -781,7 +1078,7 @@ mod tests {
             let provider = HeldProvider::start();
             provider.install();
             let state = state();
-            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-refused-keeps-stop-ws").canonicalize().unwrap());
+            state.set_workspace_for_test(crate::infra::paths::canonicalize_plain(&temp_dir("cmd-refused-keeps-stop-ws")).unwrap());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
 
@@ -852,7 +1149,7 @@ mod tests {
             let provider = HeldProvider::start();
             provider.install();
             let state = state();
-            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-two-turns-ws").canonicalize().unwrap());
+            state.set_workspace_for_test(crate::infra::paths::canonicalize_plain(&temp_dir("cmd-two-turns-ws")).unwrap());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
 
@@ -893,6 +1190,7 @@ mod tests {
             vec![LlmMessage::user(said)],
             Vec::new(),
             None,
+            None,
         ))
     }
 
@@ -924,7 +1222,7 @@ mod tests {
             let provider = HeldProvider::start();
             provider.install();
             let state = state();
-            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-same-chat-ws").canonicalize().unwrap());
+            state.set_workspace_for_test(crate::infra::paths::canonicalize_plain(&temp_dir("cmd-same-chat-ws")).unwrap());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
 
@@ -990,7 +1288,7 @@ mod tests {
             provider.install();
             crate::infra::settings_store::update(|s| s.llm.turn_limits.parallel = 1).expect("settings");
             let state = state();
-            *state.workspace.lock().unwrap() = Some(temp_dir("cmd-parallel-limit-ws").canonicalize().unwrap());
+            state.set_workspace_for_test(crate::infra::paths::canonicalize_plain(&temp_dir("cmd-parallel-limit-ws")).unwrap());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
 
@@ -1014,10 +1312,10 @@ mod tests {
     #[test]
     fn a_saved_chat_keeps_the_branch_its_folder_has_out() {
         crate::testing::with_app_dir("cmd-chat-git-branch", || {
-            let root = temp_dir("cmd-chat-git-branch-repo").canonicalize().unwrap();
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-git-branch-repo")).unwrap();
             git2::Repository::init(&root).unwrap().set_head("refs/heads/feature").unwrap();
             let state = state();
-            *state.workspace.lock().unwrap() = Some(root.clone());
+            state.set_workspace_for_test(root.clone());
             let app = tauri::test::mock_app();
             app.manage(state);
 
@@ -1029,6 +1327,7 @@ mod tests {
                 Vec::new(),
                 None,
                 None,
+                None,
             ))
             .unwrap();
             assert_eq!(saved.git_branch.as_deref(), Some("feature"));
@@ -1038,7 +1337,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_gets_the_search_of_the_open_folder() {
+    fn a_turn_opens_the_search_of_its_folder() {
         use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
         struct NoModel;
         impl EmbeddingProvider for NoModel {
@@ -1055,10 +1354,10 @@ mod tests {
 
         let index = Arc::new(WorkspaceIndex::new(temp_dir("cmd-search-index"), Arc::new(NoModel)));
         tauri::Manager::manage(&app, Arc::clone(&index));
-        assert!(searcher_of(app.handle(), &root).is_none(), "no folder open");
-
-        index.open(&root, Arc::new(|_| {})).unwrap();
-        assert!(searcher_of(app.handle(), &root).is_some());
-        assert!(searcher_of(app.handle(), &temp_dir("cmd-search-other-repo")).is_none(), "a background chat cannot borrow another folder's index");
+        let search = searcher_of(app.handle(), &root).expect("a cold folder is opened for the turn");
+        assert!(index.indexer(&root).is_some(), "the turn's folder is indexed while its search lives");
+        assert!(index.indexer(&temp_dir("cmd-search-other-repo")).is_none(), "and no other folder is");
+        drop(search);
+        assert!(index.indexer(&root).is_none(), "a folder in the background cools once its turn's search goes");
     }
 }

@@ -6,7 +6,7 @@
 //! caught is the *next* change. What breaks a rule today is listed beside it,
 //! and the list only shrinks: an entry that no longer matches anything fails
 //! too, so fixing an exception means deleting its line, and a new one means
-//! arguing for it here (`docs/34-architecture-audit.md`).
+//! arguing for it here.
 
 use std::collections::HashSet;
 use std::fs;

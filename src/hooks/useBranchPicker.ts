@@ -8,6 +8,8 @@ export type BranchConflict = { branch: string; paths: string[] };
 type Deps = {
   /** The chat on screen: Worktree and its base are that chat's choice, not the next one's. */
   chatId: string | null;
+  /** The folder the branches are read from and switched in — the active one. */
+  workspace: string | null;
   /** The branch checked out now: picking it again is not a switch. */
   current: string | null;
   /** Runs `go` once leaving the open folder is agreed to, `onCancel` if it is not — `useFolderSwitch`'s guard. */
@@ -33,7 +35,7 @@ type Deps = {
  * worktree as the way round it; committing or stashing is left to the user,
  * or to the agent when asked.
  */
-export function useBranchPicker({ chatId, current, guard, open, notify, send, onSwitched }: Deps) {
+export function useBranchPicker({ chatId, workspace, current, guard, open, notify, send, onSwitched }: Deps) {
   const [branches, setBranches] = useState<BranchRef[]>([]);
   const [worktree, setWorktree] = useState(false);
   // Where a worktree starts; `null` is the branch checked out now.
@@ -58,8 +60,8 @@ export function useBranchPicker({ chatId, current, guard, open, notify, send, on
   // Read as the menu opens rather than kept current: a branch made in a
   // terminal is then there the next time anyone looks.
   const load = useCallback(() => {
-    gitBranches().then(setBranches, (e) => notify(String(e)));
-  }, [notify]);
+    gitBranches(workspace).then(setBranches, (e) => notify(String(e)));
+  }, [notify, workspace]);
 
   /**
    * Makes a worktree from `from`, opens it, and sends `message` there;
@@ -75,7 +77,7 @@ export function useBranchPicker({ chatId, current, guard, open, notify, send, on
           () => {
             void (async () => {
               try {
-                const opened = await open(await gitWorktreeAdd(from));
+                const opened = await open(await gitWorktreeAdd(from, workspace));
                 if (opened) {
                   setWorktree(false);
                   setBase(null);
@@ -91,7 +93,7 @@ export function useBranchPicker({ chatId, current, guard, open, notify, send, on
           () => resolve(false),
         );
       }),
-    [guard, open, notify],
+    [guard, open, notify, workspace],
   );
 
   const pick = useCallback(
@@ -99,14 +101,14 @@ export function useBranchPicker({ chatId, current, guard, open, notify, send, on
       if (worktree) return setBase(name === current ? null : name);
       if (name === current) return;
       try {
-        const outcome = await gitCheckout(name);
+        const outcome = await gitCheckout(name, workspace);
         if (outcome.kind === "conflicts") setConflict({ branch: name, paths: outcome.paths });
         else onSwitched?.();
       } catch (e) {
         notify(String(e));
       }
     },
-    [worktree, current, notify, onSwitched],
+    [worktree, current, notify, onSwitched, workspace],
   );
 
   const closeConflict = useCallback(() => setConflict(null), []);

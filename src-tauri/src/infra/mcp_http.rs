@@ -2,10 +2,9 @@
 //!
 //! The transport and the protocol over it are `rmcp`'s (`infra::mcp_rmcp`),
 //! on its own `reqwest` client; this module says where to connect and with which headers,
-//! and puts the transport's failures into the app's words
-//! (`docs/22-rmcp-migration.md`).
+//! and puts the transport's failures into the app's words.
 //!
-//! Left out on purpose: OAuth (a 401 says so; `docs/18-mcp-oauth.md`) and the
+//! Left out on purpose: OAuth (a 401 says so) and the
 //! old HTTP+SSE transport.
 
 use std::collections::HashMap;

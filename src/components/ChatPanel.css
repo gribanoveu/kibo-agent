@@ -112,20 +112,22 @@
   color: var(--text-faint);
 }
 
-/* A background process that ended: a card as wide as the thread, like the
-   calls around it — how it ended in the tile's and the badge's colour, amber
-   for a failure — that opens the Terminal tab. */
+/* A background process that ended: a quiet two-line row among the messages —
+   what it was for, the command and the folder under it, how it ended in the
+   badge's colour, amber for a failure — that opens the Terminal tab. News,
+   not an object: no box around it. */
 .process-ended {
   --state: var(--text-faint);
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 2px;
   width: 100%;
-  margin: 6px 0 4px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel-soft);
+  /* The command reads to the measure of a line, not to the thread's edge. */
+  max-width: 80ch;
+  margin: 8px 0 6px;
+  padding: 0;
+  border: none;
+  background: none;
   color: var(--text-dim);
   font-family: var(--font-ui);
   text-align: left;
@@ -134,49 +136,70 @@
 .process-ended.failed {
   --state: var(--amber);
 }
-.process-ended:hover:not(:disabled) {
-  background: var(--bg-hover);
+.process-ended:hover:not(:disabled) .process-ended-command {
+  color: var(--text);
 }
 .process-ended:disabled {
   cursor: default;
 }
-.process-ended-ico {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--state) 14%, transparent);
+/* What kind of news this is — said quietly, like a role label; how it ended
+   wears the tone's colour, so a failure is noticed from the label alone. */
+.process-ended-eyebrow {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.process-ended-exit {
   color: var(--state);
 }
-.process-ended-body {
-  flex: 1;
-  min-width: 0;
+.process-ended-exit::before {
+  content: "·";
+  margin: 0 5px;
+  color: var(--text-faint);
+}
+.process-ended-head {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .process-ended-command {
   font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* With no description the command is the title. */
+.process-ended-command.solo {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+/* What the model said it was for — the line read first. */
+.process-ended-name {
+  flex: 1;
+  min-width: 0;
   font-size: var(--fs-sm);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.process-ended-meta {
+.process-ended-detail {
   display: flex;
   align-items: center;
-  gap: 6px;
   min-width: 0;
   font-size: var(--fs-xs);
   color: var(--text-faint);
   white-space: nowrap;
   overflow: hidden;
 }
-.process-ended-label {
-  flex: none;
+.process-ended-detail > *:not(:first-child)::before {
+  content: "·";
+  margin: 0 5px;
 }
 .process-ended-cwd {
   display: inline-flex;
@@ -186,21 +209,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.process-ended-cwd::before {
-  content: "·";
-  margin-right: 2px;
-}
-.process-ended-state {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--state) 16%, transparent);
-  color: var(--state);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
 .process-ended-open {
   flex: none;
+  margin-left: auto;
   color: var(--text-faint);
 }
 
@@ -635,6 +646,12 @@ button.turn-processes:hover {
 .tool-item.open .tool .chev {
   transform: rotate(90deg);
 }
+/* The model's few words for a command, under the row they explain. */
+.tool-note {
+  margin: 0 8px 4px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
 /* An explore row, unfolded: its run in the Agents tab, above its answer. */
 .tool-open-agent {
   display: inline-flex;
@@ -865,6 +882,10 @@ button.turn-processes:hover {
   margin: 0 0 8px;
   font-size: var(--fs-xs);
   color: var(--text-faint);
+}
+/* What the model says the command does — shown beside the line, never instead of it. */
+.approval-desc {
+  color: var(--text-dim);
 }
 /* A change to a cluster: where it lands is read before what it does. */
 .approval-change-place {

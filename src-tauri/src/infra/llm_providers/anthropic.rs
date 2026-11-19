@@ -21,7 +21,6 @@
 //! Either way a round that thought is kept whole in
 //! `ChatStreamResult::native_content` and sent back verbatim, because a
 //! `thinking` block's signature must return unmodified and in place.
-//! `docs/06-port-plan.md`, F-7.3.
 //!
 //! `base_url` includes the version, as it does for the OpenAI-compatible
 //! provider: `https://api.anthropic.com/v1`.

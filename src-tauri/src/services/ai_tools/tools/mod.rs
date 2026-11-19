@@ -372,6 +372,7 @@ mod definition_tests {
                 r#"{"command":"cargo test"}"#,
                 vec![ToolCall::RunCommand(crate::domain::command_exec::CommandRequest {
                     command: "cargo test".to_string(),
+                    description: Some("run the crate's tests".to_string()),
                     cwd: Some("crate".to_string()),
                     timeout_seconds: Some(30),
                     background: Some(true),

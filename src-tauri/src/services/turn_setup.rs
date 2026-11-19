@@ -3,7 +3,7 @@
 //! (the provider, skills, rules, hooks, web search, features), read per turn so
 //! a change made a minute ago counts. The command layer takes the app's handles
 //! out of Tauri's state, hands them over with the window's sink, and does
-//! nothing else (`docs/34-architecture-audit.md`, #5).
+//! nothing else.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

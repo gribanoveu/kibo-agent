@@ -1,6 +1,5 @@
 //! A call to a connected MCP server's tool — through the same dispatcher,
 //! and so the same approval gate, budget and log, as every built-in tool.
-//! Decisions behind it: `docs/06-port-plan.md`, stage 7, "Решения по MCP".
 
 use crate::domain::command_exec::{truncate_output, MAX_OUTPUT_CHARS};
 use crate::domain::mcp::McpError;

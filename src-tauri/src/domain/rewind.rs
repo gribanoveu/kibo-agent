@@ -13,8 +13,7 @@
 //! guessing its targets is how a rewind comes to delete the user's work. The
 //! preview says commands ran instead.
 //!
-//! The idea and the rules follow MiniMax Code's diff rewind
-//! (`docs/19-minimax-code-ideas.md`, § 3).
+//! The idea and the rules follow MiniMax Code's diff rewind.
 
 use std::collections::BTreeMap;
 

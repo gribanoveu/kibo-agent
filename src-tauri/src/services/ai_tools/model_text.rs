@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     fn a_moved_command_says_it_runs_on_and_is_not_to_be_run_again() {
-        let process = ProcessInfo { id: 2, command: "cargo test".into(), cwd: ".".into(), state: ProcessState::Running };
+        let process = ProcessInfo { id: 2, command: "cargo test".into(), description: None, cwd: ".".into(), state: ProcessState::Running };
         let text = for_model(&ToolResult::CommandMoved { process, after_ms: 120_000 });
         assert!(text.starts_with("Still running after 120.0 s — not killed: it goes on as background process #2. Do not run it again."), "{text}");
         assert!(text.contains("readOutput #2"), "{text}");
@@ -878,7 +878,7 @@ mod tests {
     /// What the chat reads: the process's fields at the top, as a start has them.
     #[test]
     fn a_moved_command_is_sent_to_the_window_with_its_number() {
-        let process = ProcessInfo { id: 2, command: "cargo test".into(), cwd: ".".into(), state: ProcessState::Running };
+        let process = ProcessInfo { id: 2, command: "cargo test".into(), description: None, cwd: ".".into(), state: ProcessState::Running };
         let json = serde_json::to_value(ToolResult::CommandMoved { process, after_ms: 5 }).unwrap();
         assert_eq!(json["result"], "commandMoved");
         assert_eq!((json["id"].as_u64(), json["afterMs"].as_u64()), (Some(2), Some(5)));
@@ -888,7 +888,7 @@ mod tests {
     /// `is running in ..` read as a typo: the folder is not last any more.
     #[test]
     fn a_background_start_reads_as_a_sentence() {
-        let process = ProcessInfo { id: 1, command: "npm run dev".into(), cwd: ".".into(), state: ProcessState::Running };
+        let process = ProcessInfo { id: 1, command: "npm run dev".into(), description: None, cwd: ".".into(), state: ProcessState::Running };
         assert_eq!(
             for_model(&ToolResult::ProcessStarted(process)),
             "Started background process #1 in `.`: `npm run dev`. Read what it writes with readOutput."
@@ -898,7 +898,7 @@ mod tests {
     /// Stopped now, or already over: the answer has to tell them apart.
     #[test]
     fn a_stop_says_whether_it_stopped_anything() {
-        let stopped = |state| for_model(&ToolResult::ProcessStopped(ProcessInfo { id: 1, command: "sleep 4".into(), cwd: ".".into(), state }));
+        let stopped = |state| for_model(&ToolResult::ProcessStopped(ProcessInfo { id: 1, command: "sleep 4".into(), description: None, cwd: ".".into(), state }));
         assert_eq!(stopped(ProcessState::Stopped), "#1 `sleep 4` was stopped, with everything it started.");
         assert_eq!(
             stopped(ProcessState::Exited { code: Some(0) }),
@@ -1052,7 +1052,7 @@ mod tests {
 
     #[test]
     fn a_process_read_says_how_it_stands_and_what_was_lost() {
-        let process = ProcessInfo { id: 3, command: "npm run dev".into(), cwd: ".".into(), state: ProcessState::Running };
+        let process = ProcessInfo { id: 3, command: "npm run dev".into(), description: None, cwd: ".".into(), state: ProcessState::Running };
         let shown = for_model(&ToolResult::ProcessOutput(ProcessOutput {
             process: process.clone(),
             output: "ready\n".into(),

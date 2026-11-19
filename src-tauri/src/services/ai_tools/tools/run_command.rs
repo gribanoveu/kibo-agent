@@ -35,7 +35,7 @@ pub fn run_command(
         }
         let processes = deps.processes.as_deref().ok_or_else(super::process::unavailable)?;
         let shown = request.cwd.as_deref().filter(|c| !c.is_empty()).unwrap_or(".");
-        return Ok(ToolResult::ProcessStarted(processes.start(&deps.shell, &request.command, &cwd, shown)?));
+        return Ok(ToolResult::ProcessStarted(processes.start(&deps.shell, &request.command, request.description.as_deref(), &cwd, shown)?));
     }
 
     // A note typed while it runs moves it to the background, so the model
@@ -82,6 +82,10 @@ pub(super) fn definition() -> LlmToolDefinition {
                     "type": "string",
                     "description": "The command line, as you would type it. Pipes, redirection and `&&` work. Prefer the project's own tooling (its test runner, its formatter) over ad-hoc shell."
                 },
+                "description": {
+                    "type": ["string", "null"],
+                    "description": "What the command does, in a few words — shown to the user approving it and beside it in the transcript. Explain what is not obvious from the line itself: a script's effect, why these flags, what depends on it. Omit for a self-evident line like `cargo test`."
+                },
                 "cwd": {
                     "type": ["string", "null"],
                     "description": "Directory to run in, relative to the workspace root. Omit for the root itself."
@@ -112,6 +116,7 @@ mod tests {
     fn ask(command: &str, cwd: Option<&str>) -> ToolCall {
         ToolCall::RunCommand(CommandRequest {
             command: command.to_string(),
+            description: None,
             cwd: cwd.map(|c| c.to_string()),
             timeout_seconds: Some(10),
             background: None,
@@ -224,6 +229,15 @@ mod tests {
         let json = serde_json::to_value(&call).unwrap();
         assert_eq!(json["tool"], "runCommand");
         assert_eq!(json["args"]["command"], "cargo test");
+        assert!(json["args"].get("description").is_none(), "absent when the model wrote none");
         assert!(call.is_risky(), "a command line is never safe by its name alone");
+
+        let mut explained = ask("python scripts/fix.py --apply", None);
+        let ToolCall::RunCommand(request) = &mut explained else { unreachable!() };
+        request.description = Some("regenerates the fixtures the tests compare against".to_string());
+        let json = serde_json::to_value(&explained).unwrap();
+        assert_eq!(json["args"]["description"], "regenerates the fixtures the tests compare against");
+        // The approval gate and the risk class read the command line, never this.
+        assert!(explained.is_risky());
     }
 }

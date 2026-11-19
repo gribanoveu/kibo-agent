@@ -7,7 +7,7 @@ import { inTauri, requireBackend } from "./backend";
 /** Mirrors `domain::background::ProcessState`. */
 export type ProcessState = { state: "running" } | { state: "exited"; code: number | null } | { state: "stopped" };
 /** Mirrors `domain::background::ProcessInfo`. */
-export type ProcessInfo = { id: number; command: string; cwd: string; state: ProcessState };
+export type ProcessInfo = { id: number; command: string; description?: string | null; cwd: string; state: ProcessState };
 /** A row of the Terminal tab: the process and the end of what it wrote. */
 export type ProcessView = ProcessInfo & { tail: string };
 
@@ -22,10 +22,10 @@ export async function onProcessChanged(handler: (id: number) => void): Promise<U
   return listen<{ id: number }>(PROCESS_EVENT, ({ payload }) => handler(payload.id));
 }
 
-/** The ones chat `chatId` started; with no chat, every one — a folder switch stops them all. */
-export async function processesList(chatId: string | null = null): Promise<ProcessView[]> {
+/** The ones chat `chatId` started; with no chat, every one of the folder `workspace` — what closing it stops. */
+export async function processesList(chatId: string | null, workspace: string | null = null): Promise<ProcessView[]> {
   if (!inTauri()) return [];
-  return invoke<ProcessView[]>("processes_list", { chatId });
+  return invoke<ProcessView[]>("processes_list", { chatId, workspace });
 }
 
 /** The running ones chat `chatId` started, newest first, without output — cheap to read on every change. */

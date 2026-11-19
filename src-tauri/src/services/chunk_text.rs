@@ -4,7 +4,7 @@
 //! Both refuse rather than guess. A file the index will not take says why, in
 //! a form the caller can count and show ("3 skipped: 2 too large, 1 binary"),
 //! because a file that silently is not there is indistinguishable from a
-//! search that failed (`docs/06-port-plan.md`, stage 5, "must not lose" 5).
+//! search that failed.
 //! A chunk whose file has changed since it was cut says so, rather than
 //! serving whatever bytes now sit at its old offsets.
 //!

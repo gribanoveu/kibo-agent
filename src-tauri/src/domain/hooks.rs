@@ -6,8 +6,7 @@
 //! the event as JSON on stdin; exit code 2 blocks and its stderr is the
 //! reason; any other failure is a warning and the turn goes on.
 //!
-//! Decisions behind this (global only, deny-only, fail-open) are in
-//! `docs/06-port-plan.md`, stage 7, "Решения по хукам".
+//! Decisions behind this: global only, deny-only, fail-open.
 //!
 //! **Tool names are this app's** (`runCommand`, `editFile`), not Claude
 //! Code's (`Bash`, `Edit`): a matcher written for those matches nothing here.

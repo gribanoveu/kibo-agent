@@ -81,7 +81,7 @@ pub enum ToolName {
     /// its own; only its answer comes back.
     Explore,
     /// A change read by a helper turn in Review mode; its findings come back
-    /// in the result (`docs/49-review-as-a-tool.md`). Reads and reports —
+    /// in the result. Reads and reports —
     /// it writes nothing itself.
     Review,
     /// A note for later conversations in this folder, checked by the model

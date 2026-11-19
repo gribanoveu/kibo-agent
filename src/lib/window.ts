@@ -1,6 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Effect, EffectState, getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { inTauri } from "./backend";
 
@@ -27,6 +27,19 @@ export const startWindowDrag = () => inTauri() && getCurrentWindow().startDraggi
 // The OS draws the window's edge in its own appearance: a light theme in a dark
 // system got a black outline. `null` follows the system again.
 export const setWindowTheme = (theme: "light" | "dark" | null) => inTauri() && getCurrentWindow().setTheme(theme);
+// The frosted glass under a glass palette, kept on when the window loses
+// focus: macOS's dark HUD material on the dark side, and on the light one the
+// window's own material, which is light in a light window (useTheme passes the side).
+// `null` clears it. Only macOS — Windows' window is opaque (above), and the
+// glass palettes draw a ground of their own there.
+export const setWindowGlass = (side: "light" | "dark" | null) =>
+  nativeFrame &&
+  (side
+    ? getCurrentWindow().setEffects({
+        effects: [side === "dark" ? Effect.HudWindow : Effect.UnderWindowBackground],
+        state: EffectState.Active,
+      })
+    : getCurrentWindow().clearEffects());
 
 /** In a Markdown viewer (`viewer.html`), the file it was opened on: its name and its text. */
 export const viewerFile = () => invoke<{ name: string; text: string }>("viewer_file");

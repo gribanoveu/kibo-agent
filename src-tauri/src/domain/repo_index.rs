@@ -12,7 +12,7 @@
 //! `RepositoryIndex::update_file` **deletes the file from the index** when it
 //! comes back `None`. With five languages — AsciiDoc, Markdown, Java, JSON,
 //! YAML — that quietly drops `.txt`, `.puml` and `.mmd` from search while
-//! leaving them visible to `grep` (`docs/07-upstream-findings.md`, B-8).
+//! leaving them visible to `grep`.
 //!
 //! Here it would drop almost everything: this repository is 56 `.rs`, 22
 //! `.tsx`, 22 `.ts` and no `.java` at all. So the function returns a

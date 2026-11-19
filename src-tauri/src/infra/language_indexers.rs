@@ -20,8 +20,7 @@
 //! containment: a closure or an anonymous class inside a method is covered by
 //! the method's own range, and emitting it too would put a range inside a
 //! range the chunker has already cut at. That is the invariant upstream's Java
-//! indexer held by a comment in one function (`docs/07-upstream-findings.md`,
-//! B-1); here it is held by the walk every language shares.
+//! indexer held by a comment in one function; here it is held by the walk every language shares.
 //!
 //! ## What an indexer never does
 //!

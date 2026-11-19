@@ -121,22 +121,22 @@ const components = {
     node && [node.properties.className].flat().includes("plantuml") ? <Diagram source={text(node).replace(/^\n+|\n+$/g, "")} /> : <div {...props} />,
 };
 
-const readFile = (path: string) => fileView({ path, side: "worktree" }).then((view) => view.new);
+const readFile = (workspace: string | null) => (path: string) => fileView({ path, side: "worktree" }, workspace).then((view) => view.new);
 
-/** An AsciiDoc file of the open folder as it renders, with its includes put in. */
-export function AsciiDocPreview({ text, path }: { text: string; path: string }) {
+/** An AsciiDoc file of the folder `workspace` names as it renders, with its includes put in. */
+export function AsciiDocPreview({ text, path, workspace }: { text: string; path: string; workspace: string | null }) {
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let current = true;
-    asciidocHtml(text, path, readFile).then(
+    asciidocHtml(text, path, readFile(workspace)).then(
       (done) => current && (setHtml(done), setError(null)),
       (e) => current && setError(String(e)),
     );
     return () => {
       current = false;
     };
-  }, [text, path]);
+  }, [text, path, workspace]);
   const content = useMemo(
     () => html !== null && toJsxRuntime(sanitize(fromParse5(parseFragment(html)), schema), { Fragment, jsx, jsxs, components, passNode: true }),
     [html],

@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use crate::domain::mcp::{McpError, McpServerConfig};
 use crate::infra::mcp_rmcp::{Failure, RmcpClient};
-use crate::infra::process_runner::{kill_tree, set_process_group};
+use crate::infra::process_runner::{kill_tree, no_window, set_process_group};
 use crate::sync::lock;
 
 /// Lines of the server's stderr kept to explain an exit.
@@ -50,6 +50,7 @@ pub fn start(config: &McpServerConfig, cwd: &Path, cancelled: &dyn Fn() -> bool)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    no_window(&mut command);
     set_process_group(&mut command);
     let mut child = command.spawn().map_err(|e| McpError::NotStarted(format!("{}: {e}", config.command)))?;
 

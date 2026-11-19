@@ -69,7 +69,7 @@ import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedCha
 import { DEFAULT_TURN_LIMITS, withLanguageReminder } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
-import { useFolderSwitch } from "./hooks/useFolderSwitch";
+import { turnsIn, useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
 import { FolderSwitchDialog } from "./components/FolderSwitchDialog";
 import { FolderTrustDialog } from "./components/FolderTrustDialog";
@@ -245,15 +245,19 @@ export default function App() {
   // On screen in either dock: what decides whether a pane's data is read.
   const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
   const toolLog = useToolLog(logOpen);
-  const history = useChatHistory(workspace.path);
-  const chatGroups = useChatGroups(agentMode ? workspace.path : null);
-  const [movedChat, setMovedChat] = useState<{ id: string; path: string } | null>(null);
-  const movedChatOpened = useCallback(() => setMovedChat(null), []);
+  const history = useChatHistory(workspace.folders, workspace.path);
+  const chatGroups = useChatGroups(agentMode ? "projects" : "chat");
+  // A chat to open once its folder is the active one: one moved to its
+  // worktree, or one of another folder picked in the sidebar. Opened only
+  // then, or the folder change's reset of the thread would close it again.
+  const [pendingChat, setPendingChat] = useState<{ id: string; path: string } | null>(null);
+  const pendingChatOpened = useCallback(() => setPendingChat(null), []);
   // The list is redrawn from disk after every save rather than guessed at
   // here: what belongs in it, and in what order, is the store's rule.
   // Queued messages that will not be sent after all go back to the box.
   const agent = useAgentTurn({
     model,
+    folder: workspace.path,
     onSaved: history.refresh,
     onGiveBack: giveBack,
     spentShown: agentMode && shown("overview"),
@@ -272,22 +276,32 @@ export default function App() {
     workspace.resumed,
     history.chats.find((one) => !one.archived)?.id,
     agent,
-    movedChat,
-    movedChatOpened,
+    pendingChat,
+    pendingChatOpened,
   );
   // Sounds and notifications when the agent finishes or asks, each switched in Settings.
   const [alerts, setAlerts] = useStoredState("turn-alerts", DEFAULT_ALERTS, isAlertPrefs);
+  // Every chat's, the ones left working in another chat or folder too.
+  const everyChat = Object.values(history.byFolder).flat();
   useTurnAlerts({
-    sessionKey: agent.sessionKey,
-    status: agent.turn.status,
-    failed: agent.error !== null,
-    queued: agent.queued.length,
-    chatTitle: chatName(history.chats, agent.chatId, agent.turn),
+    turns: Object.fromEntries(
+      Object.entries(agent.turns).map(([key, one]) => [
+        key,
+        { status: one.turn.status, failed: one.failed, queued: one.queued, chatTitle: chatName(everyChat, key, one.turn) },
+      ]),
+    ),
     prefs: alerts,
   });
+  // A turn with no model pinned pins the provider's first one
+  // (llm_session::effective_model). The settings are read again as a turn
+  // starts or ends, as the branch is, so the line names the model that went
+  // out rather than the auto guess.
+  useEffect(() => {
+    void llm.reload();
+  }, [agent.turn.status, plain.turn.status, llm.reload]);
   // Servers start with an Agent or Analyst turn and may stop during one.
   // Settings shows both in "Where your data goes".
-  const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, agent.turn.status);
+  const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, workspace.path, agent.turn.status);
   const hooks = useHooks(shown("hooks") || hooksEditing || settingsOpen);
   // Settings has its own copy: which skills folders are read. The Skills
   // pane reads the same list for itself while it is open.
@@ -369,8 +383,20 @@ export default function App() {
     ideLayout: agentMode ? toggleIde : undefined,
   });
 
-  const selectChat = (id: string) => {
+  // A chat of another folder makes that folder the active one first (F-8.6):
+  // the right panel and the next new chat follow the chat on screen.
+  const selectChat = (id: string, folder: string | null = agentMode ? history.folderOf(id) : null) => {
     setPage(null);
+    if (agentMode && folder && folder !== workspace.path) {
+      return void folderSwitch.guard(() => {
+        setPendingChat({ id, path: folder });
+        // A failed open drops only its own chat, not one picked since.
+        void workspace.open(folder).then((opened) => opened || setPendingChat((pending) => (pending?.id === id ? null : pending)));
+      });
+    }
+    // A chat of another folder still on its way is not opened over this one,
+    // picked since.
+    setPendingChat(null);
     void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
   };
 
@@ -389,6 +415,15 @@ export default function App() {
     }
     if (!agent.reset()) return toast.show(STAY);
     focusComposer();
+  };
+
+  // The section's "+": in the active folder an ordinary new chat; in another
+  // one the folder becomes active, and its change starts the thread afresh.
+  const newChatIn = (folder: string) => {
+    setPendingChat(null);
+    if (folder === workspace.path) return newChat();
+    setPage(null);
+    void folderSwitch.guard(() => void workspace.open(folder));
   };
 
   // The window the meter is drawn against, and the provider a turn talks to.
@@ -422,7 +457,13 @@ export default function App() {
   const ownCommands = [...builtIn, ...fileCommands(commandFiles.files, builtIn, (text, sent) => void send(text, sent))];
   const commands = [
     ...ownCommands,
-    ...mcpPromptCommands(serverPrompts.prompts, ownCommands, mcpPromptGet, (text, sent) => void send(text, sent), toast.show),
+    ...mcpPromptCommands(
+      serverPrompts.prompts,
+      ownCommands,
+      (server, name, typed) => mcpPromptGet(server, name, typed, workspace.path),
+      (text, sent) => void send(text, sent),
+      toast.show,
+    ),
   ];
 
   const pickConversation = async (mode: ConversationMode) => {
@@ -445,18 +486,19 @@ export default function App() {
     if (workspace.error) toast.show(workspace.error);
   }, [workspace.error]);
 
-  // Leaving the folder ends every turn in it, including one in a background chat.
-  const activities = Object.values(agent.chatActivity);
-  const anyTurnBusy = activities.includes("running") || activities.includes("awaitingApproval");
-  const folderSwitch = useFolderSwitch(
-    activities.includes("running") ? "running" : activities.includes("awaitingApproval") ? "waiting" : null,
-  );
+  // A turn keeps its own folder while the window moves (F-8.7): only closing
+  // that folder, or switching its branch, waits for it.
+  const turnsInFolder = turnsIn(agent.chatActivity, history.folderOf);
+  const folderSwitch = useFolderSwitch(turnsInFolder);
+  // Opening a folder closes none (F-8.6); closing one stops what runs in it, and says so first.
   const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
+  const closeFolder = (path: string) => void folderSwitch.guard(() => void workspace.close(path), undefined, [path]);
   // Before the first message the branch is where the chat starts; after it,
   // the chat's own branch — switched only between turns, never under one.
   const branchPicker = useBranchPicker({
     chatId: agent.chatId,
+    workspace: workspace.path,
     current: branch,
     guard: folderSwitch.guard,
     open: workspace.open,
@@ -505,16 +547,15 @@ export default function App() {
     if (!id) return;
     try {
       const path = await moveChatToWorktree(id);
-      setMovedChat({ id, path });
-      // This is not an ordinary folder switch: the neighbouring chat keeps
-      // its running processes, terminals and checkout.
-      if (!(await workspace.open(path, true))) {
-        setMovedChat(null);
-        return;
+      setPendingChat({ id, path });
+      // The worktree opens beside the folder: the neighbouring chat keeps its
+      // running processes, terminals and checkout.
+      if (!(await workspace.open(path))) {
+        setPendingChat(null);
       }
-      history.refresh();
+      // The lists re-read as the worktree joins the open folders.
     } catch (e) {
-      setMovedChat(null);
+      setPendingChat(null);
       toast.show(String(e));
     }
   };
@@ -602,8 +643,10 @@ export default function App() {
       branch,
       changes: changeTotals,
       context: agent.context,
+      contextPending: agent.contextPending,
       usage: agent.turn.usage,
       spent: agent.spent,
+      subagents: agent.subagents,
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.
       onOpenProcesses: () => openProcess(null),
@@ -640,6 +683,7 @@ export default function App() {
             }
             onOpenSettings={ide ? () => openSettings() : undefined}
             workspace={workspace.path}
+            chatId={agent.chatId}
             turn={agent.turn}
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}
@@ -685,12 +729,14 @@ export default function App() {
                   onPick: (name) => void branchPicker.pick(name),
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
-                  locked: anyTurnBusy
-                    ? "An agent is working in this folder — wait for every turn to finish, or use Worktree for a new chat"
-                    : undefined,
+                  locked:
+                    workspace.path && turnsInFolder(workspace.path).length > 0
+                      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
+                      : undefined,
                 }}
-                // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
-                chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
+                // A started chat stays in its folder, its branch shown in
+                // Overview: only a new one picks either.
+                folderFixed={!unstarted}
               />
             }
             end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
@@ -904,9 +950,19 @@ export default function App() {
             setPageItem(undefined);
             setPage(next);
           }}
-          chats={agentMode ? history.chats : plain.chats}
+          sections={
+            agentMode
+              ? workspace.folders.map((path) => ({
+                  path,
+                  worktreeOf: workspace.worktrees[path] ?? null,
+                  chats: history.byFolder[path] ?? [],
+                }))
+              : [{ path: null, chats: plain.chats }]
+          }
           groups={chatGroups.groups}
-          groupScope={workspace.path}
+          activeFolder={agentMode ? workspace.path : null}
+          onNewChatIn={agentMode ? newChatIn : undefined}
+          onCloseFolder={agentMode ? closeFolder : undefined}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
@@ -992,8 +1048,7 @@ export default function App() {
 
       <FolderSwitchDialog
         blocked={folderSwitch.blocked}
-        folder={workspace.path}
-        onStopAgent={agent.cancelAll}
+        onStopAgent={(chats) => void agent.cancelAll(chats)}
         onClose={folderSwitch.close}
       />
       <FolderTrustDialog

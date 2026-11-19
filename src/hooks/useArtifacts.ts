@@ -31,7 +31,7 @@ export const KIND_NAMES: Record<ArtifactKind, string> = { meetings: "Meetings", 
 const KINDS = Object.keys(KIND_NAMES) as ArtifactKind[];
 
 /**
- * The Artifacts page's state (docs/38-artifacts.md): the collections, read
+ * The Artifacts page's state: the collections, read
  * while the page is on screen and again on `onCollectionsChanged` — never on a
  * timer — the open collection's files on `onArtifactsChanged`, and where the page is.
  * The page's own changes read again when they are done; so does a change to

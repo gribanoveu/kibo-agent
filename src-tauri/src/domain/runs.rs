@@ -121,7 +121,7 @@ mod tests {
     use crate::domain::agents::AgentTokens;
 
     fn run(id: u32, state: AgentState) -> AgentInfo {
-        AgentInfo { id, task: format!("t{id}"), state, steps: Vec::new(), tokens: AgentTokens::default(), answer: None }
+        AgentInfo { id, task: format!("t{id}"), state, steps: Vec::new(), tokens: AgentTokens::default(), answer: None, progress: Default::default() }
     }
 
     #[test]
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn a_stored_process_still_running_is_shown_stopped_and_an_ended_one_as_it_ended() {
         use crate::domain::background::ProcessInfo;
-        let view = |id, state| ProcessView { info: ProcessInfo { id, command: "x".into(), cwd: ".".into(), state }, tail: String::new() };
+        let view = |id, state| ProcessView { info: ProcessInfo { id, command: "x".into(), description: None, cwd: ".".into(), state }, tail: String::new() };
         let mut cut = view(1, ProcessState::Running);
         process_cut_short(&mut cut);
         let mut ended = view(2, ProcessState::Exited { code: Some(1) });

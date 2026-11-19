@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 
 use crate::domain::conversation_mode::{ConversationMode, PickedMode};
@@ -38,6 +38,11 @@ pub(crate) struct SessionHandle {
     pub(super) running_root: Mutex<Option<PathBuf>>,
     /// A paused turn still owns the chat's history until its card is resumed.
     pub(super) paused: AtomicBool,
+    /// The folder an unsaved chat's first turn started in (F-8.7): until its
+    /// record names it, the chat belongs there, not to whichever folder the
+    /// window has made active since — its first save, its "always allow",
+    /// its context are that folder's. Set once; a saved record wins.
+    pub(super) home: Mutex<Option<PathBuf>>,
 }
 
 /// Counted while a chat's turn runs; clears itself on drop, however the turn
@@ -105,10 +110,29 @@ pub struct AgentState {
     /// chat touched in a window's run. An LRU is the way past that if a long
     /// run ever shows it.
     pub(super) sessions: Mutex<HashMap<String, Arc<SessionHandle>>>,
+    /// The folders open in the window (F-8): canonical paths, the last added
+    /// first. `workspace` is always one of them — registering a folder makes
+    /// it the active one, closing it moves the active mark.
+    pub(super) open: Mutex<Vec<PathBuf>>,
     pub(super) workspace: Mutex<Option<PathBuf>>,
-    /// Grows as the user answers "always allow"; not persisted, because a
-    /// saved "never ask me" is a brake released a month ago and forgotten.
+    /// Held for the whole of adding or closing a folder: the registry, the
+    /// active mark and the folder's index change together. Without it React's
+    /// StrictMode double launch opened one folder's index twice, two first
+    /// syncs writing one store, and a close racing an add left an index open
+    /// for a folder no longer in the registry, or the reverse. Async: held
+    /// across the index's open, which reads the store.
+    pub(super) folder_change: tokio::sync::Mutex<()>,
+    /// Auto (`skip_all`): one for the app, as the composer's one chip is
+    /// (F-8, decisions). Its "always allow" sets stay empty — those are
+    /// `allowed`, by folder.
     pub(super) approval: Mutex<ApprovalPolicy>,
+    /// "Always allow" answers, by the folder of the turn whose card was
+    /// answered (F-8.5): a permission given in one's own project does not
+    /// carry over to a stranger's repository open beside it. Only the two
+    /// sets are read. Not persisted — a saved "never ask me" is a brake
+    /// released a month ago and forgotten — and dropped with the folder
+    /// (invariant 4). Locked after `open`, never before.
+    pub(super) allowed: Mutex<HashMap<PathBuf, ApprovalPolicy>>,
     /// What the composer's panel says right now. Resident rather than sent
     /// with each turn for the same reason as the approval policy: a paused
     /// turn is resumed from a checkpoint that predates the choice, and a mode
@@ -186,11 +210,6 @@ impl AgentState {
         running.into_iter().map(|id| crate::infra::chat_store::title(&id).ok().flatten().unwrap_or(id)).collect()
     }
 
-    pub(super) fn running_turns(&self) -> usize {
-        let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        sessions.values().filter(|session| session.is_running()).count()
-    }
-
     pub(crate) fn ensure_chat_idle(&self, chat_id: &str) -> Result<(), String> {
         if self.session(chat_id).is_running() {
             Err("this chat's turn is running — wait for it to finish before moving or deleting it".into())
@@ -200,17 +219,25 @@ impl AgentState {
     }
 
     /// Automatic cleanup never removes a checkout another turn is still using.
+    /// A turn holds its folder, the folders around it and the ones inside it:
+    /// `/repo` and `/repo/packages/x` open together share files and one git
+    /// index, and a checkout in one changes the tree under the other's turn.
     pub(crate) fn root_is_idle(&self, workspace: &std::path::Path) -> bool {
+        !self.any_running(|running| running.starts_with(workspace) || workspace.starts_with(running))
+    }
+
+    fn any_running(&self, holds: impl Fn(&std::path::Path) -> bool) -> bool {
         let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        !sessions.values().any(|session| {
-            session.is_running()
-                && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
+        sessions.values().any(|session| {
+            session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref().is_some_and(&holds)
         })
     }
 
-    /// A checkout moves every chat's folder, so none may be running in it.
-    pub(crate) fn ensure_tree_is_idle(&self) -> Result<(), String> {
-        if self.running_turns() == 0 {
+    /// The folder's tree may change only when no turn runs in it, or in a
+    /// folder around or inside it (F-8) — those share its files and git
+    /// index. A turn in an unrelated folder does not hold this one.
+    pub(crate) fn ensure_folder_idle(&self, root: &std::path::Path) -> Result<(), String> {
+        if self.root_is_idle(root) {
             Ok(())
         } else {
             Err("an agent turn is running in this folder — wait for it to finish, or start a worktree for the new chat".to_string())
@@ -225,20 +252,119 @@ impl AgentState {
             .ok_or_else(|| "no folder is open".to_string())
     }
 
+    /// The open folders (F-8), the last added first.
+    pub(crate) fn open_folders(&self) -> Vec<PathBuf> {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    pub(crate) fn is_open(&self, root: &std::path::Path) -> bool {
+        self.open.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|open| open == root)
+    }
+
+    /// Makes `root` an open folder: first in recency, exactly once. Does not
+    /// touch the active mark — that is `activate` in `commands::workspace`.
+    pub(crate) fn register_open(&self, root: PathBuf) {
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        open.retain(|known| *known != root);
+        open.insert(0, root);
+    }
+
+    /// Drops `root` from the open set unless a turn runs in it — checked and
+    /// dropped under the registry's lock. A turn starting meanwhile marks
+    /// itself running first and asks `is_open` after (`chat_start`), so one
+    /// of the two sees the other: either this refuses, or the turn does —
+    /// never a turn running in a folder already closed, its processes
+    /// unstoppable. `false` when a turn holds it.
+    pub(crate) fn unregister_if_idle(&self, root: &std::path::Path) -> bool {
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        // Exactly this folder: closing stops only what is keyed by it, so a
+        // turn in a folder inside or around it loses nothing.
+        if self.any_running(|running| running == root) {
+            return false;
+        }
+        open.retain(|known| known != root);
+        self.allowed.lock().unwrap_or_else(PoisonError::into_inner).remove(root);
+        true
+    }
+
+    /// "Always allow `tool`" from a card of a turn in `root` — refused for a
+    /// folder no longer open, which would otherwise get the answer back when
+    /// opened again. Checked and written under the registry's lock, as a
+    /// close removes the folder and its answers under it.
+    pub(super) fn allow_always(&self, root: &std::path::Path, tool: &str) -> Result<(), String> {
+        let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        if !open.iter().any(|known| known == root) {
+            return Err(format!("{} is not an open folder", root.display()));
+        }
+        let mut allowed = self.allowed.lock().unwrap_or_else(PoisonError::into_inner);
+        allowed.entry(root.to_path_buf()).or_default().allow_always(tool)
+    }
+
+    /// A turn just admitted in `root` may run only while `root` is open:
+    /// checked after `begin_running`, see `unregister_if_idle`.
+    pub(crate) fn still_open(&self, root: &std::path::Path) -> Result<(), String> {
+        match self.is_open(root) {
+            true => Ok(()),
+            false => Err(format!("{} is not an open folder — open it to work in this chat", root.display())),
+        }
+    }
+
+    /// The one door a folder path from the window goes through before the
+    /// backend acts on it (F-8, invariant 1): canonicalized — `..` and
+    /// symlinks resolve to what they really point at — and accepted only as
+    /// one of the open folders.
+    pub(crate) fn require_open(&self, path: &str) -> Result<PathBuf, String> {
+        let asked = crate::infra::paths::canonicalize_plain(std::path::Path::new(path))
+            .map_err(|e| format!("cannot use {path}: {e}"))?;
+        if self.is_open(&asked) {
+            Ok(asked)
+        } else {
+            Err(format!("{path} is not an open folder"))
+        }
+    }
+
+    /// The folder a window-scoped command acts on (F-8): `Some(path)` is
+    /// canonicalized and accepted only as an open folder (invariant 1);
+    /// `None` is Chat mode's "no folder".
+    pub(crate) fn ui_workspace(&self, workspace: &Option<String>) -> Result<Option<PathBuf>, String> {
+        workspace.as_ref().map(|path| self.require_open(path)).transpose()
+    }
+
     #[cfg(test)]
     pub(crate) fn set_workspace_for_test(&self, workspace: PathBuf) {
+        // The active folder is always one of the open ones (F-8).
+        self.register_open(workspace.clone());
         *self.workspace.lock().unwrap() = Some(workspace);
     }
 
     /// The checkout this chat belongs to, not whichever folder is open now.
-    /// An unsaved chat has no record yet and starts in the open folder.
+    /// An unsaved chat has no record yet: it is in the folder its first turn
+    /// started in, and before that in the active one.
     pub(crate) fn chat_workspace(&self, chat_id: &str) -> Result<(PathBuf, Option<String>), String> {
+        self.chat_workspace_in(chat_id, None)
+    }
+
+    /// As `chat_workspace`, with the folder the window shows the chat in
+    /// (`typed_in`), for a chat with neither a record nor a started turn:
+    /// the window's active folder may already be another one, which the
+    /// backend made active while the message was on its way. A folder closed
+    /// meanwhile is refused, like any folder from the window (invariant 1).
+    pub(crate) fn chat_workspace_in(&self, chat_id: &str, typed_in: Option<&str>) -> Result<(PathBuf, Option<String>), String> {
         let record = match crate::infra::chat_store::load(chat_id) {
             Ok(record) => Some(record),
             Err(crate::domain::chat_record::ChatError::NotFound(_)) => None,
             Err(e) => return Err(e.to_string()),
         };
-        let Some(record) = record else { return Ok((self.workspace()?, None)) };
+        let Some(record) = record else {
+            // A started chat's home wins; closed since, the chat goes on in
+            // the active folder — the folder it was typed in is that closed one.
+            let root = match (self.pinned_home(chat_id), typed_in) {
+                (Some(home), _) if self.is_open(&home) => home,
+                (Some(_), _) | (None, None) => self.workspace()?,
+                (None, Some(folder)) => self.require_open(folder)?,
+            };
+            return Ok((root, None));
+        };
         let root = crate::infra::paths::canonicalize_plain(std::path::Path::new(&record.workspace))
             .map_err(|e| format!("cannot open the chat's folder {}: {e}", record.workspace))?;
         if !root.is_dir() {
@@ -247,12 +373,27 @@ impl AgentState {
         Ok((root, record.worktree_base))
     }
 
+    /// Where an unsaved chat's first turn started, while that folder is open:
+    /// one closed since leaves the chat nowhere to be opened from, and it goes
+    /// on in the active folder as an unstarted chat would.
+    fn unsaved_home(&self, chat_id: &str) -> Option<PathBuf> {
+        self.pinned_home(chat_id).filter(|root| self.is_open(root))
+    }
+
+    /// Where an unsaved chat's first turn started, open or not.
+    fn pinned_home(&self, chat_id: &str) -> Option<PathBuf> {
+        let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
+        let handle = sessions.get(chat_id)?;
+        let home = handle.home.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        home
+    }
+
     /// Prompt measuring also works before any folder is open, as it did for
     /// an unsaved chat; a saved chat still reads only its own checkout.
     pub(super) fn chat_prompt_workspace(&self, chat_id: &str) -> Result<Option<PathBuf>, String> {
         match crate::infra::chat_store::load(chat_id) {
             Ok(_) => self.chat_workspace(chat_id).map(|(root, _)| Some(root)),
-            Err(crate::domain::chat_record::ChatError::NotFound(_)) => Ok(self.workspace().ok()),
+            Err(crate::domain::chat_record::ChatError::NotFound(_)) => Ok(self.unsaved_home(chat_id).or_else(|| self.workspace().ok())),
             Err(e) => Err(e.to_string()),
         }
     }
@@ -266,12 +407,15 @@ impl AgentState {
         self.picked().into()
     }
 
-    pub(super) fn approval(&self) -> Result<ApprovalPolicy, String> {
-        Ok(self
-            .approval
-            .lock()
-            .map_err(|_| "approval lock poisoned".to_string())?
-            .clone())
+    /// The policy a turn in `root` runs under: Auto as the app has it, and
+    /// "always allow" as given in that folder.
+    pub(super) fn approval(&self, root: &std::path::Path) -> Result<ApprovalPolicy, String> {
+        let mut policy = self.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
+        let allowed = self.allowed.lock().unwrap_or_else(PoisonError::into_inner);
+        let here = allowed.get(root);
+        policy.always_allowed = here.map(|here| here.always_allowed.clone()).unwrap_or_default();
+        policy.always_allowed_mcp = here.map(|here| here.always_allowed_mcp.clone()).unwrap_or_default();
+        Ok(policy)
     }
 }
 
@@ -409,14 +553,32 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_waits_for_every_running_turn() {
+    fn a_folder_waits_only_for_its_own_turns() {
         let state = state();
-        state.ensure_tree_is_idle().expect("an idle tree can be switched");
-        let running = state.begin_running("c1", 2, Path::new("/repo")).expect("the turn runs");
-        let refused = state.ensure_tree_is_idle().expect_err("a running turn holds the tree");
+        let here = Path::new("/repo");
+        let there = Path::new("/other");
+        state.ensure_folder_idle(here).expect("an idle folder can be switched");
+        let running = state.begin_running("c1", 2, here).expect("the turn runs");
+        let refused = state.ensure_folder_idle(here).expect_err("a running turn holds its folder");
         assert!(refused.contains("worktree"), "{refused}");
+        state.ensure_folder_idle(there).expect("another folder is not held");
         drop(running);
-        state.ensure_tree_is_idle().expect("the finished turn releases the tree");
+        state.ensure_folder_idle(here).expect("the finished turn releases the folder");
+    }
+
+    /// A folder open inside another shares its files and git index: a turn
+    /// in either holds both, and a sibling holds neither.
+    #[test]
+    fn a_turn_holds_the_folders_around_and_inside_it() {
+        let state = state();
+        let running = state.begin_running("c1", 2, Path::new("/repo/packages/x")).expect("the turn runs");
+        state.ensure_folder_idle(Path::new("/repo")).expect_err("a checkout around the turn's folder waits");
+        state.ensure_folder_idle(Path::new("/repo/packages/x/src")).expect_err("one inside it too");
+        state.ensure_folder_idle(Path::new("/repo/packages/y")).expect("a sibling is not held");
+        state.ensure_folder_idle(Path::new("/repo/packages/xy")).expect("a name that only starts the same is not inside");
+        state.register_open(PathBuf::from("/repo"));
+        assert!(state.unregister_if_idle(Path::new("/repo")), "closing the folder around it stops nothing of the turn's");
+        drop(running);
     }
 
     /// The turn's thread dying with the guard frees the mark all the same —
@@ -484,5 +646,68 @@ mod tests {
 
         session.cancel.store(false, Ordering::SeqCst);
         assert!(!session.cancel.load(Ordering::SeqCst));
+    }
+
+    /// The registry holds each folder once, the last added first; closing
+    /// removes only the named folder.
+    #[test]
+    fn open_folders_register_once_most_recent_first() {
+        let state = state();
+        let a = PathBuf::from("/a");
+        let b = PathBuf::from("/b");
+        state.register_open(a.clone());
+        state.register_open(b.clone());
+        state.register_open(a.clone());
+        assert_eq!(state.open_folders(), vec![a.clone(), b.clone()]);
+
+        assert!(state.unregister_if_idle(&b));
+        assert!(state.unregister_if_idle(&b), "a folder that is not open is not an error");
+        assert_eq!(state.open_folders(), vec![a]);
+    }
+
+    /// Invariant 1: a path from the window is canonicalized — over-qualified
+    /// spellings, `..` and symlinks resolve to what they really point at —
+    /// and accepted only as one of the open folders.
+    #[test]
+    fn require_open_resolves_spellings_and_rejects_what_is_not_open() {
+        let state = state();
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("require-open")).unwrap();
+        state.register_open(root.clone());
+        let shown = root.display().to_string();
+
+        // Over-qualified spellings of the same folder: the same folder.
+        assert_eq!(state.require_open(&format!("{shown}/.")).unwrap(), root);
+        std::fs::create_dir(root.join("inner")).unwrap();
+        assert_eq!(state.require_open(&format!("{shown}/inner/..")).unwrap(), root);
+
+        // A symlink at the window's spelling resolves to the folder itself.
+        #[cfg(unix)]
+        {
+            let links = temp_dir("require-open-links");
+            std::os::unix::fs::symlink(&root, links.join("link")).unwrap();
+            let spelled = links.join("link").display().to_string();
+            assert_eq!(state.require_open(&spelled).unwrap(), root);
+        }
+
+        // What resolves outside the open set — a parent, another existing
+        // folder, a path that does not exist — is refused, not acted on.
+        let parent = root.parent().unwrap().to_path_buf();
+        assert!(state.require_open(&parent.display().to_string()).is_err(), "the parent is not open");
+        let other = crate::infra::paths::canonicalize_plain(&temp_dir("require-open-other")).unwrap();
+        assert!(state.require_open(&other.display().to_string()).is_err(), "another existing folder is not open");
+        assert!(state.require_open(&root.join("gone").display().to_string()).is_err(), "a missing path resolves nowhere");
+    }
+
+    /// `ui_workspace` is `require_open` for a window that may be in Chat
+    /// mode: `Some` answers the folder or an error, `None` answers no folder.
+    #[test]
+    fn ui_workspace_accepts_only_open_folders_and_passes_none_through() {
+        let state = state();
+        assert_eq!(state.ui_workspace(&None), Ok(None));
+
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("ui-workspace")).unwrap();
+        state.register_open(root.clone());
+        assert_eq!(state.ui_workspace(&Some(root.display().to_string())).unwrap(), Some(root.clone()));
+        assert!(state.ui_workspace(&Some(root.join("elsewhere").display().to_string())).is_err());
     }
 }

@@ -20,6 +20,8 @@ export type ToolDisplay = {
   arg: string;
   /** The secondary fact: a line range, a match count, a diff size, an exit code. */
   meta?: string;
+  /** The model's own few words about the call, under the row — runCommand's description. */
+  note?: string;
   /** The expandable body. Empty means there is nothing to expand. */
   detail: string;
   /** `detail` is a unified diff, to be drawn as one rather than as text. */
@@ -519,6 +521,9 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
 
     case "runCommand": {
+      // What the model said the line does, under the row in every shape —
+      // the schema promises it beside the command in the transcript.
+      const note = str(args.description) || undefined;
       // Started to run on: the answer is a number, not an exit code.
       if (args.background === true) {
         const id = num(result.id);
@@ -526,6 +531,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
           name,
           arg: str(args.command) ?? "",
           meta: id === undefined ? "background" : `background #${id}`,
+          note,
           detail: "",
           process: id,
         };
@@ -539,6 +545,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
           name,
           arg: str(args.command) ?? "",
           meta: [id === undefined ? "background" : `moved to background #${id}`, took(num(result.afterMs))].filter(Boolean).join(" · "),
+          note,
           detail: collapseRedraws(streamed),
           process: id,
         };
@@ -554,6 +561,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         meta: [result.stopped ? "stopped" : result.timedOut ? "timed out" : code === undefined ? undefined : `exit ${code}`, took(num(result.durationMs))]
           .filter(Boolean)
           .join(" · ") || undefined,
+        note,
         // While it runs there is only what has streamed in; once it settles the
         // captured output is authoritative — and shorter, being truncated in
         // the middle rather than cut off wherever the turn ended.

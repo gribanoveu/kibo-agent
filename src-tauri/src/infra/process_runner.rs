@@ -90,7 +90,7 @@ pub fn run_or_move(
     woken: &dyn Fn() -> bool,
     stop: &dyn Fn() -> bool,
 ) -> Result<Ran, CommandError> {
-    let adopt = |child: Child, backlog: &str| processes.adopt(child, &request.command, shown_cwd, backlog).ok();
+    let adopt = |child: Child, backlog: &str| processes.adopt(child, &request.command, request.description.as_deref(), shown_cwd, backlog).ok();
     // ponytail: room is checked before `adopt`, which ends the child when
     // full; a process started in between kills the command. Make `adopt`
     // hand the child back on refusal if that window ever matters.
@@ -374,6 +374,23 @@ pub fn probe_shell(_shell: &Shell) -> Option<ShellFound> {
     None
 }
 
+/// A console program started from this app gets no console window.
+///
+/// A release build is a GUI-subsystem process and has no console, so Windows
+/// gives a console child one of its own — a window, showing for as long as the
+/// child runs. `taskkill` did that, and it is started on every `runCommand`, so
+/// the window blinked up once per call.
+#[cfg(windows)]
+pub(crate) fn no_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    // CREATE_NO_WINDOW
+    command.creation_flags(0x0800_0000);
+}
+
+/// Nothing to hide: a process here is given no window to begin with.
+#[cfg(not(windows))]
+pub(crate) fn no_window(_command: &mut Command) {}
+
 /// `shell` told to run `line`.
 #[cfg(not(windows))]
 pub(crate) fn shell_command(shell: &Shell, line: &str) -> Command {
@@ -401,9 +418,8 @@ pub(crate) fn shell_command(shell: &Shell, line: &str) -> Command {
 #[cfg(windows)]
 pub(crate) fn shell_command(shell: &Shell, line: &str) -> Command {
     use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new(&shell.program);
-    command.creation_flags(CREATE_NO_WINDOW);
+    no_window(&mut command);
     let stem = Path::new(&shell.program)
         .file_stem()
         .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
@@ -447,13 +463,13 @@ pub(crate) fn kill_tree(child: &mut Child) {
     // grandchild whose parent has already exited is not found — a job object
     // would catch those too. Written this way deliberately: an untested
     // `windows-sys` job object is a worse answer than a documented ceiling,
-    // and this is the upgrade path when Windows is a supported target
-    // (05-gaps §5.4).
-    let _ = Command::new("taskkill")
-        .args(["/T", "/F", "/PID", &child.id().to_string()])
+    // and this is the upgrade path when Windows is a supported target.
+    let mut kill = Command::new("taskkill");
+    kill.args(["/T", "/F", "/PID", &child.id().to_string()])
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+        .stderr(Stdio::null());
+    no_window(&mut kill);
+    let _ = kill.status();
     let _ = child.kill();
 }
 
@@ -465,6 +481,7 @@ mod tests {
     fn ask(command: &str, timeout_seconds: Option<u32>) -> CommandRequest {
         CommandRequest {
             command: command.to_string(),
+            description: None,
             cwd: None,
             timeout_seconds,
             background: None,
@@ -486,7 +503,7 @@ mod tests {
                 let sink = Arc::clone(&sink);
                 Box::new(move |text: Option<&str>| sink.lock().unwrap().push(text.map(String::from))) as Feed
             };
-            let info = ProcessInfo { id: 1, command: String::new(), cwd: ".".into(), state: ProcessState::Running };
+            let info = ProcessInfo { id: 1, command: String::new(), description: None, cwd: ".".into(), state: ProcessState::Running };
             Some((info, [feed(), feed()]))
         };
 
