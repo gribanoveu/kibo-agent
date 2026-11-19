@@ -123,7 +123,9 @@ pub fn apply(cards: &[Card], change: &BoardChange) -> Result<Vec<Card>, BoardErr
             if cards.iter().filter(|c| c.column != Column::Archived).count() >= MAX_CARDS {
                 return Err(BoardError::Full);
             }
-            next.push(Card { id: next_id(cards), title, note, due, column: Column::Todo });
+            // On top of To do: the newest is the one looked for.
+            let top = next.iter().position(|c| c.column == Column::Todo).unwrap_or(next.len());
+            next.insert(top, Card { id: next_id(cards), title, note, due, column: Column::Todo });
         }
         BoardChange::Edit { id, title, note, due } => {
             let at = position(cards, id)?;
@@ -224,23 +226,28 @@ mod tests {
     }
 
     #[test]
-    fn an_added_card_is_todo_with_the_next_id_and_trimmed_text() {
+    fn an_added_card_is_todo_on_top_with_the_next_id_and_trimmed_text() {
         let one = apply(&[], &BoardChange::Add { title: "  file the memory request  ".into(), note: Some("   ".into()), due: None }).unwrap();
         let two = apply(&one, &BoardChange::Add { title: "renew cert".into(), note: Some("  wlbuh  ".into()), due: None }).unwrap();
         assert_eq!(
             two,
             [
-                Card { id: "c1".into(), title: "file the memory request".into(), note: None, due: None, column: Column::Todo },
                 Card { id: "c2".into(), title: "renew cert".into(), note: Some("wlbuh".into()), due: None, column: Column::Todo },
+                Card { id: "c1".into(), title: "file the memory request".into(), note: None, due: None, column: Column::Todo },
             ]
         );
+        // On top of To do's cards, wherever they stand among the others.
+        let started = apply(&add(&[], "a"), &BoardChange::Move { id: "c1".into(), column: Column::Doing, index: None }).unwrap();
+        let cards = add(&add(&started, "b"), "c");
+        assert_eq!(titles_in(&cards, Column::Todo), ["c", "b"]);
+        assert_eq!(titles_in(&cards, Column::Doing), ["a"]);
     }
 
     #[test]
     fn ids_go_on_from_the_highest_even_after_a_removal_in_the_middle() {
         let three = add(&add(&add(&[], "a"), "b"), "c");
         let without_b = apply(&three, &BoardChange::Remove { id: "c2".into() }).unwrap();
-        assert_eq!(add(&without_b, "d").last().unwrap().id, "c4");
+        assert_eq!(add(&without_b, "d")[0].id, "c4");
     }
 
     #[test]
@@ -258,7 +265,7 @@ mod tests {
     fn an_index_places_the_card_among_the_columns_others_and_past_their_end_last() {
         let mut cards = add(&add(&add(&[], "a"), "b"), "c");
         cards = put(&cards, "c2", Column::Doing, 0);
-        assert_eq!(titles_in(&cards, Column::Todo), ["a", "c"]);
+        assert_eq!(titles_in(&cards, Column::Todo), ["c", "a"]);
 
         assert_eq!(titles_in(&put(&cards, "c1", Column::Todo, 1), Column::Todo), ["c", "a"]);
         assert_eq!(titles_in(&put(&cards, "c3", Column::Todo, 0), Column::Todo), ["c", "a"]);
@@ -286,7 +293,7 @@ mod tests {
     fn an_unknown_id_names_the_ones_there_are() {
         let two = add(&add(&[], "a"), "b");
         let err = apply(&two, &BoardChange::Move { id: "c9".into(), column: Column::Done, index: None }).unwrap_err();
-        assert_eq!(err.to_string(), "no card with id c9 — the board has: c1, c2");
+        assert_eq!(err.to_string(), "no card with id c9 — the board has: c2, c1");
         let err = apply(&[], &BoardChange::Remove { id: "c1".into() }).unwrap_err();
         assert_eq!(err.to_string(), "no card with id c1 — the board has: no cards");
     }
