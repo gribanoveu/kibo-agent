@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { act, render, waitFor } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { undo, undoDepth } from "@codemirror/commands";
@@ -31,13 +31,24 @@ describe("a text put into the editor from outside", () => {
 
   test("a long response is parsed to its end when shown, and when it is replaced", async () => {
     const long = (key: string, items: number) => JSON.stringify(Array.from({ length: items }, (_, i) => ({ [key]: i, name: `item ${i}` })), null, 2);
-    const page = render(<CodeEditor text={long("id", 4000)} language="json" />);
-    const view = viewOf(page.container);
-    await waitFor(() => expect(syntaxTree(view.state).length).toBeGreaterThan(0));
-    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
-    // Large enough that the replacing transaction's own parse stops short of the end.
-    page.rerender(<CodeEditor text={long("key", 20000)} language="json" />);
-    expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    // CodeMirror parses by the clock — a time budget per transaction, another for
+    // `forceParsing` — so a slow machine parses less in the same budget. A clock that
+    // ticks once per look makes each budget a count of parse steps, the same anywhere:
+    // a transaction's own reaches about 11k characters, the editor's about 4 times that.
+    let now = 0;
+    const clock = spyOn(Date, "now").mockImplementation(() => (now += 1));
+    try {
+      const page = render(<CodeEditor text={long("id", 1000)} language="json" />);
+      const view = viewOf(page.container);
+      await waitFor(() => expect(syntaxTree(view.state).length).toBeGreaterThan(0));
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+      // Longer than the replacing transaction's own parse reaches.
+      page.rerender(<CodeEditor text={long("key", 1000)} language="json" />);
+      expect(view.state.doc.length).toBeGreaterThan(40_000);
+      expect(syntaxTreeAvailable(view.state, view.state.doc.length)).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("the label follows the text it names", () => {
