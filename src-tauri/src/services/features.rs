@@ -85,6 +85,10 @@ pub fn delete_data(id: &str) -> Result<(), String> {
     if feature == Feature::VoiceMemory {
         return voices_store::delete().map_err(|e| e.to_string());
     }
+    // A database is more than its one file, and a board kept before it may lie beside it.
+    if feature == Feature::Board {
+        return app_dir::dir().map_or(Ok(()), |dir| crate::infra::board_store::delete(&dir).map_err(|e| e.to_string()));
+    }
     let Some(path) = data_path(feature, app_dir::dir().ok().as_deref()) else {
         return Ok(());
     };
@@ -157,9 +161,9 @@ mod tests {
         assert_eq!(board.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["board"]);
         assert!(board.tools[0].description.contains("remind"), "{}", board.tools[0].description);
         assert_eq!(board.places, ["Assistant chat", "Agent", "Analyst"]);
-        assert_eq!(board.data.as_deref(), Some("~/.kibo/board.json"));
+        assert_eq!(board.data.as_deref(), Some("~/.kibo/board.db"));
 
-        std::fs::write(dir.join("board.json"), "[]").unwrap();
+        std::fs::write(dir.join("board.db"), "").unwrap();
         let mut settings = AppSettings::default();
         settings.features.insert("board".into(), true);
         let on = views(&settings, Some(&dir));
@@ -214,13 +218,16 @@ mod tests {
             set("board", true).unwrap();
             assert!(enabled().is_on(Feature::Board));
 
-            std::fs::write(dir.join("board.json"), "[]").unwrap();
+            let files = ["board.db", "board.db-wal", "board.db-shm", "board.json", "board.json.imported"];
+            for file in files {
+                std::fs::write(dir.join(file), "").unwrap();
+            }
             assert!(delete_data("board").unwrap_err().contains("turn Board off"));
-            assert!(dir.join("board.json").exists());
+            assert!(dir.join("board.db").exists());
 
             set("board", false).unwrap();
             delete_data("board").unwrap();
-            assert!(!dir.join("board.json").exists());
+            assert!(files.iter().all(|file| !dir.join(file).exists()), "the database with its journal, and the board kept before it");
             // Nothing there is nothing to delete, not a failure.
             delete_data("board").unwrap();
             assert!(set("nope", true).is_err());

@@ -49,7 +49,7 @@
 | `name`, `description` | Для карточки в Catalog | «Board», «Cards for later…» |
 | `enabled_by_default` | Что действует, пока пользователь не выбрал | `false` |
 | `tools` | Какие `ToolName` ей принадлежат. *Где* они предлагаются, решают, как и раньше, роли (`ChatRole::tools`) и режимы (`conversation_mode::tools`); манифест только снимает их, пока функция выключена | `Board` — роль Assistant и режимы Agent, Analyst |
-| `data` | Её файл в папке приложения, для «Delete data» и для карточки | `board.json` |
+| `data` | Её файл в папке приложения, для «Delete data» и для карточки | `board.db` |
 
 Страницы функции не в манифесте, а в окне: запись в `PAGES` с `feature: "<id>"`.
 

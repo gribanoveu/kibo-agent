@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-19 The Board is kept in SQLite, `~/.kibo/board.db`: a card is a row, its tags and comments rows of their own; a board kept in `board.json` is taken in on first open
 - 2026-11-19 Dictate a comment on a Board card, as a message is, while voice input is on
 - 2026-11-19 Filter the Board by tag: the board's tags sit over the columns as toggles, with All to show every card again; a card added under the filter gets its tags
 - 2026-11-19 Tag Board cards in their side panel — the box offers the board's tags as you type, or creates a new one; the tags show on the card and stay yours — the Assistant does not see them
