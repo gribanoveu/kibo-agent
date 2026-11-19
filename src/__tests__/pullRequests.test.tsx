@@ -14,6 +14,8 @@ let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let opened: string[] = [];
 let mergeFails: string | null = null;
 let servers: CodeHostServer[] = [];
+/** What `pull_request_last` hands back: the backend's last read, or a promise to hold it. */
+let lastStrip: PrStrip | null | Promise<PrStrip | null> = null;
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
@@ -21,6 +23,7 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "git_changes") return Promise.resolve({ staged: [], unstaged: [] });
     if (command === "pull_request") return strip instanceof Promise ? strip : Promise.resolve(structuredClone(strip));
     if (command === "pull_request_git_changed") return Promise.resolve(gitMoved);
+    if (command === "pull_request_last") return lastStrip instanceof Promise ? lastStrip : Promise.resolve(structuredClone(lastStrip));
     if (command === "code_host_save") return Promise.resolve([]);
     if (command === "code_hosts") return Promise.resolve(structuredClone(servers));
     if (command === "code_host_delete") {
@@ -107,6 +110,7 @@ function panel(on = true, notes: string[] = []) {
 
 beforeEach(() => {
   strip = ready();
+  lastStrip = null;
   gitMoved = false;
   calls = [];
   opened = [];
@@ -308,6 +312,32 @@ describe("the strip's states", () => {
     fromMenu("Unapprove");
     await settle();
     expect(asked("pull_request_approve").map((c) => c.args)).toEqual([{ approved: false }]);
+  });
+
+  test("the last read shows at once while the server is asked again, then gives way to the answer", async () => {
+    lastStrip = ready({}, { pr: pr({ title: "As read before" }) });
+    let answer: (strip: PrStrip) => void = () => {};
+    strip = new Promise<PrStrip>((resolve) => (answer = resolve));
+    panel();
+    await settle();
+    expect(screen.getByText("As read before")).toBeTruthy();
+
+    answer(ready({}, { pr: pr({ title: "As it is now" }) }));
+    await settle();
+    expect(screen.getByText("As it is now")).toBeTruthy();
+    expect(screen.queryByText("As read before")).toBeNull();
+  });
+
+  test("a last read that comes after the fresh answer does not replace it", async () => {
+    let hand: (strip: PrStrip) => void = () => {};
+    lastStrip = new Promise<PrStrip | null>((resolve) => (hand = resolve));
+    strip = ready({}, { pr: pr({ title: "As it is now" }) });
+    panel();
+    await settle();
+    hand(ready({}, { pr: pr({ title: "As read before" }) }));
+    await settle();
+    expect(screen.getByText("As it is now")).toBeTruthy();
+    expect(screen.queryByText("As read before")).toBeNull();
   });
 
   test("a read that fails keeps the last strip, grey, with the reason", async () => {

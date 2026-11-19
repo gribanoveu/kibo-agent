@@ -122,6 +122,14 @@ pub async fn pull_request_git_changed(state: Agent<'_>, prs: Prs<'_>) -> Result<
     blocking(move || Ok::<_, String>(PullRequests::git_changed(&prs, &root))).await
 }
 
+/// What the last read of the open folder gave, asking no server: the strip
+/// shows it at once while `pull_request` asks again. In memory only, so it may
+/// stay on the main thread.
+#[tauri::command]
+pub fn pull_request_last(state: Agent<'_>, prs: Prs<'_>) -> Result<Option<PrStrip>, String> {
+    Ok(prs.last(&state.workspace()?))
+}
+
 /// The strip is on screen: the open folder is watched until it says otherwise.
 /// Starts a thread and asks nothing yet, so it may stay on the main thread.
 #[tauri::command]

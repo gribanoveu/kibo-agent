@@ -123,6 +123,12 @@ export async function pullRequestCreate(title: string, to: string | null, draft:
   return invoke<PullRequest>("pull_request_create", { title, to, draft });
 }
 
+/** What the last read of the open folder gave, asking no server — `null` before one, or after one that failed. */
+export async function pullRequestLast(): Promise<PrStrip | null> {
+  requireBackend();
+  return invoke<PrStrip | null>("pull_request_last");
+}
+
 /** `false` marks the draft ready for review; `true` takes it back to a draft. */
 export async function pullRequestSetDraft(id: number, version: number, draft: boolean): Promise<void> {
   requireBackend();

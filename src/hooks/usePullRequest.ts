@@ -10,6 +10,7 @@ import {
   pullRequestGitChanged,
   pullRequestMerge,
   pullRequestSetDraft,
+  pullRequestLast,
   pullRequestUnwatch,
   pullRequestWatch,
   type CodeHostServer,
@@ -46,6 +47,13 @@ export function usePullRequest(on: boolean, workspace: string | null) {
         .finally(() => live && setReading(false));
     };
     reload.current = read;
+    // The last read, at once, while the server is asked again: a read is several
+    // requests to a server often behind a VPN. Only into an empty strip — the
+    // fresh answer, if it is in first, is not overwritten with an older one.
+    pullRequestLast().then(
+      (last) => live && last && setStrip((was) => was ?? last),
+      () => {},
+    );
     // No open folder to watch is no error: the strip draws nothing either.
     pullRequestWatch().catch(() => {});
     const stops = Promise.all([

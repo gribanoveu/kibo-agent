@@ -432,6 +432,7 @@ pub fn run() {
             commands::pull_requests::pull_request_approve,
             commands::pull_requests::pull_request_merge,
             commands::pull_requests::pull_request_set_draft,
+            commands::pull_requests::pull_request_last,
             commands::pull_requests::pull_request_git_changed,
             commands::pull_requests::pull_request_watch,
             commands::pull_requests::pull_request_unwatch,

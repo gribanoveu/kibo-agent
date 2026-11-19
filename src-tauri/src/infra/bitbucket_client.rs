@@ -11,6 +11,8 @@
 //! Nothing here keeps a token: [`Call`] carries it per request, and it goes in
 //! one header, to the address the user added and nowhere else.
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -211,6 +213,30 @@ fn request(
     answer(call.server, common(method, url).header("Authorization", bearer(call)), body)
 }
 
+/// The agents kept, by address and certificate.
+type Agents = HashMap<(String, Option<blake3::Hash>), ureq::Agent>;
+
+/// ponytail: never emptied — one agent per address and certificate this run
+/// has used, a handful; drop one with its server if that ever grows.
+static AGENTS: LazyLock<Mutex<Agents>> = LazyLock::new(Mutex::default);
+
+/// One agent per server, kept: ureq's pool keeps its connections open, so
+/// every request of a read after the first goes without a TCP and TLS
+/// handshake — over a VPN, most of what a read cost. The server's own
+/// certificate replaces the public roots, trusted for this server and nowhere
+/// else; a new certificate is a new agent, and a connection it did not vouch
+/// for is never reused.
+fn agent_for(base: &str, pem: Option<&str>) -> Result<ureq::Agent, CodeHostError> {
+    let key = (base.to_string(), pem.map(|pem| blake3::hash(pem.as_bytes())));
+    let mut agents = AGENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(agent) = agents.get(&key) {
+        return Ok(agent.clone());
+    }
+    let agent = http_agent::build_agent(pem).map_err(|e| CodeHostError::Tls(e.0))?;
+    agents.insert(key, agent.clone());
+    Ok(agent)
+}
+
 /// The headers every request carries, the token aside.
 fn common(method: http::Method, url: &str) -> http::request::Builder {
     http::Request::builder()
@@ -233,9 +259,7 @@ fn answer(
     if base.starts_with("http://") && !is_loopback(base) {
         return Err(CodeHostError::Insecure(base.to_string()));
     }
-    // The server's own certificate replaces the public roots: a corporate CA
-    // is trusted for this server and nowhere else.
-    let agent = http_agent::build_agent(server.trusted_cert_pem.as_deref()).map_err(|e| CodeHostError::Tls(e.0))?;
+    let agent = agent_for(base, server.trusted_cert_pem.as_deref())?;
     let mut response = match body {
         None => send(&agent, request.body(())),
         Some(body) => send(&agent, request.header("Content-Type", "application/json").body(body.to_string())),
@@ -923,6 +947,48 @@ mod tests {
         let (_, asked) =
             with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", true));
         assert_eq!(body_of(&asked)["draft"], json!(true), "a draft is asked for as one");
+    }
+
+    /// The second request of a read goes down the first one's connection: the
+    /// stand answers both on the one socket it accepts, and a client that
+    /// opened another would wait on it for nothing.
+    #[test]
+    fn a_read_s_requests_share_one_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stand = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{DEFAULT_BRANCH}",
+                DEFAULT_BRANCH.len()
+            );
+            let mut answered = 0;
+            let mut buffer = [0u8; 8192];
+            let mut request = Vec::new();
+            while answered < 2 {
+                match socket.read(&mut buffer) {
+                    Ok(read @ 1..) => request.extend_from_slice(&buffer[..read]),
+                    _ => break,
+                }
+                if String::from_utf8_lossy(&request).contains("\r\n\r\n") {
+                    socket.write_all(reply.as_bytes()).unwrap();
+                    request.clear();
+                    answered += 1;
+                }
+            }
+            answered
+        });
+        let at = server_at(&format!("http://127.0.0.1:{port}"));
+        // On a thread of its own: a client that opened a second connection waits
+        // its whole timeout on it, and the stand's answer should not.
+        let client = std::thread::spawn(move || {
+            let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+            let call = Call { server: &at, token: "t", remote: &remote };
+            (Bitbucket.default_branch(&call).is_ok(), Bitbucket.default_branch(&call).is_ok())
+        });
+        assert_eq!(stand.join().unwrap(), 2, "the second request came on another connection");
+        assert_eq!(client.join().unwrap(), (true, true));
     }
 
     /// Mark ready sends the server's own pull request back with `draft` changed

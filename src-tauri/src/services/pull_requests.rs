@@ -122,6 +122,16 @@ impl PullRequests {
         read
     }
 
+    /// What the last read of `root` gave, asking nothing: the strip opens with
+    /// it while the server is asked again. A read that failed is not kept for
+    /// this — the strip has nothing grey to keep yet.
+    pub fn last(&self, root: &Path) -> Option<PrStrip> {
+        match lock(&self.read_last).as_ref() {
+            Some((read_root, Ok(strip))) if read_root == root => Some(strip.clone()),
+            _ => None,
+        }
+    }
+
     /// `.git` changed: whether the strip should read the server again — the
     /// remote was added or changed, the branch switched, pushed or fetched
     /// since its last read. Staging, a local commit or an editor's own
@@ -145,25 +155,27 @@ impl PullRequests {
             Found::Nothing(strip) => return Ok(strip),
         };
         let call = target.call();
-        let default_branch = self.host.default_branch(&call)?;
-        let commit = self.host.branch_commit(&call, &target.branch)?;
+        let host = self.host.as_ref();
+        // Three rounds rather than five requests in a row: each pair waits on
+        // the round before it and on nothing else. A read costs the slowest of
+        // each pair — the merge check, as a rule — not the sum.
+        let (default_branch, commit) = both(|| host.default_branch(&call), || host.branch_commit(&call, &target.branch));
+        let (default_branch, commit) = (default_branch?, commit?);
         // A branch the server does not have has no pull request either: the
         // strip says "push first" and asks nothing more.
-        let pr = match &commit {
-            Some(_) => self.host.pull_request(&call, &target.branch)?,
-            None => None,
+        let (pr, builds) = match &commit {
+            Some(commit) => {
+                let (pr, builds) = both(|| host.pull_request(&call, &target.branch), || host.builds(&call, commit));
+                (pr?, builds?)
+            }
+            None => (None, Vec::new()),
         };
-        let merge = match &pr {
-            Some(pr) => Some(self.host.merge_check(&call, pr.id)?),
-            None => None,
-        };
-        let builds = match &commit {
-            Some(commit) => self.host.builds(&call, commit)?,
-            None => Vec::new(),
-        };
-        let me = match &pr {
-            Some(_) => self.me(&call)?,
-            None => None,
+        let (merge, me) = match &pr {
+            Some(pr) => {
+                let (merge, me) = both(|| host.merge_check(&call, pr.id), || self.me(&call));
+                (Some(merge?), me?)
+            }
+            None => (None, None),
         };
         let (can_approve, approved) = match (&pr, &me) {
             (Some(pr), Some(me)) => (can_approve(pr, me), approved_by(pr, me)),
@@ -410,6 +422,16 @@ impl PullRequests {
     }
 }
 
+/// `a` on a thread of its own and `b` on this one, both answers once both are in.
+fn both<A: Send, B>(a: impl FnOnce() -> A + Send, b: impl FnOnce() -> B) -> (A, B) {
+    std::thread::scope(|scope| {
+        let first = scope.spawn(a);
+        let second = b();
+        // A panic over there is one here: the read has no answer to give.
+        (first.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)), second)
+    })
+}
+
 /// A server as the form sent it, made ready to keep: an id for a new one, the
 /// address without the slash a user may type after it, and an address that is
 /// one. Whether `http` may carry the token is the client's to refuse, per
@@ -475,6 +497,8 @@ mod tests {
         /// How long the builds take to answer — the last thing a read asks
         /// but one: a read in flight that has seen the branch and its PR.
         slow: Mutex<Duration>,
+        /// How long the pull request takes to answer — asked beside the builds.
+        pr_slow: Mutex<Duration>,
         /// What the default branch answers instead: a server that does not.
         down: Mutex<Option<CodeHostError>>,
     }
@@ -514,6 +538,8 @@ mod tests {
         }
         fn pull_request(&self, _: &Call, _: &str) -> Result<Option<PullRequest>, CodeHostError> {
             self.ask("pull_request");
+            let slow = *lock(&self.pr_slow);
+            std::thread::sleep(slow);
             Ok(lock(&self.pr).clone())
         }
         fn merge_check(&self, _: &Call, _: u64) -> Result<MergeCheck, CodeHostError> {
@@ -639,6 +665,45 @@ mod tests {
             assert!(can_approve && !approved);
             assert_eq!(merge_blocked, Some(vec!["Requires approvals".to_string()]));
             assert_eq!(latest_build, Some(build(BuildState::Successful)));
+        });
+    }
+
+    /// The pull request and the builds wait on the branch and not on each
+    /// other: asked together, a read costs the slower of the two, not both.
+    #[test]
+    fn a_read_asks_together_what_does_not_wait_on_each_other() {
+        with_app_dir("prs-rounds", || {
+            let (service, double, _) = connected();
+            *lock(&double.commit) = Some("94beed9".to_string());
+            *lock(&double.pr) = Some(pull_request(6));
+            *lock(&double.me) = Some("u_me".to_string());
+            *lock(&double.slow) = Duration::from_millis(400);
+            *lock(&double.pr_slow) = Duration::from_millis(400);
+            let started = std::time::Instant::now();
+            assert!(matches!(service.strip(&repo("prs-rounds-repo", Some(REMOTE))), Ok(PrStrip::Ready { snapshot: Snapshot { pr: Some(_), .. }, .. })));
+            assert!(started.elapsed() < Duration::from_millis(750), "asked one after the other: {:?}", started.elapsed());
+            assert_eq!((double.asked("builds"), double.asked("merge_check"), double.asked("me")), (1, 1, 1));
+        });
+    }
+
+    /// The last read is there for the strip to open with, asking nothing; a
+    /// failed one, or one of another folder, is not.
+    #[test]
+    fn the_last_read_is_handed_back_without_asking() {
+        with_app_dir("prs-last", || {
+            let (service, double, _) = connected();
+            *lock(&double.commit) = Some("94beed9".to_string());
+            let root = repo("prs-last-repo", Some(REMOTE));
+            assert_eq!(service.last(&root), None, "nothing read yet");
+            let read = service.strip(&root).unwrap();
+            let asked = double.total();
+            assert_eq!(service.last(&root), Some(read));
+            assert_eq!(double.total(), asked, "the server is not asked");
+            assert_eq!(service.last(&repo("prs-last-other", Some(REMOTE))), None, "another folder");
+
+            *lock(&double.down) = Some(CodeHostError::Unauthorized);
+            service.strip(&root).unwrap_err();
+            assert_eq!(service.last(&root), None, "a failed read");
         });
     }
 
