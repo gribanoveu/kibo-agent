@@ -420,7 +420,14 @@ impl Pr {
                 .reviewers
                 .into_iter()
                 .filter(|reviewer| !reviewer.user.slug.is_empty())
-                .map(|reviewer| Reviewer { slug: reviewer.user.slug, status: review_status(&reviewer.status) })
+                .map(|reviewer| Reviewer {
+                    display_name: match reviewer.user.display_name.trim() {
+                        "" => reviewer.user.slug.clone(),
+                        name => name.to_string(),
+                    },
+                    slug: reviewer.user.slug,
+                    status: review_status(&reviewer.status),
+                })
                 .collect(),
             // The probe's answer has only `self`, and it is the page Open
             // opens; `web` is preferred first because a server that names one
@@ -447,6 +454,8 @@ struct Person {
 struct User {
     #[serde(default)]
     slug: String,
+    #[serde(default, rename = "displayName")]
+    display_name: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -525,8 +534,9 @@ mod tests {
                    "latestCommit":"94beed93512849804d03fe90d10a99b1418d4342","type":"BRANCH"},
         "toRef":{"id":"refs/heads/master","displayId":"master","type":"BRANCH"},
         "author":{"user":{"name":"A","emailAddress":"a@example.com","id":1,"displayName":"A","active":true,"slug":"u_author","type":"NORMAL"}},
-        "reviewers":[{"user":{"name":"R","emailAddress":"r@example.com","id":2,"displayName":"R","active":true,"slug":"u_reviewer","type":"NORMAL"},
-                      "lastReviewedCommit":"94beed9","approved":false,"status":"UNAPPROVED"}],
+        "reviewers":[{"user":{"name":"R","emailAddress":"r@example.com","id":2,"displayName":"Rita Reviewer","active":true,"slug":"u_reviewer","type":"NORMAL"},
+                      "lastReviewedCommit":"94beed9","approved":false,"status":"UNAPPROVED"},
+                     {"user":{"name":"S","id":3,"displayName":" ","slug":"u_silent","type":"NORMAL"},"status":"APPROVED"}],
         "links":{"self":[{"href":"https://server.com/projects/CORP/repos/tax-api/pull-requests/153"}]}}]}"#;
 
     const MERGE: &str = r#"{"canMerge":false,"conflicted":false,"outcome":"CLEAN","vetoes":[
@@ -655,7 +665,14 @@ mod tests {
 
         assert_eq!((pr.id, pr.version), (153, 6));
         assert_eq!((pr.author.as_str(), pr.from_branch.as_str(), pr.to_branch.as_str()), ("u_author", "docs/wowtax-8238", "master"));
-        assert_eq!(pr.reviewers, [Reviewer { slug: "u_reviewer".to_string(), status: ReviewStatus::Unapproved }]);
+        assert_eq!(
+            pr.reviewers,
+            [
+                Reviewer { slug: "u_reviewer".to_string(), display_name: "Rita Reviewer".to_string(), status: ReviewStatus::Unapproved },
+                // No name from the server: the slug is what is shown.
+                Reviewer { slug: "u_silent".to_string(), display_name: "u_silent".to_string(), status: ReviewStatus::Approved },
+            ]
+        );
         assert_eq!(pr.url, "https://server.com/projects/CORP/repos/tax-api/pull-requests/153");
     }
 

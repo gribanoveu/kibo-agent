@@ -20,7 +20,8 @@ export type CodeHostServer = {
 export type RemoteRepo = { host: string; baseUrl: string; project: string; slug: string; transport: "web" | "ssh" };
 
 export type ReviewStatus = "approved" | "unapproved" | "needsWork";
-export type Reviewer = { slug: string; status: ReviewStatus };
+/** `slug` is the login the server matches on; `displayName` is what is shown — the slug when the server gives none. */
+export type Reviewer = { slug: string; displayName: string; status: ReviewStatus };
 
 export type PullRequest = {
   id: number;

@@ -63,7 +63,7 @@ function pr(over: Partial<PullRequest> = {}): PullRequest {
     author: "u_author",
     fromBranch: "feature/x",
     toBranch: "master",
-    reviewers: [{ slug: "u_me", status: "unapproved" }],
+    reviewers: [{ slug: "u_me", displayName: "Me Myself", status: "unapproved" }],
     url: "https://bitbucket.example/projects/CORP/repos/tax-api/pull-requests/153",
     ...over,
   };
@@ -194,6 +194,15 @@ describe("the strip's states", () => {
     expect(screen.queryByText("Merge")).toBeNull();
     expect(screen.getByText("Requires 2 approvals")).toBeTruthy();
     expect(screen.getByText("conflicts")).toBeTruthy();
+  });
+
+  test("a reviewer is shown by name, the login under the pointer", async () => {
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("#153"));
+    const reviewer = screen.getByText("Me Myself").closest("li")!;
+    expect(reviewer.title).toBe("u_me — unapproved");
+    expect(screen.queryByText("u_me")).toBeNull();
   });
 
   test("Approve sends the approval", async () => {
@@ -436,7 +445,7 @@ describe("at a glance", () => {
 
   test("the reviews are a count, or needs work when anyone said so", () => {
     expect(reviewsAtAGlance([])).toBeNull();
-    expect(reviewsAtAGlance([{ slug: "a", status: "approved" }, { slug: "b", status: "unapproved" }])).toBe("1/2");
-    expect(reviewsAtAGlance([{ slug: "a", status: "approved" }, { slug: "b", status: "needsWork" }])).toBe("needs work");
+    expect(reviewsAtAGlance([{ slug: "a", displayName: "A", status: "approved" }, { slug: "b", displayName: "B", status: "unapproved" }])).toBe("1/2");
+    expect(reviewsAtAGlance([{ slug: "a", displayName: "A", status: "approved" }, { slug: "b", displayName: "B", status: "needsWork" }])).toBe("needs work");
   });
 });

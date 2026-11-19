@@ -387,7 +387,11 @@ pub enum ReviewStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reviewer {
+    /// Who the server means: what the token's user is compared with.
     pub slug: String,
+    /// What a person reads — "Ivan Petrov" for `u_m2grr`; the slug when the
+    /// server gives none.
+    pub display_name: String,
     pub status: ReviewStatus,
 }
 
@@ -586,7 +590,7 @@ mod tests {
             to_branch: "master".to_string(),
             reviewers: reviewers
                 .iter()
-                .map(|(slug, status)| Reviewer { slug: slug.to_string(), status: *status })
+                .map(|(slug, status)| Reviewer { slug: slug.to_string(), display_name: slug.to_string(), status: *status })
                 .collect(),
             url: "https://server.com/projects/P/repos/r/pull-requests/153".to_string(),
         }

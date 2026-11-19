@@ -171,9 +171,9 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
               {pr.reviewers.map((r) => {
                 const Icon = REVIEW_ICON[r.status];
                 return (
-                  <li key={r.slug} className={r.status} title={r.status === "needsWork" ? "needs work" : r.status}>
+                  <li key={r.slug} className={r.status} title={`${r.slug} — ${r.status === "needsWork" ? "needs work" : r.status}`}>
                     <Icon size={11} />
-                    {r.slug}
+                    {r.displayName}
                   </li>
                 );
               })}

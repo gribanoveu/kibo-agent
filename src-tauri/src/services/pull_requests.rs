@@ -526,7 +526,7 @@ mod tests {
             author: "u_author".to_string(),
             from_branch: "feature/x".to_string(),
             to_branch: "master".to_string(),
-            reviewers: vec![Reviewer { slug: "u_me".to_string(), status: ReviewStatus::Unapproved }],
+            reviewers: vec![Reviewer { slug: "u_me".to_string(), display_name: "Me".to_string(), status: ReviewStatus::Unapproved }],
             url: "https://server.com/projects/CORP/repos/tax-api/pull-requests/153".to_string(),
         }
     }
