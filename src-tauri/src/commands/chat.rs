@@ -577,8 +577,8 @@ mod tests {
     #[test]
     fn a_background_chat_saves_under_its_own_checkout() {
         crate::testing::with_app_dir("cmd-chat-save-own-root", || {
-            let own = temp_dir("cmd-chat-save-own").canonicalize().unwrap();
-            let other = temp_dir("cmd-chat-save-other").canonicalize().unwrap();
+            let own = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-save-own")).unwrap();
+            let other = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-save-other")).unwrap();
             crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
             let state = state();
             state.set_workspace_for_test(other);
@@ -659,8 +659,8 @@ mod tests {
     fn compaction_measures_the_saved_chats_prompt_not_the_open_folders() {
         crate::testing::with_app_dir("cmd-chat-compact-own-root", || {
             crate::testing::spending_provider("the earlier part", 10, 2);
-            let own = temp_dir("cmd-chat-compact-own").canonicalize().unwrap();
-            let other = temp_dir("cmd-chat-compact-other").canonicalize().unwrap();
+            let own = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-compact-own")).unwrap();
+            let other = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-compact-other")).unwrap();
             std::fs::write(own.join("AGENTS.md"), "x".repeat(1_000_000)).unwrap();
             crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
             let state = state();
@@ -1306,7 +1306,7 @@ mod tests {
     #[test]
     fn a_saved_chat_keeps_the_branch_its_folder_has_out() {
         crate::testing::with_app_dir("cmd-chat-git-branch", || {
-            let root = temp_dir("cmd-chat-git-branch-repo").canonicalize().unwrap();
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-git-branch-repo")).unwrap();
             git2::Repository::init(&root).unwrap().set_head("refs/heads/feature").unwrap();
             let state = state();
             state.set_workspace_for_test(root.clone());
