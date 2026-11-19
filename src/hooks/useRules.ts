@@ -22,6 +22,9 @@ export function useRules(visible: boolean, workspace: string | null) {
     }
   }, [workspace]);
 
+  // Another folder's refusal is not this one's.
+  useEffect(() => setError(null), [workspace]);
+
   useEffect(() => {
     if (visible) reload();
   }, [visible, workspace, reload]);
@@ -33,11 +36,11 @@ export function useRules(visible: boolean, workspace: string | null) {
       try {
         await setRuleEnabled(path, enabled);
       } catch (e) {
-        setError(String(e));
+        if (shown.current === workspace) setError(String(e));
       }
       await reload();
     },
-    [reload],
+    [reload, workspace],
   );
 
   return { rules, error, setEnabled };

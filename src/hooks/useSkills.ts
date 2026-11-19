@@ -24,6 +24,9 @@ export function useSkills(visible: boolean, workspace: string | null = null) {
     }
   }, [workspace]);
 
+  // Another folder's refusal is not this one's.
+  useEffect(() => setError(null), [workspace]);
+
   useEffect(() => {
     if (visible) reload();
   }, [visible, workspace, reload]);
@@ -37,11 +40,11 @@ export function useSkills(visible: boolean, workspace: string | null = null) {
       try {
         await setSkillEnabled(name, enabled);
       } catch (e) {
-        setError(String(e));
+        if (shown.current === workspace) setError(String(e));
       }
       await reload();
     },
-    [reload],
+    [reload, workspace],
   );
 
   /** A whole folder on or off, from Settings; the list is read again, since its skills come and go. */
@@ -52,11 +55,11 @@ export function useSkills(visible: boolean, workspace: string | null = null) {
       try {
         await setSkillSourceEnabled(id, enabled);
       } catch (e) {
-        setError(String(e));
+        if (shown.current === workspace) setError(String(e));
       }
       await reload();
     },
-    [reload],
+    [reload, workspace],
   );
 
   return { view, error, setEnabled, setSourceEnabled };

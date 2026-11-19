@@ -223,21 +223,19 @@ impl AgentState {
     /// `/repo` and `/repo/packages/x` open together share files and one git
     /// index, and a checkout in one changes the tree under the other's turn.
     pub(crate) fn root_is_idle(&self, workspace: &std::path::Path) -> bool {
+        !self.any_running(|running| running.starts_with(workspace) || workspace.starts_with(running))
+    }
+
+    fn any_running(&self, holds: impl Fn(&std::path::Path) -> bool) -> bool {
         let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        !sessions.values().any(|session| {
-            session.is_running()
-                && session
-                    .running_root
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .as_deref()
-                    .is_some_and(|running| running.starts_with(workspace) || workspace.starts_with(running))
+        sessions.values().any(|session| {
+            session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref().is_some_and(&holds)
         })
     }
 
-    /// The folder's tree may change only when no turn runs in it (F-8): only
-    /// turns in the same checkout share files and a git index — a turn in
-    /// another folder does not hold this one.
+    /// The folder's tree may change only when no turn runs in it, or in a
+    /// folder around or inside it (F-8) — those share its files and git
+    /// index. A turn in an unrelated folder does not hold this one.
     pub(crate) fn ensure_folder_idle(&self, root: &std::path::Path) -> Result<(), String> {
         if self.root_is_idle(root) {
             Ok(())
@@ -279,7 +277,9 @@ impl AgentState {
     /// unstoppable. `false` when a turn holds it.
     pub(crate) fn unregister_if_idle(&self, root: &std::path::Path) -> bool {
         let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
-        if !self.root_is_idle(root) {
+        // Exactly this folder: closing stops only what is keyed by it, so a
+        // turn in a folder inside or around it loses nothing.
+        if self.any_running(|running| running == root) {
             return false;
         }
         open.retain(|known| known != root);
@@ -576,6 +576,8 @@ mod tests {
         state.ensure_folder_idle(Path::new("/repo/packages/x/src")).expect_err("one inside it too");
         state.ensure_folder_idle(Path::new("/repo/packages/y")).expect("a sibling is not held");
         state.ensure_folder_idle(Path::new("/repo/packages/xy")).expect("a name that only starts the same is not inside");
+        state.register_open(PathBuf::from("/repo"));
+        assert!(state.unregister_if_idle(Path::new("/repo")), "closing the folder around it stops nothing of the turn's");
         drop(running);
     }
 

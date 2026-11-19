@@ -95,11 +95,15 @@ pub async fn chat_resume<R: Runtime>(
     let state = state.inner().clone();
     let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let session = state.session(&chat_id);
-    // Before the resume as well as after: `begin_resume` takes the card's
-    // pause, and a refusal after it would leave the card resumable by nothing.
-    state.still_open(&workspace)?;
     let running = state.begin_resume(&chat_id, parallel_limit(), &workspace)?;
-    state.still_open(&workspace)?;
+    if let Err(closed) = state.still_open(&workspace) {
+        // `begin_resume` took the card's pause: given back while the turn
+        // still counts as running, so no fresh start slips in between and
+        // orphans the card.
+        session.paused.store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(running);
+        return Err(closed);
+    }
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
     })

@@ -64,7 +64,7 @@ export function useMcp(visible: boolean, workspace: string | null, refreshKey?: 
       setView(next);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      if (shownFolder.current === workspace) setError(String(e));
       await reload();
     }
   }, [reload, workspace]);
@@ -77,7 +77,7 @@ export function useMcp(visible: boolean, workspace: string | null, refreshKey?: 
       setView(next);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      if (shownFolder.current === workspace) setError(String(e));
       await reload();
     }
   }, [reload, workspace]);
@@ -94,7 +94,7 @@ export function useMcp(visible: boolean, workspace: string | null, refreshKey?: 
       setView(answer);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      if (shownFolder.current === workspace) setError(String(e));
       await reload();
     }
   }, [reload, workspace]);

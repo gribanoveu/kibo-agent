@@ -138,8 +138,8 @@ pub async fn git_branches(workspace: Option<String>, state: State<'_, Arc<AgentS
 }
 
 /// Switches the folder `workspace` names to `branch`, or says which files
-/// stand in the way — it never overwrites them. Only a turn in that folder
-/// holds it (F-8): a turn in another open folder does not.
+/// stand in the way — it never overwrites them. A turn in that folder, or in
+/// one around or inside it, holds it (F-8); one in an unrelated folder does not.
 #[tauri::command]
 pub async fn git_checkout(branch: String, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<CheckoutOutcome, String> {
     let root = state.ui_workspace(&workspace)?.ok_or_else(|| "no folder is open".to_string())?;

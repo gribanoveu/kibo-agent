@@ -390,7 +390,8 @@ export default function App() {
     if (agentMode && folder && folder !== workspace.path) {
       return void folderSwitch.guard(() => {
         setPendingChat({ id, path: folder });
-        void workspace.open(folder).then((opened) => opened || setPendingChat(null));
+        // A failed open drops only its own chat, not one picked since.
+        void workspace.open(folder).then((opened) => opened || setPendingChat((pending) => (pending?.id === id ? null : pending)));
       });
     }
     // A chat of another folder still on its way is not opened over this one,
