@@ -81,6 +81,25 @@ describe("Overview", () => {
     expect(opened).toEqual(["changes"]);
   });
 
+  /// Another chat of the folder switched it: Changes shows what is checked
+  /// out, and this chat's own branch under it, one click away.
+  test("a chat the folder was moved off says which branch is its own, and switches back", () => {
+    let switched = 0;
+    const { rerender } = render(<OverviewPanel {...props({ away: { branch: "feature", onSwitch: () => switched++ } })} />);
+    expect(screen.getByText("main")).toBeTruthy();
+    fireEvent.click(screen.getByTitle(/This chat works on feature; the folder is on main now/));
+    expect(switched).toBe(1);
+
+    rerender(<OverviewPanel {...props({ away: { branch: "feature", onSwitch: () => switched++, locked: "An agent is working in this folder" } })} />);
+    const back = screen.getByTitle("An agent is working in this folder");
+    expect(back.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(back);
+    expect(switched).toBe(1);
+
+    rerender(<OverviewPanel {...props()} />);
+    expect(screen.queryByText(/Back to/)).toBeNull();
+  });
+
   test("lists what runs in the background, opens it, and counts what ended", () => {
     const opened: unknown[] = [];
     const tokens = { prompt: 0, cached: 0, completion: 0 };

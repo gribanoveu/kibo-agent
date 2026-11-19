@@ -95,6 +95,14 @@
   flex: none;
   color: var(--text-faint);
 }
+/* The folder is off the open chat's branch: the way back, said in amber. */
+.overview-away,
+.overview-away svg {
+  color: var(--amber);
+}
+.overview-away[aria-disabled] {
+  cursor: default;
+}
 .overview-mono {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);

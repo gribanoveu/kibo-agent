@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-11-19 The box under the message field picks a folder and a branch only for a new chat: a started chat shows its folder there and its branch in Overview
+- 2026-11-19 The box under the message field picks a folder and a branch only for a new chat: a started chat shows its folder there and its branch in Overview, with the way back to the chat's own branch when another chat moved the folder off it
 - 2026-11-18 Switching chats no longer shifts the Overview: the context card keeps its place with placeholders while the new chat's numbers are read
 - 2026-11-18 Chat folders you made stand at the top of the sidebar, above the open folders' sections, and are shared by every project: one folder holds chats of several, each still opening in its own; folders of the same name made per project before become one
 - 2026-11-18 Keep many folders open for little memory: only the folder on screen and folders with a turn running are indexed and watched, and search by meaning loads a model a third the size it was
