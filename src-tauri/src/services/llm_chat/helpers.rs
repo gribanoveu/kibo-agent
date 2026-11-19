@@ -158,6 +158,8 @@ pub(super) fn run_helper(
         board: None,
         // A fork reads the databases the calling turn may; a helper has no feature on, and is not offered it.
         mongo: turn.mongo.clone(),
+        // Neither is let call it: `httpSend` is no read of the folder's, and it will write (HC-8).
+        http: None,
         deepseek: None,
         features,
         fork: fork.is_some(),

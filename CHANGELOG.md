@@ -18,6 +18,31 @@
 - 2026-11-16 The review and explore cards in the chat wear the robot icon, the same as the agent's sheet and the Subagent button
 - 2026-11-16 A review subagent in Overview and the Agents tab is named by its focus when one was given, else by its brief's first line — not by a `task:` line of code that happened to be in the diff it reviews
 - 2026-11-16 While subagents run, the Working panel shows their live speed and tokens as a line of its own, the run's sheet shows its speed too, and Overview gains a Subagents tokens row under Session tokens with an info icon explaining what each counts
+- 2026-11-14 An HTTP environment trusts several certificates, each a file of its own: load them from files or paste them, and export or remove each one
+- 2026-11-14 A script's editor suggests the variable names of the scope it reads — `pm.environment.get('`, `pm.collectionVariables.set('`… — and an HTTP request's menu copies its place and id for pasting into a chat with the API role
+- 2026-11-14 Every Postman dynamic variable in an HTTP request — `{{$randomEmail}}`, `{{$randomFirstName}}` and the rest of the 118 — is made as Postman makes it when the request goes; `{{$` lists them with what each makes, and a script's own editor suggests `pm.*` as you type, with each method's arguments and what it does
+- 2026-11-11 See a chat's script draft on the HTTP request it is for — marked in the tree, with its run on the Scripts tab — and move it into the request after reading what it replaces, or reject it; a deleted chat takes its drafts with it
+- 2026-11-11 Ask the API role for tests or a pre-request script on a saved HTTP request: it drafts the script and runs it with nothing sent — tests on its last send of the request, a pre-request on the request as saved — and the draft runs nowhere until you move it into the request
+- 2026-11-11 Write and edit a request's own pre-request and post-response scripts on its Scripts tab; a new script runs once you turn it on
+- 2026-11-10 Turn each Postman script of an HTTP collection on or off on the request's Scripts tab, after reading its code; scripts that are off are marked in the tree and named under the response
+- 2026-11-10 Picking an HTTP request's tab opens its collection and folders in the tree and scrolls to it
+- 2026-11-10 The API role keeps a test case as a new request in your HTTP collections — beside the request it started from or in a folder inside that one; every save asks you first
+- 2026-11-09 The API role sends your saved HTTP requests with its own edits — method, path, query, headers, body, no auth — through the request's auth and the scripts you trusted, always to the saved request's host; its sends are in History, signed by the chat
+- 2026-11-09 The API role reads a request saved in your HTTP collections — its auth and the level it comes from, the variables it uses, its scripts — with credentials written in it masked
+- 2026-11-09 The Assistant chat no longer sends HTTP requests — it mistook them for fetching web pages; your HTTP environments are the API role's
+- 2026-11-09 An API role in Chat, listed while the HTTP client is on: it tests your API against its spec on the environments you opened to the agent
+- 2026-11-08 The HTTP environment form saves itself as you leave a field — no Save button
+- 2026-11-08 HTTP collections and folders you opened stay open after a restart
+- 2026-11-08 Move an HTTP request or folder to another folder or collection from its menu
+- 2026-11-08 Typing {{ in an HTTP request's address, fields or body lists the variables in scope to pick from
+- 2026-11-08 Show a saved HTTP environment secret with the eye beside its field
+- 2026-11-08 A long HTTP response is coloured to its end as soon as it shows, not as you scroll
+- 2026-11-08 Add folders to an HTTP collection or folder from its menu
+- 2026-11-08 The agent can write to an HTTP stand you open to it for writes: POST, PUT, PATCH and DELETE with a body, each shown on a card first — every time with Ask for writes, or as other changes are with Writes as other tools
+- 2026-11-08 The agent works across your HTTP collections: it sends only to the hosts your collections' requests go to, gives you a curl command for any other, and first reads an environment's addresses, requests and open variables — a variable your collections use for sign-in stays hidden from it, marked secret or not
+- 2026-11-07 The agent reads the HTTP stands you open to it: an environment set to Read only takes its GET, HEAD and OPTIONS with no card, the app fills in `{{token}}` and scrubs secrets from what the model reads, and each send shows in History under its chat
+- 2026-11-05 The HTTP page signs in the way a collection says: OAuth 2.0 tokens are got by client credentials or password, kept sealed and renewed as requests go, digest answers its challenge, cookies a server sets go back to it and are listed by domain under Cookies, and form-data bodies with text fields go out
+- 2026-11-04 HTTP page in the Catalog: import Postman collections and environments, send requests, see each request's last response and the history, and run the collection's pre-request and test scripts once you trust them
 
 ## v0.13.1 — 2026-11-16
 

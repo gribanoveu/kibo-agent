@@ -1,0 +1,8 @@
+GET /api/digest/protected HTTP/1.1
+User-Agent: PostmanRuntime/7.56.1
+Accept: */*
+Postman-Token: dac4f7d0-b767-4ede-93c5-b84aca504a64
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+

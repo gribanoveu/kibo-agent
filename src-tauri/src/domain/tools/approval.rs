@@ -67,6 +67,21 @@ impl ApprovalPolicy {
         }
     }
 
+    /// `httpSend` acting as `method` in an environment of `access` (HC-8). A read
+    /// never asks. A write asks by the mode: Ask for writes every time, whatever
+    /// "Always allow" and Auto say, as a production cluster does; Writes as other
+    /// tools as any change does. Off and Read only ask nothing — the tool refuses.
+    pub fn stand_asks(&self, access: AgentAccess, method: &str, environment: &str) -> (bool, Option<String>) {
+        if is_read(method) {
+            return (false, None);
+        }
+        match access {
+            AgentAccess::Off | AgentAccess::ReadOnly => (false, None),
+            AgentAccess::AskForWrites => (true, Some(format!("\"{environment}\" asks for every write"))),
+            AgentAccess::WritesAsOtherTools => (self.requires_approval(ToolName::HttpSend, true), None),
+        }
+    }
+
     /// "Always allow" from an approval card, by the name the call carried.
     pub fn allow_always(&mut self, wire_name: &str) -> Result<(), String> {
         if wire_name.starts_with(MCP_PREFIX) {

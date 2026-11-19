@@ -75,6 +75,11 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "deepseekFetch" => ToolCall::DeepseekFetch(args(call)?),
         "board" => ToolCall::Board(args(call)?),
         "mongo" => ToolCall::Mongo(args(call)?),
+        "httpEnvironment" => ToolCall::HttpEnvironment(args(call)?),
+        "httpSend" => ToolCall::HttpSend(args(call)?),
+        "httpReadRequest" => ToolCall::HttpReadRequest(args(call)?),
+        "httpSaveRequest" => ToolCall::HttpSaveRequest(args(call)?),
+        "httpDraftScript" => ToolCall::HttpDraftScript(args(call)?),
         "present" => ToolCall::Present(args(call)?),
         "toolSearch" => ToolCall::ToolSearch(args(call)?),
         // No arguments, so nothing to deserialize — and nothing for a model to

@@ -13,8 +13,9 @@ export async function plainChatPreview(kube: KubePin | null, calls: PendingToolC
 }
 
 /** Mirrors `domain::chat_role::ChatRole`: who the model is in Chat mode, and which tools it has. */
-export type ChatRoleId = "assistant" | "kubernetes" | "prototype";
-export type ChatRoleView = { id: ChatRoleId; name: string; description: string };
+export type ChatRoleId = "assistant" | "kubernetes" | "prototype" | "api";
+/** `feature`: the Catalog feature the menu waits for before it lists the role. */
+export type ChatRoleView = { id: ChatRoleId; name: string; description: string; feature: string | null };
 
 export async function plainChatRoles(): Promise<ChatRoleView[]> {
   if (!inTauri()) return [];

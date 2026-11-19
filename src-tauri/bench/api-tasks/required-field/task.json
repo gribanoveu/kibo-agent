@@ -1,0 +1,6 @@
+{
+  "prompt": "Test creating orders on my HTTP environment Stage against the spec below, the validation of the body included. It is a test stand: creating orders there is fine.",
+  "access": "writesAsOtherTools",
+  "planted": "(?=.*\\bsum\\b)(?=.*(missing|without|absent|omit|required|no\\W+sum|left out|empty|null))",
+  "_why": "a body without sum is created (201); the spec says 422"
+}

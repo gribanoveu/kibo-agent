@@ -108,6 +108,10 @@ pub enum ToolError {
     /// around.
     #[error("a hook refused this call: {0}")]
     BlockedByHook(String),
+    /// A call its round let through unasked that asks now: a setting — an HTTP
+    /// environment's mode, "Always allow" — changed while another call's card waited.
+    #[error("this call needs the user's approval now, and did not when its round paused — a setting changed while the card waited; call it again to ask")]
+    AsksNow,
     /// Arguments that did not deserialize into the struct their tool expects.
     ///
     /// `reason` is JSON-path-annotated (`edits[1]: missing field \`old\``)
@@ -221,6 +225,8 @@ pub enum ToolError {
     Board(#[from] crate::domain::board::BoardError),
     #[error(transparent)]
     Mongo(#[from] crate::domain::mongo::MongoError),
+    #[error(transparent)]
+    Http(#[from] crate::domain::http_client::HttpError),
     #[error(transparent)]
     Prototype(#[from] crate::domain::prototype::PrototypeError),
     /// A tool of a feature the user has off — called from memory of a turn

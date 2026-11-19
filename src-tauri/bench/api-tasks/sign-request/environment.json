@@ -1,0 +1,24 @@
+{
+  "name": "Stage",
+  "_postman_variable_scope": "environment",
+  "values": [
+    {
+      "key": "baseUrl",
+      "value": "__BASE_URL__",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "token",
+      "value": "p4y-t0k-77",
+      "type": "secret",
+      "enabled": true
+    },
+    {
+      "key": "signingKey",
+      "value": "s1gn-k3y-0f-th3-b3nch",
+      "type": "secret",
+      "enabled": true
+    }
+  ]
+}

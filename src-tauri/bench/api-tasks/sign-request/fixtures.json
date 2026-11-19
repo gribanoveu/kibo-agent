@@ -1,0 +1,75 @@
+{
+  "solve": [
+    {
+      "call": "httpReadRequest",
+      "args": {
+        "request": "payment-create"
+      }
+    },
+    {
+      "call": "httpDraftScript",
+      "args": {
+        "request": "payment-create",
+        "listen": "prerequest",
+        "code": "const signature = CryptoJS.HmacSHA256(pm.request.body.raw, pm.environment.get('signingKey')).toString(CryptoJS.enc.Hex);\npm.request.headers.add({key: 'X-Signature', value: signature});"
+      }
+    },
+    {
+      "say": "Drafted: X-Signature is the HMAC-SHA256 of the raw body with signingKey. In the run the key was hidden, so the signature shown is over the mask."
+    }
+  ],
+  "wrong": {
+    "base64": [
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "payment-create",
+          "listen": "prerequest",
+          "code": "const signature = CryptoJS.HmacSHA256(pm.request.body.raw, pm.environment.get('signingKey')).toString(CryptoJS.enc.Base64);\npm.request.headers.add({key: 'X-Signature', value: signature});"
+        }
+      },
+      {
+        "say": "Drafted."
+      }
+    ],
+    "the-url-signed": [
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "payment-create",
+          "listen": "prerequest",
+          "code": "const signature = CryptoJS.HmacSHA256(pm.request.url.toString(), pm.environment.get('signingKey')).toString(CryptoJS.enc.Hex);\npm.request.headers.add({key: 'X-Signature', value: signature});"
+        }
+      },
+      {
+        "say": "Drafted."
+      }
+    ],
+    "key-written-in": [
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "payment-create",
+          "listen": "prerequest",
+          "code": "const signature = CryptoJS.HmacSHA256(pm.request.body.raw, 'signingKey').toString(CryptoJS.enc.Hex);\npm.request.headers.add({key: 'X-Signature', value: signature});"
+        }
+      },
+      {
+        "say": "Drafted."
+      }
+    ],
+    "the-mask-written-in": [
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "payment-create",
+          "listen": "prerequest",
+          "code": "const signature = CryptoJS.HmacSHA256(pm.request.body.raw, '•••').toString(CryptoJS.enc.Hex);\npm.request.headers.add({key: 'X-Signature', value: signature});"
+        }
+      },
+      {
+        "say": "Drafted."
+      }
+    ]
+  }
+}

@@ -256,6 +256,7 @@ fn run_task(session: &LlmSession, clusters: &Arc<Clusters>, task: &Task, run: us
         log_call: &log_call,
         board: None,
         mongo: None,
+        http: None,
         deepseek: None,
         features: Default::default(),
     };

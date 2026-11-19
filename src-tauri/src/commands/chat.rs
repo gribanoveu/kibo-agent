@@ -338,6 +338,11 @@ fn terminals_of<R: Runtime>(app: &AppHandle<R>, workspace: &std::path::Path) -> 
     Some(Arc::new(terminals.for_workspace(workspace)))
 }
 
+/// The HTTP page's environments, as this chat's HTTP tools reach them.
+pub(super) fn http_stands_of<R: Runtime>(app: &AppHandle<R>, chat_id: &str) -> Arc<dyn crate::domain::http_client::HttpStands> {
+    Arc::new(crate::services::http_client::Stands { changed: super::http::http_event_sink(app), chat: chat_id.to_string() })
+}
+
 /// The MongoDB page's clients, as the agent's `mongo` tool reads through them.
 pub(super) fn mongo_servers_of<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<dyn crate::domain::mongo::MongoServers>> {
     let clients = app.try_state::<Arc<crate::infra::mongo_client::MongoClients>>()?;
@@ -418,6 +423,7 @@ where
             .try_state::<Arc<crate::infra::board_store::Board>>()
             .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
         mongo: mongo_servers_of(&app),
+        http: Some(http_stands_of(&app, &chat_id)),
     };
 
     tauri::async_runtime::spawn_blocking(move || {

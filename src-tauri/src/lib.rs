@@ -88,6 +88,8 @@ fn open_launch(app: &tauri::AppHandle, files: Vec<std::path::PathBuf>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `{{$randomEmail}}` and the rest of Postman's dynamic variables, by Postman's own code.
+    domain::http_client::make_dynamic_with(infra::postman_dynamic::make);
     let builder = commands::meeting::register(commands::prototype::register(tauri::Builder::default()));
     // First, as the plugin requires: plugins start in the order they were
     // added, and a second launch must be turned away before anything else
@@ -244,6 +246,38 @@ pub fn run() {
             commands::prototype::prototype_assets,
             commands::prototype::prototype_asset_add,
             commands::prototype::prototype_asset_remove,
+            commands::http::http_send,
+            commands::http::http_response_last,
+            commands::http::http_collection_list,
+            commands::http::http_collection_new,
+            commands::http::http_collection_delete,
+            commands::http::http_request_save,
+            commands::http::http_script_save,
+            commands::http::http_item_add,
+            commands::http::http_item_rename,
+            commands::http::http_item_delete,
+            commands::http::http_item_move,
+            commands::http::http_import,
+            commands::http::http_export_collection,
+            commands::http::http_export_environment,
+            commands::http::http_environment_list,
+            commands::http::http_environment_save,
+            commands::http::http_environment_delete,
+            commands::http::http_certs,
+            commands::http::http_cert_add,
+            commands::http::http_cert_delete,
+            commands::http::http_cert_export,
+            commands::http::http_environment_secret,
+            commands::http::http_history_list,
+            commands::http::http_cookies,
+            commands::http::http_cookie_delete,
+            commands::http::http_cookies_clear,
+            commands::http::http_scripts,
+            commands::http::http_scripts_set,
+            commands::http::http_drafts,
+            commands::http::http_draft_apply,
+            commands::http::http_draft_reject,
+            commands::http::http_parse_curl,
             commands::artifacts::artifact_list,
             commands::artifacts::artifact_free_space,
             commands::artifacts::artifact_files,

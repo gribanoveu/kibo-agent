@@ -1,0 +1,18 @@
+{
+  "name": "Stage",
+  "_postman_variable_scope": "environment",
+  "values": [
+    {
+      "key": "baseUrl",
+      "value": "__BASE_URL__",
+      "type": "default",
+      "enabled": true
+    },
+    {
+      "key": "token",
+      "value": "dr4ft-t0k-55",
+      "type": "secret",
+      "enabled": true
+    }
+  ]
+}

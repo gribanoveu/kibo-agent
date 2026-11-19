@@ -144,6 +144,12 @@ pub(super) fn run_calls(
                         state.reads.merge(ran.reads);
                         return ran.result;
                     }
+                    // One the round let through unasked may ask by now: a mode
+                    // changed while another call's card waited (HC-8). It goes
+                    // only through a card of its own.
+                    if decision.is_none() && needs_approval(turn, call).0 {
+                        return Err(crate::domain::tools::ToolError::AsksNow);
+                    }
                     if let Some(reason) = pre_tool_use(turn, &events, round, call) {
                         return Err(crate::domain::tools::ToolError::BlockedByHook(reason));
                     }
@@ -294,6 +300,7 @@ pub(super) fn execute_call(
         history,
         board: turn.board.clone(),
         mongo: turn.mongo.clone(),
+        http: turn.http.clone(),
         parallel: match turn.place {
             Place::Folder { parallel, .. } => Some(parallel),
             Place::Chat { .. } => None,
@@ -505,6 +512,37 @@ pub(super) fn needs_approval(turn: &Turn, call: &LlmToolCall) -> (bool, Option<S
     let production = matches!(turn.place, Place::Chat { kube: KubeSetup::Pinned(target), .. } if target.config.production);
     if production && parsed.name().is_mutating() && parsed.name().wire_name().starts_with("kube") {
         return (true, Some("a production cluster — every change to it asks".to_string()));
+    }
+    // A write to a stand asks by the environment's mode, read now (HC-8), and by the
+    // method the send goes with — the saved request's, unless the call names one
+    // (HC-10c). One not open, or refused before the network, asks nothing: the tool
+    // says so, and there is nothing to approve. Stores that could not be read leave
+    // the method or the mode unknown: a write asks.
+    if let crate::domain::tools::ToolCall::HttpSend(args) = &parsed {
+        use crate::services::ai_tools::tools::http_send;
+        let Some(stands) = turn.http.as_deref() else { return (false, None) };
+        let unknown = || {
+            let asks = parsed.is_risky();
+            (asks, asks.then(|| "the HTTP environments could not be read, so a write asks".to_string()))
+        };
+        let Ok(open) = stands.open() else { return unknown() };
+        let (Ok(stand), Ok(send)) = (http_send::stand(&open, args.environment.as_deref()), http_send::agent_send(args)) else { return (false, None) };
+        return match stands.sending(&stand.id, &send) {
+            Ok((acts, what)) => match policy.stand_asks(stand.access, &acts, &stand.name) {
+                (true, reason) => (true, Some(reason.map_or_else(|| what.clone(), |r| format!("{what} — {r}")))),
+                no => no,
+            },
+            Err(crate::domain::http_client::HttpError::Store(_)) => unknown(),
+            Err(_) => (false, None),
+        };
+    }
+    // A case added to the user's collections asks every time, whatever "Always allow"
+    // and Auto say (HC-10e): what lands there is theirs to keep, and they see it first.
+    if let crate::domain::tools::ToolCall::HttpSaveRequest(args) = &parsed {
+        return match turn.http {
+            Some(_) => (true, Some(format!("it adds \"{}\" to your HTTP collections — every save asks", args.name.trim()))),
+            None => (false, None),
+        };
     }
     // What a server says about its own tool is its word (`McpToolHints`):
     // "destructive" asks whatever "Always allow" says, "only reads" is put

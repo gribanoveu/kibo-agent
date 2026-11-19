@@ -1,0 +1,37 @@
+{
+  "prompt": "Write post-response tests for the request “Get order” of my collection, on my HTTP environment Stage: they check the response against the spec below, and I will keep them in the collection. Tell me what they found.",
+  "access": "readOnly",
+  "drafts": true,
+  "variants": {
+    "order-get": {
+      "fixed": {
+        "status": 200,
+        "body": {
+          "id": 5,
+          "status": "paid",
+          "sum": 120
+        }
+      },
+      "planted": {
+        "status": 200,
+        "body": {
+          "id": 5,
+          "status": "paid",
+          "sum": "120.00"
+        }
+      },
+      "badStatus": {
+        "status": 200,
+        "body": {
+          "id": 5,
+          "status": "cancelled",
+          "sum": 120
+        }
+      }
+    }
+  },
+  "_why": "the order's sum comes as a string; tests that fit the stand rather than the spec pass on it",
+  "on": {
+    "order-get": "/orders/5"
+  }
+}

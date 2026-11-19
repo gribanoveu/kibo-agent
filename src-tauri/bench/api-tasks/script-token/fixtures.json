@@ -1,0 +1,67 @@
+{
+  "solve": [
+    {
+      "call": "httpEnvironment",
+      "args": {}
+    },
+    {
+      "send": {
+        "request": "orders-list"
+      }
+    },
+    {
+      "call": "httpReadRequest",
+      "args": {
+        "request": "orders-list"
+      }
+    },
+    {
+      "call": "httpEnvironment",
+      "args": {}
+    },
+    {
+      "send": {
+        "request": "orders-list",
+        "query": "status=paid"
+      }
+    },
+    {
+      "say": "| Case | Result |\n|---|---|\n| FAIL: GET /orders?status=paid | the filter is ignored, order 2 is open |"
+    }
+  ],
+  "wrong": {
+    "no-auth": [
+      {
+        "send": {
+          "request": "orders-list",
+          "query": "status=paid",
+          "auth": "none"
+        }
+      },
+      {
+        "say": "FAIL: GET /orders?status=paid — the status filter is not applied"
+      }
+    ],
+    "the-list-only": [
+      {
+        "send": {
+          "request": "orders-list"
+        }
+      },
+      {
+        "say": "FAIL: GET /orders — the status filter is not applied"
+      }
+    ],
+    "imagined": [
+      {
+        "send": {
+          "request": "orders-list",
+          "query": "status=paid"
+        }
+      },
+      {
+        "say": "FAIL: GET /orders?status=paid — the filter is ignored\nFAIL: POST /login — answers 200, not 201"
+      }
+    ]
+  }
+}

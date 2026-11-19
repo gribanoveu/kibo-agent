@@ -60,6 +60,11 @@ pub enum ToolCall {
     DeepseekFetch(WebFetchArgs),
     Board(BoardArgs),
     Mongo(MongoArgs),
+    HttpEnvironment(HttpEnvironmentArgs),
+    HttpSend(HttpSendArgs),
+    HttpReadRequest(HttpReadRequestArgs),
+    HttpSaveRequest(HttpSaveRequestArgs),
+    HttpDraftScript(HttpDraftScriptArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -115,6 +120,11 @@ impl ToolCall {
             ToolCall::DeepseekFetch(_) => ToolName::DeepseekFetch,
             ToolCall::Board(_) => ToolName::Board,
             ToolCall::Mongo(_) => ToolName::Mongo,
+            ToolCall::HttpEnvironment(_) => ToolName::HttpEnvironment,
+            ToolCall::HttpSend(_) => ToolName::HttpSend,
+            ToolCall::HttpReadRequest(_) => ToolName::HttpReadRequest,
+            ToolCall::HttpSaveRequest(_) => ToolName::HttpSaveRequest,
+            ToolCall::HttpDraftScript(_) => ToolName::HttpDraftScript,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -132,6 +142,10 @@ impl ToolCall {
             // The tool stays mutating — Analyst does not offer it —
             // but a line that only reads needs no card.
             ToolCall::RunCommand(request) => command_risk::classify(&request.command) != CommandRisk::ReadOnly,
+            // So is `httpSend`: a read asks nobody, in any mode. With no method
+            // it is the saved request's, unknown here, and taken as a write —
+            // the loop asks by the one the template has (`HttpStands::sending`).
+            ToolCall::HttpSend(args) => args.method.is_none() || !is_read(&args.acts_as()),
             _ => self.name().is_mutating(),
         }
     }
@@ -390,6 +404,17 @@ pub enum ToolResult {
     /// `mongo`: what was read, already shaped for the model, and a few words
     /// for the row in the transcript.
     Mongo { text: String, summary: String },
+    /// `httpEnvironment`: the environment as the model reads it, and its name.
+    HttpEnvironment { text: String, summary: String },
+    /// `httpSend`: the response and the scripts' report, already shaped for the
+    /// model, and its status and time for the row in the transcript.
+    HttpSend { text: String, summary: String },
+    /// `httpReadRequest`: the saved request as the model reads it, and where it is.
+    HttpReadRequest { text: String, summary: String },
+    /// `httpSaveRequest`: what was kept and where, and the place and name for the row.
+    HttpSaveRequest { text: String, summary: String },
+    /// `httpDraftScript`: what the draft did with nothing sent, and its tests for the row.
+    HttpDraftScript { text: String, summary: String },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
 }

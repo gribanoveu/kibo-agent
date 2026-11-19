@@ -71,10 +71,13 @@ const chatScreen = (
   send?: (text: string) => void,
   imagesEnabled = false,
   role: "assistant" | "prototype" = "assistant",
+  featureOn: (id: string) => boolean = () => false,
+  roles: { id: string; name: string; description: string; feature: string | null }[] | null = null,
   layoutCorrection = false,
 ) => (
   <PlainChat
-    chat={state(chatId, send, role) as unknown as Chat}
+    chat={{ ...state(chatId, send, role), ...(roles ? { roles } : {}) } as unknown as Chat}
+    featureOn={featureOn}
     focus={0}
     imagesEnabled={imagesEnabled}
     layoutCorrection={layoutCorrection}
@@ -93,7 +96,7 @@ const type = (text: string) => fireEvent.change(box(), { target: { value: text }
 
 describe("Chat mode's box", () => {
   test("offers and applies a wrong-layout correction", async () => {
-    render(chatScreen("a", undefined, false, "assistant", true));
+    render(chatScreen("a", undefined, false, "assistant", () => false, null, true));
     type("ghbdtn");
     expect(box().value).toBe("ghbdtn");
 
@@ -181,6 +184,27 @@ describe("Chat mode's box", () => {
     expect(box().value).toBe("");
     expect(readChatDraft(chatDraftKey("chat", null))).toBe("");
   });
+
+  /// A role that needs a Catalog feature is in the menu only while it is on:
+  /// the API role without the HTTP client would have nothing to send with.
+  test("the role menu lists a role only while its feature is on", () => {
+    const roles = [
+      { id: "assistant", name: "Assistant", description: "Answers in text", feature: null },
+      { id: "api", name: "API", description: "Tests an API", feature: "http-client" },
+    ];
+    const listed = () => {
+      fireEvent.click(screen.getByTitle("Who the model is in this chat"));
+      const names = screen.queryAllByRole("option").map((o) => o.textContent ?? "");
+      fireEvent.click(screen.getByTitle("Who the model is in this chat"));
+      return names;
+    };
+    const { rerender } = render(chatScreen("a", undefined, false, "assistant", () => false, roles));
+    expect(listed().some((n) => n.startsWith("API"))).toBe(false);
+    rerender(chatScreen("a", undefined, false, "assistant", (id) => id === "http-client", roles));
+    expect(listed().filter((n) => n.startsWith("API")).length).toBe(1);
+    rerender(chatScreen("a", undefined, false, "assistant", (id) => id === "mongodb", roles));
+    expect(listed().some((n) => n.startsWith("API"))).toBe(false);
+  });
 });
 
 describe("a Kubernetes chat's box", () => {
@@ -196,6 +220,7 @@ describe("a Kubernetes chat's box", () => {
           setPin: (pin: Pin) => pins.push(pin),
         } as unknown as Chat
       }
+      featureOn={() => false}
       focus={0}
       models={{ choices: [], current: null }}
       onModel={() => {}}

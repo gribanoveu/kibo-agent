@@ -87,14 +87,14 @@ fn reads_survive_the_trip_through_javascript() {
 #[test]
 fn what_waits_for_tool_search_is_these() {
     let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-    assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo]);
+    assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest, ToolName::HttpSaveRequest, ToolName::HttpDraftScript]);
 }
 
 #[test]
 fn all_is_complete() {
     assert_eq!(
         ToolName::ALL.len(),
-        50,
+        55,
         "a variant was added or removed — update ALL and this count together"
     );
     let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -171,6 +171,10 @@ fn exactly_the_writing_tools_are_mutating() {
             ToolName::Move,
             // Unknown, so assumed.
             ToolName::Mcp,
+            // A POST to a stand changes it; a GET is told apart per call (`is_risky`).
+            ToolName::HttpSend,
+            // A request added to the user's collections.
+            ToolName::HttpSaveRequest,
         ])
     );
 }
@@ -271,6 +275,39 @@ fn always_allowed_covers_only_its_own_tool() {
     };
     assert!(!policy.requires_approval(ToolName::WriteFile, true));
     assert!(policy.requires_approval(ToolName::Delete, true));
+}
+
+/// A write into a stand asks by the environment's mode, and a read asks nobody in any.
+/// Ask for writes holds under "Always allow" and Auto; Writes as other tools gives way to both.
+#[test]
+fn a_stand_asks_for_a_write_by_its_mode() {
+    let policy = |skip_all: bool, always: bool| {
+        let mut policy = ApprovalPolicy { skip_all, ..ApprovalPolicy::default() };
+        if always {
+            policy.allow_always("httpSend").unwrap();
+        }
+        policy
+    };
+    let modes = [AgentAccess::Off, AgentAccess::ReadOnly, AgentAccess::AskForWrites, AgentAccess::WritesAsOtherTools];
+    for (skip_all, always) in [(false, false), (true, false), (false, true), (true, true)] {
+        let policy = policy(skip_all, always);
+        for access in modes {
+            for read in ["GET", " head ", "options"] {
+                assert_eq!(policy.stand_asks(access, read, "Stage"), (false, None), "{access:?} {read}");
+            }
+            let asks = match access {
+                AgentAccess::Off | AgentAccess::ReadOnly => false,
+                AgentAccess::AskForWrites => true,
+                AgentAccess::WritesAsOtherTools => !skip_all && !always,
+            };
+            for write in ["POST", "put", "PATCH", "DELETE"] {
+                let (asked, why) = policy.stand_asks(access, write, "Stage");
+                assert_eq!(asked, asks, "{access:?} {write} skip_all={skip_all} always={always}");
+                let said = (access == AgentAccess::AskForWrites).then(|| "\"Stage\" asks for every write".to_string());
+                assert_eq!(why, said, "{access:?}");
+            }
+        }
+    }
 }
 
 #[test]

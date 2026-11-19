@@ -157,6 +157,8 @@ pub struct ToolDeps<'a> {
     pub board: Option<std::sync::Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads; `None` while the feature is off.
     pub mongo: Option<std::sync::Arc<dyn crate::domain::mongo::MongoServers>>,
+    /// The environments the HTTP tools reach; `None` while the feature is off.
+    pub http: Option<std::sync::Arc<dyn crate::domain::http_client::HttpStands>>,
     /// The app's own tools this turn offers through `toolSearch` only.
     pub waiting: Vec<crate::domain::llm::LlmToolDefinition>,
     /// Other turns in this checkout, for the worktree offer.

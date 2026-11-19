@@ -1,0 +1,9 @@
+{
+  "name": "Stage",
+  "_postman_variable_scope": "environment",
+  "values": [
+    {"key": "baseUrl", "value": "__BASE_URL__", "type": "default", "enabled": true},
+    {"key": "user", "value": "bench", "type": "default", "enabled": true},
+    {"key": "password", "value": "p4ssw0rd-b3nch", "type": "secret", "enabled": true}
+  ]
+}

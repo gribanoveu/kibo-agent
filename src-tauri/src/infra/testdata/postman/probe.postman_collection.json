@@ -1,0 +1,519 @@
+{
+  "info": {
+    "_postman_id": "3039859f-04ca-430c-91d5-07fa9e717163",
+    "name": "wire_kibo_test",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "00000000"
+  },
+  "item": [
+    {
+      "name": "Body Types",
+      "item": [
+        {
+          "name": "raw-json",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Content-Type is JSON\", function () {",
+                  "    pm.response.to.have.header(\"Content-Type\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"test\",\n  \"value\": 42,\n  \"active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/echo",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "echo"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK – echo response",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"test\",\n  \"value\": 42,\n  \"active\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/echo",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "echo"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "",
+                  "enabled": true
+                }
+              ],
+              "cookie": [],
+              "body": "{\\n  \"name\": \"test\",\\n  \"value\": 42,\\n  \"active\": true\\n}"
+            }
+          ]
+        },
+        {
+          "name": "urlencoded",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "field1",
+                  "value": "hello"
+                },
+                {
+                  "key": "field2",
+                  "value": "world"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/form",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "form"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "formdata-file",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "value": ""
+                },
+                {
+                  "key": "description",
+                  "type": "text",
+                  "value": "test upload"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/upload",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "upload"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "graphql",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query GetUser($id: ID!) {\n  user(id: $id) {\n    id\n    name\n    email\n  }\n}",
+                "variables": "{\"id\": \"1\"}"
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "graphql"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "// Folder pre-request: Body Types",
+              "console.log(\"Entering Body Types folder\");"
+            ],
+            "type": "text/javascript"
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "// Folder test: Body Types",
+              "pm.test(\"Status is not 5xx\", function () {",
+              "    pm.expect(pm.response.code).to.be.below(500);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth Methods",
+      "item": [
+        {
+          "name": "basic-auth",
+          "request": {
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "testuser",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "testpass",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/basic",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "basic"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "apikey-header",
+          "request": {
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-API-Key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "my-secret-key",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/apikey-header",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "apikey-header"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "apikey-query",
+          "request": {
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "api_key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "my-secret-key",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "query",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/apikey-query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "apikey-query"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "digest-auth",
+          "request": {
+            "auth": {
+              "type": "digest",
+              "digest": [
+                {
+                  "key": "username",
+                  "value": "digestuser",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "digestpass",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/digest/protected",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "digest",
+                "protected"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "oauth2",
+          "request": {
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {
+                  "key": "accessToken",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                },
+                {
+                  "key": "tokenType",
+                  "value": "Bearer",
+                  "type": "string"
+                },
+                {
+                  "key": "addTokenTo",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/oauth2/resource",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "oauth2",
+                "resource"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Inherited Bearer",
+      "item": [
+        {
+          "name": "Nested Sub-folder",
+          "item": [
+            {
+              "name": "inherited-get",
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "exec": [
+                      "// Request-level pre-request",
+                      "console.log(\"Sending inherited-get, token: \" + pm.collectionVariables.get(\"access_token\"));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Status code is 200\", function () {",
+                      "    pm.response.to.have.status(200);",
+                      "});",
+                      "pm.test(\"Has authorization header\", function () {",
+                      "    pm.request.to.have.header(\"Authorization\");",
+                      "});"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "auth": {
+                  "type": "inherit"
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/api/protected/resource",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "protected",
+                    "resource"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{access_token}}",
+            "type": "string"
+          }
+        ]
+      }
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "exec": [
+          "// Collection-level pre-request",
+          "console.log(\"Collection pre-request: \" + pm.info.requestName);",
+          "pm.collectionVariables.set(\"timestamp\", new Date().toISOString());"
+        ],
+        "type": "text/javascript"
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "exec": [
+          "// Collection-level test",
+          "pm.test(\"Response time < 5000ms\", function () {",
+          "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});"
+        ],
+        "type": "text/javascript"
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8099"
+    },
+    {
+      "key": "auth_password_16qu",
+      "secret": true
+    },
+    {
+      "key": "timestamp",
+      "value": ""
+    }
+  ]
+}

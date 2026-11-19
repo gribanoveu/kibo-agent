@@ -7,19 +7,20 @@ import { matches, type ShortcutId } from "../lib/shortcuts";
  * would otherwise send Ctrl+` to the shell as a NUL.
  *
  * Handlers are read at the moment of the press, so they may close over
- * this render's state without the listener being set up again.
+ * this render's state without the listener being set up again. One that
+ * returns `false` declines: the key goes on to whatever has focus.
  */
-export function useShortcuts(handlers: Partial<Record<ShortcutId, () => void>>) {
+export function useShortcuts(handlers: Partial<Record<ShortcutId, () => void | false>>) {
   const current = useRef(handlers);
   current.current = handlers;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       for (const [id, run] of Object.entries(current.current)) {
         if (!run || !matches(e, id as ShortcutId)) continue;
+        // Held down, a toggle would flicker.
+        if (!e.repeat && run() === false) return;
         e.preventDefault();
         e.stopPropagation();
-        // Held down, a toggle would flicker.
-        if (!e.repeat) run();
         return;
       }
     };

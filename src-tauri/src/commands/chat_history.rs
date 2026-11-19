@@ -172,6 +172,7 @@ pub async fn chat_set_group(id: String, group: Option<String>) -> Result<(), Str
 
 #[tauri::command]
 pub async fn chat_delete(
+    app: tauri::AppHandle,
     id: String,
     state: State<'_, Arc<AgentState>>,
     processes: State<'_, Arc<crate::infra::background::Processes>>,
@@ -182,7 +183,10 @@ pub async fn chat_delete(
         cleanup_worktree(&id, &state)?;
         crate::services::plain_chat::delete_chat(&id, &processes).map_err(|e| e.to_string())
     })
-    .await
+    .await?;
+    // Its HTTP drafts went with it: the page reads them again.
+    super::http::http_event_sink(&app)(crate::domain::http_client::HttpChanged);
+    Ok(())
 }
 
 /// A clean, unshared worktree no folder of the window is open in (F-8) can

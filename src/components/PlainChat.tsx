@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { AppWindow, MessagesSquare, MousePointerClick, SendHorizontal, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
+import { AppWindow, Globe, MessagesSquare, MousePointerClick, SendHorizontal, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
 import { Dropdown } from "./Dropdown";
@@ -35,6 +35,7 @@ const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   assistant: MessagesSquare,
   kubernetes: ShipWheel,
   prototype: AppWindow,
+  api: Globe,
 };
 
 /** What the empty chat says the role can do — longer than its menu hint, and plain about the limits. */
@@ -44,6 +45,7 @@ const ROLE_WELCOME: Record<ChatRoleId, string> = {
     "The model reads the cluster picked below: pods, events, logs. With Allow changes on it can change it too, asking you first.",
   prototype:
     "The model builds a page — a site, a small app, a slide deck — as files in this chat's own folder. It reaches nothing else on your machine.",
+  api: "The model tests an API against its spec, sending into the HTTP environments you opened to the agent — writes as each one's mode allows. It never sees their secrets.",
 };
 
 type Props = {
@@ -82,6 +84,8 @@ type Props = {
   };
   /** Whether Voice input is on: its button, its key. */
   dictate?: boolean;
+  /** Whether a Catalog feature is on: a role that needs one is listed only while it is. */
+  featureOn: (id: string) => boolean;
   /** Whether the wrong-layout hint is on. Corrections are never automatic. */
   layoutCorrection?: boolean;
   /** Whether Fix also selects the corrected prose's dominant system layout. */
@@ -109,6 +113,7 @@ export function PlainChat({
   onRewind,
   pages,
   dictate = false,
+  featureOn,
   layoutCorrection = false,
   switchLayoutAfterFix = false,
   onLayoutCorrectionError,
@@ -353,7 +358,7 @@ export function PlainChat({
               </span>
             }
             value={chat.role}
-            options={chat.roles.map((r) => ({ value: r.id, label: r.name, hint: r.description }))}
+            options={chat.roles.filter((r) => !r.feature || featureOn(r.feature)).map((r) => ({ value: r.id, label: r.name, hint: r.description }))}
             onPick={(value) => chat.setRole(value as ChatRoleId)}
           />
           {chat.role === "kubernetes" && (

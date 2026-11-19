@@ -19,6 +19,38 @@ const tool = (over: Partial<Extract<Block, { kind: "tool" }>>): Extract<Block, {
 });
 
 describe("what each call shows", () => {
+  test("a send shows what the call changed, the request it went from, its status and what came back", () => {
+    const done = tool({ name: "httpSend", arguments: '{"request":"r1","method":"post","path":"/orders/2","query":"?a=1","environment":"Stage"}', result: { summary: "201 · 12 ms", text: "POST /orders/2 → 201" } });
+    expect(describeTool(done)).toMatchObject({ name: "HTTP", arg: "POST /orders/2?a=1 from r1 on Stage", meta: "201 · 12 ms", detail: "POST /orders/2 → 201" });
+    expect(describeTool(tool({ name: "httpSend", arguments: '{"request":"r1"}' })).arg).toBe("r1");
+    expect(describeTool(tool({ name: "httpSend", arguments: '{"request":"r1","path":"/x"}' })).arg).toBe("/x from r1");
+    expect(describeTool(tool({ name: "httpSend", arguments: '{"request":"r1","method":" head "}' })).arg).toBe("HEAD from r1");
+  });
+
+  test("an environment described shows its name", () => {
+    expect(describeTool(tool({ name: "httpEnvironment", arguments: '{"environment":"Stage"}', result: { summary: "Stage · 3 requests", text: "Environment" } }))).toMatchObject({ name: "HTTP environment", arg: "Stage", meta: "Stage · 3 requests" });
+    expect(describeTool(tool({ name: "httpEnvironment", arguments: "{}" })).arg).toBe("the environment");
+  });
+
+  test("a saved request read shows where it is once read, and its id until then", () => {
+    const done = tool({ name: "httpReadRequest", arguments: '{"request":"r1","environment":"Stage"}', result: { summary: "Shop / Get one", text: "Request \"Shop / Get one\"" } });
+    expect(describeTool(done)).toMatchObject({ name: "HTTP request", arg: "Shop / Get one in Stage", detail: 'Request "Shop / Get one"' });
+    expect(describeTool(tool({ name: "httpReadRequest", arguments: '{"request":" r1 "}', status: "running" })).arg).toBe("r1");
+  });
+
+  test("a case kept shows its name, and where it went once saved", () => {
+    const done = tool({ name: "httpSaveRequest", arguments: '{"from":"r1","name":" No auth ","folder":"Cases"}', result: { summary: "Shop / Cases", text: "Saved" } });
+    expect(describeTool(done)).toMatchObject({ name: "Save HTTP case", arg: '"No auth" in Shop / Cases', detail: "Saved" });
+    expect(describeTool(tool({ name: "httpSaveRequest", arguments: '{"from":" r1 ","name":"No auth"}', status: "running" })).arg).toBe('"No auth" from r1');
+  });
+
+  test("a script draft shows its kind and request, how its tests went, and its code until it ran", () => {
+    const done = tool({ name: "httpDraftScript", arguments: '{"request":" r1 ","listen":"test","code":"pm.test()"}', result: { summary: "post-response · 2 passed", text: "Draft post-response" } });
+    expect(describeTool(done)).toMatchObject({ name: "HTTP script draft", arg: "post-response for r1", meta: "post-response · 2 passed", detail: "Draft post-response" });
+    const running = describeTool(tool({ name: "httpDraftScript", arguments: '{"request":"r1","listen":"prerequest","code":"pm.request"}', status: "running" }));
+    expect(running).toMatchObject({ arg: "pre-request for r1", detail: "pm.request" });
+  });
+
   test("a presented page shows its name and the version kept, and its title while it runs", () => {
     const running = describeTool(tool({ name: "present", arguments: '{"path":"index.html","title":"Coffee shop"}', status: "running" }));
     expect(running).toMatchObject({ name: "Prototype", arg: "Coffee shop", detail: "index.html" });

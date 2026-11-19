@@ -1,0 +1,15 @@
+POST /api/echo HTTP/1.1
+Content-Type: application/json
+User-Agent: PostmanRuntime/7.56.1
+Accept: */*
+Postman-Token: 47e8c3a2-77ef-4249-921e-4db252345d07
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+Content-Length: 53
+
+{
+  "name": "test",
+  "value": 42,
+  "active": true
+}

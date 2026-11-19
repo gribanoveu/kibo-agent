@@ -23,6 +23,7 @@ pub enum Feature {
     MeetingNotes,
     VoiceMemory,
     Mongodb,
+    HttpClient,
     VoiceInput,
     LayoutCorrection,
 }
@@ -49,7 +50,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Mongodb, Feature::VoiceInput, Feature::LayoutCorrection];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Mongodb, Feature::HttpClient, Feature::VoiceInput, Feature::LayoutCorrection];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -113,6 +114,18 @@ impl Feature {
                 enabled_by_default: false,
                 tools: &[ToolName::Mongo],
                 data: Some("mongo_connections.enc"),
+            },
+            Feature::HttpClient => Manifest {
+                id: "http-client",
+                name: "HTTP client",
+                description: "An HTTP page for trying an API: requests in collections kept in the Postman format, \
+                    imported from and exported to Postman, environments with sealed secrets, the response beside the \
+                    request and kept with it, every send in History. A collection's scripts run once you turn each on, having read it. \
+                    An environment you open to the agent it sends your saved requests into, its secrets kept from the model, \
+                    and the cases you ask it to keep it adds beside them.",
+                enabled_by_default: false,
+                tools: &[ToolName::HttpEnvironment, ToolName::HttpSend, ToolName::HttpReadRequest, ToolName::HttpSaveRequest, ToolName::HttpDraftScript],
+                data: Some("http"),
             },
             Feature::VoiceInput => Manifest {
                 id: "voice-input",
@@ -210,7 +223,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "mongodb", "voice-input", "layout-correction"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "mongodb", "http-client", "voice-input", "layout-correction"]);
     }
 
     #[test]
@@ -247,6 +260,7 @@ mod tests {
             assert!(on.offers(tool), "{tool:?}");
         }
         assert!(!off.offers(ToolName::Board));
+        assert_eq!(Feature::owning(ToolName::HttpReadRequest), Some(Feature::HttpClient), "a saved request is the HTTP client's");
     }
 
     #[test]

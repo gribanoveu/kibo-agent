@@ -99,6 +99,144 @@ pub struct MongoArgs {
     pub limit: Option<usize>,
 }
 
+/// `httpEnvironment`: which environment to describe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpEnvironmentArgs {
+    /// An environment's name, as the user named it on the HTTP page.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
+}
+
+/// `httpSend`: a saved request by its id and the model's edits over it.
+/// `{{name}}` stays written out here: its value is the app's to fill in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpSendArgs {
+    pub request: String,
+    /// An environment's name, as the user named it on the HTTP page.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
+    /// The saved request's when left out.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub method: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub path: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub query: Option<String>,
+    /// `null` takes a header away.
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, Option<String>>>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub body: Option<String>,
+    /// Only `"none"` — which `opt_text` would read as no value at all.
+    #[serde(default)]
+    pub auth: Option<String>,
+    /// A model writes `{"id": 5}` as often as `{"id": "5"}`: either is the text `5`.
+    #[serde(default)]
+    pub variables: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub show_headers: Option<bool>,
+}
+
+/// `httpReadRequest`: a request by its id, as the environment's description lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpReadRequestArgs {
+    pub request: String,
+    /// An environment's name; may be left out when only one is open.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
+}
+
+/// `httpSaveRequest`: a case kept — the saved request `from` with the edits
+/// `httpSend` takes, but no `variables`: `{{name}}` stays written in the case.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpSaveRequestArgs {
+    pub from: String,
+    pub name: String,
+    /// A folder right inside `from`'s own, by name; beside `from` when left out.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub folder: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub method: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub path: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub headers: Option<std::collections::BTreeMap<String, Option<String>>>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub auth: Option<String>,
+}
+
+/// `httpDraftScript` (HC-11c): a script for a saved request, run with nothing sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpDraftScriptArgs {
+    pub request: String,
+    /// `prerequest` or `test`, as Postman names them.
+    pub listen: String,
+    pub code: String,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub environment: Option<String>,
+    /// A send's id from `httpSend`; the chat's last of the request when left out.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub variables: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
+impl HttpDraftScriptArgs {
+    pub fn variables(&self) -> Vec<(String, String)> {
+        texts(&self.variables)
+    }
+}
+
+/// A model writes `{"id": 5}` as often as `{"id": "5"}`: either is the text `5`.
+fn texts(values: &Option<std::collections::BTreeMap<String, serde_json::Value>>) -> Vec<(String, String)> {
+    let text = |v: &serde_json::Value| v.as_str().map_or_else(|| v.to_string(), str::to_string);
+    values.iter().flatten().map(|(k, v)| (k.clone(), text(v))).collect()
+}
+
+impl HttpSaveRequestArgs {
+    /// The edits as `httpSend` would take them, to be read the same way.
+    pub fn as_send(&self) -> HttpSendArgs {
+        HttpSendArgs {
+            request: self.from.clone(),
+            environment: self.environment.clone(),
+            method: self.method.clone(),
+            path: self.path.clone(),
+            query: self.query.clone(),
+            headers: self.headers.clone(),
+            body: self.body.clone(),
+            auth: self.auth.clone(),
+            variables: None,
+            show_headers: None,
+        }
+    }
+}
+
+impl HttpSendArgs {
+    /// The method the call acts as — a method-override header's write over the
+    /// request line ([`acts_as`]), when the call names a method; the saved
+    /// request's own headers are the loop's to read (`HttpStands::sending`).
+    pub fn acts_as(&self) -> String {
+        let method = self.method.as_deref().map(str::trim).filter(|m| !m.is_empty()).map_or_else(|| "GET".to_string(), str::to_ascii_uppercase);
+        acts_as(&method, self.headers.iter().flatten().filter_map(|(k, v)| Some((k.as_str(), v.as_deref()?))))
+    }
+
+    /// The model's own values for `{{name}}`, as text.
+    pub fn variables(&self) -> Vec<(String, String)> {
+        texts(&self.variables)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum MongoOp {

@@ -1,0 +1,9 @@
+GET /api/basic HTTP/1.1
+Authorization: Basic dGVzdHVzZXI6dGVzdHBhc3M=
+User-Agent: PostmanRuntime/7.56.1
+Accept: */*
+Postman-Token: 001f04b4-0ba3-4e1b-89be-81e8869cdc80
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+

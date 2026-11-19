@@ -1,0 +1,6 @@
+{
+  "prompt": "Write a pre-request script for the request “Create payment” of my collection that signs it as the spec below says, on my HTTP environment Stage. I will keep it in the collection.",
+  "access": "readOnly",
+  "drafts": true,
+  "_why": "the signing key is hidden: the draft's run signs with the mask, and the check computes the HMAC over the same mask from the request the draft says it would make"
+}

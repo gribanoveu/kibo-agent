@@ -203,6 +203,7 @@ struct Harness {
     shell_described: String,
     agents: Option<Arc<crate::domain::agents::Agents>>,
     questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
+    http: Option<Arc<dyn crate::domain::http_client::HttpStands>>,
     /// The agent's web, as Settings would give it; `None` is off.
     web: Option<Web>,
     features: Features,
@@ -260,6 +261,7 @@ fn harness(label: &str, steps: Vec<Step>) -> Harness {
         agents: None,
         questions: None,
         web: None,
+        http: None,
         features: Features::default(),
         parallel: Vec::new(),
         parallel_calls: Arc::new(Mutex::new(0)),
@@ -329,6 +331,7 @@ impl Harness {
             questions: self.questions.clone(),
             board: None,
             mongo: None,
+            http: self.http.clone(),
             deepseek: None,
             features: self.features.clone(),
             fork: false,

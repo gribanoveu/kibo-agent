@@ -1,0 +1,41 @@
+{
+  "prompt": "Write post-response tests for creating an order and reading it back — the requests “Create order” and “Get order” of my collection, on my HTTP environment Stage — that I will keep in the collection. The test of the read must check that it gets the very order that was created. It is a test stand: creating orders there is fine.",
+  "access": "writesAsOtherTools",
+  "drafts": true,
+  "variants": {
+    "order-create": {
+      "same": {
+        "status": 201
+      },
+      "notCreated": {
+        "status": 200
+      }
+    },
+    "order-get": {
+      "same": {
+        "status": 200
+      },
+      "another": {
+        "status": 200,
+        "patch": {
+          "id": 999
+        }
+      },
+      "elsewhere": {
+        "status": 200,
+        "patch": {
+          "id": 77
+        },
+        "renumber": {
+          "variable": "orderId",
+          "to": "77"
+        }
+      }
+    }
+  },
+  "_why": "the read's draft runs on a send of {{orderId}}: the id has to come from the create, through `variables`, and a test that passes on any order passes on another",
+  "on": {
+    "order-create": "/orders",
+    "order-get": "/orders/{{orderId}}"
+  }
+}

@@ -157,7 +157,7 @@ const mint = (session: Session, prefix: string) => {
  * and approval card, so leaving one does not stop it or mix its events into
  * the next chat opened. The active session is the one the panels draw.
  */
-export function usePlainChat(lastKubeconfig: string | null = null, model?: string, shown = false) {
+export function usePlainChat(lastKubeconfig: string | null = null, model?: string, shown = false, featureOn: (id: string) => boolean = () => true) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [openId, setOpenId] = useStoredState<string | null>("plain-chat-open", null, isId);
   const [roles, setRoles] = useState<ChatRoleView[]>([]);
@@ -354,11 +354,14 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     const pinned = previous.pinned
       ? { kubeconfig: previous.pinned.kubeconfig, context: previous.pinned.context, namespace: previous.pinned.namespace }
       : null;
-    const session = fresh(crypto.randomUUID(), previous.role, pinned);
+    // The role goes on, unless its feature was turned off: the menu no longer lists it.
+    const needs = roles.find((r) => r.id === previous.role)?.feature;
+    const role = needs && !featureOn(needs) ? "assistant" : previous.role;
+    const session = fresh(crypto.randomUUID(), role, pinned);
     sessions.current.set(session.key, session);
     activate(session);
     return true;
-  }, [activate]);
+  }, [activate, roles, featureOn]);
 
   const setRole = (next: ChatRoleId) => {
     const session = active.current;

@@ -1,0 +1,11 @@
+POST /api/form HTTP/1.1
+User-Agent: PostmanRuntime/7.56.1
+Accept: */*
+Postman-Token: b92e605f-c2c0-4dfa-b74b-23fb7143131c
+Host: 127.0.0.1:8099
+Accept-Encoding: gzip, deflate, br
+Connection: keep-alive
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 25
+
+field1=hello&field2=world

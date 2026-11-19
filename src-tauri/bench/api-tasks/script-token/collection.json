@@ -1,0 +1,26 @@
+{
+  "info": {"name": "Orders", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{accessToken}}", "type": "string"}]},
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.collectionVariables.get('accessToken')) {",
+          "  pm.sendRequest({",
+          "    url: pm.environment.get('baseUrl') + '/login',",
+          "    method: 'POST',",
+          "    header: {'Content-Type': 'application/json'},",
+          "    body: {mode: 'raw', raw: JSON.stringify({user: pm.environment.get('user'), password: pm.environment.get('password')})}",
+          "  }, (err, res) => pm.collectionVariables.set('accessToken', res.json().token));",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [{"key": "accessToken", "value": ""}],
+  "item": [
+    {"id": "orders-list", "name": "List orders", "request": {"method": "GET", "url": "{{baseUrl}}/orders"}}
+  ]
+}

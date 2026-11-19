@@ -1,0 +1,385 @@
+{
+  "solve": [
+    {
+      "send": {
+        "request": "order-get",
+        "variables": {
+          "orderId": "41"
+        }
+      }
+    },
+    {
+      "send": {
+        "request": "order-create"
+      }
+    },
+    {
+      "send": {
+        "request": "order-create",
+        "body": "{\"sum\": -1}"
+      }
+    },
+    {
+      "call": "httpDraftScript",
+      "args": {
+        "request": "order-create",
+        "listen": "test",
+        "code": "pm.test('201 Created', () => pm.response.to.have.status(201));\npm.test('the order made', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.eql(120);\n  pm.expect(o.status).to.eql('open');\n  pm.environment.set('orderId', String(o.id));\n});"
+      }
+    },
+    {
+      "send": {
+        "request": "order-get",
+        "variables": {
+          "orderId": "41"
+        }
+      }
+    },
+    {
+      "send": {
+        "request": "order-get",
+        "variables": {
+          "orderId": "999"
+        }
+      }
+    },
+    {
+      "send": {
+        "request": "order-create"
+      }
+    },
+    {
+      "send": {
+        "request": "order-get",
+        "variables": {
+          "orderId": "42"
+        }
+      }
+    },
+    {
+      "call": "httpDraftScript",
+      "args": {
+        "request": "order-get",
+        "listen": "test",
+        "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('orderId'));\n});\npm.test('read where it was asked', () => pm.expect(pm.request.url.toString()).to.include('/orders/' + pm.variables.get('orderId')));",
+        "variables": {
+          "orderId": "999"
+        }
+      }
+    },
+    {
+      "call": "httpDraftScript",
+      "args": {
+        "request": "order-get",
+        "listen": "test",
+        "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('orderId'));\n});\npm.test('read where it was asked', () => pm.expect(pm.request.url.toString()).to.include('/orders/' + pm.variables.get('orderId')));",
+        "variables": {
+          "orderId": "41"
+        }
+      }
+    },
+    {
+      "call": "httpDraftScript",
+      "args": {
+        "request": "order-get",
+        "listen": "test",
+        "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('orderId'));\n});\npm.test('read where it was asked', () => pm.expect(pm.request.url.toString()).to.include('/orders/' + pm.variables.get('orderId')));",
+        "variables": {
+          "orderId": "999"
+        }
+      }
+    },
+    {
+      "say": "Two drafts: the create's test keeps the id as orderId, and the read's checks it gets order 41 back."
+    }
+  ],
+  "wrong": {
+    "any-order-will-do": [
+      {
+        "send": {
+          "request": "order-create"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-create",
+          "listen": "test",
+          "code": "pm.test('201 Created', () => pm.response.to.have.status(201));\npm.test('the order made', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.eql(120);\n  pm.expect(o.status).to.eql('open');\n  pm.environment.set('orderId', String(o.id));\n});"
+        }
+      },
+      {
+        "send": {
+          "request": "order-get",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('an order', () => pm.expect(pm.response.json().id).to.exist); // orderId",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "say": "Both drafts pass."
+      }
+    ],
+    "id-left-out": [
+      {
+        "send": {
+          "request": "order-create"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-create",
+          "listen": "test",
+          "code": "pm.test('201 Created', () => pm.response.to.have.status(201));\npm.test('the order made', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.eql(120);\n  pm.expect(o.status).to.eql('open');\n  pm.environment.set('orderId', String(o.id));\n});"
+        }
+      },
+      {
+        "send": {
+          "request": "order-get",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('orderId'));\n});"
+        }
+      },
+      {
+        "say": "The read's test fails: orderId is not set."
+      }
+    ],
+    "read-only": [
+      {
+        "send": {
+          "request": "order-create"
+        }
+      },
+      {
+        "send": {
+          "request": "order-get",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('orderId'));\n});",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "say": "The read's draft checks the order."
+      }
+    ],
+    "given-but-unused": [
+      {
+        "send": {
+          "request": "order-create"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-create",
+          "listen": "test",
+          "code": "pm.test('201 Created', () => pm.response.to.have.status(201));\npm.test('the order made', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.eql(120);\n  pm.expect(o.status).to.eql('open');\n  pm.environment.set('orderId', String(o.id));\n});"
+        }
+      },
+      {
+        "send": {
+          "request": "order-get",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => pm.expect(pm.response.json().id).to.eql(41));",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "say": "Both drafts pass."
+      }
+    ],
+    "never-read-it": [
+      {
+        "send": {
+          "request": "order-create"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-create",
+          "listen": "test",
+          "code": "pm.test('201 Created', () => pm.response.to.have.status(201));\npm.test('the order made', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.eql(120);\n  pm.expect(o.status).to.eql('open');\n  pm.environment.set('orderId', String(o.id));\n});"
+        }
+      },
+      {
+        "send": {
+          "request": "order-get",
+          "variables": {
+            "orderId": "999"
+          }
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('orderId'));\n});\npm.test('read where it was asked', () => pm.expect(pm.request.url.toString()).to.include('/orders/' + pm.variables.get('orderId')));",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "say": "Both drafts written."
+      }
+    ],
+    "create-any-success": [
+      {
+        "send": {
+          "request": "order-create"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-create",
+          "listen": "test",
+          "code": "pm.test('201 Created', () => pm.response.to.be.success);\npm.test('the order made', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.eql(120);\n  pm.expect(o.status).to.eql('open');\n  pm.environment.set('orderId', String(o.id));\n});"
+        }
+      },
+      {
+        "send": {
+          "request": "order-get",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('orderId'));\n});\npm.test('read where it was asked', () => pm.expect(pm.request.url.toString()).to.include('/orders/' + pm.variables.get('orderId')));",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "say": "Two drafts: the create's test keeps the id as orderId, and the read's checks it gets order 41 back."
+      }
+    ],
+    "create-expects-202": [
+      {
+        "send": {
+          "request": "order-create"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-create",
+          "listen": "test",
+          "code": "pm.test('201 Created', () => pm.response.to.have.status(202));\npm.test('the order made', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.eql(120);\n  pm.expect(o.status).to.eql('open');\n  pm.environment.set('orderId', String(o.id));\n});"
+        }
+      },
+      {
+        "send": {
+          "request": "order-get",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('orderId'));\n});\npm.test('read where it was asked', () => pm.expect(pm.request.url.toString()).to.include('/orders/' + pm.variables.get('orderId')));",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "say": "Two drafts: the create's test keeps the id as orderId, and the read's checks it gets order 41 back."
+      }
+    ]
+  },
+  "right": {
+    "named-otherwise": [
+      {
+        "send": {
+          "request": "order-create"
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-create",
+          "listen": "test",
+          "code": "pm.test('201 Created', () => pm.response.to.have.status(201));\npm.test('the order made', () => {\n  const o = pm.response.json();\n  pm.expect(o.id).to.be.a('number');\n  pm.expect(o.sum).to.eql(120);\n  pm.expect(o.status).to.eql('open');\n  pm.environment.set('orderId', String(o.id));\n});"
+        }
+      },
+      {
+        "send": {
+          "request": "order-get",
+          "variables": {
+            "orderId": "41"
+          }
+        }
+      },
+      {
+        "call": "httpDraftScript",
+        "args": {
+          "request": "order-get",
+          "listen": "test",
+          "code": "pm.test('200', () => pm.response.to.have.status(200));\npm.test('the order created', () => {\n  pm.expect(String(pm.response.json().id)).to.eql(pm.variables.get('createdOrderId'));\n});\npm.test('read where it was asked', () => pm.expect(pm.request.url.toString()).to.include('/orders/' + pm.variables.get('createdOrderId')));",
+          "variables": {
+            "createdOrderId": "41"
+          }
+        }
+      },
+      {
+        "say": "Two drafts: the create's test keeps the id as orderId, and the read's checks it gets order 41 back."
+      }
+    ]
+  }
+}

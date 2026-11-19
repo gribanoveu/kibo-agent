@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::domain::command_risk::{self, CommandRisk};
+use crate::domain::http_client::{acts_as, is_read, AgentAccess};
 
 /// A tool's identity, known from the wire name alone — before its arguments
 /// are parsed, and without borrowing them. That is what lets it key the
@@ -125,6 +126,21 @@ pub enum ToolName {
     /// The MongoDB connections the user opened to the agent, read: their
     /// collections, documents, counts, aggregations, indexes (`docs/44-mongodb.md`, M-8).
     Mongo,
+    /// An HTTP environment the user opened to the agent, described: its hosts,
+    /// variables and the collections' requests (`docs/45-http-client.md`, HC-10c).
+    HttpEnvironment,
+    /// A saved request sent into an environment with the model's edits, as the
+    /// page sends it (`docs/45-http-client.md`, HC-10c).
+    HttpSend,
+    /// A request saved in the user's collections, read as written — its auth,
+    /// variables and scripts, a credential masked (`docs/45-http-client.md`, HC-10b).
+    HttpReadRequest,
+    /// A case kept as a new request in the template's collection — the template
+    /// with the model's edits, no scripts (`docs/45-http-client.md`, HC-10e).
+    HttpSaveRequest,
+    /// The model's script for a saved request, run with nothing sent and kept as a
+    /// draft the user may move into the request (`docs/45-http-client.md`, HC-11c).
+    HttpDraftScript,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -193,6 +209,11 @@ impl ToolName {
         ToolName::DeepseekFetch,
         ToolName::Board,
         ToolName::Mongo,
+        ToolName::HttpEnvironment,
+        ToolName::HttpSend,
+        ToolName::HttpReadRequest,
+        ToolName::HttpSaveRequest,
+        ToolName::HttpDraftScript,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -249,6 +270,11 @@ impl ToolName {
             ToolName::DeepseekFetch => "deepseekFetch",
             ToolName::Board => "board",
             ToolName::Mongo => "mongo",
+            ToolName::HttpEnvironment => "httpEnvironment",
+            ToolName::HttpSend => "httpSend",
+            ToolName::HttpReadRequest => "httpReadRequest",
+            ToolName::HttpSaveRequest => "httpSaveRequest",
+            ToolName::HttpDraftScript => "httpDraftScript",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -357,6 +383,10 @@ impl ToolName {
             | ToolName::KubeRolloutUndo
             | ToolName::KubeApply
             | ToolName::KubeDelete
+            // POST, PUT, DELETE to a stand; a read asks nobody (`ToolCall::is_risky`).
+            | ToolName::HttpSend
+            // A request added to the user's collections; the card always shows.
+            | ToolName::HttpSaveRequest
             // Nothing is known about what a foreign tool does, and its
             // server's own hints are untrusted by the specification: it
             // goes through the approval gate, in Analyst too, the one place
@@ -400,6 +430,11 @@ impl ToolName {
             | ToolName::Board
             // Reads; a pipeline that would write is refused before the server.
             | ToolName::Mongo
+            // The user's collections and environments, read; nothing is sent.
+            | ToolName::HttpEnvironment
+            | ToolName::HttpReadRequest
+            // Nothing sent, nothing of the user's written: a draft goes to the app's own file.
+            | ToolName::HttpDraftScript
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
@@ -427,8 +462,17 @@ impl ToolName {
             | ToolName::DeepseekSearch
             | ToolName::DeepseekFetch
             // A server asked, nothing left open after it.
-            | ToolName::Mongo => true,
-            ToolName::WriteFile
+            | ToolName::Mongo
+            // Files of the app's, read.
+            | ToolName::HttpEnvironment
+            | ToolName::HttpReadRequest => true,
+            // One at a time: it writes, and a stand is the user's to load.
+            ToolName::HttpSend
+            // The user's collection file, written.
+            | ToolName::HttpSaveRequest
+            // The drafts' file, written.
+            | ToolName::HttpDraftScript
+            | ToolName::WriteFile
             | ToolName::EditFile
             | ToolName::Delete
             | ToolName::Move
@@ -505,6 +549,10 @@ impl ToolName {
             | ToolName::ToolSearch
             | ToolName::Board
             | ToolName::Mongo
+            | ToolName::HttpEnvironment
+            | ToolName::HttpReadRequest
+            // A draft beside the request, which a rewind leaves, as it leaves the board.
+            | ToolName::HttpDraftScript
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
             | ToolName::Skill
@@ -518,6 +566,10 @@ impl ToolName {
             ToolName::RunCommand | ToolName::Mcp => false,
             // The folder's memory file, which stays.
             ToolName::Remember => false,
+            // A stand, which a rewind does not reach: a write there stays.
+            ToolName::HttpSend => false,
+            // The user's collections, which a rewind does not reach: the case stays.
+            ToolName::HttpSaveRequest => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
             // Its helper may run commands to prove a finding (a build writes
@@ -635,6 +687,12 @@ impl ToolName {
             ToolName::DeepseekSearch | ToolName::DeepseekFetch => 2,
             // A request or two to a server; a search by name, one per database.
             ToolName::Mongo => 2,
+            // One request; a slow stand holds it for up to 30 s.
+            ToolName::HttpSend => 2,
+            // The collections and environments, small files of the app's.
+            ToolName::HttpEnvironment | ToolName::HttpReadRequest | ToolName::HttpSaveRequest => 1,
+            // A script in the sandbox, which may wait out its timers.
+            ToolName::HttpDraftScript => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,

@@ -1,0 +1,51 @@
+{
+  "solve": [
+    {
+      "send": {
+        "request": "users-get"
+      }
+    },
+    {
+      "send": {
+        "request": "users-get",
+        "path": "/users/999"
+      }
+    },
+    {
+      "say": "Verdict:\n- FAIL: GET /users/7 — leaks the password hash, a field the spec does not list"
+    }
+  ],
+  "wrong": {
+    "pass-after-the-bug": [
+      {
+        "send": {
+          "request": "users-get"
+        }
+      },
+      {
+        "say": "PASS"
+      }
+    ],
+    "unknown-only": [
+      {
+        "send": {
+          "request": "users-get",
+          "path": "/users/999"
+        }
+      },
+      {
+        "say": "FAIL: GET /users/7 — passwordHash in the user"
+      }
+    ],
+    "wrong-field": [
+      {
+        "send": {
+          "request": "users-get"
+        }
+      },
+      {
+        "say": "FAIL: GET /users/7 — email is missing"
+      }
+    ]
+  }
+}

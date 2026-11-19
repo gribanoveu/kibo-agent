@@ -15,6 +15,8 @@ mock.module("@tauri-apps/api/core", () => ({
     calls.push({ command, args });
     const answer = results[command];
     const result = typeof answer === "function" ? answer(args) : answer;
+    // The roles are a list whenever the backend answers; other commands may answer nothing.
+    if (command === "plain_chat_roles") return Promise.resolve(result ?? []);
     return result instanceof Error ? Promise.reject(result.message) : Promise.resolve(result ?? null);
   },
 }));
@@ -396,6 +398,31 @@ describe("a chat's role", () => {
     act(() => {
       result.current.setRole("assistant");
     });
+    expect(result.current.role).toBe("kubernetes");
+  });
+
+  /// A new chat goes on in the last one's role — unless that role's feature was
+  /// turned off since, and the menu no longer lists it.
+  test("a new chat keeps the role only while its feature is on", async () => {
+    results.plain_chat_roles = [
+      { id: "assistant", name: "Assistant", description: "", feature: null },
+      { id: "kubernetes", name: "Kubernetes", description: "", feature: null },
+      { id: "api", name: "API", description: "", feature: "http-client" },
+    ];
+    const { result, rerender } = renderHook(({ on }) => usePlainChat(null, undefined, false, (id) => on.includes(id)), {
+      initialProps: { on: ["http-client"] },
+    });
+    await waitFor(() => expect(result.current.roles).toHaveLength(3));
+    act(() => result.current.setRole("api"));
+    act(() => void result.current.newChat());
+    expect(result.current.role).toBe("api");
+
+    rerender({ on: ["mongodb"] });
+    act(() => void result.current.newChat());
+    expect(result.current.role).toBe("assistant");
+
+    act(() => result.current.setRole("kubernetes"));
+    act(() => void result.current.newChat());
     expect(result.current.role).toBe("kubernetes");
   });
 });

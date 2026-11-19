@@ -32,6 +32,11 @@ const ACCOUNTED = new Set([
   "board",
   // MongoDB, read.
   "mongo",
+  // An HTTP environment and a saved request, read; nothing sent.
+  "httpEnvironment",
+  "httpReadRequest",
+  // A draft beside the request: nothing sent, nothing of the user's written.
+  "httpDraftScript",
   // A version kept beside a Prototype chat's folder: history, which stays.
   "present",
   "skill",

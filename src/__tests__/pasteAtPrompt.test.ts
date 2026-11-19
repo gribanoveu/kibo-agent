@@ -97,14 +97,15 @@ describe("pasteAtPrompt", () => {
 
   test("a shell with no bracketed paste gets it once its output goes quiet", async () => {
     const id = nextId++;
-    const s = screen(id, 40);
+    // Wide margins: a Windows timer runs up to 16 ms late, and more on a busy runner.
+    const s = screen(id, 300);
     queuePaste(id, "dir");
-    await wait(25);
+    await wait(200);
     await s.shell("C:\\> ");
-    // The output restarted the wait.
-    await wait(25);
+    // The output restarted the wait: 400 ms since the queue, 200 since the output.
+    await wait(200);
     expect(s.sent()).toBe("");
-    await wait(40);
+    await wait(300);
     expect(s.sent()).toBe("dir");
   });
 
@@ -112,7 +113,7 @@ describe("pasteAtPrompt", () => {
     const id = nextId++;
     queuePaste(id, "dir");
     const s = screen(id, 30);
-    await wait(50);
+    await wait(200);
     expect(s.sent()).toBe("dir");
   });
 
