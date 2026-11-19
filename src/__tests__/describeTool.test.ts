@@ -9,7 +9,7 @@ import { briefTitle } from "../lib/agents";
 
 const tool = (over: Partial<Extract<Block, { kind: "tool" }>>): Extract<Block, { kind: "tool" }> => ({
   kind: "tool",
-  id: "c1",
+  id: "T1",
   round: 1,
   name: "readFile",
   arguments: "{}",
@@ -35,10 +35,10 @@ describe("what each call shows", () => {
   test("a board call names the card it is about, and an edit shows the note it wrote", () => {
     const board = (args: string) => describeTool(tool({ name: "board", arguments: args, result: { cards: [{}, {}] } }));
     expect(board('{"op":"add","title":"Renew cert"}')).toMatchObject({ name: "Board", arg: "Renew cert", meta: "2 cards" });
-    expect(board('{"op":"move","id":"c1","column":"done"}')).toMatchObject({ arg: "c1 → done" });
-    expect(board('{"op":"edit","id":"c1","title":null,"note":"wlbuh, 1 Nov"}')).toMatchObject({ arg: "c1", detail: "wlbuh, 1 Nov" });
-    expect(board('{"op":"edit","id":"c1","title":"Renew the cert"}')).toMatchObject({ arg: "c1 Renew the cert" });
-    expect(board('{"op":"edit","id":"c1","due":"2026-11-01"}')).toMatchObject({ arg: "c1", detail: "due 2026-11-01" });
+    expect(board('{"op":"move","id":"T1","column":"done"}')).toMatchObject({ arg: "T1 → done" });
+    expect(board('{"op":"edit","id":"T1","title":null,"note":"wlbuh, 1 Nov"}')).toMatchObject({ arg: "T1", detail: "wlbuh, 1 Nov" });
+    expect(board('{"op":"edit","id":"T1","title":"Renew the cert"}')).toMatchObject({ arg: "T1 Renew the cert" });
+    expect(board('{"op":"edit","id":"T1","due":"2026-11-01"}')).toMatchObject({ arg: "T1", detail: "due 2026-11-01" });
     expect(board('{"op":"add","title":"Renew cert","note":"wlbuh","due":"2026-11-01"}')).toMatchObject({ detail: "wlbuh\ndue 2026-11-01" });
     expect(board('{"op":"list"}')).toMatchObject({ arg: "list", detail: "" });
   });

@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(done.result.text, "Записал на доску.");
         let cards = crate::domain::board::TaskBoard::cards(board.as_ref()).unwrap();
         assert_eq!(cards.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["Заявка на память в wlbuh"]);
-        assert!(tool_result(&done.history).contains("c1 Заявка на память в wlbuh"), "{}", tool_result(&done.history));
+        assert!(tool_result(&done.history).contains("T1 Заявка на память в wlbuh"), "{}", tool_result(&done.history));
     }
 
     /// The board turned off since: a call from memory is refused before it

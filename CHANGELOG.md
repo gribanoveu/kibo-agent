@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-19 Board cards are keyed T1, T2… as issues in a tracker; a board kept before reads with the new keys
 - 2026-11-19 Leave comments on a Board card in its side panel — written as Markdown, the newest first, counted on the card, and seen by the Assistant when it lists the board
 - 2026-11-19 A card on the Board opens in a side panel, as an issue does in a tracker: its status and actions on top, its title and description (read as Markdown) edited in place, how far off its due day is; a new card is written and lands on top of To do, from the + in its heading
 - 2026-11-19 The box under the message field picks a folder and a branch only for a new chat: a started chat shows its folder there and its branch in Overview

@@ -6,7 +6,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::domain::board::{apply, BoardChange, BoardChanged, BoardError, BoardEventSink, Card, TaskBoard};
+use crate::domain::board::{apply, with_keys, BoardChange, BoardChanged, BoardError, BoardEventSink, Card, TaskBoard};
 
 pub struct Board {
     /// `None` without a home directory: every call then says so.
@@ -35,7 +35,7 @@ impl Board {
         match fs::read_to_string(path) {
             // A file that does not parse is refused, not replaced: the next
             // write would otherwise drop every card in it.
-            Ok(text) => serde_json::from_str(&text).map_err(|e| BoardError::Store(format!("{} does not parse: {e}", path.display()))),
+            Ok(text) => serde_json::from_str(&text).map(with_keys).map_err(|e| BoardError::Store(format!("{} does not parse: {e}", path.display()))),
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(BoardError::Store(format!("{}: {e}", path.display()))),
         }
@@ -81,7 +81,7 @@ mod tests {
         let (first, signals) = board(path.clone());
         assert_eq!(first.cards().unwrap(), []);
         first.change(&BoardChange::Add { title: "file the request".into(), note: None, due: None }).unwrap();
-        first.change(&BoardChange::Move { id: "c1".into(), column: Column::Doing, index: None }).unwrap();
+        first.change(&BoardChange::Move { id: "T1".into(), column: Column::Doing, index: None }).unwrap();
         assert_eq!(signals.load(Ordering::SeqCst), 2);
 
         let (again, _) = board(path);
@@ -90,10 +90,22 @@ mod tests {
     }
 
     #[test]
+    fn a_board_kept_with_the_first_keys_reads_and_is_written_with_t_keys() {
+        let path = temp_dir("board-store-keys").join("board.json");
+        fs::write(&path, r#"[{"id":"c2","title":"a","column":"todo"},{"id":"c5","title":"b","column":"doing"}]"#).unwrap();
+        let (board, _) = board(path.clone());
+        assert_eq!(board.cards().unwrap().iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["T2", "T5"]);
+        // An old key still finds its card, and the file is written back keyed anew.
+        board.change(&BoardChange::Move { id: "c2".into(), column: Column::Done, index: None }).unwrap();
+        let kept = fs::read_to_string(&path).unwrap();
+        assert!(kept.contains(r#""id": "T2""#) && kept.contains(r#""id": "T5""#) && !kept.contains(r#""c2""#), "{kept}");
+    }
+
+    #[test]
     fn a_refused_change_writes_nothing_and_signals_nothing() {
         let path = temp_dir("board-store-refused").join("board.json");
         let (board, signals) = board(path.clone());
-        assert!(board.change(&BoardChange::Remove { id: "c1".into() }).is_err());
+        assert!(board.change(&BoardChange::Remove { id: "T1".into() }).is_err());
         assert!(!path.exists());
         assert_eq!(signals.load(Ordering::SeqCst), 0);
     }

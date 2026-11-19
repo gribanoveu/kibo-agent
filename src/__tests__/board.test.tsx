@@ -39,7 +39,7 @@ mock.module("@tauri-apps/api/core", () => ({
         change.op === "remove"
           ? stored.filter((c) => c.id !== change.id)
           : change.op === "add"
-            ? [{ id: `c${stored.length + 1}`, title: "", ...text, column: "todo" }, ...stored]
+            ? [{ id: `T${stored.length + 1}`, title: "", ...text, column: "todo" }, ...stored]
             : stored.map((c) => (c.id !== change.id ? c : change.op === "edit" ? { ...c, ...text } : { ...c, column: change.column! }));
       return Promise.resolve(structuredClone(stored));
     }
@@ -72,10 +72,10 @@ beforeEach(() => {
   calls = [];
   refusal = null;
   stored = [
-    { id: "c1", title: "File the memory request", note: "wlbuh", column: "todo" },
-    { id: "c2", title: "Renew the cert", column: "done" },
-    { id: "c3", title: "Old one", column: "archived" },
-    { id: "c4", title: "Older one", column: "archived" },
+    { id: "T1", title: "File the memory request", note: "wlbuh", column: "todo" },
+    { id: "T2", title: "Renew the cert", column: "done" },
+    { id: "T3", title: "Old one", column: "archived" },
+    { id: "T4", title: "Older one", column: "archived" },
   ];
 });
 
@@ -96,17 +96,17 @@ describe("the board page", () => {
 
     fireEvent.click(column("To do").getByLabelText("Move to Doing"));
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "move", id: "c1", column: "doing" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "move", id: "T1", column: "doing" } } });
     expect(column("Doing").getByText("File the memory request")).toBeTruthy();
 
     fireEvent.click(column("Done").getByLabelText("Remove"));
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "c2" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "T2" } } });
     expect(screen.queryByText("Renew the cert")).toBeNull();
 
     fireEvent.click(column("Doing").getByLabelText("Remove"));
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "c1" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "T1" } } });
   });
 
   test("the archive is folded under the columns, newest first, and its cards can be removed", async () => {
@@ -123,7 +123,7 @@ describe("the board page", () => {
 
     fireEvent.click(column("Archive").getAllByLabelText("Remove")[0]);
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "c4" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "T4" } } });
   });
 
   test("a card is added to To do from its title and note; Enter in the title saves, an empty title cannot", async () => {
@@ -150,7 +150,7 @@ describe("the board page", () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
     fireEvent.click(column("To do").getByText("File the memory request"));
-    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
     expect(column("To do").getByText("File the memory request").closest("article")!.className).toContain("selected");
 
     // Escape puts it back, and leaving it then saves nothing.
@@ -160,7 +160,7 @@ describe("the board page", () => {
     fireEvent.blur(title);
     expect(title.value).toBe("File the memory request");
     expect(calls.some((c) => c.command === "board_change")).toBe(false);
-    expect(screen.getByRole("complementary", { name: "c1 details" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "T1 details" })).toBeTruthy();
 
     // An empty title goes back to what it was.
     fireEvent.change(title, { target: { value: "  " } });
@@ -171,7 +171,7 @@ describe("the board page", () => {
     fireEvent.change(title, { target: { value: "File it today" } });
     fireEvent.blur(title);
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", title: "File it today" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "T1", title: "File it today" } } });
     expect(column("To do").getByText("File it today")).toBeTruthy();
 
     // Read as text until clicked into.
@@ -182,7 +182,7 @@ describe("the board page", () => {
     fireEvent.change(note, { target: { value: "" } });
     fireEvent.blur(note);
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", note: "" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "T1", note: "" } } });
     expect(column("To do").queryByText("wlbuh")).toBeNull();
     expect(sheet.getByText("Add a description…")).toBeTruthy();
   });
@@ -191,33 +191,33 @@ describe("the board page", () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
     fireEvent.click(column("To do").getByLabelText("Open"));
-    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
     fireEvent.click(sheet.getByRole("button", { name: "To do" }));
     fireEvent.click(sheet.getByRole("option", { name: "Doing" }));
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "move", id: "c1", column: "doing" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "move", id: "T1", column: "doing" } } });
     expect(column("Doing").getByText("File the memory request")).toBeTruthy();
 
     // Another card opens in the same sheet.
     fireEvent.pointerDown(screen.getByText("Renew the cert"));
     fireEvent.click(screen.getByText("Renew the cert"));
-    expect(screen.getByRole("complementary", { name: "c2 details" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "T2 details" })).toBeTruthy();
 
-    fireEvent.click(within(screen.getByRole("complementary", { name: "c2 details" })).getByRole("button", { name: "More" }));
+    fireEvent.click(within(screen.getByRole("complementary", { name: "T2 details" })).getByRole("button", { name: "More" }));
     // A press in the menu, drawn outside the sheet, is not one that closes it.
     fireEvent.pointerDown(screen.getByRole("menuitem", { name: "Remove" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "c2" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "T2" } } });
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
   test("a due day is set in the card sheet, and marked on an open card once it has come", async () => {
     stored = [
-      { id: "c1", title: "Late", due: "2000-01-01", column: "todo" },
-      { id: "c2", title: "Now", due: localDay(), column: "doing" },
-      { id: "c3", title: "Later", due: "2999-01-01", column: "todo" },
-      { id: "c4", title: "Finished late", due: "2000-01-01", column: "done" },
+      { id: "T1", title: "Late", due: "2000-01-01", column: "todo" },
+      { id: "T2", title: "Now", due: localDay(), column: "doing" },
+      { id: "T3", title: "Later", due: "2999-01-01", column: "todo" },
+      { id: "T4", title: "Finished late", due: "2000-01-01", column: "done" },
     ];
     render(<BoardPage openPane={() => {}} />);
     await settle();
@@ -229,18 +229,18 @@ describe("the board page", () => {
     expect(due("Finished late").className).toContain("ahead");
 
     fireEvent.click(column("To do").getByText("Late"));
-    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
     expect((sheet.getByLabelText("Due") as HTMLInputElement).value).toBe("2000-01-01");
     expect(sheet.getByText((_, el) => el?.classList.contains("board-sheet-due-when") ?? false).className).toContain("past");
     fireEvent.change(sheet.getByLabelText("Due"), { target: { value: "2999-06-01" } });
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", due: "2999-06-01" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "T1", due: "2999-06-01" } } });
     expect(sheet.getByText((_, el) => el?.classList.contains("board-sheet-due-when") ?? false).className).toContain("ahead");
     expect(due("Late").className).toContain("ahead");
 
     // A finished card's day is not marked.
     fireEvent.click(column("Done").getByText("Finished late"));
-    const done = within(screen.getByRole("complementary", { name: "c4 details" }));
+    const done = within(screen.getByRole("complementary", { name: "T4 details" }));
     expect(done.getByText((_, el) => el?.classList.contains("board-sheet-due-when") ?? false).className).toContain("ahead");
   });
 
@@ -248,7 +248,7 @@ describe("the board page", () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
     fireEvent.click(column("To do").getByText("File the memory request"));
-    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
     const box = sheet.getByLabelText("New comment") as HTMLTextAreaElement;
     fireEvent.focus(box);
     expect((sheet.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
@@ -258,7 +258,7 @@ describe("the board page", () => {
     fireEvent.keyDown(box, { key: "Enter", code: "Enter", ...(IS_MAC ? { metaKey: true } : { ctrlKey: true }) });
     await settle();
     const sent = calls.at(-1)!.args!.change as { op: string; id: string; text: string; at: string };
-    expect({ ...sent, at: undefined }).toEqual({ op: "comment", id: "c1", text: "asked the bank", at: undefined });
+    expect({ ...sent, at: undefined }).toEqual({ op: "comment", id: "T1", text: "asked the bank", at: undefined });
     expect(new Date(sent.at).getTime()).toBeGreaterThanOrEqual(before - 1000);
     expect(box.value).toBe("");
 
@@ -272,7 +272,7 @@ describe("the board page", () => {
 
     fireEvent.click(sheet.getAllByRole("button", { name: "Delete the comment" })[1]);
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "uncomment", id: "c1", comment: 1 } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "uncomment", id: "T1", comment: 1 } } });
     expect(sheet.queryByText("asked the bank")).toBeNull();
     expect(column("To do").getByTitle("1 comments")).toBeTruthy();
   });
@@ -281,7 +281,7 @@ describe("the board page", () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
     fireEvent.click(column("To do").getByText("File the memory request"));
-    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
     refusal = "the card has 100 comments — remove the ones no longer needed";
     fireEvent.change(sheet.getByLabelText("New comment"), { target: { value: "one more" } });
     fireEvent.click(sheet.getByRole("button", { name: "Save" }));
@@ -291,11 +291,11 @@ describe("the board page", () => {
   });
 
   test("a description is read as Markdown, and a link in it is followed rather than edited", async () => {
-    stored = [{ id: "c1", title: "Read", note: "See **the spec** at [docs](https://example.com)", column: "todo" }];
+    stored = [{ id: "T1", title: "Read", note: "See **the spec** at [docs](https://example.com)", column: "todo" }];
     render(<BoardPage openPane={() => {}} />);
     await settle();
     fireEvent.click(column("To do").getByText("Read"));
-    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
     expect(sheet.getByText("the spec").tagName).toBe("STRONG");
     fireEvent.click(sheet.getByText("docs"));
     expect(sheet.queryByLabelText("Description")).toBeNull();
@@ -314,8 +314,8 @@ describe("the board page", () => {
     });
     try {
       stored = [
-        { id: "c1", title: "Long", note: "one\ntwo\nthree\nfour", column: "todo" },
-        { id: "c2", title: "Short", note: "one line", column: "todo" },
+        { id: "T1", title: "Long", note: "one\ntwo\nthree\nfour", column: "todo" },
+        { id: "T2", title: "Short", note: "one line", column: "todo" },
       ];
       render(<BoardPage openPane={() => {}} />);
       await settle();
@@ -349,14 +349,14 @@ describe("the board page", () => {
   test("a card the model added appears when the backend says the board changed", async () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
-    stored = [...stored, { id: "c3", title: "Call the bank", column: "todo" }];
+    stored = [...stored, { id: "T3", title: "Call the bank", column: "todo" }];
     act(() => listeners.forEach((handler) => handler()));
     await settle();
     expect(column("To do").getByText("Call the bank")).toBeTruthy();
   });
 
   test("a board with only an archive says how cards get there", async () => {
-    stored = [{ id: "c3", title: "Old one", column: "archived" }];
+    stored = [{ id: "T3", title: "Old one", column: "archived" }];
     render(<BoardPage openPane={() => {}} />);
     await settle();
     expect(screen.getByText(/Add a card, or ask the Assistant to remind you/)).toBeTruthy();
@@ -378,21 +378,21 @@ describe("a due day", () => {
 });
 
 describe("a dropped card", () => {
-  const order = { todo: ["c1", "c2", "c3"], doing: ["c4"], done: ["c5"] };
+  const order = { todo: ["T1", "T2", "T3"], doing: ["T4"], done: ["T5"] };
 
   test("is read top to bottom per open column, the archive left out", () => {
     const card = (id: string, column: Card["column"]): Card => ({ id, title: id, column });
-    expect(orderOf([card("c1", "done"), card("c2", "todo"), card("c3", "archived"), card("c4", "todo")])).toEqual({ todo: ["c2", "c4"], doing: [], done: ["c1"] });
+    expect(orderOf([card("T1", "done"), card("T2", "todo"), card("T3", "archived"), card("T4", "todo")])).toEqual({ todo: ["T2", "T4"], doing: [], done: ["T1"] });
   });
 
   test("moves to the column and place the drag left it in", () => {
-    expect(dropChange(order, { ...order, todo: ["c2", "c3", "c1"] }, "c1")).toEqual({ op: "move", id: "c1", column: "todo", index: 2 });
-    expect(dropChange(order, { ...order, todo: ["c1", "c3"], doing: ["c2", "c4"] }, "c2")).toEqual({ op: "move", id: "c2", column: "doing", index: 0 });
+    expect(dropChange(order, { ...order, todo: ["T2", "T3", "T1"] }, "T1")).toEqual({ op: "move", id: "T1", column: "todo", index: 2 });
+    expect(dropChange(order, { ...order, todo: ["T1", "T3"], doing: ["T2", "T4"] }, "T2")).toEqual({ op: "move", id: "T2", column: "doing", index: 0 });
   });
 
   test("back where it started, or never in the order, sends nothing", () => {
-    expect(dropChange(order, order, "c2")).toBeNull();
-    expect(dropChange(order, { ...order, todo: ["c1", "c3"], doing: ["c4"] }, "c2")).toBeNull();
+    expect(dropChange(order, order, "T2")).toBeNull();
+    expect(dropChange(order, { ...order, todo: ["T1", "T3"], doing: ["T4"] }, "T2")).toBeNull();
   });
 });
 

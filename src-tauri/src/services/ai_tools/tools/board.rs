@@ -103,9 +103,9 @@ mod tests {
         let deps = ToolDeps { board: Some(Arc::new(InMemory::default())), ..ToolDeps::default() };
         let added = call(&deps, r#"{"op":"add","title":"file the memory request","note":"wlbuh"}"#).unwrap();
         let ToolResult::Board { cards } = added else { panic!("{added:?}") };
-        assert_eq!((cards[0].id.as_str(), cards[0].note.as_deref()), ("c1", Some("wlbuh")));
+        assert_eq!((cards[0].id.as_str(), cards[0].note.as_deref()), ("T1", Some("wlbuh")));
 
-        call(&deps, r#"{"op":"move","id":"c1","column":"done"}"#).unwrap();
+        call(&deps, r#"{"op":"move","id":"T1","column":"done"}"#).unwrap();
         let listed = call(&deps, r#"{"op":"list"}"#).unwrap();
         let ToolResult::Board { cards } = listed else { panic!("{listed:?}") };
         assert_eq!(cards[0].column, Column::Done);
@@ -116,7 +116,7 @@ mod tests {
         let deps = ToolDeps { board: Some(Arc::new(InMemory::default())), ..ToolDeps::default() };
         let err = call(&deps, r#"{"op":"add"}"#).unwrap_err().to_string();
         assert!(err.contains("op \"add\" needs `title`"), "{err}");
-        let err = call(&deps, r#"{"op":"move","id":"c1"}"#).unwrap_err().to_string();
+        let err = call(&deps, r#"{"op":"move","id":"T1"}"#).unwrap_err().to_string();
         assert!(err.contains("op \"move\" needs `column`"), "{err}");
         let err = call(&deps, r#"{"op":"move","column":"done"}"#).unwrap_err().to_string();
         assert!(err.contains("op \"move\" needs `id`"), "{err}");
@@ -126,15 +126,15 @@ mod tests {
     fn edit_changes_what_it_is_given_and_needs_an_id_and_something_to_change() {
         let deps = ToolDeps { board: Some(Arc::new(InMemory::default())), ..ToolDeps::default() };
         call(&deps, r#"{"op":"add","title":"renew cert","note":"wlbuh"}"#).unwrap();
-        let edited = call(&deps, r#"{"op":"edit","id":"c1","title":null,"note":"wlbuh, expires 1 Nov"}"#).unwrap();
+        let edited = call(&deps, r#"{"op":"edit","id":"T1","title":null,"note":"wlbuh, expires 1 Nov"}"#).unwrap();
         let ToolResult::Board { cards } = edited else { panic!("{edited:?}") };
         assert_eq!((cards.len(), cards[0].title.as_str(), cards[0].note.as_deref()), (1, "renew cert", Some("wlbuh, expires 1 Nov")));
 
         let err = call(&deps, r#"{"op":"edit","title":"x"}"#).unwrap_err().to_string();
         assert!(err.contains("op \"edit\" needs `id`"), "{err}");
-        let err = call(&deps, r#"{"op":"edit","id":"c1","title":null,"note":null,"due":null}"#).unwrap_err().to_string();
+        let err = call(&deps, r#"{"op":"edit","id":"T1","title":null,"note":null,"due":null}"#).unwrap_err().to_string();
         assert!(err.contains("op \"edit\" needs `title`, `note` or `due`"), "{err}");
-        let err = call(&deps, r#"{"op":"edit","id":"c1","title":"  "}"#).unwrap_err().to_string();
+        let err = call(&deps, r#"{"op":"edit","id":"T1","title":"  "}"#).unwrap_err().to_string();
         assert!(err.contains("a card needs a title"), "{err}");
     }
 
@@ -144,7 +144,7 @@ mod tests {
         let added = call(&deps, r#"{"op":"add","title":"renew cert","due":"2026-11-01"}"#).unwrap();
         let ToolResult::Board { cards } = added else { panic!("{added:?}") };
         assert_eq!(cards[0].due.as_deref(), Some("2026-11-01"));
-        let edited = call(&deps, r#"{"op":"edit","id":"c1","due":"2026-11-03"}"#).unwrap();
+        let edited = call(&deps, r#"{"op":"edit","id":"T1","due":"2026-11-03"}"#).unwrap();
         let ToolResult::Board { cards } = edited else { panic!("{edited:?}") };
         assert_eq!((cards[0].title.as_str(), cards[0].due.as_deref()), ("renew cert", Some("2026-11-03")));
         let err = call(&deps, r#"{"op":"add","title":"x","due":"next friday"}"#).unwrap_err().to_string();
@@ -154,8 +154,8 @@ mod tests {
     #[test]
     fn the_board_refusing_is_the_calls_error() {
         let deps = ToolDeps { board: Some(Arc::new(InMemory::default())), ..ToolDeps::default() };
-        let err = call(&deps, r#"{"op":"move","id":"c7","column":"done"}"#).unwrap_err().to_string();
-        assert!(err.contains("no card with id c7"), "{err}");
+        let err = call(&deps, r#"{"op":"move","id":"T7","column":"done"}"#).unwrap_err().to_string();
+        assert!(err.contains("no card with id T7"), "{err}");
     }
 
     #[test]
