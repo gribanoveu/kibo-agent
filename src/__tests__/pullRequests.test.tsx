@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import type { Build, CodeHostServer, PrStrip, PullRequest } from "../lib/pullRequests";
+import type { Build, CodeHostServer, PrStrip, PullRequest, Reviewer } from "../lib/pullRequests";
 import { buildText, offersConnect, reviewsAtAGlance } from "../lib/pullRequestView";
 
 // The pull request strip above the Changes list (docs/56-bitbucket-prs.md,
@@ -173,7 +173,7 @@ describe("the strip's states", () => {
     await settle();
     expect(screen.getByText("Fix the tax profile")).toBeTruthy();
     expect(screen.getByText("tax-api #153")).toBeTruthy();
-    expect(screen.getByText("0/1")).toBeTruthy();
+    expect(screen.getByText("0/1 approved")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Ready to merge" })).toBeTruthy();
     expect(screen.getByText("Merge")).toBeTruthy();
     expect(screen.queryByText("Draft")).toBeNull();
@@ -246,6 +246,8 @@ describe("the strip's states", () => {
     fireEvent.click(screen.getByText("tax-api #153"));
     expect(screen.queryByText("Merge")).toBeNull();
     expect(screen.getByRole("img", { name: "Cannot merge yet: Requires 2 approvals; conflicts" })).toBeTruthy();
+    // The line says it short; the reasons are under the pointer and in the list.
+    expect(screen.getByText("Cannot merge yet").closest(".pr-status")!.getAttribute("title")).toBe("Cannot merge yet: Requires 2 approvals; conflicts");
     expect(screen.getByText("Requires 2 approvals")).toBeTruthy();
     expect(screen.getByText("conflicts")).toBeTruthy();
   });
@@ -255,10 +257,33 @@ describe("the strip's states", () => {
     await settle();
     fireEvent.click(screen.getByText("tax-api #153"));
     const reviewer = screen.getByText("Me Myself").closest("li")!;
-    expect(reviewer.title).toBe("u_me — unapproved");
+    expect(reviewer.title).toBe("u_me");
+    expect(reviewer.textContent).toBe("Me Myselfnot yet");
     expect(screen.queryByText("u_me")).toBeNull();
     expect(screen.getByText("Anna Author").title).toBe("u_author");
     expect(screen.queryByText(/u_author/)).toBeNull();
+  });
+
+  test("reviewers are a line each, who holds it up first, and a long list folds after five", async () => {
+    const r = (slug: string, status: Reviewer["status"]): Reviewer => ({ slug, displayName: slug.toUpperCase(), status });
+    strip = ready({}, { pr: pr({ reviewers: [r("a", "approved"), r("b", "unapproved"), r("c", "needsWork"), r("d", "approved"), r("e", "unapproved"), r("f", "approved"), r("g", "approved")] }) });
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("tax-api #153"));
+    const names = () => [...screen.getByRole("list", { name: "Reviewers" }).querySelectorAll(".pr-reviewer-name")].map((n) => n.textContent);
+    expect(names()).toEqual(["C", "B", "E", "A", "D"]);
+    fireEvent.click(screen.getByText("2 more"));
+    expect(names()).toEqual(["C", "B", "E", "A", "D", "F", "G"]);
+  });
+
+  test("six reviewers are all shown: folding one away saves no line", async () => {
+    const r = (slug: string): Reviewer => ({ slug, displayName: slug, status: "unapproved" });
+    strip = ready({}, { pr: pr({ reviewers: ["a", "b", "c", "d", "e", "f"].map(r) }) });
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("tax-api #153"));
+    expect(screen.getByRole("list", { name: "Reviewers" }).querySelectorAll(".pr-reviewer-name")).toHaveLength(6);
+    expect(screen.queryByText(/more$/)).toBeNull();
   });
 
   test("Approve sends the approval", async () => {
@@ -511,7 +536,7 @@ describe("at a glance", () => {
 
   test("the reviews are a count, or needs work when anyone said so", () => {
     expect(reviewsAtAGlance([])).toBeNull();
-    expect(reviewsAtAGlance([{ slug: "a", displayName: "A", status: "approved" }, { slug: "b", displayName: "B", status: "unapproved" }])).toBe("1/2");
+    expect(reviewsAtAGlance([{ slug: "a", displayName: "A", status: "approved" }, { slug: "b", displayName: "B", status: "unapproved" }])).toBe("1/2 approved");
     expect(reviewsAtAGlance([{ slug: "a", displayName: "A", status: "approved" }, { slug: "b", displayName: "B", status: "needsWork" }])).toBe("needs work");
   });
 });

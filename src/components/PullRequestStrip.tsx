@@ -4,6 +4,7 @@ import {
   Circle,
   CircleAlert,
   CircleCheck,
+  CircleDashed,
   CircleHelp,
   CircleX,
   ExternalLink,
@@ -23,8 +24,8 @@ import { CodeHostConnect } from "./CodeHostConnect";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { Switch } from "./Switch";
 import { openExternal } from "../lib/window";
-import { buildText, offersConnect, readiness, reviewsAtAGlance } from "../lib/pullRequestView";
-import type { Build, BuildState, PrStrip, ReviewStatus } from "../lib/pullRequests";
+import { buildText, offersConnect, readiness, REVIEW_WORD, reviewersInOrder, reviewsAtAGlance } from "../lib/pullRequestView";
+import type { Build, BuildState, PrStrip, PullRequest, ReviewStatus } from "../lib/pullRequests";
 import type { PullRequestState } from "../hooks/usePullRequest";
 import "./PullRequestStrip.css";
 
@@ -36,6 +37,13 @@ const BUILD_ICON: Record<BuildState, typeof Circle> = {
   failed: CircleX,
   inProgress: Loader2,
   unknown: CircleHelp,
+};
+
+/** Whether the pull request can go in: merge, not yet, or a draft. */
+const READY_ICON: Record<"ready" | "blocked" | "draft", typeof Circle> = {
+  ready: GitMerge,
+  blocked: CircleAlert,
+  draft: CircleDashed,
 };
 
 const REVIEW_ICON: Record<ReviewStatus, typeof Circle> = {
@@ -161,6 +169,7 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
   const blocked = strip.mergeBlocked ?? [];
   const mayApprove = strip.canApprove || strip.approved;
   const ready = readiness(pr.draft, strip.mergeBlocked);
+  const ReadyIcon = READY_ICON[ready.kind];
   const Icon = pr.draft ? GitPullRequestDraft : GitPullRequest;
   const menu: ChatMenuItem[] = [
     { id: "open", label: "Open in Bitbucket", icon: <ExternalLink size={14} />, onSelect: () => void openExternal(pr.url) },
@@ -202,17 +211,24 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
                 {strip.repo} #{pr.id}
               </span>
               {pr.draft && <span className="pr-draft">Draft</span>}
+              {reviews && <span aria-hidden>·</span>}
               {reviews && (
                 <span className="pr-glance" title={`${pr.reviewers.filter((r) => r.status === "approved").length} of ${pr.reviewers.length} reviewers approved`}>
                   {reviews}
                 </span>
               )}
             </span>
+            {/* A line of its own, its icon in the column of the build's above. */}
+            <span className="pr-status" title={ready.text}>
+              <span className="pr-status-text">{ready.label}</span>
+              <span className="pr-ready-box">
+                <ReadyIcon size={12} className={`pr-ready ${ready.kind}`} role="img" aria-label={ready.text} />
+              </span>
+            </span>
           </span>
         </button>
-        <div className="pr-side">
+        <div className="pr-menu">
           <ChatMenu items={menu} icon={<MoreHorizontal size={15} />} />
-          <span className={`pr-dot ${ready.kind}`} role="img" aria-label={ready.text} title={ready.text} />
         </div>
       </div>
       {pr.draft ? (
@@ -233,19 +249,7 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
           <div className="pr-meta">
             <span title={pr.author}>{pr.authorName}</span> → {pr.toBranch}
           </div>
-          {pr.reviewers.length > 0 && (
-            <ul className="pr-reviewers" aria-label="Reviewers">
-              {pr.reviewers.map((r) => {
-                const Mark = REVIEW_ICON[r.status];
-                return (
-                  <li key={r.slug} className={r.status} title={`${r.slug} — ${r.status === "needsWork" ? "needs work" : r.status}`}>
-                    <Mark size={11} />
-                    {r.displayName}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          {pr.reviewers.length > 0 && <Reviewers reviewers={pr.reviewers} />}
           {blocked.length > 0 && (
             <ul className="pr-vetoes" aria-label="Why it cannot be merged">
               {blocked.map((veto) => (
@@ -277,6 +281,38 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
         </p>
       </Modal>
     </div>
+  );
+}
+
+/** Past this many, the rest wait behind "N more". */
+const REVIEWERS_SHOWN = 5;
+
+/** One reviewer a line, who holds it up first, the status in words at the end; the login under the pointer. */
+function Reviewers({ reviewers }: { reviewers: PullRequest["reviewers"] }) {
+  const [all, setAll] = useState(false);
+  const ordered = reviewersInOrder(reviewers);
+  // Folding one name away saves no line: "1 more" takes its place.
+  const shown = all || ordered.length <= REVIEWERS_SHOWN + 1 ? ordered : ordered.slice(0, REVIEWERS_SHOWN);
+  return (
+    <ul className="pr-reviewers" aria-label="Reviewers">
+      {shown.map((r) => {
+        const Mark = REVIEW_ICON[r.status];
+        return (
+          <li key={r.slug} className={r.status} title={r.slug}>
+            <Mark size={12} />
+            <span className="pr-reviewer-name">{r.displayName}</span>
+            <span className="pr-reviewer-status">{REVIEW_WORD[r.status]}</span>
+          </li>
+        );
+      })}
+      {shown.length < ordered.length && (
+        <li>
+          <button type="button" className="pr-reviewers-more" onClick={() => setAll(true)}>
+            {ordered.length - shown.length} more
+          </button>
+        </li>
+      )}
+    </ul>
   );
 }
 
