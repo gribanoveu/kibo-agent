@@ -904,8 +904,8 @@ mod tests {
             let processes = std::sync::Arc::new(crate::infra::background::Processes::default());
             let dir = crate::testing::temp_dir("chat-delete-processes");
             let shell = crate::domain::command_exec::Shell::default();
-            processes.for_chat(id).start(&shell, "sleep 30", None, &dir, ".").unwrap();
-            processes.for_chat("other").start(&shell, "sleep 30", None, &dir, ".").unwrap();
+            processes.for_chat(id, &dir).start(&shell, "sleep 30", None, &dir, ".").unwrap();
+            processes.for_chat("other", &dir).start(&shell, "sleep 30", None, &dir, ".").unwrap();
 
             delete_chat(id, &processes).unwrap();
             assert!(processes.running_for(id).is_empty());

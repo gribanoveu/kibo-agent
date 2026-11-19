@@ -28,7 +28,7 @@ use serde_json::Value;
 use crate::domain::chat_export;
 use crate::domain::compaction::SUMMARY_PREFIX;
 use crate::domain::chat_record::{
-    self, ChatError, ChatGroup, ChatRecord, ChatSummary, CHAT_SCHEMA_VERSION, NO_FOLDER,
+    self, ChatError, ChatGroup, ChatRecord, ChatSummary, GroupList, CHAT_SCHEMA_VERSION, NO_FOLDER,
 };
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::KubePin;
@@ -137,7 +137,57 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
     // review counts as "this chat's work". NULL for rows saved before the
     // column and for chats begun before their folder's first commit.
     add_column(&conn, "head_at_start", "TEXT")?;
+    share_project_folders(&conn)?;
     Ok(conn)
+}
+
+/// Folders were once filed per project; now every project shares one set
+/// (`GroupList::Projects`). A database from before has them under their
+/// projects' paths: they move to the shared set, one folder per name — the
+/// later of two same-named folders gives its chats to the first and goes —
+/// and are numbered again in the order they stood. A no-op once moved.
+fn share_project_folders(conn: &Connection) -> Result<(), ChatError> {
+    let shared = GroupList::Projects.key();
+    let old: bool = conn
+        .query_row("SELECT COUNT(*) > 0 FROM chat_groups WHERE workspace NOT IN (?1, ?2)", params![NO_FOLDER, shared], |row| row.get(0))
+        .map_err(store)?;
+    if !old {
+        return Ok(());
+    }
+    // Immediate: two windows opening the store at once would otherwise both
+    // read the old sets and merge them twice. The second one, let in after
+    // the first commits, reads only the shared set and changes nothing.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate).map_err(store)?;
+    let folders: Vec<(String, String)> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id, name FROM chat_groups WHERE workspace != ?1
+                 ORDER BY workspace != ?2, position, workspace, id",
+            )
+            .map_err(store)?;
+        let rows = stmt.query_map(params![NO_FOLDER, shared], |row| Ok((row.get(0)?, row.get(1)?))).map_err(store)?;
+        rows.collect::<Result<_, _>>().map_err(store)?
+    };
+    // ASCII case only, as `name_taken`'s `lower()` compares.
+    let mut kept: Vec<(String, String)> = Vec::new();
+    for (id, name) in folders {
+        let key = name.to_ascii_lowercase();
+        match kept.iter().find(|(_, other)| *other == key) {
+            Some((first, _)) => {
+                tx.execute("UPDATE chats SET group_id = ?1 WHERE group_id = ?2", params![first, id]).map_err(store)?;
+                tx.execute("DELETE FROM chat_groups WHERE id = ?1", params![id]).map_err(store)?;
+            }
+            None => kept.push((id, key)),
+        }
+    }
+    for (position, (id, _)) in kept.iter().enumerate() {
+        tx.execute(
+            "UPDATE chat_groups SET workspace = ?2, position = ?3 WHERE id = ?1",
+            params![id, shared, position as i64 + 1],
+        )
+        .map_err(store)?;
+    }
+    tx.commit().map_err(store)
 }
 
 fn add_column(conn: &Connection, name: &str, definition: &str) -> Result<(), ChatError> {
@@ -457,10 +507,11 @@ pub fn set_pinned(id: &str, pinned: bool) -> Result<(), ChatError> {
     }
 }
 
-/// The folders of one workspace, in the order the user arranged them. An
-/// empty folder is listed too — otherwise a folder made ahead of its first
-/// chat could not be renamed or deleted at all.
-pub fn groups(workspace: &str) -> Result<Vec<ChatGroup>, ChatError> {
+/// The folders of one set, in the order the user arranged them. An empty
+/// folder is listed too — otherwise a folder made ahead of its first chat
+/// could not be renamed or deleted at all.
+pub fn groups(list: GroupList) -> Result<Vec<ChatGroup>, ChatError> {
+    let workspace = list.key();
     let conn = open()?;
     let mut stmt = conn
         .prepare("SELECT id, name, position FROM chat_groups WHERE workspace = ?1 ORDER BY position, id")
@@ -488,7 +539,7 @@ fn checked_name(name: &str) -> Result<String, ChatError> {
     }
 }
 
-/// Whether another folder of the same workspace already carries the name —
+/// Whether another folder of the same set already carries the name —
 /// case-insensitively, so "Release" and "release" are one folder to the eye.
 fn name_taken(conn: &Connection, workspace: &str, name: &str, except_id: Option<&str>) -> Result<bool, ChatError> {
     conn.query_row(
@@ -499,8 +550,9 @@ fn name_taken(conn: &Connection, workspace: &str, name: &str, except_id: Option<
     .map_err(store)
 }
 
-/// Makes a folder at the end of the workspace's list.
-pub fn create_group(workspace: &str, name: &str) -> Result<ChatGroup, ChatError> {
+/// Makes a folder at the end of the set's list.
+pub fn create_group(list: GroupList, name: &str) -> Result<ChatGroup, ChatError> {
+    let workspace = list.key();
     let _write = write_lock();
     let name = checked_name(name)?;
     let conn = open()?;
@@ -525,7 +577,8 @@ pub fn create_group(workspace: &str, name: &str) -> Result<ChatGroup, ChatError>
 
 /// Renames a folder. The name's rules are the creation's; another folder's
 /// name is refused rather than silently numbered.
-pub fn rename_group(workspace: &str, id: &str, name: &str) -> Result<(), ChatError> {
+pub fn rename_group(list: GroupList, id: &str, name: &str) -> Result<(), ChatError> {
+    let workspace = list.key();
     let _write = write_lock();
     let name = checked_name(name)?;
     let conn = open()?;
@@ -545,7 +598,8 @@ pub fn rename_group(workspace: &str, id: &str, name: &str) -> Result<(), ChatErr
 /// Removes the folder and files its chats under no folder, in one transaction:
 /// deleting what reads as "remove the label" must not delete the
 /// conversations it held.
-pub fn delete_group(workspace: &str, id: &str) -> Result<(), ChatError> {
+pub fn delete_group(list: GroupList, id: &str) -> Result<(), ChatError> {
+    let workspace = list.key();
     let _write = write_lock();
     let mut conn = open()?;
     let own: bool = conn
@@ -561,9 +615,10 @@ pub fn delete_group(workspace: &str, id: &str) -> Result<(), ChatError> {
     Ok(())
 }
 
-/// Moves a chat into a folder of its own workspace, or out to no folder with
-/// `None`. The folder has to belong to the same workspace: a chat about one
-/// project never lands in another's list. The write lock is taken because the
+/// Moves a chat into a folder of its set, or out to no folder with `None`.
+/// The folder has to be of the chat's set: a project's chat goes into the
+/// projects' shared folders, never Chat mode's, and the other way round. The
+/// write lock is taken because the
 /// check and the write are two statements: without it, a folder deleted in
 /// between would leave the chat pointing at a group that is gone.
 pub fn set_group(id: &str, group: Option<&str>) -> Result<(), ChatError> {
@@ -576,8 +631,9 @@ pub fn set_group(id: &str, group: Option<&str>) -> Result<(), ChatError> {
         .map_err(store)?;
     let workspace = workspace.ok_or_else(|| ChatError::NotFound(id.to_string()))?;
     if let Some(group) = group {
+        let list = GroupList::of_workspace(&workspace).key();
         let own: bool = conn
-            .query_row("SELECT COUNT(*) > 0 FROM chat_groups WHERE id = ?1 AND workspace = ?2", params![group, workspace], |row| row.get(0))
+            .query_row("SELECT COUNT(*) > 0 FROM chat_groups WHERE id = ?1 AND workspace = ?2", params![group, list], |row| row.get(0))
             .map_err(store)?;
         if !own {
             return Err(ChatError::NotFound(group.to_string()));
@@ -1158,7 +1214,7 @@ mod tests {
     fn a_chat_moves_into_a_folder_and_back_out() {
         with_app_dir("chat-store-group-set", || {
             save_one("one", "/repo", "first");
-            let group = create_group("/repo", "release").unwrap();
+            let group = create_group(GroupList::Projects, "release").unwrap();
 
             set_group("one", Some(&group.id)).unwrap();
             let held = |id: &str| list("/repo").unwrap().into_iter().find(|c| c.id == id).unwrap().group;
@@ -1168,9 +1224,81 @@ mod tests {
             assert_eq!(held("one"), None);
             assert!(matches!(set_group("nope", Some(&group.id)), Err(ChatError::NotFound(_))));
             assert!(matches!(set_group("../x", Some(&group.id)), Err(ChatError::BadId(_))));
-            // The folder belongs to this workspace; another's is not found here.
-            let other = create_group("/other", "release").unwrap();
+            // Chat mode's folders are another set; a project's chat finds none of them.
+            let other = create_group(GroupList::Chat, "release").unwrap();
             assert!(matches!(set_group("one", Some(&other.id)), Err(ChatError::NotFound(_))));
+        });
+    }
+
+    /// The projects share their folders: one holds chats of several projects,
+    /// each still listed under its own project; Chat mode's chats keep to
+    /// Chat mode's folders.
+    #[test]
+    fn a_folder_holds_chats_of_several_projects() {
+        with_app_dir("chat-store-group-shared", || {
+            save_one("api", "/work/api", "first");
+            save_one("web", "/work/web", "second");
+            let release = create_group(GroupList::Projects, "release").unwrap();
+            set_group("api", Some(&release.id)).unwrap();
+            set_group("web", Some(&release.id)).unwrap();
+
+            assert_eq!(list("/work/api").unwrap()[0].group.as_deref(), Some(release.id.as_str()));
+            assert_eq!(list("/work/web").unwrap()[0].group.as_deref(), Some(release.id.as_str()));
+            assert!(matches!(create_group(GroupList::Projects, "Release"), Err(ChatError::AlreadyExists(_))));
+
+            save_plain("plain", ChatRole::Assistant, None, &[LlmMessage::user("hi")], &serde_json::json!([])).unwrap();
+            assert!(matches!(set_group("plain", Some(&release.id)), Err(ChatError::NotFound(_))));
+            let notes = create_group(GroupList::Chat, "notes").unwrap();
+            set_group("plain", Some(&notes.id)).unwrap();
+        });
+    }
+
+    /// A database from when every project had its own folders: they move to
+    /// the shared set, a name met twice becomes one folder holding the chats
+    /// of both, and they are numbered in the order they stood; Chat mode's
+    /// stay its own. Opening again changes nothing.
+    #[test]
+    fn folders_filed_per_project_become_one_shared_set() {
+        with_app_dir("chat-store-group-migrate", || {
+            save_one("a1", "/work/api", "first");
+            save_one("w1", "/work/web", "second");
+            let conn = open().unwrap();
+            conn.execute_batch(
+                "INSERT INTO chat_groups VALUES ('g-api-rel', '/work/api', 'release', 1);
+                 INSERT INTO chat_groups VALUES ('g-api-ops', '/work/api', 'ops', 2);
+                 INSERT INTO chat_groups VALUES ('g-web-rel', '/work/web', 'Release', 1);
+                 INSERT INTO chat_groups VALUES ('g-chat', '', 'release', 1);
+                 UPDATE chats SET group_id = 'g-api-rel' WHERE id = 'a1';
+                 UPDATE chats SET group_id = 'g-web-rel' WHERE id = 'w1';",
+            )
+            .unwrap();
+            drop(conn);
+
+            let shared = || groups(GroupList::Projects).unwrap().into_iter().map(|g| (g.id, g.name, g.position)).collect::<Vec<_>>();
+            let moved = shared();
+            assert_eq!(moved.iter().map(|g| g.0.as_str()).collect::<Vec<_>>(), ["g-api-rel", "g-api-ops"]);
+            assert_eq!(moved.iter().map(|g| g.2).collect::<Vec<_>>(), [1, 2], "numbered again in the order they stood");
+            assert_eq!(list("/work/web").unwrap()[0].group.as_deref(), Some("g-api-rel"), "the second release's chat is in the first");
+            assert_eq!(list("/work/api").unwrap()[0].group.as_deref(), Some("g-api-rel"));
+            assert_eq!(groups(GroupList::Chat).unwrap().len(), 1, "Chat mode's folder is its own");
+            assert_eq!(shared(), moved, "opening again changes nothing");
+            let rows: i64 = open().unwrap().query_row("SELECT COUNT(*) FROM chat_groups", [], |row| row.get(0)).unwrap();
+            assert_eq!(rows, 3, "the merged folder is gone, not left behind");
+        });
+    }
+
+    /// Once shared, opening the store writes nothing to the folders: a gap
+    /// a deleted folder left in the order stays as it is.
+    #[test]
+    fn shared_folders_are_not_rewritten_on_open() {
+        with_app_dir("chat-store-group-no-rewrite", || {
+            create_group(GroupList::Projects, "a").unwrap();
+            let gone = create_group(GroupList::Projects, "b").unwrap();
+            create_group(GroupList::Projects, "c").unwrap();
+            delete_group(GroupList::Projects, &gone.id).unwrap();
+
+            let positions: Vec<i64> = groups(GroupList::Projects).unwrap().into_iter().map(|g| g.position).collect();
+            assert_eq!(positions, [1, 3]);
         });
     }
 
@@ -1180,7 +1308,7 @@ mod tests {
     fn saving_a_grouped_chat_keeps_its_folder() {
         with_app_dir("chat-store-group-save", || {
             save_one("one", "/repo", "first");
-            let group = create_group("/repo", "release").unwrap();
+            let group = create_group(GroupList::Projects, "release").unwrap();
             set_group("one", Some(&group.id)).unwrap();
 
             let saved = save_one("one", "/repo", "first");
@@ -1197,19 +1325,19 @@ mod tests {
         with_app_dir("chat-store-group-delete", || {
             save_one("one", "/repo", "first");
             save_one("two", "/repo", "second");
-            let group = create_group("/repo", "release").unwrap();
+            let group = create_group(GroupList::Projects, "release").unwrap();
             set_group("one", Some(&group.id)).unwrap();
 
-            delete_group("/repo", &group.id).unwrap();
+            delete_group(GroupList::Projects, &group.id).unwrap();
 
-            assert!(groups("/repo").unwrap().is_empty());
+            assert!(groups(GroupList::Projects).unwrap().is_empty());
             let mut unfiled: Vec<String> = list("/repo").unwrap().into_iter().map(|c| (c.id, c.group)).filter(|(_, g)| g.is_none()).map(|(id, _)| id).collect();
             unfiled.sort();
             assert_eq!(unfiled, ["one", "two"]);
-            assert!(matches!(delete_group("/repo", &group.id), Err(ChatError::NotFound(_))));
-            // Another workspace's folder of the same name is not this one.
-            let elsewhere = create_group("/other", "release").unwrap();
-            assert!(matches!(delete_group("/repo", &elsewhere.id), Err(ChatError::NotFound(_))));
+            assert!(matches!(delete_group(GroupList::Projects, &group.id), Err(ChatError::NotFound(_))));
+            // Chat mode's folder of the same name is not this one.
+            let elsewhere = create_group(GroupList::Chat, "release").unwrap();
+            assert!(matches!(delete_group(GroupList::Projects, &elsewhere.id), Err(ChatError::NotFound(_))));
         });
     }
 
@@ -1218,11 +1346,11 @@ mod tests {
     #[test]
     fn an_empty_folder_is_listed() {
         with_app_dir("chat-store-group-empty", || {
-            create_group("/repo", "release").unwrap();
-            let listed = groups("/repo").unwrap();
+            create_group(GroupList::Projects, "release").unwrap();
+            let listed = groups(GroupList::Projects).unwrap();
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].name, "release");
-            assert!(groups("/other").unwrap().is_empty());
+            assert!(groups(GroupList::Chat).unwrap().is_empty());
         });
     }
 
@@ -1231,31 +1359,31 @@ mod tests {
     #[test]
     fn folders_keep_the_order_they_were_made_in() {
         with_app_dir("chat-store-group-order-folders", || {
-            create_group("/repo", "beta").unwrap();
-            create_group("/repo", "alpha").unwrap();
+            create_group(GroupList::Projects, "beta").unwrap();
+            create_group(GroupList::Projects, "alpha").unwrap();
 
-            let names: Vec<String> = groups("/repo").unwrap().into_iter().map(|g| g.name).collect();
+            let names: Vec<String> = groups(GroupList::Projects).unwrap().into_iter().map(|g| g.name).collect();
             assert_eq!(names, ["beta", "alpha"]);
         });
     }
 
-    /// Names are compared trimmed and case-insensitively, per workspace:
-    /// "Release" and "release" are one folder to the eye, and the same name
-    /// is free in another project.
+    /// Names are compared trimmed and case-insensitively, per set: "Release"
+    /// and "release" are one folder to the eye, and the same name is free in
+    /// Chat mode's set.
     #[test]
     fn a_folder_name_is_unique_within_its_workspace() {
         with_app_dir("chat-store-group-names", || {
-            let made = create_group("/repo", " Release ").unwrap();
+            let made = create_group(GroupList::Projects, " Release ").unwrap();
             assert_eq!(made.name, "Release");
-            assert!(matches!(create_group("/repo", "release"), Err(ChatError::AlreadyExists(_))));
-            let launch = create_group("/repo", "launch").unwrap();
-            assert!(matches!(rename_group("/repo", &made.id, "Launch"), Err(ChatError::AlreadyExists(_))));
-            rename_group("/repo", &made.id, " ship ").unwrap();
-            assert_eq!(groups("/repo").unwrap().iter().find(|g| g.id == made.id).unwrap().name, "ship");
-            create_group("/other", "release").unwrap();
+            assert!(matches!(create_group(GroupList::Projects, "release"), Err(ChatError::AlreadyExists(_))));
+            let launch = create_group(GroupList::Projects, "launch").unwrap();
+            assert!(matches!(rename_group(GroupList::Projects, &made.id, "Launch"), Err(ChatError::AlreadyExists(_))));
+            rename_group(GroupList::Projects, &made.id, " ship ").unwrap();
+            assert_eq!(groups(GroupList::Projects).unwrap().iter().find(|g| g.id == made.id).unwrap().name, "ship");
+            create_group(GroupList::Chat, "release").unwrap();
 
-            assert!(matches!(create_group("/repo", "   "), Err(ChatError::EmptyName)));
-            assert!(matches!(rename_group("/repo", &launch.id, "  "), Err(ChatError::EmptyName)));
+            assert!(matches!(create_group(GroupList::Projects, "   "), Err(ChatError::EmptyName)));
+            assert!(matches!(rename_group(GroupList::Projects, &launch.id, "  "), Err(ChatError::EmptyName)));
         });
     }
 
@@ -1268,8 +1396,8 @@ mod tests {
             save_one("in-release", "/repo", "b");
             save_one("in-launch", "/repo", "c");
             save_one("loose", "/repo", "d");
-            let launch = create_group("/repo", "launch").unwrap();
-            let release = create_group("/repo", "release").unwrap();
+            let launch = create_group(GroupList::Projects, "launch").unwrap();
+            let release = create_group(GroupList::Projects, "release").unwrap();
             set_group("in-launch", Some(&launch.id)).unwrap();
             set_group("in-release", Some(&release.id)).unwrap();
             set_pinned("pinned", true).unwrap();
@@ -1304,8 +1432,8 @@ mod tests {
             let listed = list("/repo").unwrap();
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].group, None);
-            assert!(groups("/repo").unwrap().is_empty());
-            let group = create_group("/repo", "release").unwrap();
+            assert!(groups(GroupList::Projects).unwrap().is_empty());
+            let group = create_group(GroupList::Projects, "release").unwrap();
             set_group("old", Some(&group.id)).unwrap();
             assert_eq!(list("/repo").unwrap()[0].group.as_deref(), Some(group.id.as_str()));
         });

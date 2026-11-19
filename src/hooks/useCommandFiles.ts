@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type CommandFile, commandFilesList } from "../lib/skills";
 
 /**
@@ -10,9 +10,14 @@ import { type CommandFile, commandFilesList } from "../lib/skills";
 export function useCommandFiles(workspace: string | null) {
   const [files, setFiles] = useState<CommandFile[]>([]);
 
+  // An answer for a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
+
   const reload = useCallback(() => {
-    commandFilesList().then(setFiles, () => setFiles([]));
-  }, []);
+    const take = (next: CommandFile[]) => shown.current === workspace && setFiles(next);
+    commandFilesList(workspace).then(take, () => take([]));
+  }, [workspace]);
 
   useEffect(reload, [workspace, reload]);
 

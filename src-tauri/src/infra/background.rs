@@ -12,7 +12,7 @@
 //! gone from here — after a restart, or pushed out past [`MAX_FINISHED`].
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -65,7 +65,21 @@ struct Entry {
     reported: bool,
     /// The chat whose turn started it; `None` outside one.
     chat: Option<String>,
+    /// The folder that chat works in (F-8.3): closing the folder stops it,
+    /// and only a turn in that folder sees it. `None` outside a chat.
+    workspace: Option<PathBuf>,
 }
+
+/// Who starts a process: the chat and its folder, or neither.
+#[derive(Clone, Copy)]
+struct Owner<'a> {
+    chat: Option<&'a str>,
+    workspace: Option<&'a Path>,
+}
+
+/// Started through `Processes` itself — tests and tool doubles only: every
+/// real start goes through a chat's [`ChatProcesses`], which has a folder.
+const NOBODY: Owner<'static> = Owner { chat: None, workspace: None };
 
 impl Entry {
     fn view(&self) -> ProcessView {
@@ -85,6 +99,15 @@ fn save(registry: &Mutex<Registry>, log: &Arc<dyn RunLog>, id: u32) {
 impl Registry {
     fn entry(&mut self, id: u32) -> Result<&mut Entry, BackgroundError> {
         self.entries.iter_mut().find(|e| e.info.id == id).ok_or(BackgroundError::NotFound(id))
+    }
+
+    /// Process `id`, if it is `workspace`'s: another folder's is not there
+    /// for a turn to read or stop — it answers as no such process.
+    fn entry_in(&mut self, workspace: &Path, id: u32) -> Result<&mut Entry, BackgroundError> {
+        self.entry(id).and_then(|e| match e.workspace.as_deref() == Some(workspace) {
+            true => Ok(e),
+            false => Err(BackgroundError::NotFound(id)),
+        })
     }
 }
 
@@ -138,18 +161,36 @@ impl Processes {
         }
     }
 
-    /// What a turn of `chat` starts through: recorded as that chat's.
-    pub fn for_chat(self: &Arc<Self>, chat: &str) -> ChatProcesses {
-        ChatProcesses { processes: Arc::clone(self), chat: chat.to_string() }
+    /// What a turn of `chat`, working in `workspace`, starts through:
+    /// recorded as that chat's and that folder's.
+    pub fn for_chat(self: &Arc<Self>, chat: &str, workspace: &Path) -> ChatProcesses {
+        ChatProcesses { processes: Arc::clone(self), chat: chat.to_string(), workspace: workspace.to_path_buf() }
     }
 
-    /// The workspace changed or the app is quitting. Nothing is reported:
-    /// there is no conversation left that these belong to.
+    /// The app is quitting. Nothing is reported: there is no conversation
+    /// left that these belong to.
     pub fn stop_all(&self) {
+        self.stop_where(|_| true);
+    }
+
+    /// Every process of `workspace`, kept for reading too — what a turn in it
+    /// sees, oldest first. The Terminal tab's list without a chat.
+    pub fn list_in(&self, workspace: &Path) -> Vec<ProcessView> {
+        lock(&self.registry).entries.iter().filter(|e| e.workspace.as_deref() == Some(workspace)).map(Entry::view).collect()
+    }
+
+    /// `workspace` was closed (F-8 invariant 4): what runs in it stops, and
+    /// nothing of another folder's. Not reported, as at quitting: its chats
+    /// cannot run until the folder is open again.
+    pub fn stop_workspace(&self, workspace: &Path) {
+        self.stop_where(|entry| entry.workspace.as_deref() == Some(workspace));
+    }
+
+    fn stop_where(&self, which: impl Fn(&Entry) -> bool) {
         let mut stopped = Vec::new();
         {
             let mut registry = lock(&self.registry);
-            for entry in registry.entries.iter_mut() {
+            for entry in registry.entries.iter_mut().filter(|entry| which(entry)) {
                 if let Some(mut child) = entry.child.take() {
                     end(&mut child);
                     entry.info.state = ProcessState::Stopped;
@@ -187,10 +228,15 @@ impl Processes {
     }
 }
 
-/// Refused past [`MAX_RUNNING`], naming what runs.
-fn room(registry: &Registry) -> Result<(), BackgroundError> {
-    let running: Vec<String> =
-        registry.entries.iter().filter(|e| e.info.running()).map(|e| e.info.describe()).collect();
+/// Refused past [`MAX_RUNNING`] in one folder, naming what runs there: the
+/// model can stop only its own folder's, so another's never takes its room.
+fn room(registry: &Registry, workspace: Option<&Path>) -> Result<(), BackgroundError> {
+    let running: Vec<String> = registry
+        .entries
+        .iter()
+        .filter(|e| e.info.running() && e.workspace.as_deref() == workspace)
+        .map(|e| e.info.describe())
+        .collect();
     if running.len() >= MAX_RUNNING {
         return Err(BackgroundError::TooMany(running.join("; ")));
     }
@@ -209,7 +255,7 @@ impl Processes {
         description: Option<&str>,
         shown_cwd: &str,
         backlog: &str,
-        chat: Option<&str>,
+        owner: Owner,
     ) -> (ProcessInfo, [Feed; 2]) {
         registry.next_id += 1;
         let id = registry.next_id;
@@ -222,7 +268,7 @@ impl Processes {
         };
         let mut buffer = OutputBuffer::default();
         buffer.push(backlog);
-        registry.entries.push(Entry { info: info.clone(), child: Some(child), buffer, streams: 2, reported: false, chat: chat.map(str::to_string) });
+        registry.entries.push(Entry { info: info.clone(), child: Some(child), buffer, streams: 2, reported: false, chat: owner.chat.map(str::to_string), workspace: owner.workspace.map(Path::to_path_buf) });
         watch(&self.registry, &self.changed, &self.log, id);
 
         // Forget the oldest finished ones past the limit.
@@ -252,9 +298,9 @@ fn end(child: &mut Child) {
 }
 
 impl Processes {
-    fn start_in(&self, chat: Option<&str>, shell: &Shell, command: &str, description: Option<&str>, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
+    fn start_in(&self, owner: Owner, shell: &Shell, command: &str, description: Option<&str>, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
         let mut registry = lock(&self.registry);
-        room(&registry)?;
+        room(&registry, owner.workspace)?;
 
         let mut process = shell_command(shell, command);
         process
@@ -267,7 +313,7 @@ impl Processes {
         let mut child = process.spawn().map_err(|e| BackgroundError::NotStarted(format!("{}: {e}", shell.program)))?;
 
         let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-        let (info, [out, err]) = self.register(&mut registry, child, command, description, shown_cwd, "", chat);
+        let (info, [out, err]) = self.register(&mut registry, child, command, description, shown_cwd, "", owner);
         // Under the lock still: a reader's first chunk waits for the entry.
         read_into(stdout, out);
         read_into(stderr, err);
@@ -279,7 +325,7 @@ impl Processes {
 
     fn adopt_in(
         &self,
-        chat: Option<&str>,
+        owner: Owner,
         mut child: Child,
         command: &str,
         description: Option<&str>,
@@ -287,11 +333,11 @@ impl Processes {
         backlog: &str,
     ) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
         let mut registry = lock(&self.registry);
-        if let Err(full) = room(&registry) {
+        if let Err(full) = room(&registry, owner.workspace) {
             end(&mut child);
             return Err(full);
         }
-        let adopted = self.register(&mut registry, child, command, description, shown_cwd, backlog, chat);
+        let adopted = self.register(&mut registry, child, command, description, shown_cwd, backlog, owner);
         drop(registry);
         save(&self.registry, &self.log, adopted.0.id);
         (self.changed)(ProcessChanged { id: adopted.0.id });
@@ -301,11 +347,11 @@ impl Processes {
 
 impl BackgroundProcesses for Processes {
     fn start(&self, shell: &Shell, command: &str, description: Option<&str>, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
-        self.start_in(None, shell, command, description, cwd, shown_cwd)
+        self.start_in(NOBODY, shell, command, description, cwd, shown_cwd)
     }
 
     fn adopt(&self, child: Child, command: &str, description: Option<&str>, shown_cwd: &str, backlog: &str) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
-        self.adopt_in(None, child, command, description, shown_cwd, backlog)
+        self.adopt_in(NOBODY, child, command, description, shown_cwd, backlog)
     }
 
     fn read(&self, id: u32) -> Result<ProcessOutput, BackgroundError> {
@@ -346,34 +392,44 @@ impl Processes {
 }
 
 /// One chat's way into the processes: what it starts is that chat's, for
-/// the tab to list. The model still sees and stops every one — a server one
-/// chat started is there for the next — but is told only of its own chat's
-/// ends: another's is told there, at that chat's next turn, where its card
-/// opens a process the tab lists.
+/// the tab to list, and its folder's. The model sees and stops every one of
+/// its folder — a server one chat started is there for the next — and none
+/// of another folder's (F-8.3); it is told only of its own chat's ends:
+/// another's is told there, at that chat's next turn, where its card opens a
+/// process the tab lists.
 pub struct ChatProcesses {
     processes: Arc<Processes>,
     chat: String,
+    workspace: PathBuf,
+}
+
+impl ChatProcesses {
+    fn owner(&self) -> Owner<'_> {
+        Owner { chat: Some(&self.chat), workspace: Some(&self.workspace) }
+    }
 }
 
 impl BackgroundProcesses for ChatProcesses {
     fn start(&self, shell: &Shell, command: &str, description: Option<&str>, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError> {
-        self.processes.start_in(Some(&self.chat), shell, command, description, cwd, shown_cwd)
+        self.processes.start_in(self.owner(), shell, command, description, cwd, shown_cwd)
     }
 
     fn adopt(&self, child: Child, command: &str, description: Option<&str>, shown_cwd: &str, backlog: &str) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError> {
-        self.processes.adopt_in(Some(&self.chat), child, command, description, shown_cwd, backlog)
+        self.processes.adopt_in(self.owner(), child, command, description, shown_cwd, backlog)
     }
 
     fn read(&self, id: u32) -> Result<ProcessOutput, BackgroundError> {
+        lock(&self.processes.registry).entry_in(&self.workspace, id)?;
         self.processes.read(id)
     }
 
     fn stop(&self, id: u32) -> Result<ProcessInfo, BackgroundError> {
+        lock(&self.processes.registry).entry_in(&self.workspace, id)?;
         self.processes.stop(id)
     }
 
     fn list(&self) -> Vec<ProcessInfo> {
-        self.processes.list()
+        self.processes.list_in(&self.workspace).into_iter().map(|view| view.info).collect()
     }
 
     fn take_ended(&self) -> Vec<ProcessInfo> {
@@ -489,12 +545,12 @@ mod tests {
         }
     }
 
-    /// The tab shows the open chat's; the model, every one.
+    /// The tab shows the open chat's; the model, every one of its folder.
     #[test]
     fn what_a_chat_starts_is_listed_for_that_chat_only() {
         let processes = Arc::new(Processes::default());
-        let (mine, theirs) = (processes.for_chat("a"), processes.for_chat("b"));
         let dir = temp_dir("bg-chat");
+        let (mine, theirs) = (processes.for_chat("a", &dir), processes.for_chat("b", &dir));
         mine.start(&Shell::default(), "printf hi; sleep 30", None, &dir, ".").unwrap();
         theirs.start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         start(&processes, "sleep 30");
@@ -503,7 +559,7 @@ mod tests {
         let ids = |chat| processes.list_for(chat).iter().map(|p| p.info.id).collect::<Vec<_>>();
         assert_eq!((ids("a"), ids("b"), ids("c")), (vec![1, 4], vec![2], vec![]));
 
-        assert_eq!(mine.list().len(), 4);
+        assert_eq!(mine.list().iter().map(|p| p.id).collect::<Vec<_>>(), [1, 2, 4], "the folder's, not #3 started outside it");
         assert_eq!(mine.read(4).unwrap().output, "so far");
         processes.stop_by_user(1).unwrap();
         processes.stop_by_user(2).unwrap();
@@ -513,6 +569,39 @@ mod tests {
         assert_eq!(mine.stop(4).unwrap().state, ProcessState::Stopped);
         // The model's own stop: it knows, so it is not told again.
         assert!(mine.take_ended().is_empty());
+        processes.stop_all();
+    }
+
+    /// F-8.3: a turn in B neither sees, reads nor stops A's process — by id
+    /// it is no such process — and A's running ones take none of B's room;
+    /// closing A stops A's alone.
+    #[test]
+    fn a_folder_sees_and_stops_only_its_own() {
+        let processes = Arc::new(Processes::default());
+        let (a, b) = (temp_dir("bg-folder-a"), temp_dir("bg-folder-b"));
+        let (in_a, in_b) = (processes.for_chat("ca", &a), processes.for_chat("cb", &b));
+        let theirs = in_a.start(&Shell::default(), "sleep 30", None, &a, ".").unwrap();
+
+        assert_eq!(in_b.stop(theirs.id), Err(BackgroundError::NotFound(theirs.id)));
+        assert_eq!(in_b.read(theirs.id), Err(BackgroundError::NotFound(theirs.id)));
+        assert!(in_b.list().is_empty());
+        assert!(processes.list_in(&a)[0].info.running(), "A's still runs");
+
+        for _ in 1..MAX_RUNNING {
+            in_a.start(&Shell::default(), "sleep 30", None, &a, ".").unwrap();
+        }
+        assert!(matches!(in_a.start(&Shell::default(), "sleep 30", None, &a, "."), Err(BackgroundError::TooMany(_))));
+        let mine = in_b.start(&Shell::default(), "sleep 30", None, &b, ".").expect("A's full room is not B's");
+
+        // A `runCommand` moved to the background at its timeout is the folder's too.
+        let late = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        processes.stop_by_user(theirs.id).unwrap();
+        let (adopted, _feeds) = in_a.adopt(late, "sleep 30", None, ".", "").unwrap();
+        assert!(in_a.list().iter().any(|p| p.id == adopted.id));
+
+        processes.stop_workspace(&a);
+        assert!(processes.list_in(&a).iter().all(|p| p.info.state == ProcessState::Stopped));
+        assert!(in_b.read(mine.id).unwrap().process.running(), "B's untouched");
         processes.stop_all();
     }
 
@@ -526,7 +615,7 @@ mod tests {
         let states = |chat| log.processes(chat).iter().map(|p| (p.info.id, p.info.state)).collect::<Vec<_>>();
         {
             let before = Arc::new(Processes::with_log(Arc::new(|_| {}), log.clone()));
-            let chat = before.for_chat("a");
+            let chat = before.for_chat("a", &dir);
             chat.start(&Shell::default(), "echo built; exit 2", None, &dir, ".").unwrap();
             let serving = chat.start(&Shell::default(), "echo serving; sleep 30", None, &dir, ".").unwrap();
             assert_eq!(states("a"), [(1, ProcessState::Running), (2, ProcessState::Running)], "saved as they start");
@@ -545,8 +634,8 @@ mod tests {
         );
 
         let after = Arc::new(Processes::with_log(Arc::new(|_| {}), log.clone()));
-        let next = after.for_chat("a").start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
-        after.for_chat("b").start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
+        let next = after.for_chat("a", &dir).start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
+        after.for_chat("b", &dir).start(&Shell::default(), "sleep 30", None, &dir, ".").unwrap();
         assert_eq!(next.id, 5, "numbered on from the log");
         let listed = after.list_for("a");
         assert_eq!(listed.iter().map(|p| p.info.id).collect::<Vec<_>>(), [1, 2, 4, 5]);
@@ -702,6 +791,7 @@ mod tests {
             streams: 1,
             reported: false,
             chat: None,
+            workspace: None,
         });
         let heard = Arc::new(Mutex::new(0));
         let count = Arc::clone(&heard);

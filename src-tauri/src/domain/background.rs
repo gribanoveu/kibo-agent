@@ -3,7 +3,7 @@
 //!
 //! Started by `runCommand` with `background: true`, read with `readOutput`,
 //! stopped with `stopProcess` or from the Terminal tab. Each lives until it
-//! exits, is stopped, the workspace changes, or the app quits — not the turn:
+//! exits, is stopped, its folder is closed, or the app quits — not the turn:
 //! a dev server the agent started has to be there when the next message
 //! asks it something.
 //!
@@ -18,8 +18,9 @@ use thiserror::Error;
 
 use crate::domain::command_exec::Shell;
 
-/// Running at once. A sixth start is refused with the list of what runs, so
-/// the model stops one rather than piling up servers on ports.
+/// Running at once in one folder. A sixth start is refused with the list of
+/// what runs there, so the model stops one rather than piling up servers on
+/// ports — another folder's are not its to stop, so they do not count.
 pub const MAX_RUNNING: usize = 5;
 /// Kept per process, newest last; what falls off the front is gone, and a
 /// read that missed it says so.
@@ -51,7 +52,7 @@ pub enum ProcessState {
     Running,
     /// Ended on its own; `None` when a signal ended it.
     Exited { code: Option<i32> },
-    /// Stopped by `stopProcess`, the Terminal tab, or a workspace change.
+    /// Stopped by `stopProcess`, the Terminal tab, or its folder closing.
     Stopped,
 }
 

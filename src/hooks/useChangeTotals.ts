@@ -15,7 +15,7 @@ export function useChangeTotals(workspace: string | null): ChangeTotals | null {
     if (!workspace) return;
     let live = true;
     const load = () =>
-      gitTotals().then(
+      gitTotals(workspace).then(
         (next) => live && setTotals(next),
         () => live && setTotals(null),
       );

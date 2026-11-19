@@ -366,6 +366,25 @@ describe("the session's tokens", () => {
     expect(calls.find((call) => call.command === "chat_resume")?.args.plan).toBe("# Current");
   });
 
+  // F-8.5: "always allow" holds in the folder of the chat whose card it was,
+  // and the backend finds that folder by the chat — the same one the resume names.
+  test("always allow names the card's chat, as the resume does", async () => {
+    results.chat_start = {
+      status: "pendingApproval",
+      value: { history: [], round: 1, budgetUsed: 1, eventSeq: 1, calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }], todos: [], reads: {} },
+    };
+    results.chat_resume = done("written");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.send("write it"));
+    await act(async () => result.current.decide([{ id: "w1", approved: true }], ["writeFile"]));
+
+    const allowed = calls.find((call) => call.command === "approval_always_allow")?.args;
+    const resumed = calls.find((call) => call.command === "chat_resume")?.args;
+    expect(allowed?.tool).toBe("writeFile");
+    expect(allowed?.chatId).toBeTruthy();
+    expect(allowed?.chatId).toBe(resumed?.chatId);
+  });
+
   test("a refused resume keeps the approval card and its checkpoint", async () => {
     const checkpoint = {
       history: [],
@@ -439,6 +458,17 @@ describe("the context estimate", () => {
       command: "chat_context_usage",
       args: { chatId: expect.any(String), messages: [] },
     });
+  });
+
+  /// A chat just opened has no estimate yet: the Overview holds the card's
+  /// place until the first read lands — and lets it go when that read fails,
+  /// or the placeholder would stand for good.
+  test("is pending until its first read lands, and not after one fails", async () => {
+    results.chat_context_usage = new Error("no model");
+    const { result } = renderHook(() => useAgentTurn());
+    expect(result.current.contextPending).toBe(true);
+    await waitFor(() => expect(result.current.contextPending).toBe(false));
+    expect(result.current.context).toBeNull();
   });
 
   /// It is an estimate over the history, so it has to be asked again once the
@@ -711,6 +741,21 @@ describe("branching", () => {
     await waitFor(() => expect(saved()).toHaveLength(4));
     expect(saved()[3].args.id).toBe(fork.id);
     expect(saved()[3].args.messages).toHaveLength(6);
+  });
+
+  /// A fork is saved at once: in the folder on screen, not the backend's active one.
+  test("a fork is saved in the folder the window shows", async () => {
+    results.chat_start = done("answer");
+    const { result } = renderHook(() => useAgentTurn({ folder: "/a" }));
+    await act(async () => {
+      await result.current.send("first");
+    });
+    await waitFor(() => expect(result.current.chatId).not.toBeNull());
+    const before = saved().length;
+    act(() => result.current.branch());
+    await waitFor(() => expect(saved()).toHaveLength(before + 1));
+    expect(saved().at(-1)?.args.branchedFrom).not.toBeNull();
+    expect(saved().at(-1)?.args.workspace).toBe("/a");
   });
 
   /// The plan the original wrote in its last turn is copied with the fork.
@@ -1609,6 +1654,69 @@ describe("parallel sessions", () => {
       ends.get(a)?.("cancelled");
       ends.get("b")?.("cancelled");
     });
+  });
+
+  /// A new chat's folder is the one the window showed when its message was
+  /// typed, kept for its start and every save after the window moves on; a
+  /// saved chat opened sends none — its record says where it lives.
+  test("a new chat carries the folder it was typed in; a saved one carries none", async () => {
+    let end = () => {};
+    results.chat_start = (args: Record<string, unknown>) => new Promise((resolve) => (end = () => resolve(done("ok")(args))));
+    const { result, rerender } = renderHook(({ folder }) => useAgentTurn({ folder }), { initialProps: { folder: "/a" } });
+    act(() => void result.current.send("task"));
+    await waitFor(() => expect(saved()).toHaveLength(1));
+    expect(calls.find((call) => call.command === "chat_start")?.args.workspace).toBe("/a");
+    expect(saved()[0].args.workspace).toBe("/a");
+
+    rerender({ folder: "/b" });
+    await act(async () => end());
+    await waitFor(() => expect(saved()).toHaveLength(2));
+    expect(saved()[1].args.workspace).toBe("/a");
+
+    results.chat_load = { id: "old", title: "Old", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [] };
+    results.chat_start = done("ok");
+    await act(async () => result.current.open("old"));
+    await act(async () => result.current.send("more"));
+    expect(calls.filter((call) => call.command === "chat_start").at(-1)?.args.workspace).toBeNull();
+  });
+
+  /// F-8.7: the window moves to another folder while A's turn works — the
+  /// thread starts afresh there, a message in it runs a turn of its own, and
+  /// A's turn ends and is saved in full in the background.
+  test("a turn left behind by a folder change runs on and saves in full beside a new chat's", async () => {
+    const ends = new Map<string, (text: string) => void>();
+    results.chat_start = (args: Record<string, unknown>) =>
+      new Promise((resolve) => ends.set(args.chatId as string, (text) => resolve(done(text)(args))));
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("task A"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const a = calls.find((call) => call.command === "chat_start")!.args.chatId as string;
+    act(() => result.current.queue("then the docs"));
+    expect(result.current.turns[a].queued).toBe(1);
+
+    act(() => void result.current.reset());
+    expect(result.current.turn.blocks).toEqual([]);
+    // Off screen its queue waits for the user: its end is told regardless.
+    expect(result.current.turns[a].queued).toBe(0);
+    act(() => void result.current.send("task B"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const started = calls.filter((call) => call.command === "chat_start").map((call) => call.args.chatId);
+    expect(started).toHaveLength(2);
+    expect(started[1]).not.toBe(a);
+    expect(result.current.chatActivity[a]).toBe("running");
+
+    await act(async () => ends.get(a)?.("answer A"));
+    await waitFor(() => expect(result.current.chatActivity[a]).toBe("finished"));
+    const last = saved().filter((call) => call.args.id === a).at(-1);
+    expect(JSON.stringify(last?.args.messages)).toContain("answer A");
+    expect(result.current.turn.status).toBe("running");
+
+    // Stop for the folder that closes reaches only its chats.
+    await act(async () => result.current.cancelAll([a]));
+    expect(calls.filter((call) => call.command === "chat_cancel")).toEqual([]);
+    await act(async () => result.current.cancelAll([started[1] as string]));
+    expect(calls.filter((call) => call.command === "chat_cancel").map((call) => call.args)).toEqual([{ chatId: started[1] }]);
+    await act(async () => ends.get(started[1] as string)?.("answer B"));
   });
 
   test("a chat's saves run in order and keep their own snapshots", async () => {

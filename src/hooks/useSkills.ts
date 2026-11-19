@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { setSkillEnabled, setSkillSourceEnabled, skillsList, type SkillSourceItem, type SkillsView } from "../lib/skills";
 
 /**
@@ -11,13 +11,21 @@ export function useSkills(visible: boolean, workspace: string | null = null) {
   const [view, setView] = useState<SkillsView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // An answer for a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
+
   const reload = useCallback(async () => {
     try {
-      setView(await skillsList());
+      const read = await skillsList(workspace);
+      if (shown.current === workspace) setView(read);
     } catch (e) {
-      setError(String(e));
+      if (shown.current === workspace) setError(String(e));
     }
-  }, []);
+  }, [workspace]);
+
+  // Another folder's refusal is not this one's.
+  useEffect(() => setError(null), [workspace]);
 
   useEffect(() => {
     if (visible) reload();
@@ -32,11 +40,11 @@ export function useSkills(visible: boolean, workspace: string | null = null) {
       try {
         await setSkillEnabled(name, enabled);
       } catch (e) {
-        setError(String(e));
+        if (shown.current === workspace) setError(String(e));
       }
       await reload();
     },
-    [reload],
+    [reload, workspace],
   );
 
   /** A whole folder on or off, from Settings; the list is read again, since its skills come and go. */
@@ -47,11 +55,11 @@ export function useSkills(visible: boolean, workspace: string | null = null) {
       try {
         await setSkillSourceEnabled(id, enabled);
       } catch (e) {
-        setError(String(e));
+        if (shown.current === workspace) setError(String(e));
       }
       await reload();
     },
-    [reload],
+    [reload, workspace],
   );
 
   return { view, error, setEnabled, setSourceEnabled };

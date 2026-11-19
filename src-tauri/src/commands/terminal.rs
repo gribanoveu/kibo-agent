@@ -37,22 +37,46 @@ fn size(cols: u16, rows: u16) -> Result<TerminalSize, String> {
     TerminalSize::new(cols, rows).map_err(|e| e.to_string())
 }
 
-/// In the open folder, at the size the tab measured.
+/// In the folder `workspace` names — canonicalized, accepted only as an open
+/// folder (F-8, invariant 1) — at the size the tab measured.
 #[tauri::command]
 pub fn terminal_open(
     cols: u16,
     rows: u16,
+    workspace: Option<String>,
     state: State<'_, Arc<AgentState>>,
     terminals: State<'_, Arc<Terminals>>,
 ) -> Result<TerminalInfo, String> {
     let size = size(cols, rows)?;
-    terminals.open(&state.workspace()?, size).map_err(|e| e.to_string())
+    let root = state
+        .ui_workspace(&workspace)?
+        .ok_or_else(|| "no folder is open".to_string())?;
+    let opened = terminals.open(&root, size).map_err(|e| e.to_string())?;
+    // Closed meanwhile: its close stopped the shells it found, and this one
+    // was not among them yet. Closing takes the folder off the registry
+    // before it stops anything, so checking after the spawn sees it.
+    if let Err(closed) = state.still_open(&root) {
+        let _ = terminals.close(opened.id);
+        return Err(closed);
+    }
+    Ok(opened)
 }
 
-/// Read when the tab opens and on each [`TERMINAL_EVENT`].
+/// Read when the tab opens and on each [`TERMINAL_EVENT`]: the shells of the
+/// folder `workspace` names (F-8.3), checked against the open set; with no
+/// folder, none.
+/// Async: the folder is canonicalized against the user's files.
 #[tauri::command]
-pub fn terminal_list(terminals: State<'_, Arc<Terminals>>) -> Vec<TerminalInfo> {
-    terminals.list()
+pub async fn terminal_list(
+    workspace: Option<String>,
+    state: State<'_, Arc<AgentState>>,
+    terminals: State<'_, Arc<Terminals>>,
+) -> Result<Vec<TerminalInfo>, String> {
+    let (state, terminals) = (Arc::clone(&state), Arc::clone(&terminals));
+    super::blocking(move || {
+        Ok::<_, String>(state.ui_workspace(&workspace)?.map(|root| terminals.list_in(&root)).unwrap_or_default())
+    })
+    .await
 }
 
 /// What it wrote so far, then everything it writes, down `on_output`.

@@ -10,15 +10,19 @@ use crate::domain::settings::RememberScope;
 
 use super::agent_state::AgentState;
 
-/// "Always allow this tool", from an approval card. Lasts as long as the app
-/// runs and no longer.
+/// "Always allow this tool", from an approval card of a turn in `chat_id`.
+/// Holds in that chat's folder only (F-8.5) — found the way the resume finds
+/// it, so the answer and the turn it lets through agree — and lasts while the
+/// folder stays open and the app runs, no longer. Async: the chat's folder
+/// is read from its saved record.
 #[tauri::command]
-pub fn approval_always_allow(tool: String, state: State<'_, Arc<AgentState>>) -> Result<(), String> {
-    state
-        .approval
-        .lock()
-        .map_err(|_| "approval lock poisoned".to_string())?
-        .allow_always(&tool)
+pub async fn approval_always_allow(tool: String, chat_id: String, state: State<'_, Arc<AgentState>>) -> Result<(), String> {
+    let state = Arc::clone(&state);
+    super::blocking(move || {
+        let (root, _) = state.chat_workspace(&chat_id)?;
+        state.allow_always(&root, &tool)
+    })
+    .await
 }
 
 /// What the conversation is for: everything, or answering only. Takes effect
@@ -47,38 +51,51 @@ pub fn chat_mode(state: State<'_, Arc<AgentState>>) -> PickedMode {
 }
 
 /// Runs the whole turn without asking. Deliberately not persisted anywhere.
+/// Async: a chat's folder is read from the chat store.
 #[tauri::command]
-pub fn approval_set_unattended(
+pub async fn approval_set_unattended(
     unattended: bool,
     chat_id: Option<String>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<(), String> {
-    set_unattended(&state, unattended, chat_id.as_deref())
+    let state = Arc::clone(&state);
+    super::blocking(move || set_unattended(&state, unattended, chat_id.as_deref())).await
 }
 
 fn set_unattended(state: &AgentState, unattended: bool, chat_id: Option<&str>) -> Result<(), String> {
     set_skip_all(state, unattended)?;
     // Remembered after it took effect: a settings file that cannot be read
     // costs the memory, not the choice made for this turn.
-    // No folder open, nothing to remember it for.
-    let Ok(folder) = state.workspace() else { return Ok(()) };
+    // No folder, nothing to remember it for.
+    let Some(folder) = auto_folder(state, chat_id) else { return Ok(()) };
     crate::infra::settings_store::update(|s| s.approval.set_auto(chat_id, &folder.display().to_string(), unattended))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
+/// Auto is keyed by (chat, folder), and the folder is the chat's own: a chat
+/// never leaves its checkout (F-8), so the choice must not follow whichever
+/// folder the window happens to show. A folder-scope choice (`None` chat) and
+/// a chat with no record yet key on the open folder.
+fn auto_folder(state: &AgentState, chat_id: Option<&str>) -> Option<std::path::PathBuf> {
+    match chat_id {
+        Some(id) => state.chat_workspace(id).ok().map(|(root, _)| root),
+        None => state.workspace().ok(),
+    }
+}
+
 /// Puts back what was chosen for this chat, or for the open folder, and says
 /// what it is. Ask when nothing was, or no folder is open.
 #[tauri::command]
-pub fn approval_restore(chat_id: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<bool, String> {
-    restore_unattended(&state, chat_id.as_deref())
+pub async fn approval_restore(chat_id: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<bool, String> {
+    let state = Arc::clone(&state);
+    super::blocking(move || restore_unattended(&state, chat_id.as_deref())).await
 }
 
 fn restore_unattended(state: &AgentState, chat_id: Option<&str>) -> Result<bool, String> {
     let settings = crate::infra::settings_store::load().map_err(|e| e.to_string())?;
-    let auto = state
-        .workspace()
-        .is_ok_and(|folder| settings.approval.is_auto(chat_id, &folder.display().to_string()));
+    let auto = auto_folder(state, chat_id)
+        .is_some_and(|folder| settings.approval.is_auto(chat_id, &folder.display().to_string()));
     set_skip_all(state, auto)?;
     Ok(auto)
 }
@@ -198,20 +215,99 @@ mod tests {
         });
     }
 
+    /// A saved chat's Auto is kept under the chat's own folder, not the one
+    /// the window has active (F-8): per repository, it is that repository's.
+    #[test]
+    fn a_saved_chats_auto_is_kept_under_its_own_folder() {
+        crate::testing::with_app_dir("cmd-approval-chat-folder", || {
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (home, active) = (plain("cmd-approval-home"), plain("cmd-approval-active"));
+            crate::infra::chat_store::save("saved", &home.display().to_string(), &[], &serde_json::json!([]), &[], None, None, None)
+                .unwrap();
+            state.set_workspace_for_test(active.clone());
+            crate::infra::settings_store::update(|s| s.approval.remember = RememberScope::Repository).unwrap();
+
+            set_unattended(&state, true, Some("saved")).unwrap();
+
+            let approval = crate::infra::settings_store::load().unwrap().approval;
+            assert!(approval.is_auto(None, &home.display().to_string()), "kept under the chat's folder");
+            assert!(!approval.is_auto(None, &active.display().to_string()), "not under the active one");
+            assert!(!restore_unattended(&state, None).unwrap(), "the active folder asks");
+            assert!(restore_unattended(&state, Some("saved")).unwrap());
+        });
+    }
+
     /// The card's third button. It lasts for the session and is not written
     /// anywhere — a saved "never ask me" is a brake nobody remembers releasing.
     #[test]
     fn always_allow_widens_the_policy_for_that_tool_only() {
         let state = state();
-        state
-            .approval
-            .lock()
-            .unwrap()
-            .always_allowed
-            .insert(ToolName::WriteFile);
+        let root = temp_dir("always-allow-one");
+        state.register_open(root.clone());
+        state.allow_always(&root, "writeFile").unwrap();
 
-        let policy = state.approval().unwrap();
+        let policy = state.approval(&root).unwrap();
         assert!(!policy.requires_approval(ToolName::WriteFile, true));
         assert!(policy.requires_approval(ToolName::Delete, true));
+    }
+
+    /// F-8.5: "always allow" given in A does not take B's card away; Auto is
+    /// one for the app; closing A forgets A's answers, and a card answered
+    /// for a folder no longer open gives nothing to it when it comes back.
+    #[test]
+    fn always_allow_holds_in_its_folder_only_and_closes_with_it() {
+        let state = state();
+        let (a, b) = (temp_dir("always-allow-a"), temp_dir("always-allow-b"));
+        state.register_open(a.clone());
+        state.register_open(b.clone());
+        state.allow_always(&a, "writeFile").unwrap();
+        state.allow_always(&a, "mcp__github__create_issue").unwrap();
+
+        let (in_a, in_b) = (state.approval(&a).unwrap(), state.approval(&b).unwrap());
+        assert!(!in_a.requires_approval(ToolName::WriteFile, true));
+        assert!(in_a.always_allowed_mcp.contains("mcp__github__create_issue"));
+        assert!(in_b.requires_approval(ToolName::WriteFile, true), "B's card still shows");
+        assert!(in_b.always_allowed_mcp.is_empty());
+
+        set_skip_all(&state, true).unwrap();
+        assert!(state.approval(&b).unwrap().skip_all, "Auto is the app's");
+        set_skip_all(&state, false).unwrap();
+
+        assert!(state.unregister_if_idle(&a));
+        state.register_open(a.clone());
+        assert!(state.approval(&a).unwrap().requires_approval(ToolName::WriteFile, true), "closing A forgot it");
+
+        assert!(state.unregister_if_idle(&a));
+        assert!(state.allow_always(&a, "writeFile").is_err(), "a closed folder takes no answer");
+        state.register_open(a.clone());
+        assert!(state.approval(&a).unwrap().always_allowed.is_empty());
+    }
+
+    /// The command finds the folder by the chat, as the resume does: an
+    /// unsaved chat's card answers for the folder it runs in.
+    #[test]
+    fn the_command_allows_in_the_chats_folder() {
+        use tauri::Manager;
+        crate::testing::with_app_dir("always-allow-cmd", || {
+            let state = state();
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b) = (plain("always-allow-cmd-a"), plain("always-allow-cmd-b"));
+            state.register_open(b.clone());
+            state.set_workspace_for_test(a.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+
+            tauri::async_runtime::block_on(approval_always_allow("writeFile".into(), "unsaved".into(), app.state())).unwrap();
+
+            assert!(!state.approval(&a).unwrap().requires_approval(ToolName::WriteFile, true));
+            assert!(state.approval(&b).unwrap().requires_approval(ToolName::WriteFile, true));
+
+            // A saved chat of B, answered while A is the active folder.
+            crate::infra::chat_store::save("in-b", &b.display().to_string(), &[], &serde_json::json!([]), &[], None, None, None).unwrap();
+            tauri::async_runtime::block_on(approval_always_allow("delete".into(), "in-b".into(), app.state())).unwrap();
+            assert!(!state.approval(&b).unwrap().requires_approval(ToolName::Delete, true), "B's chat answers for B");
+            assert!(state.approval(&a).unwrap().requires_approval(ToolName::Delete, true), "not for the active folder");
+        });
     }
 }

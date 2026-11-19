@@ -51,8 +51,8 @@ import { useChatGroups } from "../hooks/useChatGroups";
 /** App.tsx's wiring, minus the rest of the app. */
 function Harness({ agentMode }: { agentMode: boolean }) {
   const workspace = "/repo";
-  const history = useChatHistory(agentMode ? workspace : null);
-  const chatGroups = useChatGroups(agentMode ? workspace : null);
+  const history = useChatHistory(agentMode ? [workspace] : [], agentMode ? workspace : null);
+  const chatGroups = useChatGroups(agentMode ? "projects" : "chat");
   const [, setToast] = useState<string | null>(null);
   return (
     <Sidebar
@@ -61,9 +61,9 @@ function Harness({ agentMode }: { agentMode: boolean }) {
       pages={PAGES}
       page={null}
       onPage={() => {}}
-      chats={history.chats}
+      sections={[{ path: workspace, chats: history.chats }]}
       groups={chatGroups.groups}
-      groupScope={workspace}
+      activeFolder={workspace}
       activeChat={null}
       onSelectChat={() => {}}
       onArchiveChat={() => {}}

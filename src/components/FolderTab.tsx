@@ -1,4 +1,4 @@
-import { Folder, FolderPlus, GitBranch, GitFork, Trash2, Undo2, X } from "lucide-react";
+import { Folder, FolderPlus, GitBranch, GitFork, Trash2, X } from "lucide-react";
 import { Dropdown } from "./Dropdown";
 import type { RecentFolder } from "../lib/chat";
 import type { BranchRef } from "../lib/git";
@@ -56,12 +56,13 @@ type Props = {
     /** Why the branch cannot be switched now — a turn is working in it. */
     locked?: string;
   };
-  /** The branch the open chat works on. Another chat of the folder may have
-      moved the folder off it since: then it is said, with the way back. */
-  chatBranch?: string | null;
+  /** The chat on screen has started: its folder is its own, shown and not
+      chosen here, and its branch is left to Overview — a new chat is where a
+      folder and a branch are picked. */
+  folderFixed?: boolean;
 };
 
-/** Where the next message will be worked on: the folder and its branch. Sits
+/** Where the next message will be worked on: the folder, and for a new chat its branch. Sits
     right under the composer — this is read before sending, not looked up in the
     sidebar. */
 export function FolderTab({
@@ -74,17 +75,19 @@ export function FolderTab({
   branch = null,
   worktreeOf = null,
   branchPicker,
-  chatBranch = null,
+  folderFixed = false,
 }: Props) {
   const shownBranch = (branchPicker?.worktree && branchPicker.base) || branch || "";
-  const away = chatBranch && branch && chatBranch !== branch ? chatBranch : null;
+  const branchShown = path && branch && !folderFixed;
   return (
     <div className={`folder-tab${path ? "" : " no-folder"}`}>
       <Dropdown
+        locked={folderFixed && !!path}
         title={
-          path && worktreeOf
+          (folderFixed && path ? `This chat works in ${path}\nA new chat picks its folder` : null) ??
+          (path && worktreeOf
             ? `A worktree of ${worktreeOf}\nThis folder: ${path}`
-            : path ?? "Choose the folder the agent works in"
+            : path ?? "Choose the folder the agent works in")
         }
         heading="Folder"
         label={
@@ -138,46 +141,30 @@ export function FolderTab({
         ]}
         onPick={(value) => (value === PICK ? onPickFolder() : value !== path && onOpenFolder(value))}
       />
-      {path && branch && branchPicker && (
-        <>
-          <Dropdown
-            locked={!!branchPicker.locked && !branchPicker.worktree}
-            title={
-              (branchPicker.locked && !branchPicker.worktree
-                ? branchPicker.locked
-                : undefined) ??
-              (branchPicker.worktree ? "The branch a new worktree starts from" : "Switch the folder's branch")
-            }
-            heading={branchPicker.worktree ? "Start a worktree from" : "Branch"}
-            label={
-              <span className="folder-tab-name">
-                <GitBranch size={12} />
-                <span className="folder-tab-text">{shownBranch}</span>
-              </span>
-            }
-            value={shownBranch}
-            options={branchPicker.branches.map((one) => ({ value: one.name, hint: one.remote ? "remote" : undefined }))}
-            emptyLabel="Reading branches…"
-            onOpen={branchPicker.onOpen}
-            onPick={branchPicker.onPick}
-          />
-          {away && (
-            <button
-              type="button"
-              className="folder-tab-away"
-              title={branchPicker.locked ?? `This chat works on ${away}; the folder is on ${branch} now. Switch back to ${away}`}
-              aria-disabled={!!branchPicker.locked || undefined}
-              onClick={() => {
-                if (!branchPicker.locked) branchPicker.onPick(away);
-              }}
-            >
-              <Undo2 size={12} />
-              <span className="folder-tab-text">{away}</span>
-            </button>
-          )}
-        </>
+      {branchShown && branchPicker && (
+        <Dropdown
+          locked={!!branchPicker.locked && !branchPicker.worktree}
+          title={
+            (branchPicker.locked && !branchPicker.worktree
+              ? branchPicker.locked
+              : undefined) ??
+            (branchPicker.worktree ? "The branch a new worktree starts from" : "Switch the folder's branch")
+          }
+          heading={branchPicker.worktree ? "Start a worktree from" : "Branch"}
+          label={
+            <span className="folder-tab-name">
+              <GitBranch size={12} />
+              <span className="folder-tab-text">{shownBranch}</span>
+            </span>
+          }
+          value={shownBranch}
+          options={branchPicker.branches.map((one) => ({ value: one.name, hint: one.remote ? "remote" : undefined }))}
+          emptyLabel="Reading branches…"
+          onOpen={branchPicker.onOpen}
+          onPick={branchPicker.onPick}
+        />
       )}
-      {path && branch && !branchPicker && (
+      {branchShown && !branchPicker && (
         <span className="folder-tab-branch" title="Checked-out branch">
           <GitBranch size={12} />
           <span>{branch}</span>

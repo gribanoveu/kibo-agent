@@ -22,10 +22,10 @@ export async function onProcessChanged(handler: (id: number) => void): Promise<U
   return listen<{ id: number }>(PROCESS_EVENT, ({ payload }) => handler(payload.id));
 }
 
-/** The ones chat `chatId` started; with no chat, every one — a folder switch stops them all. */
-export async function processesList(chatId: string | null = null): Promise<ProcessView[]> {
+/** The ones chat `chatId` started; with no chat, every one of the folder `workspace` — what closing it stops. */
+export async function processesList(chatId: string | null, workspace: string | null = null): Promise<ProcessView[]> {
   if (!inTauri()) return [];
-  return invoke<ProcessView[]>("processes_list", { chatId });
+  return invoke<ProcessView[]>("processes_list", { chatId, workspace });
 }
 
 /** The running ones chat `chatId` started, newest first, without output — cheap to read on every change. */

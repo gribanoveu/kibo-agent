@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- 2026-11-19 The box under the message field picks a folder and a branch only for a new chat: a started chat shows its folder there and its branch in Overview
+- 2026-11-18 Switching chats no longer shifts the Overview: the context card keeps its place with placeholders while the new chat's numbers are read
+- 2026-11-18 Chat folders you made stand at the top of the sidebar, above the open folders' sections, and are shared by every project: one folder holds chats of several, each still opening in its own; folders of the same name made per project before become one
+- 2026-11-18 Keep many folders open for little memory: only the folder on screen and folders with a turn running are indexed and watched, and search by meaning loads a model a third the size it was
+- 2026-11-17 Pick a chat's folder when it starts: a new chat chooses its folder under the composer, a started one only names it; the list's head no longer has an Add folder button
+- 2026-11-17 Fold a folder's section in the sidebar under its head; the chats below the pinned ones and the chat folders are one list, without Today and Earlier headings
+- 2026-11-17 Hear and see when a turn ends or waits in a chat off screen, in any open folder; a worktree's section in the sidebar says whose worktree it is
+- 2026-11-17 Come back to every folder open last time: the app reopens them all at launch, on the folder of the chat viewed last
+- 2026-11-17 Move between folders and their chats while agents work: a turn goes on in its own folder and is saved there
+- 2026-11-17 Keep several folders open at once: the sidebar lists each folder's chats, a chat opens in its own folder, and a folder is added beside the others or closed on its own
 - 2026-11-16 With no model pinned (Auto), the line under the message box names the model that would go out — the provider's first — instead of "no model", and after a turn it shows the one actually sent
 - 2026-11-16 `runCommand` takes a `description` — the agent explains in a few words what a command it runs does, and the explanation stands on the approval card beside the command line and names a background process when one ends; the approval decision still reads the command line alone
 - 2026-11-16 A review's report in the chat shows its finding cards first: the reviewer's summary and the range it read fold behind a Summary toggle, open by default only when there are no findings
