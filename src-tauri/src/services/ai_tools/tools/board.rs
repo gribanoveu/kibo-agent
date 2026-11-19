@@ -17,7 +17,7 @@ pub fn board(args: &BoardArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError>
         BoardOp::List => board.cards()?,
         BoardOp::Add => {
             let title = args.title.clone().ok_or_else(|| missing("title"))?;
-            board.change(&BoardChange::Add { title, note: args.note.clone(), due: args.due.clone() })?
+            board.change(&BoardChange::Add { title, note: args.note.clone(), due: args.due.clone(), tags: vec![] })?
         }
         BoardOp::Move => {
             let id = args.id.clone().ok_or_else(|| missing("id"))?;

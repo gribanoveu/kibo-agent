@@ -77,6 +77,10 @@ pub enum BoardChange {
         note: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         due: Option<String>,
+        /// The page's: a card added while its tag filter is on gets the
+        /// filter's tags, so it stays in sight. The model sends none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tags: Vec<String>,
     },
     /// `index`, the page's only: the card's place among the column's other
     /// cards, past their end meaning last. Without it the card keeps its place.
@@ -159,15 +163,16 @@ pub trait TaskBoard: Send + Sync {
 pub fn apply(cards: &[Card], change: &BoardChange) -> Result<Vec<Card>, BoardError> {
     let mut next = cards.to_vec();
     match change {
-        BoardChange::Add { title, note, due } => {
+        BoardChange::Add { title, note, due, tags } => {
             let (title, note) = text(title, note.as_deref())?;
             let due = due_date(due.as_deref())?;
+            let tags = tag_list(tags)?;
             if cards.iter().filter(|c| c.column != Column::Archived).count() >= MAX_CARDS {
                 return Err(BoardError::Full);
             }
             // On top of To do: the newest is the one looked for.
             let top = next.iter().position(|c| c.column == Column::Todo).unwrap_or(next.len());
-            next.insert(top, Card { id: next_id(cards), title, note, due, column: Column::Todo, comments: Vec::new(), tags: Vec::new() });
+            next.insert(top, Card { id: next_id(cards), title, note, due, column: Column::Todo, comments: Vec::new(), tags });
         }
         BoardChange::Edit { id, title, note, due } => {
             let at = position(cards, id)?;
@@ -330,13 +335,13 @@ mod tests {
     use super::*;
 
     fn add(cards: &[Card], title: &str) -> Vec<Card> {
-        apply(cards, &BoardChange::Add { title: title.into(), note: None, due: None }).unwrap()
+        apply(cards, &BoardChange::Add { title: title.into(), note: None, due: None, tags: vec![] }).unwrap()
     }
 
     #[test]
     fn an_added_card_is_todo_on_top_with_the_next_id_and_trimmed_text() {
-        let one = apply(&[], &BoardChange::Add { title: "  file the memory request  ".into(), note: Some("   ".into()), due: None }).unwrap();
-        let two = apply(&one, &BoardChange::Add { title: "renew cert".into(), note: Some("  wlbuh  ".into()), due: None }).unwrap();
+        let one = apply(&[], &BoardChange::Add { title: "  file the memory request  ".into(), note: Some("   ".into()), due: None, tags: vec![] }).unwrap();
+        let two = apply(&one, &BoardChange::Add { title: "renew cert".into(), note: Some("  wlbuh  ".into()), due: None, tags: vec![] }).unwrap();
         assert_eq!(
             two,
             [
@@ -429,14 +434,14 @@ mod tests {
 
     #[test]
     fn a_bad_card_is_refused_and_the_board_is_unchanged() {
-        assert_eq!(apply(&[], &BoardChange::Add { title: "  ".into(), note: None, due: None }), Err(BoardError::EmptyTitle));
+        assert_eq!(apply(&[], &BoardChange::Add { title: "  ".into(), note: None, due: None, tags: vec![] }), Err(BoardError::EmptyTitle));
         let long = "x".repeat(MAX_TITLE_CHARS + 1);
-        assert_eq!(apply(&[], &BoardChange::Add { title: long, note: None, due: None }), Err(BoardError::TitleTooLong(MAX_TITLE_CHARS + 1)));
+        assert_eq!(apply(&[], &BoardChange::Add { title: long, note: None, due: None, tags: vec![] }), Err(BoardError::TitleTooLong(MAX_TITLE_CHARS + 1)));
         let note = Some("x".repeat(MAX_NOTE_CHARS + 1));
-        assert_eq!(apply(&[], &BoardChange::Add { title: "a".into(), note, due: None }), Err(BoardError::NoteTooLong(MAX_NOTE_CHARS + 1)));
+        assert_eq!(apply(&[], &BoardChange::Add { title: "a".into(), note, due: None, tags: vec![] }), Err(BoardError::NoteTooLong(MAX_NOTE_CHARS + 1)));
         // At the limits exactly, it is kept.
         let title = "x".repeat(MAX_TITLE_CHARS);
-        assert!(apply(&[], &BoardChange::Add { title, note: Some("y".repeat(MAX_NOTE_CHARS)), due: None }).is_ok());
+        assert!(apply(&[], &BoardChange::Add { title, note: Some("y".repeat(MAX_NOTE_CHARS)), due: None, tags: vec![] }).is_ok());
     }
 
     #[test]
@@ -444,11 +449,11 @@ mod tests {
         let full: Vec<Card> = (1..=MAX_CARDS)
             .map(|i| Card { id: format!("T{i}"), title: "t".into(), note: None, due: None, column: Column::Todo, comments: vec![], tags: vec![] })
             .collect();
-        assert_eq!(apply(&full, &BoardChange::Add { title: "one more".into(), note: None, due: None }), Err(BoardError::Full));
+        assert_eq!(apply(&full, &BoardChange::Add { title: "one more".into(), note: None, due: None, tags: vec![] }), Err(BoardError::Full));
         assert!(apply(&full, &BoardChange::Move { id: "T1".into(), column: Column::Done, index: None }).is_ok());
         assert_eq!(apply(&full, &BoardChange::Remove { id: "T1".into() }).unwrap().len(), MAX_CARDS - 1);
         let almost = &full[1..];
-        assert_eq!(apply(almost, &BoardChange::Add { title: "fits".into(), note: None, due: None }).unwrap().len(), MAX_CARDS);
+        assert_eq!(apply(almost, &BoardChange::Add { title: "fits".into(), note: None, due: None, tags: vec![] }).unwrap().len(), MAX_CARDS);
     }
 
     fn titles_in(cards: &[Card], column: Column) -> Vec<&str> {
@@ -503,9 +508,9 @@ mod tests {
         // and one fewer open card makes room, whatever the archive holds.
         let mut full: Vec<Card> = (1..=MAX_CARDS).map(|i| card(i, Column::Todo)).collect();
         full.extend((MAX_CARDS + 1..=MAX_CARDS + MAX_ARCHIVED).map(|i| card(i, Column::Archived)));
-        assert_eq!(apply(&full, &BoardChange::Add { title: "x".into(), note: None, due: None }), Err(BoardError::Full));
+        assert_eq!(apply(&full, &BoardChange::Add { title: "x".into(), note: None, due: None, tags: vec![] }), Err(BoardError::Full));
         let room = apply(&full, &BoardChange::Remove { id: "T1".into() }).unwrap();
-        assert!(apply(&room, &BoardChange::Add { title: "x".into(), note: None, due: None }).is_ok());
+        assert!(apply(&room, &BoardChange::Add { title: "x".into(), note: None, due: None, tags: vec![] }).is_ok());
     }
 
     #[test]
@@ -522,7 +527,7 @@ mod tests {
 
     #[test]
     fn what_an_edit_leaves_out_stays() {
-        let cards = apply(&[], &BoardChange::Add { title: "renew cert".into(), note: Some("wlbuh".into()), due: None }).unwrap();
+        let cards = apply(&[], &BoardChange::Add { title: "renew cert".into(), note: Some("wlbuh".into()), due: None, tags: vec![] }).unwrap();
         let edit = |title: Option<&str>, note: Option<&str>| {
             let edited = apply(&cards, &BoardChange::Edit { id: "T1".into(), title: title.map(Into::into), note: note.map(Into::into), due: None }).unwrap();
             (edited[0].title.clone(), edited[0].note.clone())
@@ -534,7 +539,7 @@ mod tests {
 
     #[test]
     fn a_due_date_is_a_real_day_written_back_as_yyyy_mm_dd_and_an_empty_one_is_none() {
-        let due = |due: &str| apply(&[], &BoardChange::Add { title: "a".into(), note: None, due: Some(due.into()) }).map(|cards| cards[0].due.clone());
+        let due = |due: &str| apply(&[], &BoardChange::Add { title: "a".into(), note: None, due: Some(due.into()), tags: vec![] }).map(|cards| cards[0].due.clone());
         assert_eq!(due(" 2026-11-01 "), Ok(Some("2026-11-01".into())));
         assert_eq!(due("2026-11-1"), Ok(Some("2026-11-01".into())));
         assert_eq!(due("  "), Ok(None));
@@ -544,7 +549,7 @@ mod tests {
 
     #[test]
     fn an_edit_sets_moves_or_clears_the_due_date_and_leaving_it_out_keeps_it() {
-        let cards = apply(&[], &BoardChange::Add { title: "a".into(), note: None, due: Some("2026-11-01".into()) }).unwrap();
+        let cards = apply(&[], &BoardChange::Add { title: "a".into(), note: None, due: Some("2026-11-01".into()), tags: vec![] }).unwrap();
         let edit = |due: Option<&str>| {
             apply(&cards, &BoardChange::Edit { id: "T1".into(), title: None, note: None, due: due.map(Into::into) }).map(|cards| cards[0].due.clone())
         };
@@ -648,6 +653,15 @@ mod tests {
     }
 
     #[test]
+    fn a_new_card_takes_its_tags_as_tags_are_set() {
+        let add_tagged = |tags: &[&str]| apply(&[], &BoardChange::Add { title: "a".into(), note: None, due: None, tags: tags.iter().map(|t| t.to_string()).collect() });
+        assert_eq!(add_tagged(&[" Kibo ", "kibo", "", "home"]).unwrap()[0].tags, ["Kibo", "home"]);
+        assert_eq!(add_tagged(&[&"x".repeat(MAX_TAG_CHARS + 1)]), Err(BoardError::TagTooLong(MAX_TAG_CHARS + 1)));
+        let change: BoardChange = serde_json::from_str(r#"{"op":"add","title":"a","note":null,"tags":["Kibo"]}"#).unwrap();
+        assert_eq!(change, BoardChange::Add { title: "a".into(), note: None, due: None, tags: vec!["Kibo".into()] });
+    }
+
+    #[test]
     fn a_tag_too_long_or_too_many_is_refused() {
         let cards = add(&[], "a");
         let long = "x".repeat(MAX_TAG_CHARS + 1);
@@ -676,7 +690,7 @@ mod tests {
         let due = Card { due: Some("2026-11-01".into()), ..card.clone() };
         assert_eq!(serde_json::to_string(&due).unwrap(), r#"{"id":"T1","title":"a","due":"2026-11-01","column":"doing"}"#);
         let change: BoardChange = serde_json::from_str(r#"{"op":"add","title":"a","note":null,"due":"2026-11-01"}"#).unwrap();
-        assert_eq!(change, BoardChange::Add { title: "a".into(), note: None, due: Some("2026-11-01".into()) });
+        assert_eq!(change, BoardChange::Add { title: "a".into(), note: None, due: Some("2026-11-01".into()), tags: vec![] });
         let read: Card = serde_json::from_str(r#"{"id":"T1","title":"a"}"#).unwrap();
         assert_eq!(read.column, Column::Todo);
         let change: BoardChange = serde_json::from_str(r#"{"op":"move","id":"T1","column":"done"}"#).unwrap();

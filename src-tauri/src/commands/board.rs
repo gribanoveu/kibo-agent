@@ -49,7 +49,7 @@ mod tests {
         });
         let path = crate::testing::temp_dir("board-command").join("board.json");
         Board::new(Some(path), board_event_sink(app.handle()))
-            .change(&BoardChange::Add { title: "a".into(), note: None, due: None })
+            .change(&BoardChange::Add { title: "a".into(), note: None, due: None, tags: vec![] })
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "null");
     }
