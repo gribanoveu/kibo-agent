@@ -425,6 +425,16 @@ pub struct Build {
     pub name: String,
     pub state: BuildState,
     pub url: String,
+    /// When the server took this status, in epoch milliseconds; a server
+    /// that does not say leaves it out.
+    pub date_added: Option<u64>,
+}
+
+/// The build the strip shows: the newest the server took — a run started
+/// after one that finished is the one that matters. Undated ones are older
+/// than any dated; among equals a running one wins, then the server's last.
+pub fn latest_build(builds: &[Build]) -> Option<&Build> {
+    builds.iter().max_by_key(|build| (build.date_added, build.state == BuildState::InProgress))
 }
 
 /// The server's answer to "may this be merged".
@@ -483,13 +493,17 @@ pub enum PrStrip {
         approved: bool,
         /// [`merge_blocked`]: `None` with a pull request is a live Merge.
         merge_blocked: Option<Vec<String>>,
+        /// [`latest_build`] of the snapshot's builds.
+        latest_build: Option<Build>,
     },
 }
 
 impl PrStrip {
-    /// Whether a build is running — the watcher asks sooner while one is.
+    /// Whether the latest build is running — the watcher asks sooner while
+    /// it is. An older status left "in progress" by a run that died does not
+    /// keep it asking.
     pub fn building(&self) -> bool {
-        matches!(self, PrStrip::Ready { snapshot, .. } if snapshot.builds.iter().any(|build| build.state == BuildState::InProgress))
+        matches!(self, PrStrip::Ready { latest_build: Some(build), .. } if build.state == BuildState::InProgress)
     }
 }
 
@@ -913,25 +927,45 @@ mod tests {
         assert!(!approved_by(&pr("u_them", &[("u_me", ReviewStatus::NeedsWork)]), "u_me"));
     }
 
+    fn build(name: &str, state: BuildState, date_added: Option<u64>) -> Build {
+        Build { key: name.to_string(), name: name.to_string(), state, url: String::new(), date_added }
+    }
+
+    /// A run started after one that finished is the one to show — and a run
+    /// left "in progress" by a dead job, older than a finished one, is not.
     #[test]
-    fn a_strip_is_building_while_one_of_its_builds_runs() {
-        let ready = |states: &[BuildState]| PrStrip::Ready {
+    fn the_latest_build_is_the_newest_the_server_took() {
+        let latest = |builds: &[Build]| latest_build(builds).map(|build| build.name.clone());
+        assert_eq!(latest(&[]), None);
+        let done = build("#211", BuildState::Successful, Some(1_000));
+        let running = build("#212", BuildState::InProgress, Some(2_000));
+        assert_eq!(latest(&[running.clone(), done.clone()]).as_deref(), Some("#212"));
+        let stuck = build("#210", BuildState::InProgress, Some(500));
+        assert_eq!(latest(&[stuck, done.clone()]).as_deref(), Some("#211"));
+
+        // Undated: older than any dated; among themselves a running one, then the last.
+        let undated_done = build("old", BuildState::Successful, None);
+        assert_eq!(latest(&[done.clone(), undated_done.clone()]).as_deref(), Some("#211"));
+        let undated_running = build("run", BuildState::InProgress, None);
+        assert_eq!(latest(&[undated_running, undated_done.clone()]).as_deref(), Some("run"));
+        let other = build("other", BuildState::Failed, None);
+        assert_eq!(latest(&[undated_done, other]).as_deref(), Some("other"));
+    }
+
+    #[test]
+    fn a_strip_is_building_while_its_latest_build_runs() {
+        let ready = |latest: Option<BuildState>| PrStrip::Ready {
             server_id: "s".to_string(),
             branch: "b".to_string(),
-            snapshot: Snapshot {
-                builds: states
-                    .iter()
-                    .map(|state| Build { key: "k".to_string(), name: "n".to_string(), state: *state, url: String::new() })
-                    .collect(),
-                ..Snapshot::default()
-            },
+            snapshot: Snapshot::default(),
             can_approve: false,
             approved: false,
             merge_blocked: None,
+            latest_build: latest.map(|state| build("n", state, None)),
         };
-        assert!(ready(&[BuildState::Successful, BuildState::InProgress]).building());
-        assert!(!ready(&[BuildState::Successful, BuildState::Failed, BuildState::Unknown]).building());
-        assert!(!ready(&[]).building());
+        assert!(ready(Some(BuildState::InProgress)).building());
+        assert!(!ready(Some(BuildState::Successful)).building());
+        assert!(!ready(None).building());
         assert!(!PrStrip::NoRemote.building());
     }
 
@@ -954,12 +988,14 @@ mod tests {
             can_approve: true,
             approved: false,
             merge_blocked: Some(vec!["v".to_string()]),
+            latest_build: snapshot().builds.into_iter().next(),
         });
-        for key in ["state", "serverId", "branch", "snapshot", "canApprove", "approved", "mergeBlocked"] {
+        for key in ["state", "serverId", "branch", "snapshot", "canApprove", "approved", "mergeBlocked", "latestBuild"] {
             assert!(ready.get(key).is_some(), "{key}: {ready}");
         }
         assert_eq!(ready["state"], "ready");
         assert!(ready["snapshot"].get("branchOnServer").is_some(), "{ready}");
+        assert!(ready["latestBuild"].get("dateAdded").is_some(), "{ready}");
     }
 
     // ------------------------------------------------------------- snapshots
@@ -975,6 +1011,7 @@ mod tests {
                 name: "pipeline".to_string(),
                 state: BuildState::InProgress,
                 url: "https://server.com/builds/1".to_string(),
+                date_added: Some(1_700_000_000_000),
             }],
         }
     }

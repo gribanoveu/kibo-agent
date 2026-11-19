@@ -16,7 +16,7 @@ use std::time::Duration;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::domain::code_host::{
-    alias_to_remember, approved_by, can_approve, canonical_remote, host_of, merge_blocked, server_for, Call, CodeHost,
+    alias_to_remember, approved_by, can_approve, canonical_remote, host_of, latest_build, merge_blocked, server_for, Call, CodeHost,
     CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, RemoteRepo,
     Snapshot,
 };
@@ -164,6 +164,7 @@ impl PullRequests {
             server_id: target.server.id.clone(),
             branch: target.branch.clone(),
             merge_blocked: merge.as_ref().and_then(merge_blocked),
+            latest_build: latest_build(&builds).cloned(),
             snapshot: Snapshot { pr, branch_on_server: commit.is_some(), default_branch: Some(default_branch), merge, builds },
             can_approve,
             approved,
@@ -531,7 +532,7 @@ mod tests {
     }
 
     fn build(state: BuildState) -> Build {
-        Build { key: "ci".to_string(), name: "build #12".to_string(), state, url: "https://ci.example/12".to_string() }
+        Build { key: "ci".to_string(), name: "build #12".to_string(), state, url: "https://ci.example/12".to_string(), date_added: None }
     }
 
     /// A repository with `remote` as `origin` and `feature/x` checked out.
@@ -597,7 +598,7 @@ mod tests {
             *lock(&double.builds) = vec![build(BuildState::Successful)];
             *lock(&double.me) = Some("u_me".to_string());
 
-            let PrStrip::Ready { server_id, branch, snapshot, can_approve, approved, merge_blocked } =
+            let PrStrip::Ready { server_id, branch, snapshot, can_approve, approved, merge_blocked, latest_build } =
                 service.strip(&repo("prs-strip-repo", Some(REMOTE))).unwrap()
             else {
                 panic!("not ready")
@@ -609,6 +610,7 @@ mod tests {
             assert_eq!(snapshot.builds, [build(BuildState::Successful)]);
             assert!(can_approve && !approved);
             assert_eq!(merge_blocked, Some(vec!["Requires approvals".to_string()]));
+            assert_eq!(latest_build, Some(build(BuildState::Successful)));
         });
     }
 

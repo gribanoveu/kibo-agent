@@ -120,6 +120,7 @@ impl CodeHost for Bitbucket {
                 name: build.name,
                 state: build_state(&build.state),
                 url: build.url,
+                date_added: build.date_added,
             })
             .collect())
     }
@@ -488,7 +489,10 @@ struct Veto {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BuildJson {
+    #[serde(default)]
+    date_added: Option<u64>,
     #[serde(default)]
     key: String,
     #[serde(default)]
@@ -533,7 +537,7 @@ mod tests {
     const BUILDS_EMPTY: &str = r#"{"size":0,"limit":25,"isLastPage":true,"values":[],"start":0}"#;
 
     const BUILDS: &str = r#"{"size":4,"limit":25,"isLastPage":true,"values":[
-        {"key":"ci","state":"SUCCESSFUL","name":"build #12","url":"https://ci.example/12","description":""},
+        {"key":"ci","state":"SUCCESSFUL","name":"build #12","url":"https://ci.example/12","description":"","dateAdded":1763100000000},
         {"key":"cq","state":"FAILED","name":"code quality","url":"https://ci.example/cq"},
         {"key":"scan","state":"INPROGRESS","name":"scan","url":""},
         {"key":"odd","state":"QUEUED","name":"queued","url":""}],"start":0}"#;
@@ -694,6 +698,7 @@ mod tests {
             [BuildState::Successful, BuildState::Failed, BuildState::InProgress, BuildState::Unknown]
         );
         assert_eq!(builds[0].name, "build #12");
+        assert_eq!((builds[0].date_added, builds[1].date_added), (Some(1_763_100_000_000), None), "when the server took it, if it says");
 
         let (none, _, _) = ask(json_reply("200 OK", BUILDS_EMPTY), |call| Bitbucket.builds(call, "94beed9"));
         assert!(none.is_empty());
