@@ -146,6 +146,20 @@ describe("the strip's states", () => {
     expect(screen.getByText("Create pull request…")).toBeTruthy();
   });
 
+  test("the default branch offers no pull request into itself, only its build", async () => {
+    strip = ready({ branch: "master" }, { pr: null });
+    const { container, unmount } = panel();
+    await settle();
+    expect(container.innerHTML).toBe("");
+    unmount();
+
+    strip = ready({ branch: "master", latestBuild: { key: "j", name: "#9", state: "successful", url: "https://ci/9", dateAdded: 1 } }, { pr: null });
+    panel();
+    await settle();
+    expect(screen.getByText("Build passed")).toBeTruthy();
+    expect(screen.queryByText("Create pull request…")).toBeNull();
+  });
+
   test("a pull request is one line: its number, title and reviews", async () => {
     panel();
     await settle();

@@ -49,7 +49,8 @@ function BuildIcon({ state }: { state: BuildState }) {
  * (docs/56-bitbucket-prs.md, decision 5): one row, opened into its reviewers,
  * builds and what the server lets be done. A button shows only when it can do
  * something — Merge while the server allows it, Approve while the token's
- * user may, Create once the branch is pushed and has none — and a folder that
+ * user may, Create once the branch is pushed, has none and is not the default
+ * branch — and a folder that
  * has nothing to show shows nothing. A read that failed keeps the last row,
  * grey, with the reason and a way to read again.
  */
@@ -119,16 +120,21 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
     }
   };
 
-  // No pull request: Create, once there is something on the server to open it from.
+  // No pull request: Create, once there is something on the server to open it
+  // from — and not on the default branch, which pull requests go into.
   if (!pr) {
     if (!snapshot.branchOnServer) return failed || null;
+    const onDefault = branch === snapshot.defaultBranch;
+    if (onDefault && !build) return failed || null;
     return (
       <div className={error ? "pr-stale" : undefined}>
         {build}
-        <button type="button" className="pr-row pr-quiet" disabled={busy} onClick={() => setConfirm("create")}>
-          <GitPullRequestCreate size={14} />
-          <span className="pr-name">Create pull request…</span>
-        </button>
+        {!onDefault && (
+          <button type="button" className="pr-row pr-quiet" disabled={busy} onClick={() => setConfirm("create")}>
+            <GitPullRequestCreate size={14} />
+            <span className="pr-name">Create pull request…</span>
+          </button>
+        )}
         {failed}
         <CreateDialog
           open={confirm === "create"}
