@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Info } from "lucide-react";
 import { matches } from "../lib/shortcuts";
 import "./InfoTip.css";
@@ -39,6 +39,27 @@ export function InfoTip({ text }: { text: string }) {
   }, [pinned]);
 
   const shown = hovered || pinned;
+
+  // Centred on the icon, unless that runs past the edge of what clips it — a
+  // sheet's scrolling body, the window — then moved back inside by the overrun.
+  const pop = useRef<HTMLSpanElement>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    const el = pop.current;
+    if (!shown || !el) return setShift(0);
+    const clips = (node: Element) => {
+      const { overflow, overflowX, overflowY } = getComputedStyle(node);
+      return /auto|scroll|hidden|clip/.test(`${overflow} ${overflowX} ${overflowY}`);
+    };
+    let clip = el.parentElement;
+    while (clip && !clips(clip)) clip = clip.parentElement;
+    const edge = clip?.getBoundingClientRect();
+    const left = Math.max(edge?.left ?? 0, 0) + 8;
+    const right = Math.min(edge?.right ?? window.innerWidth, window.innerWidth) - 8;
+    const box = el.getBoundingClientRect();
+    setShift(box.left < left ? left - box.left : box.right > right ? right - box.right : 0);
+  }, [shown]);
+
   return (
     <span className="info-tip" ref={wrap}>
       <button
@@ -58,7 +79,7 @@ export function InfoTip({ text }: { text: string }) {
         <Info size={12} aria-hidden />
       </button>
       {shown && (
-        <span role="tooltip" className="info-tip-pop">
+        <span ref={pop} role="tooltip" className="info-tip-pop" style={shift ? { transform: `translateX(calc(-50% + ${shift}px))` } : undefined}>
           {text}
         </span>
       )}

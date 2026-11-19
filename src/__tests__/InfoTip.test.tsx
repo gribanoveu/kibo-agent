@@ -72,4 +72,24 @@ describe("InfoTip", () => {
     fireEvent.pointerDown(document.body);
     expect(shown()).toBeNull();
   });
+
+  test("a tooltip that would run past the edge of what clips it is moved back inside", () => {
+    // happy-dom lays nothing out: the clipping box spans 100–400, the tooltip 40–260.
+    const rect = Object.getOwnPropertyDescriptor(Element.prototype, "getBoundingClientRect")!;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const [left, right] = this.classList.contains("info-tip-pop") ? [40, 260] : this.classList.contains("clip") ? [100, 400] : [0, 0];
+      return { left, right, top: 0, bottom: 0, width: right - left, height: 0, x: left, y: 0, toJSON: () => ({}) } as DOMRect;
+    };
+    try {
+      render(
+        <div className="clip" style={{ overflow: "auto" }}>
+          <InfoTip text="What the number means." />
+        </div>,
+      );
+      fireEvent.pointerEnter(button());
+      expect(shown()!.style.transform).toBe("translateX(calc(-50% + 68px))");
+    } finally {
+      Object.defineProperty(Element.prototype, "getBoundingClientRect", rect);
+    }
+  });
 });
