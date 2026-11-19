@@ -95,6 +95,9 @@
   font-size: var(--fs-sm);
 }
 .board-sheet-fields dt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-faint);
 }
 .board-sheet-fields dd {
@@ -261,4 +264,56 @@
 }
 .board-sheet-comment-text > :last-child {
   margin-bottom: 0;
+}
+/* The card's tags: chips that wrap, then a borderless box for the next one. */
+.board-sheet-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.board-sheet-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 2px 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.board-sheet-tag button {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.board-sheet-tag button:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+.board-sheet-tag-box {
+  flex: 1;
+  min-width: 80px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  outline: none;
+}
+.board-sheet-tag-box:hover {
+  background: var(--bg-hover);
+}
+.board-sheet-tag-box:focus {
+  border-color: var(--border-box-focus);
+  background: var(--bg-field);
 }

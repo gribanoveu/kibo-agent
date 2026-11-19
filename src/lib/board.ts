@@ -15,6 +15,8 @@ export type Card = {
   column: Column;
   /** The user's remarks on it, oldest first. */
   comments?: Comment[];
+  /** The user's labels for it; the model is not shown them. */
+  tags?: string[];
 };
 
 export type Comment = {
@@ -36,7 +38,9 @@ export type BoardChange =
   | { op: "remove"; id: string }
   /** `at`: now, as `toISOString` writes it — the backend keeps no clock of its own. */
   | { op: "comment"; id: string; text: string; at: string }
-  | { op: "uncomment"; id: string; comment: number };
+  | { op: "uncomment"; id: string; comment: number }
+  /** The whole list, replacing what the card had. */
+  | { op: "tags"; id: string; tags: string[] };
 
 export type OpenColumn = Exclude<Column, "archived">;
 /** The open columns' card ids, top to bottom. */

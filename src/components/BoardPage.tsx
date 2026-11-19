@@ -212,6 +212,15 @@ function BoardCard({ card, index, group, back, forward, selected, onOpen, onChan
     >
       <div className="board-card-title">{card.title}</div>
       {card.note && <Note note={card.note} />}
+      {(card.tags?.length ?? 0) > 0 && (
+        <div className="board-card-tags">
+          {card.tags!.map((tag) => (
+            <span key={tag} className="board-card-tag">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="board-card-foot">
         <span className="board-card-meta">
           <span className="board-card-id">{card.id}</span>

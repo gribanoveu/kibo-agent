@@ -168,6 +168,21 @@
   background: color-mix(in srgb, var(--red) 14%, transparent);
   color: var(--red);
 }
+/* The card's tags, set in its sheet. */
+.board-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.board-card-tag {
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 /* How many remarks the card has, read in its sheet. */
 .board-card-comments {
   display: inline-flex;

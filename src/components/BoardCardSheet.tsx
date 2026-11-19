@@ -4,6 +4,7 @@ import { PageSheet } from "./Page";
 import { Dropdown } from "./Dropdown";
 import { ChatMenu } from "./ChatMenu";
 import { Markdown } from "./Markdown";
+import { InfoTip } from "./InfoTip";
 import { dueState, localDay, type BoardChange, type Card, type Comment, type OpenColumn } from "../lib/board";
 import { matches } from "../lib/shortcuts";
 import "./BoardCardSheet.css";
@@ -65,6 +66,16 @@ export function BoardCardSheet({ card, error, onChange, onClose }: Props) {
 
       <h4 className="board-sheet-heading">Details</h4>
       <dl className="board-sheet-fields">
+        <Field
+          label={
+            <>
+              Tags
+              <InfoTip text="Yours alone: the Assistant does not see a card's tags." />
+            </>
+          }
+        >
+          <Tags tags={card.tags ?? []} onChange={(tags) => onChange({ op: "tags", id: card.id, tags })} />
+        </Field>
         <Field label="Due">
           <span className="board-sheet-due">
             <input type="date" aria-label="Due" value={card.due ?? ""} onChange={(e) => void edit({ due: e.currentTarget.value })} />
@@ -88,12 +99,45 @@ export function BoardCardSheet({ card, error, onChange, onClose }: Props) {
 }
 
 /** A row of the card's fields: its name, and what shows and changes it. */
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
     <>
       <dt>{label}</dt>
       <dd>{children}</dd>
     </>
+  );
+}
+
+/** The card's tags as chips, each with a button that takes it off, and a box
+    where Enter adds one. A refused one stays in the box. */
+function Tags({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => Promise<boolean> }) {
+  const [text, setText] = useState("");
+  const add = async () => {
+    if (text.trim() && (await onChange([...tags, text]))) setText("");
+  };
+  return (
+    <span className="board-sheet-tags">
+      {tags.map((tag) => (
+        <span key={tag} className="board-sheet-tag">
+          {tag}
+          <button type="button" title={`Remove the tag ${tag}`} aria-label={`Remove the tag ${tag}`} onClick={() => void onChange(tags.filter((t) => t !== tag))}>
+            <X size={12} />
+          </button>
+        </span>
+      ))}
+      <input
+        className="board-sheet-tag-box"
+        aria-label="New tag"
+        placeholder={tags.length ? "Add" : "Add a tag"}
+        value={text}
+        onChange={(e) => setText(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (!matches(e.nativeEvent, "accept")) return;
+          e.preventDefault();
+          void add();
+        }}
+      />
+    </span>
   );
 }
 

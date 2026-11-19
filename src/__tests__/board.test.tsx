@@ -18,6 +18,12 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "board_change") {
       if (refusal) return Promise.reject(refusal);
       const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string; due?: string; text?: string; at?: string; comment?: number };
+      if (change.op === "tags") {
+        if (refusal) return Promise.reject(refusal);
+        const tags = (change as unknown as { tags: string[] }).tags.map((t) => t.trim()).filter(Boolean);
+        stored = stored.map((c) => (c.id === change.id ? { ...c, tags } : c));
+        return Promise.resolve(structuredClone(stored));
+      }
       if (change.op === "comment" || change.op === "uncomment") {
         stored = stored.map((c) => {
           if (c.id !== change.id) return c;
@@ -288,6 +294,39 @@ describe("the board page", () => {
     await settle();
     expect(sheet.getByText(refusal)).toBeTruthy();
     expect((sheet.getByLabelText("New comment") as HTMLTextAreaElement).value).toBe("one more");
+  });
+
+  test("tags are added and taken off in the sheet, shown on the card, and marked as the user's alone", async () => {
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByText("File the memory request"));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
+    fireEvent.click(sheet.getByRole("button", { name: "More info" }));
+    expect(sheet.getByRole("tooltip").textContent).toContain("the Assistant does not see a card's tags");
+
+    const box = sheet.getByLabelText("New tag") as HTMLInputElement;
+    for (const tag of ["work", " bank "]) {
+      fireEvent.change(box, { target: { value: tag } });
+      fireEvent.keyDown(box, { key: "Enter", code: "Enter" });
+      await settle();
+    }
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "tags", id: "T1", tags: ["work", " bank "] } } });
+    expect(box.value).toBe("");
+    const onCard = () => [...screen.getByRole("region", { name: "To do" }).querySelectorAll(".board-card-tag")].map((t) => t.textContent);
+    expect(onCard()).toEqual(["work", "bank"]);
+
+    fireEvent.click(sheet.getByRole("button", { name: "Remove the tag work" }));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "tags", id: "T1", tags: ["bank"] } } });
+    expect(onCard()).toEqual(["bank"]);
+
+    // A refused one stays in the box.
+    refusal = "the tag is 31 characters; keep it under 30";
+    fireEvent.change(box, { target: { value: "x".repeat(31) } });
+    fireEvent.keyDown(box, { key: "Enter", code: "Enter" });
+    await settle();
+    expect(box.value).toBe("x".repeat(31));
+    expect(sheet.getByText(refusal)).toBeTruthy();
   });
 
   test("a description is read as Markdown, and a link in it is followed rather than edited", async () => {
