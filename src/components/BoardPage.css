@@ -353,3 +353,28 @@
 .board-card.selected {
   border-color: var(--accent);
 }
+/* The board's tags over the columns, the picked ones filled. */
+.board-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.board-filter button {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.board-filter button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.board-filter button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}

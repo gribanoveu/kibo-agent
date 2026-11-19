@@ -68,7 +68,7 @@ afterAll(() => {
 });
 
 const { BoardPage } = await import("../components/BoardPage");
-const { dropChange, dueState, localDay, orderOf } = await import("../lib/board");
+const { dropChange, dueState, filterOrder, hasAnyTag, localDay, orderOf, tagsOf } = await import("../lib/board");
 const { ago } = await import("../components/BoardCardSheet");
 const { IS_MAC } = await import("../lib/shortcuts");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -329,6 +329,51 @@ describe("the board page", () => {
     expect(sheet.getByText(refusal)).toBeTruthy();
   });
 
+  test("the tags over the columns show only the cards with any picked, and All shows them all again", async () => {
+    stored = [
+      { id: "T1", title: "Fix the build", tags: ["Kibo"], column: "todo" },
+      { id: "T2", title: "Renew the cert", tags: ["bank", "home"], column: "doing" },
+      { id: "T3", title: "Untagged", column: "todo" },
+      { id: "T4", title: "Old Kibo one", tags: ["Kibo"], column: "archived" },
+      { id: "T5", title: "Old other one", column: "archived" },
+    ];
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    const bar = within(screen.getByRole("group", { name: "Show cards tagged" }));
+    expect(bar.getAllByRole("button").map((b) => b.textContent)).toEqual(["All", "bank", "home", "Kibo"]);
+    expect(bar.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("true");
+    const titles = () => [...document.querySelectorAll(".board-card-title")].map((t) => t.textContent);
+    fireEvent.click(screen.getByRole("button", { name: /Archive/ }));
+
+    fireEvent.click(bar.getByRole("button", { name: "Kibo" }));
+    expect(titles()).toEqual(["Fix the build", "Old Kibo one"]);
+    expect(bar.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("false");
+    expect(column("Doing").getByText("No cards with these tags")).toBeTruthy();
+
+    fireEvent.click(bar.getByRole("button", { name: "home" }));
+    expect(titles()).toEqual(["Fix the build", "Renew the cert", "Old Kibo one"]);
+    fireEvent.click(bar.getByRole("button", { name: "Kibo" }));
+    expect(titles()).toEqual(["Renew the cert"]);
+
+    fireEvent.click(bar.getByRole("button", { name: "All" }));
+    expect(titles()).toHaveLength(5);
+
+    // A picked tag no card has any longer is let go of.
+    fireEvent.click(bar.getByRole("button", { name: "home" }));
+    expect(titles()).toEqual(["Renew the cert"]);
+    stored = stored.map((c) => (c.id === "T2" ? { ...c, tags: ["bank"] } : c));
+    act(() => listeners.forEach((handler) => handler()));
+    await settle();
+    expect(titles()).toHaveLength(5);
+    expect(bar.getByRole("button", { name: "All" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  test("a board without tags has no filter over it", async () => {
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    expect(screen.queryByRole("group", { name: "Show cards tagged" })).toBeNull();
+  });
+
   test("a description is read as Markdown, and a link in it is followed rather than edited", async () => {
     stored = [{ id: "T1", title: "Read", note: "See **the spec** at [docs](https://example.com)", column: "todo" }];
     render(<BoardPage openPane={() => {}} />);
@@ -422,6 +467,29 @@ describe("a dropped card", () => {
   test("is read top to bottom per open column, the archive left out", () => {
     const card = (id: string, column: Card["column"]): Card => ({ id, title: id, column });
     expect(orderOf([card("T1", "done"), card("T2", "todo"), card("T3", "archived"), card("T4", "todo")])).toEqual({ todo: ["T2", "T4"], doing: [], done: ["T1"] });
+  });
+
+  test("among the cards a filter shows, goes just above the shown one it was dropped above, or under the one above it", () => {
+    // T2 and T4 are hidden: the shown To do is T1, T3, T5.
+    const all = { todo: ["T1", "T2", "T3", "T4", "T5"], doing: ["T6", "T7"], done: ["T8"] };
+    const shown = filterOrder(all, (id) => !["T2", "T4", "T7", "T8"].includes(id));
+    expect(shown).toEqual({ todo: ["T1", "T3", "T5"], doing: ["T6"], done: [] });
+    // T5 dropped above T3: just above it among all, past the hidden T2.
+    expect(dropChange(shown, { ...shown, todo: ["T1", "T5", "T3"] }, "T5", all)).toEqual({ op: "move", id: "T5", column: "todo", index: 2 });
+    // T1 dropped last: just under T5, the end.
+    expect(dropChange(shown, { ...shown, todo: ["T3", "T5", "T1"] }, "T1", all)).toEqual({ op: "move", id: "T1", column: "todo", index: 4 });
+    // Into Doing under T6: just under it, above the hidden T7.
+    expect(dropChange(shown, { ...shown, todo: ["T1", "T5"], doing: ["T6", "T3"] }, "T3", all)).toEqual({ op: "move", id: "T3", column: "doing", index: 1 });
+    // Into a column whose cards are all hidden: under them.
+    expect(dropChange(shown, { ...shown, todo: ["T1", "T5"], done: ["T3"] }, "T3", all)).toEqual({ op: "move", id: "T3", column: "done", index: 1 });
+  });
+
+  test("tags are listed once each whatever their case, the first spelling kept, alphabetically", () => {
+    const card = (tags?: string[]): Card => ({ id: "T1", title: "t", column: "todo", tags });
+    expect(tagsOf([card(["kibo", "Bank"]), card(["bank"]), card(), card(["Alpha", "Kibo"])])).toEqual(["Alpha", "Bank", "kibo"]);
+    expect(hasAnyTag(card(["bank"]), ["Bank"])).toBe(true);
+    expect(hasAnyTag(card(["bank"]), ["home"])).toBe(false);
+    expect(hasAnyTag(card(), ["bank"])).toBe(false);
   });
 
   test("moves to the column and place the drag left it in", () => {

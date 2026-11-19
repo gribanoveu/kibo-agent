@@ -6,7 +6,7 @@ import { Archive, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronU
 import { Page } from "./Page";
 import { BoardCardSheet } from "./BoardCardSheet";
 import { useBoard } from "../hooks/useBoard";
-import { dropChange, dueState, localDay, orderOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
+import { dropChange, dueState, filterOrder, hasAnyTag, localDay, orderOf, tagsOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
 import { matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import "./BoardPage.css";
 
@@ -35,6 +35,12 @@ export function BoardPage() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // The tags picked above the columns: a card shows when it has any of them.
+  // One no card has any longer is let go of.
+  const [picked, setPicked] = useState<string[]>([]);
+  const tags = tagsOf(cards);
+  const filter = picked.filter((tag) => tags.includes(tag));
+  const passes = (card: Card) => filter.length === 0 || hasAnyTag(card, filter);
   // A click that ends a drag is not one that opens the card.
   const draggingRef = useRef(false);
   // While a card is dragged, the order it is dragged through; the board's
@@ -42,11 +48,12 @@ export function BoardPage() {
   const [dragged, setDragged] = useState<Order | null>(null);
   const draggedRef = useRef(dragged);
   draggedRef.current = dragged;
-  const order = dragged ?? orderOf(cards);
   const byId = new Map(cards.map((card) => [card.id, card]));
+  const shownOrder = () => filterOrder(orderOf(cards), (id) => passes(byId.get(id)!));
+  const order = dragged ?? shownOrder();
   // Newest first: the one just archived is the one looked for.
-  const archived = cards.filter((card) => card.column === "archived").reverse();
-  const open = cards.length - archived.length;
+  const archived = cards.filter((card) => card.column === "archived" && passes(card)).reverse();
+  const open = cards.filter((card) => card.column !== "archived").length;
   // Looked up on every read: a card removed, here or by the model, closes its sheet.
   const shown = openId === null ? undefined : byId.get(openId);
   const openCard = (id: string) => !draggingRef.current && setOpenId(id);
@@ -55,7 +62,7 @@ export function BoardPage() {
     // The click the drop makes comes in the same task, before this runs.
     setTimeout(() => (draggingRef.current = false));
     const id = String(event.operation.source?.id);
-    const next = !event.canceled && draggedRef.current && dropChange(orderOf(cards), draggedRef.current, id);
+    const next = !event.canceled && draggedRef.current && dropChange(shownOrder(), draggedRef.current, id, orderOf(cards));
     if (!next) {
       setDragged(null);
       return;
@@ -69,12 +76,16 @@ export function BoardPage() {
   };
 
   return (
-    <Page title="Board" sheet={shown && <BoardCardSheet key={shown.id} card={shown} error={error} onChange={change} onClose={() => setOpenId(null)} />}>
+    <Page
+      title="Board"
+      bar={tags.length > 0 && <TagFilter tags={tags} picked={filter} onPick={setPicked} />}
+      sheet={shown && <BoardCardSheet key={shown.id} card={shown} error={error} onChange={change} onClose={() => setOpenId(null)} />}
+    >
       <DragDropProvider
         sensors={SENSORS}
         onDragStart={() => {
           draggingRef.current = true;
-          setDragged(orderOf(cards));
+          setDragged(shownOrder());
         }}
         onDragOver={(event) => setDragged((order) => order && move(order, event))}
         onDragEnd={onDragEnd}
@@ -92,7 +103,7 @@ export function BoardPage() {
               column={column}
               label={label}
               count={here.length}
-              empty={column === "todo" && adding ? null : EMPTY[column]}
+              empty={column === "todo" && adding ? null : filter.length ? "No cards with these tags" : EMPTY[column]}
               action={
                 column === "todo" && (
                   <button type="button" className="board-add" title="Add a card" aria-label="Add a card" disabled={adding} onClick={() => setAdding(true)}>
@@ -140,6 +151,28 @@ export function BoardPage() {
       )}
       </DragDropProvider>
     </Page>
+  );
+}
+
+/** The board's tags as toggles over the columns, and All, which lets go of
+    them; with some picked, the cards that have any of them are shown. */
+function TagFilter({ tags, picked, onPick }: { tags: string[]; picked: string[]; onPick: (picked: string[]) => void }) {
+  return (
+    <div className="board-filter" role="group" aria-label="Show cards tagged">
+      <button type="button" aria-pressed={picked.length === 0} onClick={() => onPick([])}>
+        All
+      </button>
+      {tags.map((tag) => (
+        <button
+          key={tag}
+          type="button"
+          aria-pressed={picked.includes(tag)}
+          onClick={() => onPick(picked.includes(tag) ? picked.filter((t) => t !== tag) : [...picked, tag])}
+        >
+          {tag}
+        </button>
+      ))}
+    </div>
   );
 }
 
