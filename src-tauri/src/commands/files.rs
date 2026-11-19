@@ -50,3 +50,42 @@ pub async fn file_write(
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tauri::Manager;
+
+    use super::*;
+    use crate::infra::paths::canonicalize_plain;
+    use crate::testing::temp_dir;
+
+    /// A save on its way out of a closed folder writes nothing, even where
+    /// the path still exists.
+    #[test]
+    fn a_closed_folder_takes_no_save() {
+        let state = Arc::new(AgentState::default());
+        let root = canonicalize_plain(&temp_dir("cmd-file-write-closed")).unwrap();
+        std::fs::write(root.join("a.txt"), "old").unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(Arc::clone(&state));
+        let save = |text: &str| {
+            tauri::async_runtime::block_on(file_write(
+                root.display().to_string(),
+                "a.txt".into(),
+                None,
+                text.into(),
+                app.state(),
+            ))
+        };
+
+        let refused = save("new").expect_err("a folder never opened takes nothing");
+        assert!(refused.contains("not an open folder"), "{refused}");
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "old");
+
+        state.register_open(root.clone());
+        save("new").expect("an open folder takes the save");
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "new");
+    }
+}

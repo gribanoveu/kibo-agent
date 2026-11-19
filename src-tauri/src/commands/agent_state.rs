@@ -219,11 +219,19 @@ impl AgentState {
     }
 
     /// Automatic cleanup never removes a checkout another turn is still using.
+    /// A turn holds its folder, the folders around it and the ones inside it:
+    /// `/repo` and `/repo/packages/x` open together share files and one git
+    /// index, and a checkout in one changes the tree under the other's turn.
     pub(crate) fn root_is_idle(&self, workspace: &std::path::Path) -> bool {
         let sessions = self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         !sessions.values().any(|session| {
             session.is_running()
-                && session.running_root.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref() == Some(workspace)
+                && session
+                    .running_root
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_deref()
+                    .is_some_and(|running| running.starts_with(workspace) || workspace.starts_with(running))
         })
     }
 
@@ -556,6 +564,19 @@ mod tests {
         state.ensure_folder_idle(there).expect("another folder is not held");
         drop(running);
         state.ensure_folder_idle(here).expect("the finished turn releases the folder");
+    }
+
+    /// A folder open inside another shares its files and git index: a turn
+    /// in either holds both, and a sibling holds neither.
+    #[test]
+    fn a_turn_holds_the_folders_around_and_inside_it() {
+        let state = state();
+        let running = state.begin_running("c1", 2, Path::new("/repo/packages/x")).expect("the turn runs");
+        state.ensure_folder_idle(Path::new("/repo")).expect_err("a checkout around the turn's folder waits");
+        state.ensure_folder_idle(Path::new("/repo/packages/x/src")).expect_err("one inside it too");
+        state.ensure_folder_idle(Path::new("/repo/packages/y")).expect("a sibling is not held");
+        state.ensure_folder_idle(Path::new("/repo/packages/xy")).expect("a name that only starts the same is not inside");
+        drop(running);
     }
 
     /// The turn's thread dying with the guard frees the mark all the same —

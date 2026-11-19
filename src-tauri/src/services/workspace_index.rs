@@ -48,7 +48,9 @@ pub struct WorkspaceIndex {
     /// searchers of one folder starting together would otherwise open it
     /// twice and run two first syncs on one store.
     // ponytail: one lock for every folder, so a folder opening waits for
-    // another's store (tens of milliseconds); per-folder slots if that shows.
+    // another's store and watcher: tens of milliseconds on macOS, but seconds
+    // on Linux, where inotify puts a watch on every directory of a big tree.
+    // Per-folder slots if a turn is seen waiting on that.
     opening: Mutex<()>,
 }
 
@@ -59,9 +61,9 @@ struct Folders {
     open: HashMap<PathBuf, Open>,
     active: Option<PathBuf>,
     /// The searchers alive per folder, with the epoch they are counted in. A
-    /// folder closed in the window starts a new count when it is opened
-    /// again, and a searcher left over from before — a helper still running —
-    /// does not take from it when it goes.
+    /// guard in case a searcher outlives a close (a turn holds its folder
+    /// open, so none should): the folder opened again starts a new count,
+    /// and the one left over does not take from it when it goes.
     held: HashMap<PathBuf, (u64, usize)>,
     epochs: u64,
 }
@@ -603,6 +605,8 @@ mod tests {
         assert!(matches!(index.activate(&missing, sink), Err(WorkspaceIndexError::Watch(_))));
 
         assert!(index.indexer(&missing).is_some());
+        let background = temp_dir("ws-unwatched-other").join("gone");
+        assert!(index.searcher(&background, quiet()).is_some(), "a searcher of an unwatchable folder still searches");
         let said = std::iter::from_fn(|| events.recv_timeout(Duration::from_secs(5)).ok())
             .any(|event| matches!(&event, IndexEvent::Failed { error } if error.contains("cannot be watched")));
         assert!(said, "the window was not told");

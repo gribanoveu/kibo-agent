@@ -51,7 +51,15 @@ pub fn terminal_open(
     let root = state
         .ui_workspace(&workspace)?
         .ok_or_else(|| "no folder is open".to_string())?;
-    terminals.open(&root, size).map_err(|e| e.to_string())
+    let opened = terminals.open(&root, size).map_err(|e| e.to_string())?;
+    // Closed meanwhile: its close stopped the shells it found, and this one
+    // was not among them yet. Closing takes the folder off the registry
+    // before it stops anything, so checking after the spawn sees it.
+    if let Err(closed) = state.still_open(&root) {
+        let _ = terminals.close(opened.id);
+        return Err(closed);
+    }
+    Ok(opened)
 }
 
 /// Read when the tab opens and on each [`TERMINAL_EVENT`]: the shells of the

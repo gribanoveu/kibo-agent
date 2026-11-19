@@ -95,6 +95,9 @@ pub async fn chat_resume<R: Runtime>(
     let state = state.inner().clone();
     let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let session = state.session(&chat_id);
+    // Before the resume as well as after: `begin_resume` takes the card's
+    // pause, and a refusal after it would leave the card resumable by nothing.
+    state.still_open(&workspace)?;
     let running = state.begin_resume(&chat_id, parallel_limit(), &workspace)?;
     state.still_open(&workspace)?;
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
@@ -1027,6 +1030,31 @@ mod tests {
 
             let refused = state.begin_running("c1", 3, &root).expect_err("a fresh start cannot orphan the card");
             assert!(refused.contains("waiting for approval"), "{refused}");
+            // A resume refused because the folder was closed leaves the card
+            // waiting, not resumable by nothing.
+            state.register_open(root.clone());
+            assert!(state.unregister_if_idle(&root), "a card does not hold its folder open");
+            let refused = tauri::async_runtime::block_on(chat_resume(
+                app.handle().clone(),
+                app.state(),
+                "t2".into(),
+                "c1".into(),
+                PendingApproval {
+                    history: vec![LlmMessage::user("go")],
+                    round: 1,
+                    budget_used: 0,
+                    event_seq: 0,
+                    calls: Vec::new(),
+                    todos: Vec::new(),
+                    reads: Default::default(),
+                },
+                Vec::new(),
+                None,
+            ))
+            .expect_err("a closed folder resumes nothing");
+            assert!(refused.contains("not an open folder"), "{refused}");
+            let still = state.begin_running("c1", 3, &root).expect_err("the card still waits");
+            assert!(still.contains("waiting for approval"), "{still}");
             drop(state.begin_resume("c1", 3, &root).expect("the card resumes its own turn"));
             state.begin_running("c1", 3, &root).expect("after the resume ends, a fresh turn may start");
         });

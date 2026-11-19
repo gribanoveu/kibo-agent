@@ -154,7 +154,10 @@ fn share_project_folders(conn: &Connection) -> Result<(), ChatError> {
     if !old {
         return Ok(());
     }
-    let tx = conn.unchecked_transaction().map_err(store)?;
+    // Immediate: two windows opening the store at once would otherwise both
+    // read the old sets and merge them twice. The second one, let in after
+    // the first commits, reads only the shared set and changes nothing.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate).map_err(store)?;
     let folders: Vec<(String, String)> = {
         let mut stmt = tx
             .prepare(

@@ -144,7 +144,8 @@ id сравнены с HF:
 Счётчик держит сам поисковик. `WorkspaceIndex::searcher(root)` открывает папку, если
 она холодная, делает её горячей и возвращает `CodeSearchFn`, внутри которого лежит
 guard. Когда отпускается последний поисковик (кончился ход, закончил помощник, которому
-его клонировали), папка остывает до тёплой, если она активна, или до холодной.
+его клонировали), папка остаётся открытой, если она активна, и закрывается, если нет
+(~~остывает до тёплой~~ — тёплого состояния нет, см. начало «Решений»).
 
 Отвергнуто — считать ходы по `AgentState` (начало и конец `chat_start`). Помощник
 держит поисковик дольше хода, rerank оборачивает его. Счёт по ходам пропустил бы обоих,
@@ -205,16 +206,17 @@ catches up when the agent works here» вместо счётчика векто�
 
 ## Слои
 
-- `services/index_sync.rs` — `RepoIndexer::sync` с выбором прохода: только по словам
-  (с уборкой векторов ушедших кусков) или полный.
-- `services/embedding_index.rs` — уборка ушедших кусков отдельно от эмбеддинга.
-- `services/workspace_index.rs` — состояние папки, `warm`/`cool`, guard в `searcher`, наблюдатель
-  синкает по словам или полностью, смотря по состоянию.
-- `commands/workspace.rs` — `activate` согревает новую и остужает прежнюю, `workspaces_restore`
-  без `open_index_behind`; `commands/chat.rs::searcher_of` передаёт sink событий индекса.
+- ~~`services/index_sync.rs` — `RepoIndexer::sync` с выбором прохода: только по словам
+  (с уборкой векторов ушедших кусков) или полный.~~ Не делается: ленивых эмбеддингов нет.
+- ~~`services/embedding_index.rs` — уборка ушедших кусков отдельно от эмбеддинга.~~ Не делается.
+- `services/workspace_index.rs` — открыта папка или нет, guard в `searcher`
+  (~~`warm`/`cool`, синк по словам или полный~~ — синк всегда полный).
+- `commands/workspace.rs` — `activate` открывает новую и закрывает прежнюю, если её не держит
+  поисковик; `workspaces_restore` без `open_index_behind`; `commands/chat.rs::searcher_of`
+  передаёт sink событий индекса.
 - `infra/compact_unigram.rs` — модель Unigram на плоской trie для `TokenizerImpl`.
 - `infra/local_embeddings.rs` — `TokenizerImpl<CompactUnigram, …>` вместо `Tokenizer`, `DEFAULT_IDLE_UNLOAD`.
-- Фронт: `src/lib/indexStatus.ts` (`describeIndex`) — текст бейджа.
+- ~~Фронт: `src/lib/indexStatus.ts` (`describeIndex`) — текст бейджа.~~ Не делается (решение 7).
 - Новых команд, событий и каналов нет.
 
 ## Нарезка

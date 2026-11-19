@@ -272,13 +272,17 @@ impl McpServers {
     pub fn prune(&self, config: &McpConfig) {
         let wanted = runnable(config);
         let mut pools = lock(&self.pools);
-        let mut gone = false;
+        let mut stopped = Vec::new();
         for pool in pools.values_mut() {
-            let before = pool.slots.len();
-            pool.slots.retain(|name, slot| keep(slot, wanted.get(name)));
-            gone |= pool.slots.len() != before;
+            let going: Vec<String> =
+                pool.slots.iter_mut().filter_map(|(name, slot)| (!keep(slot, wanted.get(name.as_str()))).then(|| name.clone())).collect();
+            stopped.extend(going.iter().filter_map(|name| pool.slots.remove(name)));
         }
         drop(pools);
+        // Dropped outside the lock, as in `stop`: ending a server waits for
+        // its process, and every folder's turns wait on the pools meanwhile.
+        let gone = !stopped.is_empty();
+        drop(stopped);
         if gone {
             self.report();
         }
