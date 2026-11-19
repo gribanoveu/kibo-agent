@@ -17,7 +17,7 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "board_list") return Promise.resolve(structuredClone(stored));
     if (command === "board_change") {
       if (refusal) return Promise.reject(refusal);
-      const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string; due?: string; text?: string; at?: string; comment?: number };
+      const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string; due?: string; text?: string; at?: string; comment?: number; tags?: string[] };
       if (change.op === "tags") {
         if (refusal) return Promise.reject(refusal);
         const tags = (change as unknown as { tags: string[] }).tags.map((t) => t.trim()).filter(Boolean);
@@ -45,7 +45,7 @@ mock.module("@tauri-apps/api/core", () => ({
         change.op === "remove"
           ? stored.filter((c) => c.id !== change.id)
           : change.op === "add"
-            ? [{ id: `T${stored.length + 1}`, title: "", ...text, column: "todo" }, ...stored]
+            ? [{ id: `T${stored.length + 1}`, title: "", ...text, ...(change.tags && { tags: change.tags }), column: "todo" }, ...stored]
             : stored.map((c) => (c.id !== change.id ? c : change.op === "edit" ? { ...c, ...text } : { ...c, column: change.column! }));
       return Promise.resolve(structuredClone(stored));
     }
@@ -427,6 +427,21 @@ describe("the board page", () => {
 
     fireEvent.click(bar.getByRole("button", { name: "All" }));
     expect(titles()).toHaveLength(5);
+
+    // A card added under the filter gets its tags, says so while written, and stays in sight.
+    fireEvent.click(bar.getByRole("button", { name: "Kibo" }));
+    fireEvent.click(column("To do").getByLabelText("Add a card"));
+    const form = within(screen.getByRole("group", { name: "New card" }));
+    expect(form.getByLabelText("Tags it gets").textContent).toBe("Kibo");
+    fireEvent.change(form.getByLabelText("Title"), { target: { value: "Ship it" } });
+    fireEvent.keyDown(form.getByLabelText("Title"), { key: "Enter", code: "Enter" });
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "add", title: "Ship it", note: "", due: "", tags: ["Kibo"] } } });
+    expect(column("To do").getByText("Ship it")).toBeTruthy();
+    fireEvent.click(bar.getByRole("button", { name: "All" }));
+    stored = stored.filter((c) => c.title !== "Ship it");
+    act(() => listeners.forEach((handler) => handler()));
+    await settle();
 
     // A picked tag no card has any longer is let go of.
     fireEvent.click(bar.getByRole("button", { name: "home" }));

@@ -4,7 +4,7 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 4px;
 }
 .board-column {
   min-height: 120px;

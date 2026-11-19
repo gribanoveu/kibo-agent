@@ -113,7 +113,11 @@ export function BoardPage() {
               }
             >
               {column === "todo" && adding && (
-                <CardEditor onSave={(title, note, due) => change({ op: "add", title, note, due })} onClose={() => setAdding(false)} />
+                <CardEditor
+                  tags={filter}
+                  onSave={(title, note, due) => change({ op: "add", title, note, due, ...(filter.length > 0 && { tags: filter }) })}
+                  onClose={() => setAdding(false)}
+                />
               )}
               {here.map((card, index) => (
                 <BoardCard
@@ -325,6 +329,8 @@ function Due({ due, open }: { due: string; open: boolean }) {
 }
 
 type EditorProps = {
+  /** The tags it will get — the filter's — shown so the card is not a surprise. */
+  tags: string[];
   onSave: (title: string, note: string, due: string) => Promise<boolean>;
   onClose: () => void;
 };
@@ -332,7 +338,7 @@ type EditorProps = {
 /** A new card's title, note and due day being written. Enter in the title or ⌘Enter in
     the note saves, Escape leaves it as it was; a refused one stays open, with
     the reason over the columns. */
-function CardEditor({ onSave, onClose }: EditorProps) {
+function CardEditor({ tags, onSave, onClose }: EditorProps) {
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const [due, setDue] = useState("");
@@ -364,6 +370,15 @@ function CardEditor({ onSave, onClose }: EditorProps) {
         onChange={(e) => setNote(e.currentTarget.value)}
         onKeyDown={(e) => matches(e.nativeEvent, "cardSave") && void save()}
       />
+      {tags.length > 0 && (
+        <div className="board-card-tags" aria-label="Tags it gets">
+          {tags.map((tag) => (
+            <span key={tag} className="board-card-tag">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="board-editor-actions">
         <label className="board-editor-due">
           Due

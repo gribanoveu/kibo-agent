@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-11-19 Filter the Board by tag: the board's tags sit over the columns as toggles, with All to show every card again
+- 2026-11-19 Filter the Board by tag: the board's tags sit over the columns as toggles, with All to show every card again; a card added under the filter gets its tags
 - 2026-11-19 Tag Board cards in their side panel — the box offers the board's tags as you type, or creates a new one; the tags show on the card and stay yours — the Assistant does not see them
 - 2026-11-19 Board cards are keyed T1, T2… as issues in a tracker; a board kept before reads with the new keys
 - 2026-11-19 Leave comments on a Board card in its side panel — written as Markdown, the newest first, counted on the card, and seen by the Assistant when it lists the board

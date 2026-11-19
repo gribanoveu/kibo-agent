@@ -31,7 +31,8 @@ export type Comment = {
     An `edit` replaces what it is given — the page gives all three; an empty
     note or due date clears it. */
 export type BoardChange =
-  | { op: "add"; title: string; note?: string; due?: string }
+  /** `tags`: the page's filter, so a card added under it stays in sight. */
+  | { op: "add"; title: string; note?: string; due?: string; tags?: string[] }
   | { op: "edit"; id: string; title?: string; note?: string; due?: string }
   /** `index`: its place among the column's other cards; Done ignores it. */
   | { op: "move"; id: string; column: Column; index?: number }
