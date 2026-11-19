@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- 2026-11-19 The Board is kept in SQLite, `~/.kibo/board.db`: a card is a row, its tags and comments rows of their own; a board kept in `board.json` is taken in on first open
+- 2026-11-19 Dictate a comment on a Board card, as a message is, while voice input is on
+- 2026-11-19 Filter the Board by tag: the board's tags sit over the columns as toggles, with All to show every card again; a card added under the filter gets its tags
+- 2026-11-19 Tag Board cards in their side panel — the box offers the board's tags as you type, or creates a new one; the tags show on the card and stay yours — the Assistant does not see them
+- 2026-11-19 Board cards are keyed T1, T2… as issues in a tracker; a board kept before reads with the new keys
+- 2026-11-19 Leave comments on a Board card in its side panel — written as Markdown, the newest first, counted on the card, and seen by the Assistant when it lists the board
+- 2026-11-19 A card on the Board opens in a side panel, as an issue does in a tracker: its status and actions on top, its title and description (read as Markdown) edited in place, how far off its due day is; a new card is written and lands on top of To do, from the + in its heading
 - 2026-11-19 The box under the message field picks a folder and a branch only for a new chat: a started chat shows its folder there and its branch in Overview
 - 2026-11-18 Switching chats no longer shifts the Overview: the context card keeps its place with placeholders while the new chat's numbers are read
 - 2026-11-18 Chat folders you made stand at the top of the sidebar, above the open folders' sections, and are shared by every project: one folder holds chats of several, each still opening in its own; folders of the same name made per project before become one

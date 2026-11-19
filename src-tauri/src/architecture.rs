@@ -209,6 +209,8 @@ const SLOW: &[&str] = &[
     "chat_store::", "tool_call_log::", "daily_metrics::", "next_prompt_log::", "llm_session::resolve", "list_models",
     "llm_credentials_store::", "has_saved_key", "master_key::", "git_head::", "git2::", "rewind::", "preview::",
     "meeting_store::", "rename_speaker", "meeting_notes::", "artifacts::", "free_space", "mongo::", "microphone::",
+    // The board is SQLite: its calls by name, the module being behind `State<Arc<Board>>`.
+    "board.cards()", "board.change(",
 ];
 
 /// Sync commands that reach one of [`SLOW`] today. Only shrinks.

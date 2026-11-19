@@ -555,6 +555,8 @@
 
   /* The shadow under what floats over the panels: a menu, a popover. */
   --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.45);
+  /* A tooltip's: a sentence beside a label, lifted only enough to read as over it. */
+  --shadow-tip: 0 4px 12px rgba(0, 0, 0, 0.16);
   /* The platform's own window controls — macOS traffic lights, Windows'
      red close — which no theme recolours. */
   --wc-close: #ff5f57;

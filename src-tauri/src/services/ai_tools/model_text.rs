@@ -135,7 +135,7 @@ pub fn for_model(result: &ToolResult) -> String {
     }
 }
 
-/// By column, a line a card: `c3 file the memory request (due 2026-11-01) — wlbuh`. The
+/// By column, a line a card: `T3 file the memory request (due 2026-11-01) — wlbuh`. The
 /// archive only as a count: it is the past, and up to a hundred lines of it.
 fn board(cards: &[crate::domain::board::Card]) -> String {
     use crate::domain::board::Column;
@@ -157,6 +157,11 @@ fn board(cards: &[crate::domain::board::Card]) -> String {
             let note = card.note.as_deref().map(|n| format!(" — {}", n.replace('\n', " "))).unwrap_or_default();
             let due = card.due.as_deref().map(|d| format!(" (due {d})")).unwrap_or_default();
             out.push_str(&format!("\n- {} {}{due}{note}", card.id, card.title));
+            // The user's remarks, each on a line under the card, with its day.
+            for comment in &card.comments {
+                let day = comment.at.get(..10).unwrap_or(&comment.at);
+                out.push_str(&format!("\n  - comment {day}: {}", comment.text.replace('\n', " ")));
+            }
         }
     }
     if archived > 0 {
@@ -594,21 +599,34 @@ mod tests {
     #[test]
     fn the_board_reads_by_column_with_ids_and_notes_on_one_line() {
         use crate::domain::board::{Card, Column};
-        let card = |id: &str, title: &str, note: Option<&str>, column| Card { id: id.into(), title: title.into(), note: note.map(Into::into), due: None, column };
+        let card = |id: &str, title: &str, note: Option<&str>, column| Card { id: id.into(), title: title.into(), note: note.map(Into::into), due: None, column, comments: vec![], tags: vec![] };
         let cards = [
-            card("c1", "file the request", Some("wlbuh\n16 GB"), Column::Todo),
-            card("c2", "renew cert", None, Column::Done),
-            Card { due: Some("2026-11-01".into()), ..card("c3", "call the bank", None, Column::Todo) },
+            card("T1", "file the request", Some("wlbuh\n16 GB"), Column::Todo),
+            card("T2", "renew cert", None, Column::Done),
+            Card { due: Some("2026-11-01".into()), ..card("T3", "call the bank", None, Column::Todo) },
         ];
         assert_eq!(
             for_model(&ToolResult::Board { cards: cards.to_vec() }),
-            "The board, as the user sees it on the Board page:\n\nTo do:\n- c1 file the request — wlbuh 16 GB\n- c3 call the bank (due 2026-11-01)\n\nDone:\n- c2 renew cert"
+            "The board, as the user sees it on the Board page:\n\nTo do:\n- T1 file the request — wlbuh 16 GB\n- T3 call the bank (due 2026-11-01)\n\nDone:\n- T2 renew cert"
         );
         assert_eq!(for_model(&ToolResult::Board { cards: vec![] }), "The board is empty.");
+        // The user's remarks, under their card, with the day.
+        use crate::domain::board::Comment;
+        let commented = Card {
+            comments: vec![Comment { id: 1, text: "asked\nthe bank".into(), at: "2026-11-19T10:00:00Z".into() }],
+            ..card("T5", "call the bank", None, Column::Doing)
+        };
+        assert_eq!(
+            for_model(&ToolResult::Board { cards: vec![commented] }),
+            "The board, as the user sees it on the Board page:\n\nDoing:\n- T5 call the bank\n  - comment 2026-11-19: asked the bank"
+        );
+        // Tags are the user's own sorting, not shown to the model.
+        let tagged = Card { tags: vec!["bank".into()], ..card("T6", "renew card", None, Column::Todo) };
+        assert_eq!(for_model(&ToolResult::Board { cards: vec![tagged] }), "The board, as the user sees it on the Board page:\n\nTo do:\n- T6 renew card");
 
-        let old = card("c4", "renewed last year", None, Column::Archived);
+        let old = card("T4", "renewed last year", None, Column::Archived);
         let with_archive: Vec<Card> = cards.iter().cloned().chain([old.clone()]).collect();
-        assert!(for_model(&ToolResult::Board { cards: with_archive }).ends_with("- c2 renew cert\n\nArchived: 1 older finished cards, not listed."));
+        assert!(for_model(&ToolResult::Board { cards: with_archive }).ends_with("- T2 renew cert\n\nArchived: 1 older finished cards, not listed."));
         assert_eq!(for_model(&ToolResult::Board { cards: vec![old] }), "The board is empty; 1 finished cards are in its archive.");
     }
 
