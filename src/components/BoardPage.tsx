@@ -2,8 +2,9 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { DragDropProvider, KeyboardSensor, PointerSensor, useDroppable, type DragDropEventHandlers } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
-import { Archive, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, PanelRightOpen, Plus, Trash2 } from "lucide-react";
 import { Page } from "./Page";
+import { BoardCardSheet } from "./BoardCardSheet";
 import { useBoard } from "../hooks/useBoard";
 import { dropChange, dueState, localDay, orderOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
 import { matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
@@ -26,13 +27,16 @@ const SENSORS = [
 
 /** What the Assistant was asked to keep for later, in three columns. The model
     adds and moves cards; here they are added to To do too, dragged to a place
-    in any column, edited, and any can be removed. Done keeps
+    in any column, opened in a sheet to edit, and any can be removed. Done keeps
     the last five finished — the backend sends older ones to the archive, shown
     under the columns on request. */
 export function BoardPage() {
   const { cards, error, change } = useBoard();
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  // A click that ends a drag is not one that opens the card.
+  const draggingRef = useRef(false);
   // While a card is dragged, the order it is dragged through; the board's
   // own once the drop is kept.
   const [dragged, setDragged] = useState<Order | null>(null);
@@ -43,8 +47,13 @@ export function BoardPage() {
   // Newest first: the one just archived is the one looked for.
   const archived = cards.filter((card) => card.column === "archived").reverse();
   const open = cards.length - archived.length;
+  // Looked up on every read: a card removed, here or by the model, closes its sheet.
+  const shown = openId === null ? undefined : byId.get(openId);
+  const openCard = (id: string) => !draggingRef.current && setOpenId(id);
 
   const onDragEnd: DragDropEventHandlers["onDragEnd"] = (event) => {
+    // The click the drop makes comes in the same task, before this runs.
+    setTimeout(() => (draggingRef.current = false));
     const id = String(event.operation.source?.id);
     const next = !event.canceled && draggedRef.current && dropChange(orderOf(cards), draggedRef.current, id);
     if (!next) {
@@ -60,14 +69,17 @@ export function BoardPage() {
   };
 
   return (
-    <Page title="Board">
+    <Page title="Board" sheet={shown && <BoardCardSheet key={shown.id} card={shown} error={error} onChange={change} onClose={() => setOpenId(null)} />}>
       <DragDropProvider
         sensors={SENSORS}
-        onDragStart={() => setDragged(orderOf(cards))}
+        onDragStart={() => {
+          draggingRef.current = true;
+          setDragged(orderOf(cards));
+        }}
         onDragOver={(event) => setDragged((order) => order && move(order, event))}
         onDragEnd={onDragEnd}
       >
-      {error && <p className="board-error">{error}</p>}
+      {error && !shown && <p className="board-error">{error}</p>}
       {open === 0 && !error && (
         <p className="board-empty">Nothing here yet. Add a card, or ask the Assistant to remind you of something, and it lands here.</p>
       )}
@@ -75,7 +87,23 @@ export function BoardPage() {
         {COLUMNS.map(({ column, label }, at) => {
           const here = order[column].flatMap((id) => byId.get(id) ?? []);
           return (
-            <BoardColumn key={column} column={column} label={label} count={here.length}>
+            <BoardColumn
+              key={column}
+              column={column}
+              label={label}
+              count={here.length}
+              empty={column === "todo" && adding ? null : EMPTY[column]}
+              action={
+                column === "todo" && (
+                  <button type="button" className="board-add" title="Add a card" aria-label="Add a card" disabled={adding} onClick={() => setAdding(true)}>
+                    <Plus size={14} />
+                  </button>
+                )
+              }
+            >
+              {column === "todo" && adding && (
+                <CardEditor onSave={(title, note, due) => change({ op: "add", title, note, due })} onClose={() => setAdding(false)} />
+              )}
               {here.map((card, index) => (
                 <BoardCard
                   key={card.id}
@@ -84,18 +112,11 @@ export function BoardPage() {
                   group={column}
                   back={COLUMNS[at - 1]}
                   forward={COLUMNS[at + 1]}
+                  selected={card.id === openId}
+                  onOpen={openCard}
                   onChange={change}
                 />
               ))}
-              {column === "todo" &&
-                (adding ? (
-                  <CardEditor onSave={(title, note, due) => change({ op: "add", title, note, due })} onClose={() => setAdding(false)} />
-                ) : (
-                  <button type="button" className="board-add" onClick={() => setAdding(true)}>
-                    <Plus size={14} />
-                    Add a card
-                  </button>
-                ))}
             </BoardColumn>
           );
         })}
@@ -111,7 +132,7 @@ export function BoardPage() {
           {archiveOpen && (
             <div className="board-archive-list">
               {archived.map((card, index) => (
-                <BoardCard key={card.id} card={card} index={index} onChange={change} />
+                <BoardCard key={card.id} card={card} index={index} selected={card.id === openId} onOpen={openCard} onChange={change} />
               ))}
             </div>
           )}
@@ -122,14 +143,26 @@ export function BoardPage() {
   );
 }
 
-/** What an empty column is for — To do has Add a card instead. */
-const EMPTY: Record<Exclude<OpenColumn, "todo">, string> = {
+/** What an empty column is for. */
+const EMPTY: Record<OpenColumn, string> = {
+  todo: "Add a card with + above",
   doing: "Drag a card here when you start on it",
   done: "Finished cards land here",
 };
 
+type ColumnProps = {
+  column: OpenColumn;
+  label: string;
+  count: number;
+  /** Said while it has no cards; none while a new one is being written in it. */
+  empty: string | null;
+  /** A button at the right end of its heading. */
+  action?: ReactNode;
+  children: ReactNode;
+};
+
 /** A column, and where a card is dropped when it has no card under it to go by. */
-function BoardColumn({ column, label, count, children }: { column: OpenColumn; label: string; count: number; children: ReactNode }) {
+function BoardColumn({ column, label, count, empty, action, children }: ColumnProps) {
   // Low, so a card under the pointer wins over the column around it.
   const { ref } = useDroppable({ id: column, type: "column", accept: "card", collisionPriority: 1 });
   return (
@@ -138,9 +171,10 @@ function BoardColumn({ column, label, count, children }: { column: OpenColumn; l
         <span className="board-column-dot" aria-hidden="true" />
         {label}
         <span className="board-count">{count}</span>
+        {action}
       </h2>
       {children}
-      {count === 0 && column !== "todo" && <p className="board-column-empty">{EMPTY[column]}</p>}
+      {count === 0 && empty && <p className="board-column-empty">{empty}</p>}
     </section>
   );
 }
@@ -153,23 +187,29 @@ type CardProps = {
   /** The columns either side, when there are. */
   back?: { column: Column; label: string };
   forward?: { column: Column; label: string };
+  /** Whether its sheet is the one open, and what opens it: a click on the card, or its Open button. */
+  selected: boolean;
+  onOpen: (id: string) => void;
   /** Whether the board kept it. */
   onChange: (change: BoardChange) => Promise<boolean>;
 };
 
-function BoardCard({ card, index, group, back, forward, onChange }: CardProps) {
-  const [editing, setEditing] = useState(false);
-  const { ref } = useSortable({ id: card.id, index, group, type: "card", accept: "card", disabled: editing || !group });
+function BoardCard({ card, index, group, back, forward, selected, onOpen, onChange }: CardProps) {
+  const { ref } = useSortable({ id: card.id, index, group, type: "card", accept: "card", disabled: !group });
   const moveTo = (to: { column: Column; label: string }, Icon: typeof ChevronLeft) => (
     <button type="button" title={`Move to ${to.label}`} aria-label={`Move to ${to.label}`} onClick={() => void onChange({ op: "move", id: card.id, column: to.column })}>
       <Icon size={14} />
     </button>
   );
-  if (editing) {
-    return <CardEditor card={card} onSave={(title, note, due) => onChange({ op: "edit", id: card.id, title, note, due })} onClose={() => setEditing(false)} />;
-  }
   return (
-    <article ref={ref} className="board-card" data-card-id={card.id}>
+    // Its buttons do their own thing; a click anywhere else opens it.
+    <article
+      ref={ref}
+      className={selected ? "board-card selected" : "board-card"}
+      data-card-id={card.id}
+      data-sheet-opener
+      onClick={(e) => !(e.target instanceof Element && e.target.closest("button")) && onOpen(card.id)}
+    >
       <div className="board-card-title">{card.title}</div>
       {card.note && <Note note={card.note} />}
       <div className="board-card-foot">
@@ -180,8 +220,8 @@ function BoardCard({ card, index, group, back, forward, onChange }: CardProps) {
         <span className="board-card-tools">
           {back && moveTo(back, ChevronLeft)}
           {forward && moveTo(forward, ChevronRight)}
-          <button type="button" title="Edit" aria-label="Edit" onClick={() => setEditing(true)}>
-            <Pencil size={14} />
+          <button type="button" title="Open" aria-label="Open" onClick={() => onOpen(card.id)}>
+            <PanelRightOpen size={14} />
           </button>
           <button type="button" title="Remove" aria-label="Remove" onClick={() => void onChange({ op: "remove", id: card.id })}>
             <Trash2 size={14} />
@@ -237,19 +277,17 @@ function Due({ due, open }: { due: string; open: boolean }) {
 }
 
 type EditorProps = {
-  /** The card being edited; none for a new one. */
-  card?: Card;
   onSave: (title: string, note: string, due: string) => Promise<boolean>;
   onClose: () => void;
 };
 
-/** A card's title, note and due day being written. Enter in the title or ⌘Enter in
+/** A new card's title, note and due day being written. Enter in the title or ⌘Enter in
     the note saves, Escape leaves it as it was; a refused one stays open, with
     the reason over the columns. */
-function CardEditor({ card, onSave, onClose }: EditorProps) {
-  const [title, setTitle] = useState(card?.title ?? "");
-  const [note, setNote] = useState(card?.note ?? "");
-  const [due, setDue] = useState(card?.due ?? "");
+function CardEditor({ onSave, onClose }: EditorProps) {
+  const [title, setTitle] = useState("");
+  const [note, setNote] = useState("");
+  const [due, setDue] = useState("");
   const save = async () => {
     if (title.trim() && (await onSave(title, note, due))) onClose();
   };
@@ -257,7 +295,7 @@ function CardEditor({ card, onSave, onClose }: EditorProps) {
     <div
       className="board-card board-editor"
       role="group"
-      aria-label={card ? `Edit ${card.id}` : "New card"}
+      aria-label="New card"
       onKeyDown={(e) => matches(e.nativeEvent, "close") && onClose()}
     >
       <input
@@ -287,7 +325,7 @@ function CardEditor({ card, onSave, onClose }: EditorProps) {
           Cancel
         </button>
         <button type="button" className="btn btn-primary" disabled={!title.trim()} onClick={() => void save()}>
-          {card ? "Save" : "Add"}
+          Add
         </button>
       </div>
     </div>

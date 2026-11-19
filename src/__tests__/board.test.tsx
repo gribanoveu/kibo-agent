@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { Card } from "../lib/board";
 
 // The Board page: the Assistant's cards in three columns, read when the page
-// opens and again on `board:changed`; added to To do and edited on the page,
+// opens and again on `board:changed`; added to To do and edited in a card's sheet,
 // moved a column at a time, removed from any column, and Done's oldest in an
 // archive folded under the columns.
 
@@ -18,12 +18,18 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "board_change") {
       if (refusal) return Promise.reject(refusal);
       const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string; due?: string };
-      const text = { title: change.title?.trim() ?? "", note: change.note?.trim() || undefined, due: change.due || undefined };
+      // What an edit leaves out stays, as `domain::board` keeps it.
+      const given = (key: "title" | "note" | "due") => key in change;
+      const text = {
+        ...(given("title") && { title: change.title!.trim() }),
+        ...(given("note") && { note: change.note!.trim() || undefined }),
+        ...(given("due") && { due: change.due || undefined }),
+      } as Partial<Card>;
       stored =
         change.op === "remove"
           ? stored.filter((c) => c.id !== change.id)
           : change.op === "add"
-            ? [...stored, { id: `c${stored.length + 1}`, ...text, column: "todo" }]
+            ? [{ id: `c${stored.length + 1}`, title: "", ...text, column: "todo" }, ...stored]
             : stored.map((c) => (c.id !== change.id ? c : change.op === "edit" ? { ...c, ...text } : { ...c, column: change.column! }));
       return Promise.resolve(structuredClone(stored));
     }
@@ -111,9 +117,12 @@ describe("the board page", () => {
   test("a card is added to To do from its title and note; Enter in the title saves, an empty title cannot", async () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
-    expect(column("Doing").queryByText("Add a card")).toBeNull();
-    fireEvent.click(column("To do").getByText("Add a card"));
+    expect(column("Doing").queryByLabelText("Add a card")).toBeNull();
+    fireEvent.click(column("To do").getByLabelText("Add a card"));
     const form = within(screen.getByRole("group", { name: "New card" }));
+    // Written above To do's cards, where it lands.
+    const editor = screen.getByRole("group", { name: "New card" });
+    expect(editor.compareDocumentPosition(screen.getByText("File the memory request")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect((form.getByRole("button", { name: "Add" }) as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(form.getByLabelText("Title"), { target: { value: "Call the bank" } });
@@ -121,32 +130,77 @@ describe("the board page", () => {
     fireEvent.keyDown(form.getByLabelText("Title"), { key: "Enter", code: "Enter" });
     await settle();
     expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "add", title: "Call the bank", note: "about the card", due: "" } } });
-    expect(column("To do").getByText("Call the bank")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "To do" }).querySelector("[data-card-id]")!.textContent).toContain("Call the bank");
     expect(screen.queryByRole("group", { name: "New card" })).toBeNull();
   });
 
-  test("a card is edited in place; Escape leaves it as it was", async () => {
+  test("a click on a card opens it in a sheet, where its title and description are edited in place", async () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
-    fireEvent.click(column("Done").getByLabelText("Edit"));
-    fireEvent.change(column("Done").getByLabelText("Title"), { target: { value: "Something else" } });
-    fireEvent.keyDown(column("Done").getByLabelText("Title"), { key: "Escape", code: "Escape" });
-    expect(calls.some((c) => c.command === "board_change")).toBe(false);
-    expect(column("Done").getByText("Renew the cert")).toBeTruthy();
+    fireEvent.click(column("To do").getByText("File the memory request"));
+    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    expect(column("To do").getByText("File the memory request").closest("article")!.className).toContain("selected");
 
-    fireEvent.click(column("To do").getByLabelText("Edit"));
-    const form = within(screen.getByRole("group", { name: "Edit c1" }));
-    expect((form.getByLabelText("Note") as HTMLTextAreaElement).value).toBe("wlbuh");
-    fireEvent.change(form.getByLabelText("Title"), { target: { value: "File it today" } });
-    fireEvent.change(form.getByLabelText("Note"), { target: { value: "" } });
-    fireEvent.click(form.getByRole("button", { name: "Save" }));
+    // Escape puts it back, and leaving it then saves nothing.
+    const title = sheet.getByLabelText("Title") as HTMLInputElement;
+    fireEvent.change(title, { target: { value: "Something else" } });
+    fireEvent.keyDown(title, { key: "Escape", code: "Escape" });
+    fireEvent.blur(title);
+    expect(title.value).toBe("File the memory request");
+    expect(calls.some((c) => c.command === "board_change")).toBe(false);
+    expect(screen.getByRole("complementary", { name: "c1 details" })).toBeTruthy();
+
+    // An empty title goes back to what it was.
+    fireEvent.change(title, { target: { value: "  " } });
+    fireEvent.blur(title);
+    expect(title.value).toBe("File the memory request");
+    expect(calls.some((c) => c.command === "board_change")).toBe(false);
+
+    fireEvent.change(title, { target: { value: "File it today" } });
+    fireEvent.blur(title);
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", title: "File it today", note: "", due: "" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", title: "File it today" } } });
     expect(column("To do").getByText("File it today")).toBeTruthy();
+
+    // Read as text until clicked into.
+    expect(sheet.queryByLabelText("Description")).toBeNull();
+    fireEvent.click(sheet.getByRole("button", { name: "Edit description" }));
+    const note = sheet.getByLabelText("Description") as HTMLTextAreaElement;
+    expect(note.value).toBe("wlbuh");
+    fireEvent.change(note, { target: { value: "" } });
+    fireEvent.blur(note);
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", note: "" } } });
     expect(column("To do").queryByText("wlbuh")).toBeNull();
+    expect(sheet.getByText("Add a description…")).toBeTruthy();
   });
 
-  test("a due day is set in the editor, and marked on an open card once it has come", async () => {
+  test("the sheet moves a card by its status, removes it, and closes with it", async () => {
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByLabelText("Open"));
+    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    fireEvent.click(sheet.getByRole("button", { name: "To do" }));
+    fireEvent.click(sheet.getByRole("option", { name: "Doing" }));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "move", id: "c1", column: "doing" } } });
+    expect(column("Doing").getByText("File the memory request")).toBeTruthy();
+
+    // Another card opens in the same sheet.
+    fireEvent.pointerDown(screen.getByText("Renew the cert"));
+    fireEvent.click(screen.getByText("Renew the cert"));
+    expect(screen.getByRole("complementary", { name: "c2 details" })).toBeTruthy();
+
+    fireEvent.click(within(screen.getByRole("complementary", { name: "c2 details" })).getByRole("button", { name: "More" }));
+    // A press in the menu, drawn outside the sheet, is not one that closes it.
+    fireEvent.pointerDown(screen.getByRole("menuitem", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Remove" }));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "remove", id: "c2" } } });
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+
+  test("a due day is set in the card sheet, and marked on an open card once it has come", async () => {
     stored = [
       { id: "c1", title: "Late", due: "2000-01-01", column: "todo" },
       { id: "c2", title: "Now", due: localDay(), column: "doing" },
@@ -155,21 +209,40 @@ describe("the board page", () => {
     ];
     render(<BoardPage openPane={() => {}} />);
     await settle();
-    const due = (title: string) => screen.getByText(title).closest("article")!.querySelector(".board-card-due")!;
+    const due = (title: string) => screen.getByText(title, { selector: ".board-card-title" }).closest("article")!.querySelector(".board-card-due")!;
     expect(due("Late").className).toContain("past");
     expect(due("Late").getAttribute("title")).toStartWith("Overdue");
     expect(due("Now").className).toContain("today");
     expect(due("Later").className).toContain("ahead");
     expect(due("Finished late").className).toContain("ahead");
 
-    fireEvent.click(column("To do").getAllByLabelText("Edit")[0]);
-    const form = within(screen.getByRole("group", { name: "Edit c1" }));
-    expect((form.getByLabelText("Due") as HTMLInputElement).value).toBe("2000-01-01");
-    fireEvent.change(form.getByLabelText("Due"), { target: { value: "2999-06-01" } });
-    fireEvent.click(form.getByRole("button", { name: "Save" }));
+    fireEvent.click(column("To do").getByText("Late"));
+    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    expect((sheet.getByLabelText("Due") as HTMLInputElement).value).toBe("2000-01-01");
+    expect(sheet.getByText((_, el) => el?.classList.contains("board-sheet-due-when") ?? false).className).toContain("past");
+    fireEvent.change(sheet.getByLabelText("Due"), { target: { value: "2999-06-01" } });
     await settle();
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", title: "Late", note: "", due: "2999-06-01" } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "edit", id: "c1", due: "2999-06-01" } } });
+    expect(sheet.getByText((_, el) => el?.classList.contains("board-sheet-due-when") ?? false).className).toContain("ahead");
     expect(due("Late").className).toContain("ahead");
+
+    // A finished card's day is not marked.
+    fireEvent.click(column("Done").getByText("Finished late"));
+    const done = within(screen.getByRole("complementary", { name: "c4 details" }));
+    expect(done.getByText((_, el) => el?.classList.contains("board-sheet-due-when") ?? false).className).toContain("ahead");
+  });
+
+  test("a description is read as Markdown, and a link in it is followed rather than edited", async () => {
+    stored = [{ id: "c1", title: "Read", note: "See **the spec** at [docs](https://example.com)", column: "todo" }];
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByText("Read"));
+    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    expect(sheet.getByText("the spec").tagName).toBe("STRONG");
+    fireEvent.click(sheet.getByText("docs"));
+    expect(sheet.queryByLabelText("Description")).toBeNull();
+    fireEvent.click(sheet.getByText("the spec"));
+    expect((sheet.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("See **the spec** at [docs](https://example.com)");
   });
 
   test("a note past its three lines opens in place with Show more, and a short one has none", async () => {
@@ -207,7 +280,7 @@ describe("the board page", () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
     refusal = "the board is full (200 cards)";
-    fireEvent.click(column("To do").getByText("Add a card"));
+    fireEvent.click(column("To do").getByLabelText("Add a card"));
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "One more" } });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await settle();

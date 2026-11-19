@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-19 A card on the Board opens in a side panel, as an issue does in a tracker: its status and actions on top, its title and description (read as Markdown) edited in place, how far off its due day is; a new card is written and lands on top of To do, from the + in its heading
 - 2026-11-19 The box under the message field picks a folder and a branch only for a new chat: a started chat shows its folder there and its branch in Overview
 - 2026-11-18 Switching chats no longer shifts the Overview: the context card keeps its place with placeholders while the new chat's numbers are read
 - 2026-11-18 Chat folders you made stand at the top of the sidebar, above the open folders' sections, and are shared by every project: one folder holds chats of several, each still opening in its own; folders of the same name made per project before become one

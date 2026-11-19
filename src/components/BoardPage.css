@@ -207,24 +207,26 @@
   background: var(--bg-hover);
   color: var(--text);
 }
-/* Under To do's cards, until it opens into an editor. */
+/* At the right end of To do's heading. */
 .board-add {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: var(--control);
-  padding: 0 8px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-faint);
-  font-family: inherit;
-  font-size: var(--fs-sm);
   cursor: pointer;
 }
-.board-add:hover {
+.board-add:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
+}
+.board-add:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 /* A card being written: the title, the note, Cancel and Save. */
 .board-editor {
@@ -323,4 +325,8 @@
 }
 .board-archive-list .board-card {
   opacity: 0.75;
+}
+/* The card whose sheet is open. */
+.board-card.selected {
+  border-color: var(--accent);
 }

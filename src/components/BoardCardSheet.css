@@ -1,0 +1,165 @@
+/* A card opened in the page's sheet: its id, status and menu in a line,
+   its title and description written in place, then its fields in rows. */
+.board-sheet-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.board-sheet-key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.board-sheet-menu {
+  margin-left: auto;
+}
+/* Text until it is clicked into: the field's frame shows on hover and focus. */
+.board-sheet-title,
+.board-sheet-note {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 12px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+}
+.board-sheet-title {
+  margin-left: -7px;
+  width: calc(100% + 7px);
+  font-size: var(--fs-lg);
+  font-weight: 500;
+  line-height: 1.3;
+}
+.board-sheet-note {
+  min-height: 4.5em;
+  font-size: var(--fs-md);
+  line-height: 1.45;
+}
+/* The description read as a document until it is clicked into. */
+.board-sheet-view {
+  min-height: 0;
+  margin-left: -7px;
+  width: calc(100% + 7px);
+  cursor: text;
+  overflow-wrap: anywhere;
+}
+.board-sheet-view:focus-visible {
+  border-color: var(--accent);
+}
+.board-sheet-view > :first-child {
+  margin-top: 0;
+}
+.board-sheet-view > :last-child {
+  margin-bottom: 0;
+}
+.board-sheet-placeholder {
+  color: var(--text-faint);
+}
+.board-sheet-title:hover,
+.board-sheet-note:hover,
+.board-sheet-view:hover {
+  background: var(--bg-hover);
+}
+.board-sheet-title:focus,
+.board-sheet-note:focus {
+  border-color: var(--border-box-focus);
+  background: var(--bg-field);
+}
+.board-sheet-heading {
+  margin: 4px 0 6px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-faint);
+}
+.board-sheet-error {
+  margin: -6px 0 12px;
+  color: var(--red);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+/* Name on the left, value on the right, one row per field. */
+.board-sheet-fields {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) 1fr;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 18px;
+  font-size: var(--fs-sm);
+}
+.board-sheet-fields dt {
+  color: var(--text-faint);
+}
+.board-sheet-fields dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+}
+/* The status as the columns colour it: waiting, under way, finished. */
+.board-sheet-status {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+.board-sheet-status.doing {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.board-sheet-status.done {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
+}
+/* How far off the due day is, coloured as the card's while it is open. */
+.board-sheet-due-when {
+  color: var(--text-dim);
+}
+.board-sheet-due-when.today {
+  color: var(--amber);
+}
+.board-sheet-due-when.past {
+  color: var(--red);
+}
+.board-sheet-due {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.board-sheet-due input {
+  padding: 2px 4px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
+  background: var(--bg-field);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  outline: none;
+}
+.board-sheet-due input:focus {
+  border-color: var(--border-box-focus);
+}
+.board-sheet-due button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.board-sheet-due button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
