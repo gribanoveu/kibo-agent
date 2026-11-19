@@ -36,11 +36,10 @@
 .pr-quiet .pr-name {
   color: var(--text-dim);
 }
-.pr-number {
-  color: var(--text-faint);
-}
 .pr-stale .pr-row,
-.pr-stale .pr-more {
+.pr-stale .pr-more,
+.pr-stale .pr-next,
+.pr-stale .pr-menu {
   opacity: 0.55;
 }
 .pr-glance {

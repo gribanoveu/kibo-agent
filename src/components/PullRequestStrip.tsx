@@ -168,9 +168,10 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
   const canMerge = strip.mergeBlocked === null;
   const blocked = strip.mergeBlocked ?? [];
   const mayApprove = strip.canApprove || strip.approved;
-  const ready = readiness(pr.draft, strip.mergeBlocked);
+  const draft = pr.draft === true;
+  const ready = readiness(draft, strip.mergeBlocked);
   const ReadyIcon = READY_ICON[ready.kind];
-  const Icon = pr.draft ? GitPullRequestDraft : GitPullRequest;
+  const Icon = draft ? GitPullRequestDraft : GitPullRequest;
   const menu: ChatMenuItem[] = [
     { id: "open", label: "Open in Bitbucket", icon: <ExternalLink size={14} />, onSelect: () => void openExternal(pr.url) },
     ...(mayApprove
@@ -184,7 +185,8 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
           },
         ]
       : []),
-    ...(pr.draft
+    // A server before drafts says neither, and has nothing to convert to.
+    ...(pr.draft !== false
       ? []
       : [
           {
@@ -203,14 +205,14 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
       {build}
       <div className="pr-card">
         <button type="button" className="pr-row pr-head" aria-expanded={open} title={pr.title} onClick={() => setOpen(!open)}>
-          <Icon size={14} aria-label={pr.draft ? "draft pull request" : "pull request"} />
+          <Icon size={14} aria-label={draft ? "draft pull request" : "pull request"} />
           <span className="pr-lines">
             <span className="pr-name">{pr.title}</span>
             <span className="pr-sub">
               <span>
                 {strip.repo} #{pr.id}
               </span>
-              {pr.draft && <span className="pr-draft">Draft</span>}
+              {draft && <span className="pr-draft">Draft</span>}
               {reviews && <span aria-hidden>·</span>}
               {reviews && (
                 <span className="pr-glance" title={`${pr.reviewers.filter((r) => r.status === "approved").length} of ${pr.reviewers.length} reviewers approved`}>
@@ -231,7 +233,7 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
           <ChatMenu items={menu} icon={<MoreHorizontal size={15} />} />
         </div>
       </div>
-      {pr.draft ? (
+      {draft ? (
         <button type="button" className="pr-next" disabled={busy} onClick={() => void run(() => setDraft(pr.id, pr.version, false), "Marked ready for review")}>
           Mark ready
         </button>

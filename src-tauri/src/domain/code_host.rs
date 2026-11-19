@@ -45,6 +45,12 @@ pub enum CodeHostError {
     BadAnswer(String),
     #[error("{0}")]
     Network(String),
+    /// No route to the server at all — its name does not resolve, nothing
+    /// listens, the connection times out: off the VPN, as a rule. The strip
+    /// shows only the branch then. Anything the server itself said back (a TLS
+    /// alert, a broken answer) is [`CodeHostError::Network`] and is shown.
+    #[error("the server is out of reach: {0}")]
+    Unreachable(String),
     #[error("no server is configured for {0} — add one in Catalog → Pull requests")]
     NoServer(String),
     /// The server is there and has no token yet: telling the user to add the
@@ -416,9 +422,9 @@ pub struct PullRequest {
     /// The page Open opens.
     pub url: String,
     /// Work in progress (Data Center 8.18 and later): reviewers see it, the
-    /// server merges nothing until it is marked ready. An older server never
-    /// says so, and every pull request there is ready.
-    pub draft: bool,
+    /// server merges nothing until it is marked ready. `None` is a server
+    /// before drafts — it never names the field, and has nothing to convert to.
+    pub draft: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -602,7 +608,7 @@ mod tests {
             version: 6,
             author: author.to_string(),
             author_name: author.to_string(),
-            draft: false,
+            draft: Some(false),
             from_branch: "docs/wowtax-8238".to_string(),
             to_branch: "master".to_string(),
             reviewers: reviewers
@@ -1021,6 +1027,8 @@ mod tests {
         assert!(ready["snapshot"].get("branchOnServer").is_some(), "{ready}");
         assert!(ready["latestBuild"].get("dateAdded").is_some(), "{ready}");
         assert_eq!(ready["snapshot"]["pr"]["draft"], false, "{ready}");
+        let older = serde_json::to_value(PullRequest { draft: None, ..pr("u", &[]) }).unwrap();
+        assert_eq!(older["draft"], serde_json::Value::Null, "a server before drafts says neither: {older}");
     }
 
     // ------------------------------------------------------------- snapshots

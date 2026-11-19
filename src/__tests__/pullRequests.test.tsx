@@ -210,6 +210,17 @@ describe("the strip's states", () => {
     expect(asked("pull_request_set_draft").map((c) => c.args)).toEqual([{ id: 153, version: 7, draft: true }]);
   });
 
+  test("a server before drafts offers no Convert to draft, and its pull request is ready", async () => {
+    strip = ready({}, { pr: pr({ draft: null }) });
+    panel();
+    await settle();
+    expect(screen.getByLabelText("pull request")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Merge" })).toBeTruthy();
+    fireEvent.click(screen.getByTitle("More"));
+    expect(screen.getByRole("menuitem", { name: /Open in Bitbucket/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Convert to draft/ })).toBeNull();
+  });
+
   test("the latest build is a row of its own: what it is doing, with its icon", async () => {
     const running: Build = { key: "j212", name: "corp-wowtax-tax-declaration-api #212", state: "inProgress", url: "https://ci/212", dateAdded: 2 };
     const done: Build = { key: "j211", name: "corp-wowtax-tax-declaration-api #211", state: "successful", url: "https://ci/211", dateAdded: 1 };
@@ -513,7 +524,7 @@ describe("connecting a server", () => {
   });
 });
 
-describe("the servers in Settings", () => {
+describe("the servers in the Pull requests panel", () => {
   test("each says what it has, and a delete asks first", async () => {
     servers = [
       { id: "a", baseUrl: "https://bitbucket.example", hosts: ["git.example"], trustedCertPem: null, tokenSet: true },

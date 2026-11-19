@@ -278,15 +278,34 @@ fn send<S: ureq::AsSendBody>(
     // before anything is sent.
     let request = request.map_err(|e| CodeHostError::Network(e.to_string()))?;
     let request = agent.configure_request(request).timeout_global(Some(TIMEOUT)).max_redirects(0).build();
-    agent.run(request).map_err(|error| match error {
+    agent.run(request).map_err(classify)
+}
+
+/// What a failed request means to the strip: a certificate to add, no route
+/// to the server (only the branch is shown), or something the server sent
+/// back that is worth saying.
+fn classify(error: ureq::Error) -> CodeHostError {
+    use std::io::ErrorKind;
+    match error {
         ureq::Error::Tls(message) => CodeHostError::Tls(message.to_string()),
         // A rustls handshake failure reaches ureq as an io error, and its text is
         // rustls' own — "invalid peer certificate: UnknownIssuer". That text is
         // the only thing telling a refused certificate from a closed port, and a
         // server behind an untrusted CA is exactly what this names.
-        ureq::Error::Io(e) if e.to_string().contains("certificate") => CodeHostError::Tls(e.to_string()),
+        ureq::Error::Io(e) if e.to_string().to_lowercase().contains("certificate") => CodeHostError::Tls(e.to_string()),
+        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) => {
+            CodeHostError::Unreachable(error.to_string())
+        }
+        ureq::Error::Io(e)
+            if matches!(
+                e.kind(),
+                ErrorKind::ConnectionRefused | ErrorKind::TimedOut | ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable
+            ) =>
+        {
+            CodeHostError::Unreachable(e.to_string())
+        }
         other => CodeHostError::Network(other.to_string()),
-    })
+    }
 }
 
 /// `http` is allowed only to this machine, where a test's own server listens.
@@ -448,8 +467,9 @@ struct Pr {
     reviewers: Vec<PrReviewer>,
     #[serde(default)]
     links: PrLinks,
+    /// Absent on a server before 8.18 — which has no drafts at all.
     #[serde(default)]
-    draft: bool,
+    draft: Option<bool>,
 }
 
 impl Pr {
@@ -738,9 +758,9 @@ mod tests {
             ]
         );
         assert_eq!(pr.url, "https://server.com/projects/CORP/repos/tax-api/pull-requests/153");
-        assert!(!pr.draft);
-        assert!(read::<Pr>(r#"{"id":1,"draft":true}"#).unwrap().into_pull_request().draft, "a draft is read as one");
-        assert!(!read::<Pr>(r#"{"id":1}"#).unwrap().into_pull_request().draft, "a server before drafts has none");
+        assert_eq!(pr.draft, Some(false));
+        assert_eq!(read::<Pr>(r#"{"id":1,"draft":true}"#).unwrap().into_pull_request().draft, Some(true), "a draft is read as one");
+        assert_eq!(read::<Pr>(r#"{"id":1}"#).unwrap().into_pull_request().draft, None, "a server before drafts has none");
     }
 
     /// An empty list is no pull request — Create PR, not an error.
@@ -889,6 +909,39 @@ mod tests {
         assert!(matches!(error, CodeHostError::Tls(_)), "not a TLS refusal: {error}");
     }
 
+    /// Only no route at all hides the row: a closed port is out of reach, and
+    /// what a server says back — a broken answer, its TLS alert — is shown.
+    #[test]
+    fn only_no_route_to_the_server_is_out_of_reach() {
+        use std::io::{Error, ErrorKind};
+
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let server = CodeHostServer {
+            id: "s".to_string(),
+            base_url: format!("http://127.0.0.1:{closed}"),
+            hosts: Vec::new(),
+            trusted_cert_pem: None,
+            token_set: true,
+        };
+        let call = Call { server: &server, token: "t", remote: &remote };
+        let error = Bitbucket.default_branch(&call).unwrap_err();
+        assert!(matches!(error, CodeHostError::Unreachable(_)), "a closed port: {error}");
+
+        for kind in [ErrorKind::ConnectionRefused, ErrorKind::TimedOut, ErrorKind::HostUnreachable, ErrorKind::NetworkUnreachable] {
+            let error = classify(ureq::Error::Io(Error::new(kind, "no")));
+            assert!(matches!(error, CodeHostError::Unreachable(_)), "{kind:?}: {error}");
+        }
+        assert!(matches!(classify(ureq::Error::HostNotFound), CodeHostError::Unreachable(_)));
+        assert!(matches!(classify(ureq::Error::ConnectionFailed), CodeHostError::Unreachable(_)));
+        assert!(matches!(classify(ureq::Error::Timeout(ureq::Timeout::Connect)), CodeHostError::Unreachable(_)));
+        let alert = classify(ureq::Error::Io(Error::new(ErrorKind::InvalidData, "received fatal alert: HandshakeFailure")));
+        assert!(matches!(alert, CodeHostError::Network(_)), "{alert}");
+        assert!(matches!(classify(ureq::Error::Io(Error::other("reset mid-answer"))), CodeHostError::Network(_)));
+        let cert = classify(ureq::Error::Io(Error::new(ErrorKind::InvalidData, "Certificate expired")));
+        assert!(matches!(cert, CodeHostError::Tls(_)), "{cert}");
+    }
+
     /// The three buttons' requests: the participant and its status, the version
     /// that is the optimistic lock, and the two refs a new pull request names.
     #[test]
@@ -899,7 +952,7 @@ mod tests {
             title: "a pull request".to_string(),
             author: "u_author".to_string(),
             author_name: "Anna Author".to_string(),
-            draft: true,
+            draft: Some(true),
             from_branch: "docs/wowtax-8238".to_string(),
             to_branch: "master".to_string(),
             reviewers: Vec::new(),

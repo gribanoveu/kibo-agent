@@ -144,7 +144,7 @@ impl PullRequests {
 
     fn read(&self, root: &Path) -> Read {
         match self.ask(root) {
-            Err(CodeHostError::Network(_)) => Ok(PrStrip::Unreachable),
+            Err(CodeHostError::Unreachable(_)) => Ok(PrStrip::Unreachable),
             read => read,
         }
     }
@@ -494,11 +494,9 @@ mod tests {
         links: Mutex<Vec<String>>,
         me: Mutex<Option<String>>,
         merged: Mutex<Option<CodeHostError>>,
-        /// How long the builds take to answer — the last thing a read asks
-        /// but one: a read in flight that has seen the branch and its PR.
-        slow: Mutex<Duration>,
-        /// How long the pull request takes to answer — asked beside the builds.
-        pr_slow: Mutex<Duration>,
+        /// How long a call takes to answer, by name: a read in flight, or
+        /// a slow server whose rounds are timed.
+        slow: Mutex<HashMap<&'static str, Duration>>,
         /// What the default branch answers instead: a server that does not.
         down: Mutex<Option<CodeHostError>>,
     }
@@ -506,6 +504,8 @@ mod tests {
     impl Double {
         fn ask(&self, what: &str) {
             lock(&self.asked).push(what.to_string());
+            let slow = lock(&self.slow).get(what).copied();
+            std::thread::sleep(slow.unwrap_or_default());
         }
         fn asked(&self, what: &str) -> usize {
             lock(&self.asked).iter().filter(|asked| *asked == what).count()
@@ -538,8 +538,6 @@ mod tests {
         }
         fn pull_request(&self, _: &Call, _: &str) -> Result<Option<PullRequest>, CodeHostError> {
             self.ask("pull_request");
-            let slow = *lock(&self.pr_slow);
-            std::thread::sleep(slow);
             Ok(lock(&self.pr).clone())
         }
         fn merge_check(&self, _: &Call, _: u64) -> Result<MergeCheck, CodeHostError> {
@@ -548,8 +546,6 @@ mod tests {
         }
         fn builds(&self, _: &Call, _: &str) -> Result<Vec<Build>, CodeHostError> {
             self.ask("builds");
-            let slow = *lock(&self.slow);
-            std::thread::sleep(slow);
             Ok(lock(&self.builds).clone())
         }
         fn approve(&self, _: &Call, _: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError> {
@@ -577,7 +573,7 @@ mod tests {
             version,
             author: "u_author".to_string(),
             author_name: "Anna Author".to_string(),
-            draft: false,
+            draft: Some(false),
             from_branch: "feature/x".to_string(),
             to_branch: "master".to_string(),
             reviewers: vec![Reviewer { slug: "u_me".to_string(), display_name: "Me".to_string(), status: ReviewStatus::Unapproved }],
@@ -669,7 +665,8 @@ mod tests {
     }
 
     /// The pull request and the builds wait on the branch and not on each
-    /// other: asked together, a read costs the slower of the two, not both.
+    /// other: in each of its three rounds the two are asked together, and a
+    /// read costs the slower of each pair, not the sum of all six.
     #[test]
     fn a_read_asks_together_what_does_not_wait_on_each_other() {
         with_app_dir("prs-rounds", || {
@@ -677,11 +674,13 @@ mod tests {
             *lock(&double.commit) = Some("94beed9".to_string());
             *lock(&double.pr) = Some(pull_request(6));
             *lock(&double.me) = Some("u_me".to_string());
-            *lock(&double.slow) = Duration::from_millis(400);
-            *lock(&double.pr_slow) = Duration::from_millis(400);
-            let started = std::time::Instant::now();
+            // Three rounds of 250 ms are 750; any one pair asked in turn is 1000.
+            for call in ["default_branch", "branch_commit", "pull_request", "builds", "merge_check", "me"] {
+                lock(&double.slow).insert(call, Duration::from_millis(250));
+            }
+            let started = Instant::now();
             assert!(matches!(service.strip(&repo("prs-rounds-repo", Some(REMOTE))), Ok(PrStrip::Ready { snapshot: Snapshot { pr: Some(_), .. }, .. })));
-            assert!(started.elapsed() < Duration::from_millis(750), "asked one after the other: {:?}", started.elapsed());
+            assert!(started.elapsed() < Duration::from_millis(950), "a pair asked one after the other: {:?}", started.elapsed());
             assert_eq!((double.asked("builds"), double.asked("merge_check"), double.asked("me")), (1, 1, 1));
         });
     }
@@ -1188,7 +1187,7 @@ mod tests {
             let (service, double, events) = service(Duration::from_millis(20), Duration::from_millis(20));
             let root = repo("prs-watch-late-repo", Some(REMOTE));
             service.strip(&root).unwrap();
-            *lock(&double.slow) = Duration::from_millis(300);
+            lock(&double.slow).insert("builds", Duration::from_millis(300));
             *lock(&double.commit) = Some("94beed9".to_string());
             service.watch(root.clone());
             assert!(eventually(Duration::from_secs(5), || double.asked("default_branch") == 2), "a read in flight");
@@ -1209,7 +1208,7 @@ mod tests {
             assert!(service.strip(&root).is_ok());
             service.watch(root.clone());
 
-            *lock(&double.down) = Some(CodeHostError::Network("refused".to_string()));
+            *lock(&double.down) = Some(CodeHostError::Unreachable("refused".to_string()));
             assert!(eventually(Duration::from_secs(5), || !lock(&events).is_empty()));
             let ticks = double.asked("default_branch");
             assert!(eventually(Duration::from_secs(5), || double.asked("default_branch") >= ticks + 3));
@@ -1218,6 +1217,9 @@ mod tests {
             // A server that answers and refuses is something to say: the user can act on it.
             *lock(&double.down) = Some(CodeHostError::Unauthorized);
             assert_eq!(service.strip(&root), Err(CodeHostError::Unauthorized));
+            // So is a connection that reached it and broke — a TLS alert, a garbled answer.
+            *lock(&double.down) = Some(CodeHostError::Network("handshake alert".to_string()));
+            assert_eq!(service.strip(&root), Err(CodeHostError::Network("handshake alert".to_string())));
             service.unwatch(&root);
         });
     }
@@ -1233,10 +1235,10 @@ mod tests {
             let root = repo("prs-watch-overtaken-repo", Some(REMOTE));
             service.strip(&root).unwrap();
 
-            *lock(&double.slow) = Duration::from_millis(300);
+            lock(&double.slow).insert("builds", Duration::from_millis(300));
             service.watch(root.clone());
             assert!(eventually(Duration::from_secs(5), || double.asked("builds") == 2), "the watcher's read in flight");
-            *lock(&double.slow) = Duration::ZERO;
+            lock(&double.slow).clear();
             *lock(&double.pr) = Some(pull_request(6));
             assert!(matches!(service.strip(&root), Ok(PrStrip::Ready { snapshot: Snapshot { pr: Some(_), .. }, .. })));
 

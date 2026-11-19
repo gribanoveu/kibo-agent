@@ -36,8 +36,8 @@ export type PullRequest = {
   reviewers: Reviewer[];
   /** The page Open opens. */
   url: string;
-  /** Work in progress: not merged until marked ready. Always false on a server before 8.18. */
-  draft: boolean;
+  /** Work in progress: not merged until marked ready. `null` on a server before 8.18, which has no drafts. */
+  draft: boolean | null;
 };
 
 /** `unknown` is a state this app has no word for — never a success. */
