@@ -14,6 +14,8 @@ let listed: TerminalInfo[];
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let nextId = 10;
 let runs: AgentInfo[] = [];
+/** Holds `terminal_open` until the test lets it go; a held one opens in another folder, so no list has it. */
+let holdOpen: Promise<void> | null = null;
 
 class FakeChannel {
   static made: FakeChannel[] = [];
@@ -32,6 +34,7 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "agents_list") return Promise.resolve(structuredClone(runs));
     if (command === "terminal_open") {
       const opened: TerminalInfo = { id: nextId++, shell: "zsh", state: { state: "running" } };
+      if (holdOpen) return holdOpen.then(() => structuredClone(opened));
       listed.push(opened);
       return Promise.resolve(structuredClone(opened));
     }
@@ -87,6 +90,7 @@ beforeEach(() => {
   FakeChannel.made = [];
   nextId = 10;
   cleared = 0;
+  holdOpen = null;
 });
 
 describe("terminalAttach", () => {
@@ -148,6 +152,24 @@ describe("useTerminals", () => {
     await settle();
     const folders = calls.filter((c) => c.command === "terminal_list").map((c) => c.args?.workspace);
     expect(folders).toEqual(["/a", "/b"]);
+  });
+
+  /// The folder left while its shell starts: the shell is the old folder's,
+  /// and the panel is not handed it to draw.
+  test("a shell opened in a folder left meanwhile stays out of the new one's list", async () => {
+    let started = () => {};
+    holdOpen = new Promise((resolve) => (started = resolve));
+    const { result, rerender } = renderHook(({ folder }) => useTerminals(true, folder), { initialProps: { folder: "/a" } });
+    await settle();
+    let opening: Promise<TerminalInfo | null> = Promise.resolve(null);
+    act(() => void (opening = result.current.open()));
+    rerender({ folder: "/b" });
+    await settle();
+    started();
+    let opened: TerminalInfo | null = null;
+    await act(async () => void (opened = await opening));
+    expect(opened).toBeNull();
+    expect(result.current.terminals).toEqual([]);
   });
 
   test("opens one in the list and closes it out of it", async () => {
