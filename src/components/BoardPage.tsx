@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { DragDropProvider, KeyboardSensor, PointerSensor, useDroppable, type DragDropEventHandlers } from "@dnd-kit/react";
 import { useSortable } from "@dnd-kit/react/sortable";
 import { move } from "@dnd-kit/helpers";
-import { Archive, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, PanelRightOpen, Plus, Trash2 } from "lucide-react";
+import { Archive, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, MessageSquare, PanelRightOpen, Plus, Trash2 } from "lucide-react";
 import { Page } from "./Page";
 import { BoardCardSheet } from "./BoardCardSheet";
 import { useBoard } from "../hooks/useBoard";
@@ -216,6 +216,12 @@ function BoardCard({ card, index, group, back, forward, selected, onOpen, onChan
         <span className="board-card-meta">
           <span className="board-card-id">{card.id}</span>
           {card.due && <Due due={card.due} open={card.column === "todo" || card.column === "doing"} />}
+          {(card.comments?.length ?? 0) > 0 && (
+            <span className="board-card-comments" title={`${card.comments!.length} comments`}>
+              <MessageSquare size={12} />
+              {card.comments!.length}
+            </span>
+          )}
         </span>
         <span className="board-card-tools">
           {back && moveTo(back, ChevronLeft)}

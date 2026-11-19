@@ -163,3 +163,101 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+/* The user's remarks: a box that grows as it is written, then the list,
+   the newest first, each with when it was written. */
+.board-sheet-comments {
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.board-sheet-comments .board-sheet-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.board-sheet-count {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+.board-sheet-comment-box {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
+  background: var(--bg-field);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+}
+.board-sheet-comment-box:focus {
+  border-color: var(--border-box-focus);
+}
+.board-sheet-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.board-sheet-comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.board-sheet-comment-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+/* Shown on the comment under the pointer or holding the focus. */
+.board-sheet-comment-head button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+}
+.board-sheet-comment:hover .board-sheet-comment-head button,
+.board-sheet-comment-head button:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .board-sheet-comment-head button {
+    opacity: 1;
+  }
+}
+.board-sheet-comment-head button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.board-sheet-comment-text {
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.board-sheet-comment-text > :first-child {
+  margin-top: 0;
+}
+.board-sheet-comment-text > :last-child {
+  margin-bottom: 0;
+}

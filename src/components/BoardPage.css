@@ -168,6 +168,14 @@
   background: color-mix(in srgb, var(--red) 14%, transparent);
   color: var(--red);
 }
+/* How many remarks the card has, read in its sheet. */
+.board-card-comments {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
 /* Shown on the card under the pointer or holding the focus, so a column of
    cards is not a column of buttons; laid over the foot rather than beside it,
    so the id and the due day keep the card's width. */

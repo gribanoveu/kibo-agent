@@ -17,7 +17,17 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "board_list") return Promise.resolve(structuredClone(stored));
     if (command === "board_change") {
       if (refusal) return Promise.reject(refusal);
-      const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string; due?: string };
+      const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string; due?: string; text?: string; at?: string; comment?: number };
+      if (change.op === "comment" || change.op === "uncomment") {
+        stored = stored.map((c) => {
+          if (c.id !== change.id) return c;
+          const comments = c.comments ?? [];
+          return change.op === "comment"
+            ? { ...c, comments: [...comments, { id: comments.length + 1, text: change.text!.trim(), at: change.at! }] }
+            : { ...c, comments: comments.filter((m) => m.id !== change.comment) };
+        });
+        return Promise.resolve(structuredClone(stored));
+      }
       // What an edit leaves out stays, as `domain::board` keeps it.
       const given = (key: "title" | "note" | "due") => key in change;
       const text = {
@@ -53,6 +63,8 @@ afterAll(() => {
 
 const { BoardPage } = await import("../components/BoardPage");
 const { dropChange, dueState, localDay, orderOf } = await import("../lib/board");
+const { ago } = await import("../components/BoardCardSheet");
+const { IS_MAC } = await import("../lib/shortcuts");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 const column = (name: string) => within(screen.getByRole("region", { name }));
 
@@ -232,6 +244,52 @@ describe("the board page", () => {
     expect(done.getByText((_, el) => el?.classList.contains("board-sheet-due-when") ?? false).className).toContain("ahead");
   });
 
+  test("a comment is written under the card, the newest first, counted on the card, and deleted", async () => {
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByText("File the memory request"));
+    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    const box = sheet.getByLabelText("New comment") as HTMLTextAreaElement;
+    fireEvent.focus(box);
+    expect((sheet.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+
+    const before = Date.now();
+    fireEvent.change(box, { target: { value: "asked the bank" } });
+    fireEvent.keyDown(box, { key: "Enter", code: "Enter", ...(IS_MAC ? { metaKey: true } : { ctrlKey: true }) });
+    await settle();
+    const sent = calls.at(-1)!.args!.change as { op: string; id: string; text: string; at: string };
+    expect({ ...sent, at: undefined }).toEqual({ op: "comment", id: "c1", text: "asked the bank", at: undefined });
+    expect(new Date(sent.at).getTime()).toBeGreaterThanOrEqual(before - 1000);
+    expect(box.value).toBe("");
+
+    fireEvent.change(box, { target: { value: "they call back on **Monday**" } });
+    fireEvent.click(sheet.getByRole("button", { name: "Save" }));
+    await settle();
+    const texts = [...sheet.getByRole("region", { name: "Comments" }).querySelectorAll(".board-sheet-comment-text")].map((t) => t.textContent);
+    expect(texts).toEqual(["they call back on Monday", "asked the bank"]);
+    expect(sheet.getByText("Monday").tagName).toBe("STRONG");
+    expect(column("To do").getByTitle("2 comments")).toBeTruthy();
+
+    fireEvent.click(sheet.getAllByRole("button", { name: "Delete the comment" })[1]);
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "uncomment", id: "c1", comment: 1 } } });
+    expect(sheet.queryByText("asked the bank")).toBeNull();
+    expect(column("To do").getByTitle("1 comments")).toBeTruthy();
+  });
+
+  test("a refused comment stays in its box", async () => {
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByText("File the memory request"));
+    const sheet = within(screen.getByRole("complementary", { name: "c1 details" }));
+    refusal = "the card has 100 comments — remove the ones no longer needed";
+    fireEvent.change(sheet.getByLabelText("New comment"), { target: { value: "one more" } });
+    fireEvent.click(sheet.getByRole("button", { name: "Save" }));
+    await settle();
+    expect(sheet.getByText(refusal)).toBeTruthy();
+    expect((sheet.getByLabelText("New comment") as HTMLTextAreaElement).value).toBe("one more");
+  });
+
   test("a description is read as Markdown, and a link in it is followed rather than edited", async () => {
     stored = [{ id: "c1", title: "Read", note: "See **the spec** at [docs](https://example.com)", column: "todo" }];
     render(<BoardPage openPane={() => {}} />);
@@ -335,5 +393,20 @@ describe("a dropped card", () => {
   test("back where it started, or never in the order, sends nothing", () => {
     expect(dropChange(order, order, "c2")).toBeNull();
     expect(dropChange(order, { ...order, todo: ["c1", "c3"], doing: ["c4"] }, "c2")).toBeNull();
+  });
+});
+
+describe("when a comment was written", () => {
+  const now = new Date("2026-11-19T12:00:00Z").getTime();
+  const words = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+
+  test("is said in the largest whole unit up to a week, then as the day", () => {
+    expect(ago("2026-11-19T11:59:30Z", now)).toBe(words.format(0, "second"));
+    expect(ago("2026-11-19T11:55:00Z", now)).toBe(words.format(-5, "minute"));
+    expect(ago("2026-11-19T10:30:00Z", now)).toBe(words.format(-1, "hour"));
+    expect(ago("2026-11-19T09:00:00Z", now)).toBe(words.format(-3, "hour"));
+    expect(ago("2026-11-18T11:00:00Z", now)).toBe(words.format(-1, "day"));
+    expect(ago("2026-11-13T12:00:00Z", now)).toBe(words.format(-6, "day"));
+    expect(ago("2026-11-01T12:00:00Z", now)).toBe(new Date("2026-11-01T12:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }));
   });
 });

@@ -13,6 +13,16 @@ export type Card = {
   /** `YYYY-MM-DD`, a day in the user's own calendar. */
   due?: string;
   column: Column;
+  /** The user's remarks on it, oldest first. */
+  comments?: Comment[];
+};
+
+export type Comment = {
+  /** Numbered within its card. */
+  id: number;
+  text: string;
+  /** When it was written, RFC 3339. */
+  at: string;
 };
 
 /** The page's own changes; the model adds and moves through its `board` tool.
@@ -23,7 +33,10 @@ export type BoardChange =
   | { op: "edit"; id: string; title?: string; note?: string; due?: string }
   /** `index`: its place among the column's other cards; Done ignores it. */
   | { op: "move"; id: string; column: Column; index?: number }
-  | { op: "remove"; id: string };
+  | { op: "remove"; id: string }
+  /** `at`: now, as `toISOString` writes it — the backend keeps no clock of its own. */
+  | { op: "comment"; id: string; text: string; at: string }
+  | { op: "uncomment"; id: string; comment: number };
 
 export type OpenColumn = Exclude<Column, "archived">;
 /** The open columns' card ids, top to bottom. */

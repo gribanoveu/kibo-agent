@@ -63,7 +63,7 @@ export const SHORTCUTS = {
   cardDrag: { label: "Pick up the focused card, or put it down", group: "Board", combos: [{ code: "Space" }, { code: "Enter" }] },
   // Up, down, left, right — the board's keyboard drag takes them in this order.
   cardDragMove: { label: "Move the card you picked up", group: "Board", combos: [{ code: "ArrowUp" }, { code: "ArrowDown" }, { code: "ArrowLeft" }, { code: "ArrowRight" }] },
-  cardSave: { label: "Save the card from its note", group: "Board", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
+  cardSave: { label: "Save a card's note or description, or a comment on it", group: "Board", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
   mongoRun: { label: "Run the pipeline, or save the document being edited", group: "MongoDB", combos: [{ code: "Enter", mod: true }, { code: "NumpadEnter", mod: true }] },
   mongoSuggestNext: { label: "Next suggestion in a query field", group: "MongoDB", combos: [{ code: "ArrowDown" }] },
   mongoSuggestPrev: { label: "Previous suggestion in a query field", group: "MongoDB", combos: [{ code: "ArrowUp" }] },

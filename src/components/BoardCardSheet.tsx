@@ -4,7 +4,7 @@ import { PageSheet } from "./Page";
 import { Dropdown } from "./Dropdown";
 import { ChatMenu } from "./ChatMenu";
 import { Markdown } from "./Markdown";
-import { dueState, localDay, type BoardChange, type Card, type OpenColumn } from "../lib/board";
+import { dueState, localDay, type BoardChange, type Card, type Comment, type OpenColumn } from "../lib/board";
 import { matches } from "../lib/shortcuts";
 import "./BoardCardSheet.css";
 
@@ -77,6 +77,12 @@ export function BoardCardSheet({ card, error, onChange, onClose }: Props) {
           </span>
         </Field>
       </dl>
+
+      <Comments
+        comments={card.comments ?? []}
+        onAdd={(text) => onChange({ op: "comment", id: card.id, text, at: new Date().toISOString() })}
+        onRemove={(comment) => void onChange({ op: "uncomment", id: card.id, comment })}
+      />
     </PageSheet>
   );
 }
@@ -91,7 +97,9 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-const DAY = 24 * 60 * 60 * 1000;
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 /** How far off the due day is, in words — "tomorrow", "3 days ago" — marked
     as the card marks it while the card is still open. */
@@ -100,6 +108,101 @@ function DueFromNow({ due, open }: { due: string; open: boolean }) {
   const days = Math.round((new Date(`${due}T00:00`).getTime() - new Date(`${today}T00:00`).getTime()) / DAY);
   const text = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(days, "day");
   return <span className={`board-sheet-due-when ${open ? dueState(due, today) : "ahead"}`}>{text}</span>;
+}
+
+/** When a comment was written, as one says it: "5 minutes ago", "yesterday";
+    past a week, the day itself. */
+export function ago(at: string, now = Date.now()): string {
+  const then = new Date(at).getTime();
+  const past = now - then;
+  const words = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (past < MINUTE) return words.format(0, "second");
+  if (past < HOUR) return words.format(-Math.floor(past / MINUTE), "minute");
+  if (past < DAY) return words.format(-Math.floor(past / HOUR), "hour");
+  if (past < 7 * DAY) return words.format(-Math.floor(past / DAY), "day");
+  return new Date(then).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+type CommentsProps = {
+  comments: Comment[];
+  /** Whether it was kept: the box is emptied only then. */
+  onAdd: (text: string) => Promise<boolean>;
+  onRemove: (comment: number) => void;
+};
+
+/** The user's remarks on the card: a box to write one, then those there are,
+    the newest first. ⌘Enter or Save adds it, Escape leaves the box. */
+function Comments({ comments, onAdd, onRemove }: CommentsProps) {
+  const [text, setText] = useState("");
+  const [writing, setWriting] = useState(false);
+  const box = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
+  const save = async () => {
+    if (text.trim() && (await onAdd(text))) {
+      setText("");
+      setWriting(false);
+    }
+  };
+  return (
+    <section className="board-sheet-comments" aria-label="Comments">
+      <h4 className="board-sheet-heading">
+        Comments
+        {comments.length > 0 && <span className="board-sheet-count">{comments.length}</span>}
+      </h4>
+      <textarea
+        ref={box}
+        className="board-sheet-comment-box"
+        aria-label="New comment"
+        placeholder="Add a comment…"
+        rows={1}
+        value={text}
+        onFocus={() => setWriting(true)}
+        onBlur={() => !text.trim() && setWriting(false)}
+        onChange={(e) => setText(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (matches(e.nativeEvent, "cardSave")) {
+            e.preventDefault();
+            void save();
+          } else if (matches(e.nativeEvent, "close") && !text.trim()) {
+            setWriting(false);
+            e.currentTarget.blur();
+          }
+        }}
+      />
+      {(writing || text) && (
+        <div className="board-sheet-comment-actions">
+          <button type="button" className="btn btn-ghost" onClick={() => (setText(""), setWriting(false))}>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-primary" disabled={!text.trim()} onClick={() => void save()}>
+            Save
+          </button>
+        </div>
+      )}
+      <ol className="board-sheet-comment-list">
+        {[...comments].reverse().map((comment) => (
+          <li key={comment.id} className="board-sheet-comment">
+            <div className="board-sheet-comment-head">
+              <time dateTime={comment.at} title={new Date(comment.at).toLocaleString()}>
+                {ago(comment.at)}
+              </time>
+              <button type="button" title="Delete the comment" aria-label="Delete the comment" onClick={() => onRemove(comment.id)}>
+                <Trash2 size={13} />
+              </button>
+            </div>
+            <div className="board-sheet-comment-text">
+              <Markdown text={comment.text} streaming={false} />
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
 }
 
 type EditableProps = {
