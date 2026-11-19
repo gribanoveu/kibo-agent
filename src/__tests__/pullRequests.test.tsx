@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { Build, CodeHostServer, PrStrip, PullRequest } from "../lib/pullRequests";
-import { buildsAtAGlance, reviewsAtAGlance } from "../lib/pullRequestView";
+import { buildText, offersConnect, reviewsAtAGlance } from "../lib/pullRequestView";
 
 // The pull request strip above the Changes list (docs/56-bitbucket-prs.md,
 // BB-4): a state of its own for each folder, buttons only as the server
@@ -78,6 +78,7 @@ function ready(over: Partial<Extract<PrStrip, { state: "ready" }>> = {}, snapsho
     canApprove: true,
     approved: false,
     mergeBlocked: null,
+    latestBuild: null,
     ...over,
   };
 }
@@ -144,14 +145,45 @@ describe("the strip's states", () => {
     expect(screen.getByText("Create pull request…")).toBeTruthy();
   });
 
-  test("a pull request is one line: its number, title, builds and reviews", async () => {
-    strip = ready({}, { builds: [{ key: "ci", name: "build #12", state: "failed", url: "https://ci/12" }] });
+  test("a pull request is one line: its number, title and reviews", async () => {
     panel();
     await settle();
     expect(screen.getByText("#153")).toBeTruthy();
     expect(screen.getByText("0/1")).toBeTruthy();
-    expect(screen.getByLabelText("build failed")).toBeTruthy();
     expect(screen.queryByText("Merge")).toBeNull();
+  });
+
+  test("the latest build is a row of its own: what it is doing, with its icon", async () => {
+    const running: Build = { key: "j212", name: "corp-wowtax-tax-declaration-api #212", state: "inProgress", url: "https://ci/212", dateAdded: 2 };
+    const done: Build = { key: "j211", name: "corp-wowtax-tax-declaration-api #211", state: "successful", url: "https://ci/211", dateAdded: 1 };
+    strip = ready({ latestBuild: running }, { builds: [done, running] });
+    panel();
+    await settle();
+    const row = screen.getByText("Build in progress").closest("button")!;
+    expect(row.title).toBe("corp-wowtax-tax-declaration-api #212 — open");
+    expect(row.querySelector('[aria-label="build inProgress"]')).toBeTruthy();
+    expect(screen.queryByText("Build passed")).toBeNull();
+    fireEvent.click(row);
+    await settle();
+    expect(opened).toEqual(["https://ci/212"]);
+  });
+
+  test("a pushed branch without a pull request shows its build too", async () => {
+    strip = ready({ latestBuild: { key: "j", name: "#3", state: "failed", url: "", dateAdded: null } }, { pr: null });
+    panel();
+    await settle();
+    expect((screen.getByText("Build failed").closest("button") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Create pull request…")).toBeTruthy();
+  });
+
+  test("a GitHub or GitLab folder is not offered Connect", async () => {
+    for (const host of ["github.com", "gitlab.com"]) {
+      strip = { state: "notConnected", remote: { host, baseUrl: `https://${host}`, project: "corp", slug: "tax-api", transport: "web" } };
+      const { container, unmount } = panel();
+      await settle();
+      expect(container.innerHTML).toBe("");
+      unmount();
+    }
   });
 
   test("Merge is not offered while the server says no; the server's reasons are", async () => {
@@ -247,15 +279,13 @@ describe("the buttons", () => {
     expect(screen.getByRole("dialog", { name: "Merge pull request" })).toBeTruthy();
   });
 
-  test("Open and a build open their pages in the browser", async () => {
-    strip = ready({}, { builds: [{ key: "ci", name: "build #12", state: "successful", url: "https://ci/12" }] });
+  test("Open opens the pull request's page in the browser", async () => {
     panel();
     await settle();
     fireEvent.click(screen.getByText("#153"));
-    fireEvent.click(screen.getByText("build #12"));
     fireEvent.click(screen.getByText("Open"));
     await settle();
-    expect(opened).toEqual(["https://ci/12", pr().url]);
+    expect(opened).toEqual([pr().url]);
   });
 });
 
@@ -386,14 +416,22 @@ describe("the servers in Settings", () => {
 });
 
 describe("at a glance", () => {
-  const build = (state: Build["state"]): Build => ({ key: state, name: state, state, url: "" });
+  test("the build says what it is doing", () => {
+    expect(["successful", "failed", "inProgress", "unknown"].map((state) => buildText(state as Build["state"]))).toEqual([
+      "Build passed",
+      "Build failed",
+      "Build in progress",
+      "Build status unknown",
+    ]);
+  });
 
-  test("the builds say the state that matters most", () => {
-    expect(buildsAtAGlance([])).toBeNull();
-    expect(buildsAtAGlance([build("successful"), build("inProgress")])).toBe("inProgress");
-    expect(buildsAtAGlance([build("inProgress"), build("failed"), build("successful")])).toBe("failed");
-    expect(buildsAtAGlance([build("successful"), build("unknown")])).toBe("unknown");
-    expect(buildsAtAGlance([build("successful")])).toBe("successful");
+  test("Connect is offered for any host but GitHub's and GitLab's own", () => {
+    expect(offersConnect("git.corp.local")).toBe(true);
+    expect(offersConnect("bitbucket.org")).toBe(true);
+    expect(offersConnect("mygithub.com")).toBe(true);
+    for (const host of ["github.com", "GitHub.com", "ssh.github.com", "gitlab.com", "altssh.gitlab.com"]) {
+      expect(offersConnect(host)).toBe(false);
+    }
   });
 
   test("the reviews are a count, or needs work when anyone said so", () => {

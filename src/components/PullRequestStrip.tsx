@@ -10,6 +10,7 @@ import {
   GitMerge,
   GitPullRequest,
   GitPullRequestCreate,
+  Hammer,
   Loader2,
   RefreshCw,
   TriangleAlert,
@@ -17,8 +18,8 @@ import {
 import { Modal } from "./Modal";
 import { CodeHostConnect } from "./CodeHostConnect";
 import { openExternal } from "../lib/window";
-import { buildsAtAGlance, reviewsAtAGlance } from "../lib/pullRequestView";
-import type { BuildState, PrStrip, PullRequest, ReviewStatus } from "../lib/pullRequests";
+import { buildText, offersConnect, reviewsAtAGlance } from "../lib/pullRequestView";
+import type { Build, BuildState, PrStrip, ReviewStatus } from "../lib/pullRequests";
 import type { PullRequestState } from "../hooks/usePullRequest";
 import "./PullRequestStrip.css";
 
@@ -72,6 +73,8 @@ export function PullRequestStrip(props: Props) {
 
   if (strip.state === "notConnected") {
     const { remote } = strip;
+    // A GitHub or GitLab folder has no Bitbucket to connect.
+    if (!offersConnect(remote.host)) return failed || null;
     return (
       <>
         <button type="button" className="pr-row pr-quiet" title={`No Bitbucket server added for ${remote.host}`} onClick={() => setConnecting(true)}>
@@ -100,6 +103,7 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
   const [busy, setBusy] = useState(false);
   const { snapshot, branch } = strip;
   const pr = snapshot.pr;
+  const build = strip.latestBuild && <BuildRow build={strip.latestBuild} />;
 
   const run = async (action: () => Promise<unknown>, done?: string) => {
     setBusy(true);
@@ -119,6 +123,7 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
     if (!snapshot.branchOnServer) return failed || null;
     return (
       <div className={error ? "pr-stale" : undefined}>
+        {build}
         <button type="button" className="pr-row pr-quiet" disabled={busy} onClick={() => setConfirm("create")}>
           <GitPullRequestCreate size={14} />
           <span className="pr-name">Create pull request…</span>
@@ -136,17 +141,23 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
     );
   }
 
+  const reviews = reviewsAtAGlance(pr.reviewers);
   const canMerge = strip.mergeBlocked === null;
   const blocked = strip.mergeBlocked ?? [];
   const mayApprove = strip.canApprove || strip.approved;
   return (
     <div className={error ? "pr-stale" : undefined}>
+      {build}
       <button type="button" className="pr-row" aria-expanded={open} title={pr.title} onClick={() => setOpen(!open)}>
         <GitPullRequest size={14} />
         <span className="pr-name">
           <span className="pr-number">#{pr.id}</span> {pr.title}
         </span>
-        <Glance pr={pr} builds={snapshot.builds} />
+        {reviews && (
+          <span className="pr-glance" title={`${pr.reviewers.filter((r) => r.status === "approved").length} of ${pr.reviewers.length} reviewers approved`}>
+            {reviews}
+          </span>
+        )}
       </button>
       {failed}
 
@@ -166,18 +177,6 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
                   </li>
                 );
               })}
-            </ul>
-          )}
-          {snapshot.builds.length > 0 && (
-            <ul className="pr-builds" aria-label="Builds">
-              {snapshot.builds.map((b) => (
-                <li key={b.key}>
-                  <button type="button" className="pr-link" title={b.url} onClick={() => void openExternal(b.url)}>
-                    <BuildIcon state={b.state} />
-                    <span>{b.name}</span>
-                  </button>
-                </li>
-              ))}
             </ul>
           )}
           {blocked.length > 0 && (
@@ -229,15 +228,20 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
   );
 }
 
-/** The row's right side: the builds as one icon, the reviews as "1/4". */
-function Glance({ pr, builds }: { pr: PullRequest; builds: Ready["snapshot"]["builds"] }) {
-  const build = buildsAtAGlance(builds);
-  const reviews = reviewsAtAGlance(pr.reviewers);
+/** The latest build of the branch's commit: what it is doing, its page a click away. */
+function BuildRow({ build }: { build: Build }) {
   return (
-    <span className="pr-glance">
-      {build && <BuildIcon state={build} />}
-      {reviews && <span title={`${pr.reviewers.filter((r) => r.status === "approved").length} of ${pr.reviewers.length} reviewers approved`}>{reviews}</span>}
-    </span>
+    <button
+      type="button"
+      className="pr-row pr-quiet"
+      title={build.url ? `${build.name} — open` : build.name}
+      disabled={!build.url}
+      onClick={() => void openExternal(build.url)}
+    >
+      <Hammer size={14} />
+      <span className="pr-name">{buildText(build.state)}</span>
+      <BuildIcon state={build.state} />
+    </button>
   );
 }
 

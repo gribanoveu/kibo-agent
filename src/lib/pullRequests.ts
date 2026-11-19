@@ -36,7 +36,8 @@ export type PullRequest = {
 
 /** `unknown` is a state this app has no word for — never a success. */
 export type BuildState = "successful" | "failed" | "inProgress" | "unknown";
-export type Build = { key: string; name: string; state: BuildState; url: string };
+/** `dateAdded`: when the server took this status, epoch ms; `null` when it does not say. */
+export type Build = { key: string; name: string; state: BuildState; url: string; dateAdded: number | null };
 
 export type MergeCheck = { canMerge: boolean; conflicted: boolean; vetoes: string[] };
 
@@ -62,6 +63,8 @@ export type PrStrip =
       approved: boolean;
       /** Why Merge is off, in the server's words; `null` with a pull request is a live Merge. */
       mergeBlocked: string[] | null;
+      /** The newest build of the branch's commit — the one shown. */
+      latestBuild: Build | null;
     };
 
 /**

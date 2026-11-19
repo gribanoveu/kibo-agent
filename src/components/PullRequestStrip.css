@@ -15,8 +15,11 @@
   text-align: left;
   cursor: pointer;
 }
-.pr-row:hover {
+.pr-row:hover:not(:disabled) {
   background: var(--bg-hover);
+}
+.pr-row:disabled {
+  cursor: default;
 }
 .pr-row > svg {
   flex: none;
@@ -92,7 +95,6 @@
   color: var(--text-faint);
 }
 .pr-reviewers,
-.pr-builds,
 .pr-vetoes {
   margin: 0;
   padding: 0;
@@ -117,30 +119,6 @@
 }
 .pr-reviewers li.unapproved svg {
   color: var(--text-faint);
-}
-.pr-builds {
-  display: grid;
-  gap: 2px;
-}
-.pr-link {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 100%;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  font: inherit;
-  cursor: pointer;
-}
-.pr-link span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.pr-link:hover {
-  color: var(--text);
 }
 .pr-vetoes li {
   color: var(--amber);
