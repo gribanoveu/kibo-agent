@@ -107,8 +107,8 @@ beforeEach(() => {
 });
 
 describe("the strip's states", () => {
-  test("a folder without a remote or a branch shows nothing", async () => {
-    for (const state of ["noRemote", "noBranch"] as const) {
+  test("a folder without a remote or a branch, or with its server out of reach, shows nothing", async () => {
+    for (const state of ["noRemote", "noBranch", "unreachable"] as const) {
       strip = { state };
       const { container, unmount } = panel();
       await settle();

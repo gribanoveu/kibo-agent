@@ -484,6 +484,10 @@ pub enum PrStrip {
     NoRemote,
     /// A detached HEAD: no branch for a pull request.
     NoBranch,
+    /// The server could not be reached — no route, no name, no answer in
+    /// time: nothing to show but the branch. A server that answered and
+    /// refused is an error instead, which the user can act on.
+    Unreachable,
     /// A remote no configured server answers to: the connect form, filled
     /// from what the remote says.
     #[serde(rename_all = "camelCase")]
@@ -983,6 +987,7 @@ mod tests {
         let json = |strip: &PrStrip| serde_json::to_value(strip).unwrap();
         assert_eq!(json(&PrStrip::NoRemote), serde_json::json!({ "state": "noRemote" }));
         assert_eq!(json(&PrStrip::NoBranch), serde_json::json!({ "state": "noBranch" }));
+        assert_eq!(json(&PrStrip::Unreachable), serde_json::json!({ "state": "unreachable" }));
 
         let remote = RemoteRepo::parse("ssh://git@git.server.com/corp/tax-api.git").unwrap();
         let not_connected = json(&PrStrip::NotConnected { remote });

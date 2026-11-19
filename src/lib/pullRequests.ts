@@ -57,6 +57,7 @@ export type Snapshot = {
 export type PrStrip =
   | { state: "noRemote" }
   | { state: "noBranch" }
+  | { state: "unreachable" }
   | { state: "notConnected"; remote: RemoteRepo }
   | {
       state: "ready";

@@ -69,7 +69,8 @@ export function PullRequestStrip(props: Props) {
     </div>
   );
 
-  if (!strip || strip.state === "noRemote" || strip.state === "noBranch") return failed || null;
+  // A server out of reach (off the VPN) leaves the branch alone, with no complaint under it.
+  if (!strip || strip.state === "noRemote" || strip.state === "noBranch" || strip.state === "unreachable") return failed || null;
 
   if (strip.state === "notConnected") {
     const { remote } = strip;

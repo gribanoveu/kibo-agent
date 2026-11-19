@@ -106,8 +106,10 @@ impl PullRequests {
 
     // ---------------------------------------------------------------- reading
 
-    /// What the strip shows for `root`. A server that does not answer is an
-    /// `Err`: the strip keeps its last snapshot grey with the reason.
+    /// What the strip shows for `root`. A server that answers wrongly is an
+    /// `Err`: the strip keeps its last snapshot grey with the reason. One that
+    /// cannot be reached — off the VPN, say — is [`PrStrip::Unreachable`], and
+    /// the strip shows nothing until it answers again.
     pub fn strip(&self, root: &Path) -> Read {
         *lock(&self.pushed) = Some((root.to_path_buf(), local(root)));
         let read = self.read(root);
@@ -131,6 +133,13 @@ impl PullRequests {
     }
 
     fn read(&self, root: &Path) -> Read {
+        match self.ask(root) {
+            Err(CodeHostError::Network(_)) => Ok(PrStrip::Unreachable),
+            read => read,
+        }
+    }
+
+    fn ask(&self, root: &Path) -> Read {
         let target = match target(root)? {
             Found::Target(target) => target,
             Found::Nothing(strip) => return Ok(strip),
@@ -1084,8 +1093,8 @@ mod tests {
         });
     }
 
-    /// A server that stops answering is a change too: the strip greys out with
-    /// the reason, and is told once.
+    /// A server that stops answering is a change too: the strip goes quiet,
+    /// and is told once.
     #[test]
     fn a_server_going_down_is_reported_once() {
         with_app_dir("prs-watch-down", || {
@@ -1100,7 +1109,10 @@ mod tests {
             let ticks = double.asked("default_branch");
             assert!(eventually(Duration::from_secs(5), || double.asked("default_branch") >= ticks + 3));
             assert_eq!(lock(&events).len(), 1, "still down is not news");
-            assert_eq!(service.strip(&root), Err(CodeHostError::Network("refused".to_string())));
+            assert_eq!(service.strip(&root), Ok(PrStrip::Unreachable));
+            // A server that answers and refuses is something to say: the user can act on it.
+            *lock(&double.down) = Some(CodeHostError::Unauthorized);
+            assert_eq!(service.strip(&root), Err(CodeHostError::Unauthorized));
             service.unwatch(&root);
         });
     }
