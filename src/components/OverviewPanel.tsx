@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { ChevronRight, GitBranch, Plug, Telescope, TerminalSquare } from "lucide-react";
 import { ContextDetails } from "./ContextMeter";
 import { type AgentInfo, briefTitle } from "../lib/agents";
@@ -28,6 +29,8 @@ export type OverviewProps = {
   onOpenProcesses: () => void;
   onOpenAgent: (agent: AgentFocus) => void;
   onOpenPanel: (tab: AsideTab) => void;
+  /** The branch's pull request, under the branch: the pane reads it, this only places it. */
+  pullRequest?: ReactNode;
 };
 
 function serverStatus(server: McpServerItem): { label: string; tone: "ok" | "off" | "warn" } {
@@ -64,6 +67,7 @@ export function OverviewPanel({
   onOpenProcesses,
   onOpenAgent,
   onOpenPanel,
+  pullRequest,
 }: OverviewProps) {
   const on = servers.filter((server) => server.enabled);
   const busyProcesses = processes.filter((process) => process.state.state === "running");
@@ -157,6 +161,7 @@ export function OverviewPanel({
             )}
           </button>
         )}
+        {changes && pullRequest}
       </section>
     </div>
   );

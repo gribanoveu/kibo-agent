@@ -43,6 +43,16 @@ describe("Overview", () => {
     expect(screen.queryByText("off")).toBeNull();
   });
 
+  test("the branch's pull request sits under the branch, and not outside a repository", () => {
+    const { unmount } = render(<OverviewPanel {...props({ pullRequest: <span>#117 the pull request</span> })} />);
+    const changes = screen.getByText("main").closest("section");
+    expect(changes?.textContent).toContain("#117 the pull request");
+    unmount();
+
+    render(<OverviewPanel {...props({ changes: null, pullRequest: <span>#117 the pull request</span> })} />);
+    expect(screen.queryByText("#117 the pull request")).toBeNull();
+  });
+
   test("the branch and the lines changed open Changes", () => {
     const opened: string[] = [];
     render(<OverviewPanel {...props({ onOpenPanel: (tab) => opened.push(tab) })} />);

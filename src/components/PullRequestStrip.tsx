@@ -1,8 +1,6 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Check,
-  ChevronDown,
-  ChevronRight,
   Circle,
   CircleAlert,
   CircleCheck,
@@ -11,8 +9,10 @@ import {
   ExternalLink,
   GitMerge,
   GitPullRequest,
+  GitPullRequestCreate,
   Loader2,
   RefreshCw,
+  TriangleAlert,
 } from "lucide-react";
 import { Modal } from "./Modal";
 import { CodeHostConnect } from "./CodeHostConnect";
@@ -32,10 +32,10 @@ const BUILD_ICON: Record<BuildState, typeof Circle> = {
   unknown: CircleHelp,
 };
 
-const REVIEW: Record<ReviewStatus, { icon: typeof Circle; label: string }> = {
-  approved: { icon: Check, label: "approved" },
-  needsWork: { icon: CircleAlert, label: "needs work" },
-  unapproved: { icon: Circle, label: "not yet" },
+const REVIEW_ICON: Record<ReviewStatus, typeof Circle> = {
+  approved: Check,
+  needsWork: CircleAlert,
+  unapproved: Circle,
 };
 
 function BuildIcon({ state }: { state: BuildState }) {
@@ -44,42 +44,40 @@ function BuildIcon({ state }: { state: BuildState }) {
 }
 
 /**
- * The pull request of the branch checked out, above the Changes list
- * (docs/56-bitbucket-prs.md, decision 5): one line, opened into its reviewers,
- * builds and buttons. A folder with no remote or no branch shows nothing; a
- * remote no server answers to offers to connect one; a read that failed keeps
- * the last strip, grey, with the reason.
+ * The branch's pull request, under the branch in Overview's Changes card
+ * (docs/56-bitbucket-prs.md, decision 5): one row, opened into its reviewers,
+ * builds and what the server lets be done. A button shows only when it can do
+ * something — Merge while the server allows it, Approve while the token's
+ * user may, Create once the branch is pushed and has none — and a folder that
+ * has nothing to show shows nothing. A read that failed keeps the last row,
+ * grey, with the reason and a way to read again.
  */
 export function PullRequestStrip(props: Props) {
-  const { strip, error, reading, refresh, onNotify } = props;
+  const { strip, error, reading, refresh } = props;
   const [connecting, setConnecting] = useState(false);
 
-  if (!strip) {
-    return error ? (
-      <div className="pr-strip stale">
-        <div className="pr-line">
-          <GitPullRequest size={13} className="pr-icon" />
-          <span className="pr-title pr-reason" title={error}>
-            {error}
-          </span>
-          <RefreshButton reading={reading} onRefresh={refresh} />
-        </div>
-      </div>
-    ) : null;
-  }
-  if (strip.state === "noRemote" || strip.state === "noBranch") return null;
+  const failed = error && (
+    <div className="pr-failed">
+      <TriangleAlert size={12} />
+      <span className="pr-failed-text" title={error}>
+        {error}
+      </span>
+      <button type="button" className="pr-icon-btn" title="Read again" aria-label="Refresh pull request" onClick={refresh}>
+        <RefreshCw size={12} className={reading ? "pr-spin" : undefined} />
+      </button>
+    </div>
+  );
+
+  if (!strip || strip.state === "noRemote" || strip.state === "noBranch") return failed || null;
 
   if (strip.state === "notConnected") {
     const { remote } = strip;
     return (
-      <div className="pr-strip">
-        <div className="pr-line">
-          <GitPullRequest size={13} className="pr-icon" />
-          <span className="pr-title pr-muted">{remote.host} is not connected</span>
-          <button type="button" className="btn btn-ghost pr-btn" onClick={() => setConnecting(true)}>
-            Connect…
-          </button>
-        </div>
+      <>
+        <button type="button" className="pr-row pr-quiet" title={`No Bitbucket server added for ${remote.host}`} onClick={() => setConnecting(true)}>
+          <GitPullRequest size={14} />
+          <span className="pr-name">Connect Bitbucket…</span>
+        </button>
         <CodeHostConnect
           open={connecting}
           server={{ id: "", baseUrl: remote.baseUrl, hosts: [], trustedCertPem: null, tokenSet: false }}
@@ -88,22 +86,15 @@ export function PullRequestStrip(props: Props) {
           onSave={props.connect}
           onDetect={props.detect}
         />
-      </div>
+        {failed}
+      </>
     );
   }
 
-  return <ReadyStrip {...props} strip={strip} error={error} onNotify={onNotify} />;
+  return <ReadyRow {...props} strip={strip} failed={failed} />;
 }
 
-function RefreshButton({ reading, onRefresh }: { reading: boolean; onRefresh: () => void }) {
-  return (
-    <button type="button" className="pr-icon-btn" title="Read again" aria-label="Refresh pull request" onClick={onRefresh}>
-      <RefreshCw size={12} className={reading ? "pr-spin" : undefined} />
-    </button>
-  );
-}
-
-function ReadyStrip({ strip, error, reading, refresh, create, approve, merge, onNotify }: Props & { strip: Ready }) {
+function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Props & { strip: Ready; failed: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<"merge" | "create" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -123,56 +114,62 @@ function ReadyStrip({ strip, error, reading, refresh, create, approve, merge, on
     }
   };
 
-  return (
-    <div className={`pr-strip${error ? " stale" : ""}`}>
-      {pr ? (
-        <button type="button" className="pr-line pr-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <GitPullRequest size={13} className="pr-icon" />
-          <span className="pr-title" title={pr.title}>
-            <span className="pr-number">#{pr.id}</span> {pr.title}
-          </span>
-          <Glance pr={pr} builds={snapshot.builds} />
+  // No pull request: Create, once there is something on the server to open it from.
+  if (!pr) {
+    if (!snapshot.branchOnServer) return failed || null;
+    return (
+      <div className={error ? "pr-stale" : undefined}>
+        <button type="button" className="pr-row pr-quiet" disabled={busy} onClick={() => setConfirm("create")}>
+          <GitPullRequestCreate size={14} />
+          <span className="pr-name">Create pull request…</span>
         </button>
-      ) : (
-        <div className="pr-line">
-          <GitPullRequest size={13} className="pr-icon" />
-          <span className="pr-title pr-muted">{snapshot.branchOnServer ? `No pull request for ${branch}` : "Push the branch first"}</span>
-          <button
-            type="button"
-            className="btn btn-ghost pr-btn"
-            disabled={!snapshot.branchOnServer || busy}
-            title={snapshot.branchOnServer ? undefined : `${branch} is not on the server yet`}
-            onClick={() => setConfirm("create")}
-          >
-            Create PR
-          </button>
-          <RefreshButton reading={reading} onRefresh={refresh} />
-        </div>
-      )}
-      {error && <p className="pr-reason">{error}</p>}
+        {failed}
+        <CreateDialog
+          open={confirm === "create"}
+          branch={branch}
+          target={snapshot.defaultBranch ?? ""}
+          busy={busy}
+          onClose={() => setConfirm(null)}
+          onCreate={(title, to) => void run(() => create(title, to), "Pull request created")}
+        />
+      </div>
+    );
+  }
 
-      {pr && open && (
-        <div className="pr-details">
+  const canMerge = strip.mergeBlocked === null;
+  const blocked = strip.mergeBlocked ?? [];
+  const mayApprove = strip.canApprove || strip.approved;
+  return (
+    <div className={error ? "pr-stale" : undefined}>
+      <button type="button" className="pr-row" aria-expanded={open} title={pr.title} onClick={() => setOpen(!open)}>
+        <GitPullRequest size={14} />
+        <span className="pr-name">
+          <span className="pr-number">#{pr.id}</span> {pr.title}
+        </span>
+        <Glance pr={pr} builds={snapshot.builds} />
+      </button>
+      {failed}
+
+      {open && (
+        <div className="pr-more">
           <div className="pr-meta">
-            {pr.author} · {pr.fromBranch} → {pr.toBranch}
+            {pr.author} → {pr.toBranch}
           </div>
           {pr.reviewers.length > 0 && (
-            <ul className="pr-list" aria-label="Reviewers">
+            <ul className="pr-reviewers" aria-label="Reviewers">
               {pr.reviewers.map((r) => {
-                const { icon: Icon, label } = REVIEW[r.status];
+                const Icon = REVIEW_ICON[r.status];
                 return (
-                  <li key={r.slug} className={`pr-reviewer ${r.status}`}>
-                    <Icon size={12} />
-                    <span>{r.slug}</span>
-                    <span className="pr-muted">{label}</span>
+                  <li key={r.slug} className={r.status} title={r.status === "needsWork" ? "needs work" : r.status}>
+                    <Icon size={11} />
+                    {r.slug}
                   </li>
                 );
               })}
             </ul>
           )}
           {snapshot.builds.length > 0 && (
-            <ul className="pr-list" aria-label="Builds">
+            <ul className="pr-builds" aria-label="Builds">
               {snapshot.builds.map((b) => (
                 <li key={b.key}>
                   <button type="button" className="pr-link" title={b.url} onClick={() => void openExternal(b.url)}>
@@ -183,79 +180,63 @@ function ReadyStrip({ strip, error, reading, refresh, create, approve, merge, on
               ))}
             </ul>
           )}
-          {strip.mergeBlocked && (
-            <ul className="pr-list pr-vetoes" aria-label="Why Merge is off">
-              {strip.mergeBlocked.map((veto) => (
+          {blocked.length > 0 && (
+            <ul className="pr-vetoes" aria-label="Why it cannot be merged">
+              {blocked.map((veto) => (
                 <li key={veto}>{veto}</li>
               ))}
             </ul>
           )}
           <div className="pr-actions">
-            <button type="button" className="btn btn-ghost pr-btn" onClick={() => void openExternal(pr.url)}>
+            <button type="button" className="pr-action" onClick={() => void openExternal(pr.url)}>
               <ExternalLink size={12} /> Open
             </button>
-            {(strip.canApprove || strip.approved) && (
-              <button type="button" className="btn btn-ghost pr-btn" disabled={busy} onClick={() => void run(() => approve(!strip.approved))}>
-                {strip.approved ? "Unapprove" : "Approve"}
+            {mayApprove && (
+              <button type="button" className="pr-action" disabled={busy} onClick={() => void run(() => approve(!strip.approved))}>
+                <Check size={12} /> {strip.approved ? "Unapprove" : "Approve"}
               </button>
             )}
-            <button
-              type="button"
-              className="btn btn-primary pr-btn"
-              disabled={strip.mergeBlocked !== null || busy}
-              onClick={() => setConfirm("merge")}
-            >
-              <GitMerge size={12} /> Merge
-            </button>
-            <RefreshButton reading={reading} onRefresh={refresh} />
+            {canMerge && (
+              <button type="button" className="pr-action pr-primary" disabled={busy} onClick={() => setConfirm("merge")}>
+                <GitMerge size={12} /> Merge
+              </button>
+            )}
           </div>
         </div>
       )}
 
-      {pr && (
-        <Modal
-          title="Merge pull request"
-          open={confirm === "merge"}
-          onClose={() => setConfirm(null)}
-          footer={
-            <>
-              <button type="button" className="btn btn-ghost" onClick={() => setConfirm(null)}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(() => merge(pr.id, pr.version), `Merged #${pr.id}`)}>
-                Merge
-              </button>
-            </>
-          }
-        >
-          <p className="pr-confirm">
-            Merge <b>#{pr.id} {pr.title}</b> from {pr.fromBranch} into <b>{pr.toBranch}</b> on the server? This cannot be undone
-            from here.
-          </p>
-        </Modal>
-      )}
-      {!pr && (
-        <CreateDialog
-          open={confirm === "create"}
-          branch={branch}
-          target={snapshot.defaultBranch ?? ""}
-          busy={busy}
-          onClose={() => setConfirm(null)}
-          onCreate={(title, to) => void run(() => create(title, to), "Pull request created")}
-        />
-      )}
+      <Modal
+        title="Merge pull request"
+        open={confirm === "merge"}
+        onClose={() => setConfirm(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => setConfirm(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void run(() => merge(pr.id, pr.version), `Merged #${pr.id}`)}>
+              Merge
+            </button>
+          </>
+        }
+      >
+        <p className="pr-confirm">
+          Merge <b>#{pr.id} {pr.title}</b> from {pr.fromBranch} into <b>{pr.toBranch}</b> on the server? This cannot be undone
+          from here.
+        </p>
+      </Modal>
     </div>
   );
 }
 
-/** The collapsed line's right side: the builds as one icon, the reviews as a count. */
+/** The row's right side: the builds as one icon, the reviews as "1/4". */
 function Glance({ pr, builds }: { pr: PullRequest; builds: Ready["snapshot"]["builds"] }) {
   const build = buildsAtAGlance(builds);
   const reviews = reviewsAtAGlance(pr.reviewers);
   return (
     <span className="pr-glance">
       {build && <BuildIcon state={build} />}
-      {reviews && <span className="pr-muted">{reviews}</span>}
+      {reviews && <span title={`${pr.reviewers.filter((r) => r.status === "approved").length} of ${pr.reviewers.length} reviewers approved`}>{reviews}</span>}
     </span>
   );
 }

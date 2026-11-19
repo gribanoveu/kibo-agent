@@ -11,10 +11,10 @@ export function buildsAtAGlance(builds: Build[]): BuildState | null {
   return null;
 }
 
-/** "1 of 2 approved", "needs work" when anyone said so, `null` with no reviewers. */
+/** "1/2" approved, "needs work" when anyone said so, `null` with no reviewers. */
 export function reviewsAtAGlance(reviewers: Reviewer[]): string | null {
   if (reviewers.length === 0) return null;
   if (reviewers.some((r) => r.status === "needsWork")) return "needs work";
   const approved = reviewers.filter((r) => r.status === "approved").length;
-  return `${approved} of ${reviewers.length} approved`;
+  return `${approved}/${reviewers.length}`;
 }

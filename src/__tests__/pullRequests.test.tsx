@@ -50,7 +50,8 @@ afterAll(() => {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 });
 
-const { ChangesPanel } = await import("../components/ChangesPanel");
+const { PullRequestStrip } = await import("../components/PullRequestStrip");
+const { usePullRequest } = await import("../hooks/usePullRequest");
 const { CodeHostSettings } = await import("../components/CodeHostSettings");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
@@ -84,18 +85,14 @@ function ready(over: Partial<Extract<PrStrip, { state: "ready" }>> = {}, snapsho
 const reads = () => calls.filter((c) => c.command === "pull_request").length;
 const asked = (command: string) => calls.filter((c) => c.command === command);
 
+/** What Overview's pane does: the hook while the feature is on, and the row it reads. */
+function Overview({ on = true, workspace = "/repo", notes = [] }: { on?: boolean; workspace?: string; notes?: string[] }) {
+  const pr = usePullRequest(on, workspace);
+  return on ? <PullRequestStrip {...pr} onNotify={(note) => notes.push(note)} /> : null;
+}
+
 function panel(on = true, notes: string[] = []) {
-  return render(
-    <ChangesPanel
-      active
-      workspace="/repo"
-      onNotify={(note) => notes.push(note)}
-      onOpenFile={() => {}}
-      message=""
-      onMessage={() => {}}
-      pullRequests={on}
-    />,
-  );
+  return render(<Overview on={on} notes={notes} />);
 }
 
 beforeEach(() => {
@@ -113,7 +110,7 @@ describe("the strip's states", () => {
       strip = { state };
       const { container, unmount } = panel();
       await settle();
-      expect(container.querySelector(".pr-strip")).toBeNull();
+      expect(container.innerHTML).toBe("");
       unmount();
     }
   });
@@ -121,7 +118,7 @@ describe("the strip's states", () => {
   test("the feature off reads nothing and watches nothing", async () => {
     const { container } = panel(false);
     await settle();
-    expect(container.querySelector(".pr-strip")).toBeNull();
+    expect(container.innerHTML).toBe("");
     expect(calls.filter((c) => c.command.startsWith("pull_request"))).toEqual([]);
   });
 
@@ -129,17 +126,22 @@ describe("the strip's states", () => {
     strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
     panel();
     await settle();
-    expect(screen.getByText("git.example is not connected")).toBeTruthy();
-    fireEvent.click(screen.getByText("Connect…"));
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
     expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe("https://git.example");
   });
 
-  test("a branch not on the server: Create PR is off and says to push", async () => {
+  test("a branch not on the server shows nothing: there is nothing to open a pull request from", async () => {
     strip = ready({}, { pr: null, branchOnServer: false });
+    const { container } = panel();
+    await settle();
+    expect(container.innerHTML).toBe("");
+  });
+
+  test("a pushed branch without one offers to create it", async () => {
+    strip = ready({}, { pr: null });
     panel();
     await settle();
-    expect(screen.getByText("Push the branch first")).toBeTruthy();
-    expect((screen.getByText("Create PR") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Create pull request…")).toBeTruthy();
   });
 
   test("a pull request is one line: its number, title, builds and reviews", async () => {
@@ -147,17 +149,17 @@ describe("the strip's states", () => {
     panel();
     await settle();
     expect(screen.getByText("#153")).toBeTruthy();
-    expect(screen.getByText("0 of 1 approved")).toBeTruthy();
+    expect(screen.getByText("0/1")).toBeTruthy();
     expect(screen.getByLabelText("build failed")).toBeTruthy();
     expect(screen.queryByText("Merge")).toBeNull();
   });
 
-  test("Merge is off while the server says no, with the server's reasons", async () => {
+  test("Merge is not offered while the server says no; the server's reasons are", async () => {
     strip = ready({ mergeBlocked: ["Requires 2 approvals", "conflicts"] });
     panel();
     await settle();
     fireEvent.click(screen.getByText("#153"));
-    expect((screen.getByText("Merge").closest("button") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText("Merge")).toBeNull();
     expect(screen.getByText("Requires 2 approvals")).toBeTruthy();
     expect(screen.getByText("conflicts")).toBeTruthy();
   });
@@ -195,7 +197,7 @@ describe("the strip's states", () => {
     emit("pull-requests:changed", { root: "/repo" });
     await settle();
     expect(screen.getByText("#153")).toBeTruthy();
-    expect(container.querySelector(".pr-strip.stale")).toBeTruthy();
+    expect(container.querySelector(".pr-stale")).toBeTruthy();
     expect(screen.getByText("the server did not answer")).toBeTruthy();
   });
 });
@@ -221,7 +223,7 @@ describe("the buttons", () => {
     strip = ready({}, { pr: null });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("Create PR"));
+    fireEvent.click(screen.getByText("Create pull request…"));
     expect(asked("pull_request_create")).toEqual([]);
     expect((screen.getByLabelText("Into") as HTMLInputElement).value).toBe("master");
 
@@ -294,9 +296,7 @@ describe("reading again", () => {
     const view = panel();
     await settle();
     strip = { state: "noRemote" };
-    view.rerender(
-      <ChangesPanel active workspace="/next" onNotify={() => {}} onOpenFile={() => {}} message="" onMessage={() => {}} pullRequests />,
-    );
+    view.rerender(<Overview workspace="/next" />);
     await settle();
     land(ready());
     await settle();
@@ -321,7 +321,7 @@ describe("connecting a server", () => {
     strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
     panel();
     await settle();
-    fireEvent.click(screen.getByText("Connect…"));
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
     const dialog = screen.getByRole("dialog");
     const save = dialog.querySelector(".modal-foot .btn-primary") as HTMLButtonElement;
     expect(save.disabled).toBe(true);
@@ -346,7 +346,7 @@ describe("connecting a server", () => {
     strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
     panel();
     await settle();
-    fireEvent.click(screen.getByText("Connect…"));
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
     fireEvent.click(screen.getByText("Check"));
     await settle();
     expect(asked("code_host_detect").map((c) => (c.args as { server: { baseUrl: string } }).server.baseUrl)).toEqual(["https://git.example"]);
@@ -398,7 +398,7 @@ describe("at a glance", () => {
 
   test("the reviews are a count, or needs work when anyone said so", () => {
     expect(reviewsAtAGlance([])).toBeNull();
-    expect(reviewsAtAGlance([{ slug: "a", status: "approved" }, { slug: "b", status: "unapproved" }])).toBe("1 of 2 approved");
+    expect(reviewsAtAGlance([{ slug: "a", status: "approved" }, { slug: "b", status: "unapproved" }])).toBe("1/2");
     expect(reviewsAtAGlance([{ slug: "a", status: "approved" }, { slug: "b", status: "needsWork" }])).toBe("needs work");
   });
 });

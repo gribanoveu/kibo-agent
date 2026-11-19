@@ -23,7 +23,7 @@ export function CodeHostSettings() {
     <>
       <h3 className="settings-title">Bitbucket</h3>
       <p className="modal-note code-hosts-intro">
-        The Bitbucket Data Center servers the pull request above the Changes list is read from. A folder finds its server by
+        The Bitbucket Data Center servers the pull request under the branch in Overview is read from. A folder finds its server by
         its remote: by the address, or by a host the server's clone links have shown it answers to.
       </p>
       {error && <p className="modal-note code-hosts-error">{error}</p>}
