@@ -100,9 +100,11 @@ impl Board {
         Ok(conn)
     }
 
-    /// The JSON board, into an empty database. Renamed in the same step, so a
-    /// board emptied later is not filled again from it; a file that does not
-    /// parse is refused and left as it is — the next write would drop its cards.
+    /// The JSON board, into an empty database, then renamed, so a board
+    /// emptied later is not filled again from it. Committed before the rename:
+    /// a rename that fails leaves the cards in a database the next open finds
+    /// filled, and the file is only put aside then. A file that does not parse
+    /// is refused and left as it is — the next write would drop its cards.
     fn take_in_old_file(&self, conn: &mut Connection) -> Result<(), BoardError> {
         let Some(dir) = self.dir.as_ref() else { return Ok(()) };
         let old = dir.join(OLD_FILE);
@@ -117,16 +119,26 @@ impl Board {
             let cards = serde_json::from_str(&text).map(with_keys).map_err(|e| BoardError::Store(format!("{} does not parse: {e}", old.display())))?;
             write(&tx, &cards)?;
         }
-        fs::rename(&old, dir.join(IMPORTED)).map_err(|e| BoardError::Store(format!("{}: {e}", old.display())))?;
-        tx.commit().map_err(store)
+        tx.commit().map_err(store)?;
+        fs::rename(&old, dir.join(IMPORTED)).map_err(|e| BoardError::Store(format!("{}: {e}", old.display())))
     }
+}
+
+/// Every file the board may have in the app directory. The journal before the
+/// database: a journal left behind by a failed delete would otherwise be
+/// replayed into the next, empty one.
+const FILES: [&str; 5] = ["board.db-wal", "board.db-shm", FILE, OLD_FILE, IMPORTED];
+
+/// Whether `dir` holds any of the board — a `board.json` not yet taken in counts.
+pub fn has_data(dir: &std::path::Path) -> bool {
+    FILES.iter().any(|file| dir.join(file).exists())
 }
 
 /// The board's files in `dir`, gone: the database with its journal, and a
 /// board kept before it, taken in or not. For the Catalog's "Delete data",
 /// while the feature is off — nothing holds the database open between calls.
 pub fn delete(dir: &std::path::Path) -> Result<(), BoardError> {
-    for file in [FILE, "board.db-wal", "board.db-shm", OLD_FILE, IMPORTED] {
+    for file in FILES {
         let path = dir.join(file);
         match fs::remove_file(&path) {
             Err(e) if e.kind() != ErrorKind::NotFound => return Err(BoardError::Store(format!("could not delete {}: {e}", path.display()))),
@@ -317,6 +329,31 @@ mod tests {
         assert!(board.change(&BoardChange::Comment { id: "T1".into(), text: " ".into(), at: "2026-11-19T10:00:00Z".into() }).is_err());
         assert_eq!(board.cards().unwrap(), before);
         assert_eq!(signals.load(Ordering::SeqCst), 1);
+    }
+
+    /// The rename failing — here a folder already where the file would go —
+    /// comes after the cards are in: the next open finds them, and the board
+    /// does not come up empty for good.
+    #[test]
+    fn a_rename_that_fails_after_the_import_keeps_the_cards() {
+        let dir = temp_dir("board-store-rename");
+        fs::write(dir.join(OLD_FILE), r#"[{"id":"T1","title":"kept","column":"todo"}]"#).unwrap();
+        fs::create_dir_all(dir.join(IMPORTED).join("in the way")).unwrap();
+        let (board, _) = board(dir.clone());
+        assert!(board.cards().is_err());
+        let held: i64 = Connection::open(dir.join(FILE)).unwrap().query_row("SELECT COUNT(*) FROM cards", [], |r| r.get(0)).unwrap();
+        assert_eq!(held, 1);
+    }
+
+    #[test]
+    fn has_data_counts_every_file_of_the_board() {
+        let dir = temp_dir("board-store-has-data");
+        assert!(!has_data(&dir));
+        for file in FILES {
+            fs::write(dir.join(file), "").unwrap();
+            assert!(has_data(&dir), "{file}");
+            fs::remove_file(dir.join(file)).unwrap();
+        }
     }
 
     #[test]

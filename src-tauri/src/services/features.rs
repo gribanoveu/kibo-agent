@@ -128,7 +128,11 @@ fn views(settings: &AppSettings, app_dir: Option<&Path>) -> Vec<FeatureView> {
                 layout_switch_supported: crate::infra::keyboard_layout::SUPPORTED,
                 places: places(manifest.tools),
                 data: manifest.data.map(|file| format!("~/.kibo/{file}")),
-                has_data: data_path(feature, app_dir).is_some_and(|path| path.exists()),
+                has_data: match (feature, app_dir) {
+                    // A board.json not yet taken in is data too: the database comes with the first read.
+                    (Feature::Board, Some(dir)) => crate::infra::board_store::has_data(dir),
+                    _ => data_path(feature, app_dir).is_some_and(|path| path.exists()),
+                },
             }
         })
         .collect()
@@ -163,7 +167,7 @@ mod tests {
         assert_eq!(board.places, ["Assistant chat", "Agent", "Analyst"]);
         assert_eq!(board.data.as_deref(), Some("~/.kibo/board.db"));
 
-        std::fs::write(dir.join("board.db"), "").unwrap();
+        std::fs::write(dir.join("board.json"), "[]").unwrap();
         let mut settings = AppSettings::default();
         settings.features.insert("board".into(), true);
         let on = views(&settings, Some(&dir));
