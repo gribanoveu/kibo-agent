@@ -62,7 +62,7 @@ export function PageEmpty({ icon: Icon, action, children }: { icon: ComponentTyp
 export function PageSheet({ icon: Icon, title, label, onClose, children }: PanelProps) {
   const box = useRef<HTMLElement>(null);
   useEffect(() => {
-    const layered = () => document.querySelector('.dropdown-menu, [role="dialog"]') !== null;
+    const layered = () => document.querySelector('.dropdown-menu, [role="menu"], [role="dialog"]') !== null;
     const onKey = (e: KeyboardEvent) => {
       const typing = e.target instanceof Element && e.target.closest("input, textarea, [contenteditable]");
       if (matches(e, "close") && !typing && !layered()) onClose();
