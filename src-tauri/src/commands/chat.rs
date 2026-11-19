@@ -604,8 +604,8 @@ mod tests {
     fn preview_and_resume_read_the_saved_chats_checkout() {
         crate::testing::with_app_dir("cmd-chat-resume-own-root", || {
             crate::testing::spending_provider("done", 10, 2);
-            let own = temp_dir("cmd-chat-resume-own").canonicalize().unwrap();
-            let other = temp_dir("cmd-chat-resume-other").canonicalize().unwrap();
+            let own = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-resume-own")).unwrap();
+            let other = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-resume-other")).unwrap();
             std::fs::write(own.join("a.txt"), "own\n").unwrap();
             std::fs::write(other.join("a.txt"), "other\n").unwrap();
             crate::infra::chat_store::save("c1", &own.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
@@ -1003,7 +1003,7 @@ mod tests {
         crate::testing::with_app_dir("cmd-paused-chat-turn", || {
             crate::testing::spending_provider("unused", 10, 2);
             let state = state();
-            let root = temp_dir("cmd-paused-chat-root").canonicalize().unwrap();
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-paused-chat-root")).unwrap();
             state.set_workspace_for_test(root.clone());
             let app = tauri::test::mock_app();
             app.manage(Arc::clone(&state));
