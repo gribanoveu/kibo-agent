@@ -79,7 +79,7 @@ export function BoardPage() {
     <Page
       title="Board"
       bar={tags.length > 0 && <TagFilter tags={tags} picked={filter} onPick={setPicked} />}
-      sheet={shown && <BoardCardSheet key={shown.id} card={shown} error={error} onChange={change} onClose={() => setOpenId(null)} />}
+      sheet={shown && <BoardCardSheet key={shown.id} card={shown} tags={tags} error={error} onChange={change} onClose={() => setOpenId(null)} />}
     >
       <DragDropProvider
         sensors={SENSORS}

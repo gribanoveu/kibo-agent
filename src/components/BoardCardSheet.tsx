@@ -17,6 +17,8 @@ const STATUS: { value: OpenColumn; label: string }[] = [
 
 type Props = {
   card: Card;
+  /** Every tag on the board, offered as the card's are written. */
+  tags: string[];
   /** The board's refusal of the last change, shown here while the sheet is open. */
   error: string | null;
   onChange: (change: BoardChange) => Promise<boolean>;
@@ -27,7 +29,7 @@ type Props = {
     status and actions on top, its title and description edited in place, then
     its fields one row each — a new field is one more `Field`. Each change is
     saved as it is made. */
-export function BoardCardSheet({ card, error, onChange, onClose }: Props) {
+export function BoardCardSheet({ card, tags, error, onChange, onClose }: Props) {
   const edit = (fields: Omit<Extract<BoardChange, { op: "edit" }>, "op" | "id">) => onChange({ op: "edit", id: card.id, ...fields });
   const status = STATUS.find((s) => s.value === card.column)?.label ?? "Archived";
   return (
@@ -74,7 +76,7 @@ export function BoardCardSheet({ card, error, onChange, onClose }: Props) {
             </>
           }
         >
-          <Tags tags={card.tags ?? []} onChange={(tags) => onChange({ op: "tags", id: card.id, tags })} />
+          <Tags tags={card.tags ?? []} known={tags} onChange={(tags) => onChange({ op: "tags", id: card.id, tags })} />
         </Field>
         <Field label="Due">
           <span className="board-sheet-due">
@@ -108,12 +110,34 @@ function Field({ label, children }: { label: ReactNode; children: ReactNode }) {
   );
 }
 
+/** What the tag box offers for `text`: the board's tags the card lacks that
+    hold it, then — when the board has no such tag — creating it. `known`
+    holds the card's own tags too. */
+export function tagChoices(text: string, known: string[], has: string[]): { tag: string; create: boolean }[] {
+  const typed = text.trim().toLowerCase();
+  const lacks = known.filter((tag) => !has.some((h) => h.toLowerCase() === tag.toLowerCase()));
+  const found = lacks.filter((tag) => tag.toLowerCase().includes(typed)).map((tag) => ({ tag, create: false }));
+  const exists = known.some((tag) => tag.toLowerCase() === typed);
+  return typed && !exists ? [...found, { tag: text.trim(), create: true }] : found;
+}
+
 /** The card's tags as chips, each with a button that takes it off, and a box
-    where Enter adds one. A refused one stays in the box. */
-function Tags({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => Promise<boolean> }) {
+    that offers the board's other tags as it is typed in: ↑ ↓ pick one, Enter
+    adds it (or creates what was typed), Escape closes the list. A tag no card
+    has any longer leaves the board's list on its own. A refused one stays in
+    the box. */
+function Tags({ tags, known, onChange }: { tags: string[]; known: string[]; onChange: (tags: string[]) => Promise<boolean> }) {
   const [text, setText] = useState("");
-  const add = async () => {
-    if (text.trim() && (await onChange([...tags, text]))) setText("");
+  const [open, setOpen] = useState(false);
+  // The highlighted choice; none until something is typed or an arrow is pressed.
+  const [active, setActive] = useState(-1);
+  const choices = tagChoices(text, known, tags);
+  const listed = open && choices.length > 0;
+  const add = async (tag: string) => {
+    if (tag.trim() && (await onChange([...tags, tag]))) {
+      setText("");
+      setActive(-1);
+    }
   };
   return (
     <span className="board-sheet-tags">
@@ -125,18 +149,58 @@ function Tags({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) =
           </button>
         </span>
       ))}
-      <input
-        className="board-sheet-tag-box"
-        aria-label="New tag"
-        placeholder={tags.length ? "Add" : "Add a tag"}
-        value={text}
-        onChange={(e) => setText(e.currentTarget.value)}
-        onKeyDown={(e) => {
-          if (!matches(e.nativeEvent, "accept")) return;
-          e.preventDefault();
-          void add();
-        }}
-      />
+      <span className="board-sheet-tag-field">
+        <input
+          className="board-sheet-tag-box"
+          role="combobox"
+          aria-label="New tag"
+          aria-autocomplete="list"
+          aria-expanded={listed}
+          aria-controls={listed ? "board-sheet-tag-list" : undefined}
+          aria-activedescendant={listed && active >= 0 ? `board-sheet-tag-${active}` : undefined}
+          autoComplete="off"
+          placeholder={tags.length ? "Add" : "Add a tag"}
+          value={text}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setOpen(false)}
+          onChange={(e) => {
+            setText(e.currentTarget.value);
+            setActive(e.currentTarget.value.trim() ? 0 : -1);
+            setOpen(true);
+          }}
+          onKeyDown={(e) => {
+            const moves = matches(e.nativeEvent, "tagSuggestNext") ? 1 : matches(e.nativeEvent, "tagSuggestPrev") ? -1 : 0;
+            if (moves && listed) {
+              e.preventDefault();
+              setActive((active + moves + choices.length) % choices.length);
+            } else if (matches(e.nativeEvent, "accept")) {
+              e.preventDefault();
+              void add(listed && active >= 0 ? choices[active].tag : text);
+            } else if (matches(e.nativeEvent, "close") && listed) {
+              setOpen(false);
+            }
+          }}
+        />
+        {listed && (
+          <span id="board-sheet-tag-list" className="board-sheet-tag-list" role="listbox" aria-label="Tags">
+            {choices.map((choice, at) => (
+              <span
+                key={`${choice.create}-${choice.tag}`}
+                id={`board-sheet-tag-${at}`}
+                role="option"
+                aria-selected={at === active}
+                className={at === active ? "board-sheet-tag-choice active" : "board-sheet-tag-choice"}
+                // Keeps the focus in the box, so the list stays for the next one.
+                onPointerDown={(e) => e.preventDefault()}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void add(choice.tag)}
+              >
+                {choice.create ? `Create “${choice.tag}”` : choice.tag}
+              </span>
+            ))}
+          </span>
+        )}
+      </span>
     </span>
   );
 }

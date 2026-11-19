@@ -69,7 +69,7 @@ afterAll(() => {
 
 const { BoardPage } = await import("../components/BoardPage");
 const { dropChange, dueState, filterOrder, hasAnyTag, localDay, orderOf, tagsOf } = await import("../lib/board");
-const { ago } = await import("../components/BoardCardSheet");
+const { ago, tagChoices } = await import("../components/BoardCardSheet");
 const { IS_MAC } = await import("../lib/shortcuts");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 const column = (name: string) => within(screen.getByRole("region", { name }));
@@ -310,7 +310,7 @@ describe("the board page", () => {
       fireEvent.keyDown(box, { key: "Enter", code: "Enter" });
       await settle();
     }
-    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "tags", id: "T1", tags: ["work", " bank "] } } });
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "tags", id: "T1", tags: ["work", "bank"] } } });
     expect(box.value).toBe("");
     const onCard = () => [...screen.getByRole("region", { name: "To do" }).querySelectorAll(".board-card-tag")].map((t) => t.textContent);
     expect(onCard()).toEqual(["work", "bank"]);
@@ -327,6 +327,76 @@ describe("the board page", () => {
     await settle();
     expect(box.value).toBe("x".repeat(31));
     expect(sheet.getByText(refusal)).toBeTruthy();
+  });
+
+  test("the tag box offers the board's other tags as it is typed in, and creates a new one", async () => {
+    stored = [
+      { id: "T1", title: "Fix the build", column: "todo" },
+      { id: "T2", title: "Renew the cert", tags: ["Kibo", "home"], column: "doing" },
+    ];
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByText("Fix the build"));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
+    const box = sheet.getByRole("combobox", { name: "New tag" }) as HTMLInputElement;
+    const offered = () => sheet.queryAllByRole("option").map((o) => o.textContent);
+    const active = () => sheet.queryAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true")?.textContent;
+    const type = (text: string) => fireEvent.change(box, { target: { value: text } });
+    const press = (code: string) => fireEvent.keyDown(box, { key: code, code });
+
+    // Focused, every tag the card lacks; none picked, so Enter adds nothing.
+    fireEvent.focus(box);
+    expect(offered()).toEqual(["home", "Kibo"]);
+    press("Enter");
+    expect(calls.some((c) => c.command === "board_change")).toBe(false);
+
+    // Typed and wiped out again: nothing picked.
+    type("ki");
+    type("");
+    press("Enter");
+    expect(calls.some((c) => c.command === "board_change")).toBe(false);
+
+    // Typed: those that hold it, then creating it; the first picked.
+    type("ki");
+    expect(offered()).toEqual(["Kibo", "Create “ki”"]);
+    expect(active()).toBe("Kibo");
+    press("Enter");
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "tags", id: "T1", tags: ["Kibo"] } } });
+    expect(box.value).toBe("");
+
+    // ↓ to Create, and Enter creates it; ↑ goes round.
+    type("ho");
+    press("ArrowUp");
+    expect(active()).toBe("Create “ho”");
+    press("ArrowDown");
+    expect(active()).toBe("home");
+    press("ArrowDown");
+    press("Enter");
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "tags", id: "T1", tags: ["Kibo", "ho"] } } });
+
+    // A tag the board has, in another case, is offered in its own spelling and not created.
+    type("HOME");
+    expect(offered()).toEqual(["home"]);
+    fireEvent.click(sheet.getByRole("option", { name: "home" }));
+    await settle();
+    expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "tags", id: "T1", tags: ["Kibo", "ho", "home"] } } });
+
+    // Escape closes the list and leaves the sheet open.
+    type("x");
+    press("Escape");
+    expect(offered()).toEqual([]);
+    expect(screen.getByRole("complementary", { name: "T1 details" })).toBeTruthy();
+
+    // A tag taken off the last card that had it leaves the board's list.
+    const filter = () => within(screen.getByRole("group", { name: "Show cards tagged" })).getAllByRole("button").map((b) => b.textContent);
+    expect(filter()).toEqual(["All", "ho", "home", "Kibo"]);
+    fireEvent.click(sheet.getByRole("button", { name: "Remove the tag ho" }));
+    await settle();
+    expect(filter()).toEqual(["All", "home", "Kibo"]);
+    type("");
+    expect(offered()).toEqual([]);
   });
 
   test("the tags over the columns show only the cards with any picked, and All shows them all again", async () => {
@@ -515,5 +585,17 @@ describe("when a comment was written", () => {
     expect(ago("2026-11-18T11:00:00Z", now)).toBe(words.format(-1, "day"));
     expect(ago("2026-11-13T12:00:00Z", now)).toBe(words.format(-6, "day"));
     expect(ago("2026-11-01T12:00:00Z", now)).toBe(new Date("2026-11-01T12:00:00Z").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }));
+  });
+});
+
+describe("the tag box's choices", () => {
+  test("are the tags the card lacks that hold what was typed, then creating it unless the board has it", () => {
+    const known = ["bank", "home", "Kibo"];
+    expect(tagChoices("", known, ["home"])).toEqual([{ tag: "bank", create: false }, { tag: "Kibo", create: false }]);
+    expect(tagChoices(" K ", known, [])).toEqual([{ tag: "bank", create: false }, { tag: "Kibo", create: false }, { tag: "K", create: true }]);
+    expect(tagChoices("kibo", known, [])).toEqual([{ tag: "Kibo", create: false }]);
+    // One the card already has is neither offered nor created again.
+    expect(tagChoices("HOME", known, ["home"])).toEqual([]);
+    expect(tagChoices("new", ["mine"], ["mine"])).toEqual([{ tag: "new", create: true }]);
   });
 });
