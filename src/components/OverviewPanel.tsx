@@ -1,4 +1,4 @@
-import { ChevronRight, GitBranch, Plug, Telescope, TerminalSquare, Undo2 } from "lucide-react";
+import { ChevronRight, GitBranch, Plug, Telescope, TerminalSquare } from "lucide-react";
 import { ContextDetails } from "./ContextMeter";
 import { type AgentInfo, briefTitle } from "../lib/agents";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
@@ -14,9 +14,6 @@ export type OverviewProps = {
   branch: string | null;
   /** `null` outside a repository. */
   changes: ChangeTotals | null;
-  /** The open chat's own branch, when another chat of the folder has moved
-      the folder off it: said under the branch, with the way back. */
-  away?: { branch: string; onSwitch: () => void; /** Why it cannot switch now — a turn works in the folder. */ locked?: string } | null;
   /** `null` until the first estimate arrives, and when none can be made. */
   context: ContextUsage | null;
   /** The estimate is on its way: the card keeps its place with a placeholder,
@@ -63,7 +60,6 @@ function serverStatus(server: McpServerItem): { label: string; tone: "ok" | "off
 export function OverviewPanel({
   branch,
   changes,
-  away = null,
   context,
   contextPending = false,
   usage,
@@ -151,39 +147,23 @@ export function OverviewPanel({
         {!changes ? (
           <p className="overview-empty">Not a git repository.</p>
         ) : (
-          <>
-            <button
-              type="button"
-              className="overview-row"
-              title={`${changes.files} ${changes.files === 1 ? "file" : "files"} changed since the last commit`}
-              onClick={() => onOpenPanel("changes")}
-            >
-              <GitBranch size={14} />
-              <span className="overview-name">{branch ?? "detached HEAD"}</span>
-              {changes.files ? (
-                <span className="overview-lines">
-                  <span className="add">+{changes.add}</span>
-                  <span className="del">−{changes.del}</span>
-                </span>
-              ) : (
-                <span className="overview-status">no changes</span>
-              )}
-            </button>
-            {away && (
-              <button
-                type="button"
-                className="overview-row overview-away"
-                title={away.locked ?? `This chat works on ${away.branch}; the folder is on ${branch} now. Switch back to ${away.branch}`}
-                aria-disabled={!!away.locked || undefined}
-                onClick={() => {
-                  if (!away.locked) away.onSwitch();
-                }}
-              >
-                <Undo2 size={14} />
-                <span className="overview-name">Back to {away.branch}</span>
-              </button>
+          <button
+            type="button"
+            className="overview-row"
+            title={`${changes.files} ${changes.files === 1 ? "file" : "files"} changed since the last commit`}
+            onClick={() => onOpenPanel("changes")}
+          >
+            <GitBranch size={14} />
+            <span className="overview-name">{branch ?? "detached HEAD"}</span>
+            {changes.files ? (
+              <span className="overview-lines">
+                <span className="add">+{changes.add}</span>
+                <span className="del">−{changes.del}</span>
+              </span>
+            ) : (
+              <span className="overview-status">no changes</span>
             )}
-          </>
+          </button>
         )}
       </section>
     </div>

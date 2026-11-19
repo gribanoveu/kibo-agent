@@ -507,10 +507,6 @@ export default function App() {
     onSwitched: agent.saveBranch,
   });
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
-  const branchLocked =
-    workspace.path && turnsInFolder(workspace.path).length > 0
-      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
-      : undefined;
   const turnBusy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   // The provider turns go to now: its own switch in Settings → Models.
   const imagesEnabled = !!llm.settings?.providers.find((p) => p.id === llm.models.current?.providerId)?.supportsImages;
@@ -565,8 +561,6 @@ export default function App() {
   };
 
   const openChat = history.chats.find((one) => one.id === agent.chatId);
-  // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
-  const chatOwnBranch = unstarted || turnBusy ? null : (openChat?.gitBranch ?? null);
 
   // The conversation as a file, for reading it somewhere else. Only what is
   // on disk can be written out — a turn saves when it comes to rest, so this
@@ -648,10 +642,6 @@ export default function App() {
     overview: {
       branch,
       changes: changeTotals,
-      away:
-        chatOwnBranch && branch && chatOwnBranch !== branch
-          ? { branch: chatOwnBranch, locked: branchLocked, onSwitch: () => void branchPicker.pick(chatOwnBranch) }
-          : null,
       context: agent.context,
       contextPending: agent.contextPending,
       usage: agent.turn.usage,
@@ -739,7 +729,10 @@ export default function App() {
                   onPick: (name) => void branchPicker.pick(name),
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
-                  locked: branchLocked,
+                  locked:
+                    workspace.path && turnsInFolder(workspace.path).length > 0
+                      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
+                      : undefined,
                 }}
                 // A started chat stays in its folder, its branch shown in
                 // Overview: only a new one picks either.
