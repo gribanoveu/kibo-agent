@@ -36,6 +36,8 @@ export type PullRequest = {
   reviewers: Reviewer[];
   /** The page Open opens. */
   url: string;
+  /** Work in progress: not merged until marked ready. Always false on a server before 8.18. */
+  draft: boolean;
 };
 
 /** `unknown` is a state this app has no word for — never a success. */
@@ -62,6 +64,8 @@ export type PrStrip =
   | {
       state: "ready";
       serverId: string;
+      /** The repository's slug, for the line under the title. */
+      repo: string;
       branch: string;
       snapshot: Snapshot;
       canApprove: boolean;
@@ -114,9 +118,15 @@ export async function pullRequest(): Promise<PrStrip> {
 }
 
 /** From the checked-out branch into `to`, or the repository's default branch. */
-export async function pullRequestCreate(title: string, to: string | null): Promise<PullRequest> {
+export async function pullRequestCreate(title: string, to: string | null, draft: boolean): Promise<PullRequest> {
   requireBackend();
-  return invoke<PullRequest>("pull_request_create", { title, to });
+  return invoke<PullRequest>("pull_request_create", { title, to, draft });
+}
+
+/** `false` marks the draft ready for review; `true` takes it back to a draft. */
+export async function pullRequestSetDraft(id: number, version: number, draft: boolean): Promise<void> {
+  requireBackend();
+  return invoke<void>("pull_request_set_draft", { id, version, draft });
 }
 
 /** `false` takes the approval back. */

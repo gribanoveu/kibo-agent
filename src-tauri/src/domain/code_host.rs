@@ -370,7 +370,10 @@ pub trait CodeHost: Send + Sync {
     /// `false` takes an approval back; `me` is the reviewer's slug, from [`CodeHost::me`].
     fn approve(&self, call: &Call, pr: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError>;
     fn merge(&self, call: &Call, pr: &PullRequest) -> Result<(), CodeHostError>;
-    fn create(&self, call: &Call, from: &str, to: &str, title: &str) -> Result<PullRequest, CodeHostError>;
+    /// `false` marks a draft ready for review; `true` takes it back to a draft.
+    /// At `pr.version`, as merge is: what changes is what was seen.
+    fn set_draft(&self, call: &Call, pr: &PullRequest, draft: bool) -> Result<(), CodeHostError>;
+    fn create(&self, call: &Call, from: &str, to: &str, title: &str, draft: bool) -> Result<PullRequest, CodeHostError>;
 }
 
 // ------------------------------------------------------------------ the strip
@@ -412,6 +415,10 @@ pub struct PullRequest {
     pub reviewers: Vec<Reviewer>,
     /// The page Open opens.
     pub url: String,
+    /// Work in progress (Data Center 8.18 and later): reviewers see it, the
+    /// server merges nothing until it is marked ready. An older server never
+    /// says so, and every pull request there is ready.
+    pub draft: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -495,6 +502,8 @@ pub enum PrStrip {
     #[serde(rename_all = "camelCase")]
     Ready {
         server_id: String,
+        /// The repository's slug, for the line under the title: "tax-api #153".
+        repo: String,
         branch: String,
         snapshot: Snapshot,
         /// [`can_approve`] for the token's user.
@@ -593,6 +602,7 @@ mod tests {
             version: 6,
             author: author.to_string(),
             author_name: author.to_string(),
+            draft: false,
             from_branch: "docs/wowtax-8238".to_string(),
             to_branch: "master".to_string(),
             reviewers: reviewers
@@ -967,6 +977,7 @@ mod tests {
     fn a_strip_is_building_while_its_latest_build_runs() {
         let ready = |latest: Option<BuildState>| PrStrip::Ready {
             server_id: "s".to_string(),
+            repo: "r".to_string(),
             branch: "b".to_string(),
             snapshot: Snapshot::default(),
             can_approve: false,
@@ -995,6 +1006,7 @@ mod tests {
 
         let ready = json(&PrStrip::Ready {
             server_id: "s".to_string(),
+            repo: "r".to_string(),
             branch: "b".to_string(),
             snapshot: snapshot(),
             can_approve: true,
@@ -1002,12 +1014,13 @@ mod tests {
             merge_blocked: Some(vec!["v".to_string()]),
             latest_build: snapshot().builds.into_iter().next(),
         });
-        for key in ["state", "serverId", "branch", "snapshot", "canApprove", "approved", "mergeBlocked", "latestBuild"] {
+        for key in ["state", "serverId", "repo", "branch", "snapshot", "canApprove", "approved", "mergeBlocked", "latestBuild"] {
             assert!(ready.get(key).is_some(), "{key}: {ready}");
         }
         assert_eq!(ready["state"], "ready");
         assert!(ready["snapshot"].get("branchOnServer").is_some(), "{ready}");
         assert!(ready["latestBuild"].get("dateAdded").is_some(), "{ready}");
+        assert_eq!(ready["snapshot"]["pr"]["draft"], false, "{ready}");
     }
 
     // ------------------------------------------------------------- snapshots

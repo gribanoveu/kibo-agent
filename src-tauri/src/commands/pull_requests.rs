@@ -78,12 +78,22 @@ pub async fn pull_request(state: Agent<'_>, prs: Prs<'_>) -> Result<PrStrip, Str
 pub async fn pull_request_create(
     title: String,
     to: Option<String>,
+    draft: bool,
     state: Agent<'_>,
     prs: Prs<'_>,
 ) -> Result<PullRequest, String> {
     let root = state.workspace()?;
     let prs = prs.inner().clone();
-    blocking(move || PullRequests::create(&prs, &root, &title, to.as_deref())).await
+    blocking(move || PullRequests::create(&prs, &root, &title, to.as_deref(), draft)).await
+}
+
+/// Mark ready (`draft: false`) or back to a draft, of the pull request the
+/// strip showed at `version`.
+#[tauri::command]
+pub async fn pull_request_set_draft(id: u64, version: u64, draft: bool, state: Agent<'_>, prs: Prs<'_>) -> Result<(), String> {
+    let root = state.workspace()?;
+    let prs = prs.inner().clone();
+    blocking(move || PullRequests::set_draft(&prs, &root, id, version, draft)).await
 }
 
 /// `approved: false` takes the approval back.

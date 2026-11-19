@@ -171,6 +171,7 @@ impl PullRequests {
         };
         Ok(PrStrip::Ready {
             server_id: target.server.id.clone(),
+            repo: target.remote.slug.clone(),
             branch: target.branch.clone(),
             merge_blocked: merge.as_ref().and_then(merge_blocked),
             latest_build: latest_build(&builds).cloned(),
@@ -225,9 +226,21 @@ impl PullRequests {
         })
     }
 
+    /// Marks the draft the user saw ready for review (`draft: false`), or takes
+    /// it back to a draft — at the `version` the strip showed, as merge is.
+    pub fn set_draft(&self, root: &Path, id: u64, version: u64, draft: bool) -> Result<(), CodeHostError> {
+        self.acting(root, |call, target| {
+            let pr = self.open_pull_request(call, target)?;
+            if (pr.id, pr.version) != (id, version) {
+                return Err(CodeHostError::Conflict);
+            }
+            self.host.set_draft(call, &pr, draft)
+        })
+    }
+
     /// Opens a pull request from the checked-out branch into `to`, or into the
     /// repository's default branch. An empty title is the branch's name.
-    pub fn create(&self, root: &Path, title: &str, to: Option<&str>) -> Result<PullRequest, CodeHostError> {
+    pub fn create(&self, root: &Path, title: &str, to: Option<&str>, draft: bool) -> Result<PullRequest, CodeHostError> {
         self.acting(root, |call, target| {
             if self.host.branch_commit(call, &target.branch)?.is_none() {
                 return Err(CodeHostError::NotPushed(target.branch.clone()));
@@ -240,7 +253,7 @@ impl PullRequests {
                 "" => target.branch.as_str(),
                 title => title,
             };
-            self.host.create(call, &target.branch, &to, title)
+            self.host.create(call, &target.branch, &to, title, draft)
         })
     }
 
@@ -521,8 +534,12 @@ mod tests {
             self.ask(&format!("merge v{}", pr.version));
             lock(&self.merged).clone().map_or(Ok(()), Err)
         }
-        fn create(&self, _: &Call, from: &str, to: &str, title: &str) -> Result<PullRequest, CodeHostError> {
-            self.ask(&format!("create {from} -> {to}: {title}"));
+        fn set_draft(&self, _: &Call, pr: &PullRequest, draft: bool) -> Result<(), CodeHostError> {
+            self.ask(&format!("draft {draft} v{}", pr.version));
+            Ok(())
+        }
+        fn create(&self, _: &Call, from: &str, to: &str, title: &str, draft: bool) -> Result<PullRequest, CodeHostError> {
+            self.ask(&format!("create {from} -> {to}: {title}{}", if draft { " (draft)" } else { "" }));
             Ok(pull_request(1))
         }
     }
@@ -534,6 +551,7 @@ mod tests {
             version,
             author: "u_author".to_string(),
             author_name: "Anna Author".to_string(),
+            draft: false,
             from_branch: "feature/x".to_string(),
             to_branch: "master".to_string(),
             reviewers: vec![Reviewer { slug: "u_me".to_string(), display_name: "Me".to_string(), status: ReviewStatus::Unapproved }],
@@ -608,12 +626,12 @@ mod tests {
             *lock(&double.builds) = vec![build(BuildState::Successful)];
             *lock(&double.me) = Some("u_me".to_string());
 
-            let PrStrip::Ready { server_id, branch, snapshot, can_approve, approved, merge_blocked, latest_build } =
+            let PrStrip::Ready { server_id, repo: slug, branch, snapshot, can_approve, approved, merge_blocked, latest_build } =
                 service.strip(&repo("prs-strip-repo", Some(REMOTE))).unwrap()
             else {
                 panic!("not ready")
             };
-            assert_eq!((server_id.as_str(), branch.as_str()), ("bb", "feature/x"));
+            assert_eq!((server_id.as_str(), slug.as_str(), branch.as_str()), ("bb", "tax-api", "feature/x"));
             assert_eq!(snapshot.pr.map(|pr| pr.version), Some(6));
             assert!(snapshot.branch_on_server);
             assert_eq!(snapshot.default_branch.as_deref(), Some("master"));
@@ -827,6 +845,26 @@ mod tests {
         });
     }
 
+    /// Mark ready and back to a draft change what the user saw, like a merge:
+    /// a pull request that moved since is not sent.
+    #[test]
+    fn a_draft_is_marked_ready_only_as_it_was_seen() {
+        with_app_dir("prs-draft", || {
+            let (service, double, events) = connected();
+            *lock(&double.pr) = Some(pull_request(8));
+            let root = repo("prs-draft-repo", Some(REMOTE));
+
+            assert_eq!(service.set_draft(&root, 153, 7, false), Err(CodeHostError::Conflict), "a newer version");
+            assert_eq!(service.set_draft(&root, 152, 8, false), Err(CodeHostError::Conflict), "another pull request");
+            assert_eq!(double.asked("draft false v8"), 0);
+            assert_eq!(lock(&events).len(), 2, "the strip reads again");
+
+            service.set_draft(&root, 153, 8, false).unwrap();
+            service.set_draft(&root, 153, 8, true).unwrap();
+            assert_eq!((double.asked("draft false v8"), double.asked("draft true v8")), (1, 1));
+        });
+    }
+
     #[test]
     fn approve_sends_the_token_s_user_and_a_missing_pull_request_is_said() {
         with_app_dir("prs-approve", || {
@@ -848,16 +886,18 @@ mod tests {
             let (service, double, _) = connected();
             let root = repo("prs-create-repo", Some(REMOTE));
 
-            assert_eq!(service.create(&root, "t", None).unwrap_err(), CodeHostError::NotPushed("feature/x".to_string()));
+            assert_eq!(service.create(&root, "t", None, false).unwrap_err(), CodeHostError::NotPushed("feature/x".to_string()));
             assert_eq!(double.asked("create feature/x -> master: t"), 0);
 
             *lock(&double.commit) = Some("94beed9".to_string());
-            service.create(&root, "  ", None).unwrap();
+            service.create(&root, "  ", None, false).unwrap();
             assert_eq!(double.asked("create feature/x -> master: feature/x"), 1, "an empty title is the branch");
-            service.create(&root, "t", Some("  ")).unwrap();
+            service.create(&root, "t", Some("  "), false).unwrap();
             assert_eq!(double.asked("create feature/x -> master: t"), 1, "an empty target is the default branch");
-            service.create(&root, "Fix it", Some("release")).unwrap();
+            service.create(&root, "Fix it", Some("release"), false).unwrap();
             assert_eq!(double.asked("create feature/x -> release: Fix it"), 1);
+            service.create(&root, "Not yet", None, true).unwrap();
+            assert_eq!(double.asked("create feature/x -> master: Not yet (draft)"), 1, "a draft is asked for as one");
         });
     }
 
@@ -874,7 +914,7 @@ mod tests {
             let detached = repo("prs-button-detached", Some(REMOTE));
             let git = git2::Repository::open(&detached).unwrap();
             git.set_head_detached(git.head().unwrap().target().unwrap()).unwrap();
-            assert_eq!(service.create(&detached, "t", None), Err(CodeHostError::NoBranch));
+            assert_eq!(service.create(&detached, "t", None, false), Err(CodeHostError::NoBranch));
 
             assert_eq!((double.total(), lock(&events).len()), (0, 0));
         });

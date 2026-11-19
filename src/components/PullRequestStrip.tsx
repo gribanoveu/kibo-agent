@@ -10,15 +10,20 @@ import {
   GitMerge,
   GitPullRequest,
   GitPullRequestCreate,
+  GitPullRequestDraft,
   Hammer,
   Loader2,
+  MoreHorizontal,
   RefreshCw,
   TriangleAlert,
+  Undo2,
 } from "lucide-react";
 import { Modal } from "./Modal";
 import { CodeHostConnect } from "./CodeHostConnect";
+import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
+import { Switch } from "./Switch";
 import { openExternal } from "../lib/window";
-import { buildText, offersConnect, reviewsAtAGlance } from "../lib/pullRequestView";
+import { buildText, offersConnect, readiness, reviewsAtAGlance } from "../lib/pullRequestView";
 import type { Build, BuildState, PrStrip, ReviewStatus } from "../lib/pullRequests";
 import type { PullRequestState } from "../hooks/usePullRequest";
 import "./PullRequestStrip.css";
@@ -46,11 +51,13 @@ function BuildIcon({ state }: { state: BuildState }) {
 
 /**
  * The branch's pull request, under the branch in Overview's Changes card
- * (docs/56-bitbucket-prs.md, decision 5): one row, opened into its reviewers,
- * builds and what the server lets be done. A button shows only when it can do
- * something — Merge while the server allows it, Approve while the token's
- * user may, Create once the branch is pushed, has none and is not the default
- * branch — and a folder that
+ * (docs/56-bitbucket-prs.md, decision 5): its title, "repo #id" and the
+ * reviews under it, a dot for whether it can go in, the "⋯" of what else can
+ * be done, and one button for the next step — Mark ready on a draft, Merge
+ * while the server allows it. Clicked, it opens into its reviewers and why it
+ * cannot be merged. A button shows only when it can do something — Approve
+ * while the token's user may, Create once the branch is pushed, has none and
+ * is not the default branch — and a folder that
  * has nothing to show shows nothing. A read that failed keeps the last row,
  * grey, with the reason and a way to read again.
  */
@@ -99,7 +106,7 @@ export function PullRequestStrip(props: Props) {
   return <ReadyRow {...props} strip={strip} failed={failed} />;
 }
 
-function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Props & { strip: Ready; failed: ReactNode }) {
+function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, failed }: Props & { strip: Ready; failed: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<"merge" | "create" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -142,30 +149,83 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
           target={snapshot.defaultBranch ?? ""}
           busy={busy}
           onClose={() => setConfirm(null)}
-          onCreate={(title, to) => void run(() => create(title, to), "Pull request created")}
+          onCreate={(title, to, draft) => void run(() => create(title, to, draft), draft ? "Draft pull request created" : "Pull request created")}
         />
       </div>
     );
   }
 
   const reviews = reviewsAtAGlance(pr.reviewers);
+  // A draft's next step is Mark ready, never Merge: the button below picks one.
   const canMerge = strip.mergeBlocked === null;
   const blocked = strip.mergeBlocked ?? [];
   const mayApprove = strip.canApprove || strip.approved;
+  const ready = readiness(pr.draft, strip.mergeBlocked);
+  const Icon = pr.draft ? GitPullRequestDraft : GitPullRequest;
+  const menu: ChatMenuItem[] = [
+    { id: "open", label: "Open in Bitbucket", icon: <ExternalLink size={14} />, onSelect: () => void openExternal(pr.url) },
+    ...(mayApprove
+      ? [
+          {
+            id: "approve",
+            label: strip.approved ? "Unapprove" : "Approve",
+            icon: <Check size={14} />,
+            disabled: busy,
+            onSelect: () => void run(() => approve(!strip.approved)),
+          },
+        ]
+      : []),
+    ...(pr.draft
+      ? []
+      : [
+          {
+            id: "draft",
+            label: "Convert to draft",
+            hint: "Reviewers still see it; nothing merges it until it is marked ready",
+            icon: <Undo2 size={14} />,
+            divided: true,
+            disabled: busy,
+            onSelect: () => void run(() => setDraft(pr.id, pr.version, true), "Converted to draft"),
+          },
+        ]),
+  ];
   return (
     <div className={error ? "pr-stale" : undefined}>
       {build}
-      <button type="button" className="pr-row" aria-expanded={open} title={pr.title} onClick={() => setOpen(!open)}>
-        <GitPullRequest size={14} />
-        <span className="pr-name">
-          <span className="pr-number">#{pr.id}</span> {pr.title}
-        </span>
-        {reviews && (
-          <span className="pr-glance" title={`${pr.reviewers.filter((r) => r.status === "approved").length} of ${pr.reviewers.length} reviewers approved`}>
-            {reviews}
+      <div className="pr-card">
+        <button type="button" className="pr-row pr-head" aria-expanded={open} title={pr.title} onClick={() => setOpen(!open)}>
+          <Icon size={14} aria-label={pr.draft ? "draft pull request" : "pull request"} />
+          <span className="pr-lines">
+            <span className="pr-name">{pr.title}</span>
+            <span className="pr-sub">
+              <span>
+                {strip.repo} #{pr.id}
+              </span>
+              {pr.draft && <span className="pr-draft">Draft</span>}
+              {reviews && (
+                <span className="pr-glance" title={`${pr.reviewers.filter((r) => r.status === "approved").length} of ${pr.reviewers.length} reviewers approved`}>
+                  {reviews}
+                </span>
+              )}
+            </span>
           </span>
-        )}
-      </button>
+        </button>
+        <div className="pr-side">
+          <ChatMenu items={menu} icon={<MoreHorizontal size={15} />} />
+          <span className={`pr-dot ${ready.kind}`} role="img" aria-label={ready.text} title={ready.text} />
+        </div>
+      </div>
+      {pr.draft ? (
+        <button type="button" className="pr-next" disabled={busy} onClick={() => void run(() => setDraft(pr.id, pr.version, false), "Marked ready for review")}>
+          Mark ready
+        </button>
+      ) : (
+        canMerge && (
+          <button type="button" className="pr-next" disabled={busy} onClick={() => setConfirm("merge")}>
+            <GitMerge size={12} /> Merge
+          </button>
+        )
+      )}
       {failed}
 
       {open && (
@@ -176,10 +236,10 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
           {pr.reviewers.length > 0 && (
             <ul className="pr-reviewers" aria-label="Reviewers">
               {pr.reviewers.map((r) => {
-                const Icon = REVIEW_ICON[r.status];
+                const Mark = REVIEW_ICON[r.status];
                 return (
                   <li key={r.slug} className={r.status} title={`${r.slug} — ${r.status === "needsWork" ? "needs work" : r.status}`}>
-                    <Icon size={11} />
+                    <Mark size={11} />
                     {r.displayName}
                   </li>
                 );
@@ -193,21 +253,6 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
               ))}
             </ul>
           )}
-          <div className="pr-actions">
-            <button type="button" className="pr-action" onClick={() => void openExternal(pr.url)}>
-              <ExternalLink size={12} /> Open
-            </button>
-            {mayApprove && (
-              <button type="button" className="pr-action" disabled={busy} onClick={() => void run(() => approve(!strip.approved))}>
-                <Check size={12} /> {strip.approved ? "Unapprove" : "Approve"}
-              </button>
-            )}
-            {canMerge && (
-              <button type="button" className="pr-action pr-primary" disabled={busy} onClick={() => setConfirm("merge")}>
-                <GitMerge size={12} /> Merge
-              </button>
-            )}
-          </div>
         </div>
       )}
 
@@ -265,10 +310,11 @@ function CreateDialog({
   target: string;
   busy: boolean;
   onClose: () => void;
-  onCreate: (title: string, to: string | null) => void;
+  onCreate: (title: string, to: string | null, draft: boolean) => void;
 }) {
   const [title, setTitle] = useState("");
   const [to, setTo] = useState(target);
+  const [draft, setDraft] = useState(false);
   return (
     <Modal
       title="Create pull request"
@@ -279,8 +325,8 @@ function CreateDialog({
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onCreate(title, to.trim() || null)}>
-            Create
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onCreate(title, to.trim() || null, draft)}>
+            {draft ? "Create draft" : "Create"}
           </button>
         </>
       }
@@ -293,6 +339,10 @@ function CreateDialog({
         <label htmlFor="pr-target">Into</label>
         <input id="pr-target" value={to} placeholder={target} spellCheck={false} onChange={(e) => setTo(e.target.value)} />
       </div>
+      <label className="pr-create-draft">
+        <span>As a draft — reviewers see it, nothing merges it until it is marked ready</span>
+        <Switch label="Create as draft" on={draft} onChange={setDraft} />
+      </label>
       <p className="modal-note">
         From {branch}. The pull request is opened on the server, where it stays until it is declined there.
       </p>

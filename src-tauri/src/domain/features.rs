@@ -138,7 +138,7 @@ impl Feature {
                 name: "Pull requests",
                 description: "In Overview, under the branch: the pull request of the branch you are on, from your Bitbucket Data Center — \
                     its reviewers and their decisions, the builds of its last commit, and whether it can be merged and why not. \
-                    Create, Approve, Merge and Open from there. You add the server and its HTTP access token here, once it is on, or from the folder; the token is sealed \
+                    Create (as a draft too), Mark ready, Approve, Merge and Open from there. You add the server and its HTTP access token here, once it is on, or from the folder; the token is sealed \
                     on this computer as the API keys are, and goes to that server only. Read every 30 seconds while Overview is \
                     on screen, every 10 while a build runs.",
                 enabled_by_default: false,

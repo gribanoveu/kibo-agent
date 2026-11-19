@@ -9,6 +9,7 @@ import {
   pullRequestCreate,
   pullRequestGitChanged,
   pullRequestMerge,
+  pullRequestSetDraft,
   pullRequestUnwatch,
   pullRequestWatch,
   type CodeHostServer,
@@ -82,6 +83,7 @@ export function usePullRequest(on: boolean, workspace: string | null) {
     create: pullRequestCreate,
     approve: pullRequestApprove,
     merge: pullRequestMerge,
+    setDraft: pullRequestSetDraft,
   };
 }
 

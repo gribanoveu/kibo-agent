@@ -142,12 +142,31 @@ impl CodeHost for Bitbucket {
         post(call, &format!("{}/pull-requests/{}/merge?version={}", api(call), pr.id, pr.version), json!({})).map(|_| ())
     }
 
-    fn create(&self, call: &Call, from: &str, to: &str, title: &str) -> Result<PullRequest, CodeHostError> {
-        let body = json!({
+    fn set_draft(&self, call: &Call, pr: &PullRequest, draft: bool) -> Result<(), CodeHostError> {
+        // The update takes the whole pull request: a field left out is not
+        // "unchanged" — reviewers left out are removed, and the description with
+        // them. So the server's own copy goes back with only `draft` changed, at
+        // the version the user saw: one that moved since is the 409 of a merge.
+        let url = format!("{}/pull-requests/{}", api(call), pr.id);
+        let mut body: Value = read(&get(call, &url)?)?;
+        let Some(fields) = body.as_object_mut() else {
+            return Err(CodeHostError::BadAnswer("the pull request is not a JSON object".to_string()));
+        };
+        fields.insert("draft".to_string(), json!(draft));
+        fields.insert("version".to_string(), json!(pr.version));
+        put(call, &url, body).map(|_| ())
+    }
+
+    fn create(&self, call: &Call, from: &str, to: &str, title: &str, draft: bool) -> Result<PullRequest, CodeHostError> {
+        let mut body = json!({
             "title": title,
             "fromRef": { "id": format!("refs/heads/{from}") },
             "toRef": { "id": format!("refs/heads/{to}") },
         });
+        // Only when asked: a server older than 8.18 has no drafts to make.
+        if draft {
+            body["draft"] = json!(true);
+        }
         let created = post(call, &format!("{}/pull-requests", api(call)), body)?;
         Ok(read::<Pr>(&created)?.into_pull_request())
     }
@@ -405,6 +424,8 @@ struct Pr {
     reviewers: Vec<PrReviewer>,
     #[serde(default)]
     links: PrLinks,
+    #[serde(default)]
+    draft: bool,
 }
 
 impl Pr {
@@ -415,6 +436,7 @@ impl Pr {
             version: self.version,
             author_name: self.author.user.shown(),
             author: self.author.user.slug,
+            draft: self.draft,
             from_branch: self.from_ref.display_id,
             to_branch: self.to_ref.display_id,
             reviewers: self
@@ -576,44 +598,53 @@ mod tests {
     /// The wait has a deadline: a client that refuses before sending — a server
     /// whose address is `http`, say — must fail a test, not hang it.
     fn serve(reply: String) -> (String, std::thread::JoinHandle<String>) {
+        let (base, handle) = serve_each(vec![reply]);
+        (base, std::thread::spawn(move || handle.join().unwrap().remove(0)))
+    }
+
+    /// [`serve`] for a client that asks more than once: each reply answers one
+    /// request, in order, and the requests come back in the same order.
+    fn serve_each(replies: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
-        let handle = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            let mut socket = loop {
-                match listener.accept() {
-                    Ok((socket, _)) => break socket,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        if std::time::Instant::now() > deadline {
-                            return "<no request>".to_string();
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(5));
+        let handle = std::thread::spawn(move || replies.into_iter().map(|reply| answer_one(&listener, &reply)).collect());
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    fn answer_one(listener: &TcpListener, reply: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut socket = loop {
+            match listener.accept() {
+                Ok((socket, _)) => break socket,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() > deadline {
+                        return "<no request>".to_string();
                     }
-                    Err(_) => return "<no request>".to_string(),
+                    std::thread::sleep(std::time::Duration::from_millis(5));
                 }
-            };
-            socket.set_nonblocking(false).unwrap();
-            let mut request = Vec::new();
-            let mut buffer = [0u8; 8192];
-            while let Ok(read @ 1..) = socket.read(&mut buffer) {
-                request.extend_from_slice(&buffer[..read]);
-                let text = String::from_utf8_lossy(&request);
-                if let Some(end) = text.find("\r\n\r\n") {
-                    let length = text[..end]
-                        .lines()
-                        .find_map(|line| line.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().to_string()))
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(0);
-                    if request.len() >= end + 4 + length {
-                        break;
-                    }
+                Err(_) => return "<no request>".to_string(),
+            }
+        };
+        socket.set_nonblocking(false).unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 8192];
+        while let Ok(read @ 1..) = socket.read(&mut buffer) {
+            request.extend_from_slice(&buffer[..read]);
+            let text = String::from_utf8_lossy(&request);
+            if let Some(end) = text.find("\r\n\r\n") {
+                let length = text[..end]
+                    .lines()
+                    .find_map(|line| line.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().to_string()))
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    break;
                 }
             }
-            socket.write_all(reply.as_bytes()).unwrap();
-            String::from_utf8_lossy(&request).into_owned()
-        });
-        (format!("http://127.0.0.1:{port}"), handle)
+        }
+        socket.write_all(reply.as_bytes()).unwrap();
+        String::from_utf8_lossy(&request).into_owned()
     }
 
     fn json_reply(status: &str, body: &str) -> String {
@@ -683,6 +714,9 @@ mod tests {
             ]
         );
         assert_eq!(pr.url, "https://server.com/projects/CORP/repos/tax-api/pull-requests/153");
+        assert!(!pr.draft);
+        assert!(read::<Pr>(r#"{"id":1,"draft":true}"#).unwrap().into_pull_request().draft, "a draft is read as one");
+        assert!(!read::<Pr>(r#"{"id":1}"#).unwrap().into_pull_request().draft, "a server before drafts has none");
     }
 
     /// An empty list is no pull request — Create PR, not an error.
@@ -841,6 +875,7 @@ mod tests {
             title: "a pull request".to_string(),
             author: "u_author".to_string(),
             author_name: "Anna Author".to_string(),
+            draft: true,
             from_branch: "docs/wowtax-8238".to_string(),
             to_branch: "master".to_string(),
             reviewers: Vec::new(),
@@ -872,7 +907,7 @@ mod tests {
         assert_eq!(body_of(&asked), json!({}));
 
         let (created, asked) =
-            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title"));
+            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", false));
         let created = created.expect("the new pull request");
         assert!(asked.starts_with("POST /rest/api/latest/projects/corp/repos/tax-api/pull-requests HTTP/1.1"), "{asked}");
         assert_eq!(
@@ -884,6 +919,35 @@ mod tests {
             })
         );
         assert_eq!((created.id, created.from_branch.as_str()), (154, "docs/wowtax-8238"));
+
+        let (_, asked) =
+            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", true));
+        assert_eq!(body_of(&asked)["draft"], json!(true), "a draft is asked for as one");
+    }
+
+    /// Mark ready sends the server's own pull request back with `draft` changed
+    /// and the version the user saw: the update takes the whole thing, and a
+    /// field left out — the reviewers, the description — would be wiped.
+    #[test]
+    fn mark_ready_puts_back_the_whole_pull_request_with_draft_changed() {
+        let current = r#"{"id":153,"version":9,"title":"t","description":"keep me","draft":true,
+            "reviewers":[{"user":{"name":"R","slug":"u_reviewer"},"status":"UNAPPROVED"}],
+            "toRef":{"id":"refs/heads/master"}}"#;
+        let (base, server) = serve_each(vec![json_reply("200 OK", current), json_reply("200 OK", "{}")]);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let pr = PullRequest { version: 7, ..read::<Pr>(r#"{"id":153,"draft":true}"#).unwrap().into_pull_request() };
+        Bitbucket.set_draft(&call, &pr, false).unwrap();
+        let asked = server.join().unwrap();
+
+        assert!(asked[0].starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153 HTTP/1.1"), "{}", asked[0]);
+        assert!(asked[1].starts_with("PUT /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153 HTTP/1.1"), "{}", asked[1]);
+        let sent = body_of(&asked[1]);
+        assert_eq!((&sent["draft"], &sent["version"]), (&json!(false), &json!(7)), "{sent}");
+        assert_eq!(sent["description"], "keep me");
+        assert_eq!(sent["reviewers"][0]["user"]["slug"], "u_reviewer");
+        assert_eq!(sent["toRef"]["id"], "refs/heads/master");
     }
 
     /// A 409 is the optimistic lock only when the server says so; a vetoed

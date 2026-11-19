@@ -66,6 +66,7 @@ function pr(over: Partial<PullRequest> = {}): PullRequest {
     toBranch: "master",
     reviewers: [{ slug: "u_me", displayName: "Me Myself", status: "unapproved" }],
     url: "https://bitbucket.example/projects/CORP/repos/tax-api/pull-requests/153",
+    draft: false,
     ...over,
   };
 }
@@ -74,6 +75,7 @@ function ready(over: Partial<Extract<PrStrip, { state: "ready" }>> = {}, snapsho
   return {
     state: "ready",
     serverId: "bb",
+    repo: "tax-api",
     branch: "feature/x",
     snapshot: { pr: pr(), branchOnServer: true, defaultBranch: "master", merge: null, builds: [], ...snapshot },
     canApprove: true,
@@ -91,6 +93,12 @@ const asked = (command: string) => calls.filter((c) => c.command === command);
 function Overview({ on = true, workspace = "/repo", notes = [] }: { on?: boolean; workspace?: string; notes?: string[] }) {
   const pr = usePullRequest(on, workspace);
   return on ? <PullRequestStrip {...pr} onNotify={(note) => notes.push(note)} /> : null;
+}
+
+/** Picks `label` from the pull request's "⋯". */
+function fromMenu(label: string) {
+  fireEvent.click(screen.getByTitle("More"));
+  fireEvent.click(screen.getByRole("menuitem", { name: label }));
 }
 
 function panel(on = true, notes: string[] = []) {
@@ -160,12 +168,42 @@ describe("the strip's states", () => {
     expect(screen.queryByText("Create pull request…")).toBeNull();
   });
 
-  test("a pull request is one line: its number, title and reviews", async () => {
+  test("a pull request is its title over its repository and number, its reviews, and a dot for whether it can go in", async () => {
     panel();
     await settle();
-    expect(screen.getByText("#153")).toBeTruthy();
+    expect(screen.getByText("Fix the tax profile")).toBeTruthy();
+    expect(screen.getByText("tax-api #153")).toBeTruthy();
     expect(screen.getByText("0/1")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Ready to merge" })).toBeTruthy();
+    expect(screen.getByText("Merge")).toBeTruthy();
+    expect(screen.queryByText("Draft")).toBeNull();
+    expect(screen.queryByText("Mark ready")).toBeNull();
+  });
+
+  test("a draft says so, offers Mark ready instead of Merge, and is marked ready at the version shown", async () => {
+    strip = ready({}, { pr: pr({ draft: true }) });
+    const notes: string[] = [];
+    panel(true, notes);
+    await settle();
+    expect(screen.getByText("Draft")).toBeTruthy();
+    expect(screen.getByLabelText("draft pull request").classList.contains("lucide-git-pull-request-draft")).toBe(true);
+    expect(screen.getByRole("img", { name: "Draft — mark it ready to merge" })).toBeTruthy();
     expect(screen.queryByText("Merge")).toBeNull();
+
+    fireEvent.click(screen.getByText("Mark ready"));
+    await settle();
+    expect(asked("pull_request_set_draft").map((c) => c.args)).toEqual([{ id: 153, version: 7, draft: false }]);
+    expect(notes).toEqual(["Marked ready for review"]);
+    fireEvent.click(screen.getByTitle("More"));
+    expect(screen.queryByRole("menuitem", { name: /Convert to draft/ })).toBeNull();
+  });
+
+  test("a ready pull request goes back to a draft from its menu", async () => {
+    panel();
+    await settle();
+    fromMenu("Convert to draft Reviewers still see it; nothing merges it until it is marked ready");
+    await settle();
+    expect(asked("pull_request_set_draft").map((c) => c.args)).toEqual([{ id: 153, version: 7, draft: true }]);
   });
 
   test("the latest build is a row of its own: what it is doing, with its icon", async () => {
@@ -205,8 +243,9 @@ describe("the strip's states", () => {
     strip = ready({ mergeBlocked: ["Requires 2 approvals", "conflicts"] });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
+    fireEvent.click(screen.getByText("tax-api #153"));
     expect(screen.queryByText("Merge")).toBeNull();
+    expect(screen.getByRole("img", { name: "Cannot merge yet: Requires 2 approvals; conflicts" })).toBeTruthy();
     expect(screen.getByText("Requires 2 approvals")).toBeTruthy();
     expect(screen.getByText("conflicts")).toBeTruthy();
   });
@@ -214,7 +253,7 @@ describe("the strip's states", () => {
   test("the author and reviewers are shown by name, the login under the pointer", async () => {
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
+    fireEvent.click(screen.getByText("tax-api #153"));
     const reviewer = screen.getByText("Me Myself").closest("li")!;
     expect(reviewer.title).toBe("u_me — unapproved");
     expect(screen.queryByText("u_me")).toBeNull();
@@ -225,8 +264,7 @@ describe("the strip's states", () => {
   test("Approve sends the approval", async () => {
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
-    fireEvent.click(screen.getByText("Approve"));
+    fromMenu("Approve");
     await settle();
     expect(asked("pull_request_approve").map((c) => c.args)).toEqual([{ approved: true }]);
   });
@@ -235,15 +273,14 @@ describe("the strip's states", () => {
     strip = ready({ canApprove: false, approved: false });
     const first = panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
-    expect(screen.queryByText("Approve")).toBeNull();
+    fireEvent.click(screen.getByTitle("More"));
+    expect(screen.queryByRole("menuitem", { name: "Approve" })).toBeNull();
     first.unmount();
 
     strip = ready({ canApprove: false, approved: true });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
-    fireEvent.click(screen.getByText("Unapprove"));
+    fromMenu("Unapprove");
     await settle();
     expect(asked("pull_request_approve").map((c) => c.args)).toEqual([{ approved: false }]);
   });
@@ -254,7 +291,7 @@ describe("the strip's states", () => {
     strip = Promise.reject("the server did not answer");
     emit("pull-requests:changed", { root: "/repo" });
     await settle();
-    expect(screen.getByText("#153")).toBeTruthy();
+    expect(screen.getByText("tax-api #153")).toBeTruthy();
     expect(container.querySelector(".pr-stale")).toBeTruthy();
     expect(screen.getByText("the server did not answer")).toBeTruthy();
   });
@@ -265,7 +302,7 @@ describe("the buttons", () => {
     const notes: string[] = [];
     panel(true, notes);
     await settle();
-    fireEvent.click(screen.getByText("#153"));
+    fireEvent.click(screen.getByText("tax-api #153"));
     fireEvent.click(screen.getByText("Merge").closest("button")!);
     expect(asked("pull_request_merge")).toEqual([]);
 
@@ -289,7 +326,20 @@ describe("the buttons", () => {
     fireEvent.change(screen.getByLabelText("Into"), { target: { value: "  " } });
     fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
     await settle();
-    expect(asked("pull_request_create").map((c) => c.args)).toEqual([{ title: "Fix it", to: null }]);
+    expect(asked("pull_request_create").map((c) => c.args)).toEqual([{ title: "Fix it", to: null, draft: false }]);
+  });
+
+  test("Create can open it as a draft", async () => {
+    strip = ready({}, { pr: null });
+    const notes: string[] = [];
+    panel(true, notes);
+    await settle();
+    fireEvent.click(screen.getByText("Create pull request…"));
+    fireEvent.click(screen.getByRole("switch", { name: "Create as draft" }));
+    fireEvent.click(screen.getByText("Create draft"));
+    await settle();
+    expect(asked("pull_request_create").map((c) => c.args)).toEqual([{ title: "", to: "master", draft: true }]);
+    expect(notes).toEqual(["Draft pull request created"]);
   });
 
   test("a refusal is said, and the dialog stays for another try", async () => {
@@ -297,7 +347,7 @@ describe("the buttons", () => {
     const notes: string[] = [];
     panel(true, notes);
     await settle();
-    fireEvent.click(screen.getByText("#153"));
+    fireEvent.click(screen.getByText("tax-api #153"));
     fireEvent.click(screen.getByText("Merge").closest("button")!);
     fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
     await settle();
@@ -308,8 +358,7 @@ describe("the buttons", () => {
   test("Open opens the pull request's page in the browser", async () => {
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
-    fireEvent.click(screen.getByText("Open"));
+    fromMenu("Open in Bitbucket");
     await settle();
     expect(opened).toEqual([pr().url]);
   });

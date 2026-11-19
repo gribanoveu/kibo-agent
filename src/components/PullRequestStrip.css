@@ -124,34 +124,93 @@
   color: var(--amber);
 }
 
-.pr-actions {
+/* The pull request: title over "repo #id", the "⋯" and the dot at the right. */
+.pr-card {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 2px;
 }
-.pr-action {
-  display: inline-flex;
+.pr-head {
+  flex: 1;
+  align-items: flex-start;
+}
+.pr-head > svg {
+  margin-top: 3px;
+}
+.pr-lines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+.pr-sub {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.pr-draft {
+  padding: 0 5px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
-  background: none;
   color: var(--text-dim);
-  font: inherit;
-  cursor: pointer;
 }
-.pr-action:hover:not(:disabled) {
+.pr-side {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+.pr-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.pr-dot.ready {
+  background: var(--green);
+}
+.pr-dot.blocked {
+  background: var(--amber);
+}
+.pr-dot.draft {
+  background: var(--text-faint);
+}
+/* The one next step — Mark ready, Merge — under the title, where it is read. */
+.pr-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 0 2px 28px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
 }
-.pr-action:disabled {
+.pr-next:hover:not(:disabled) {
+  background: var(--bg-active);
+}
+.pr-next:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.pr-action.pr-primary {
-  border-color: var(--accent);
-  color: var(--accent);
+.pr-create-draft {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
 }
 
 .pr-spin,

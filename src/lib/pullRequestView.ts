@@ -20,6 +20,13 @@ export function reviewsAtAGlance(reviewers: Reviewer[]): string | null {
   return `${approved}/${reviewers.length}`;
 }
 
+/** The dot beside the pull request: whether it can go in, and the words under the pointer. */
+export function readiness(draft: boolean, mergeBlocked: string[] | null): { kind: "draft" | "ready" | "blocked"; text: string } {
+  if (draft) return { kind: "draft", text: "Draft — mark it ready to merge" };
+  if (mergeBlocked === null) return { kind: "ready", text: "Ready to merge" };
+  return { kind: "blocked", text: mergeBlocked.length > 0 ? `Cannot merge yet: ${mergeBlocked.join("; ")}` : "Cannot merge yet" };
+}
+
 /** Hosts that are never a Bitbucket Data Center: a folder cloned from one is not offered Connect. */
 const NOT_BITBUCKET = ["github.com", "gitlab.com"];
 
