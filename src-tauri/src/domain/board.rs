@@ -24,6 +24,9 @@ pub const MAX_NOTE_CHARS: usize = 2000;
 pub const MAX_COMMENT_CHARS: usize = 2000;
 /// A card is a task, not a thread: past this a new remark is refused.
 pub const MAX_COMMENTS: usize = 100;
+/// A tag is a word or two to sort by, not a note.
+pub const MAX_TAG_CHARS: usize = 30;
+pub const MAX_TAGS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +54,9 @@ pub struct Card {
     /// The user's remarks on it, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<Comment>,
+    /// The user's labels for it, in the order given. The model is not shown them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// A remark the user left on a card on the Board page.
@@ -101,6 +107,8 @@ pub enum BoardChange {
     Comment { id: String, text: String, at: String },
     /// The page's only: a remark taken off a card.
     Uncomment { id: String, comment: u32 },
+    /// The page's only: the card's whole list of tags, replacing what it had.
+    Tags { id: String, tags: Vec<String> },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -123,6 +131,10 @@ pub enum BoardError {
     TooManyComments,
     #[error("{0:?} is not a time — give it as RFC 3339")]
     BadTime(String),
+    #[error("the tag is {0} characters; keep it under {MAX_TAG_CHARS}")]
+    TagTooLong(usize),
+    #[error("a card takes at most {MAX_TAGS} tags")]
+    TooManyTags,
     #[error("card {id} has no comment {comment}")]
     NoComment { id: String, comment: u32 },
     #[error("the board is full ({MAX_CARDS} cards) — ask the user to remove the ones no longer needed on the Board page")]
@@ -155,7 +167,7 @@ pub fn apply(cards: &[Card], change: &BoardChange) -> Result<Vec<Card>, BoardErr
             }
             // On top of To do: the newest is the one looked for.
             let top = next.iter().position(|c| c.column == Column::Todo).unwrap_or(next.len());
-            next.insert(top, Card { id: next_id(cards), title, note, due, column: Column::Todo, comments: Vec::new() });
+            next.insert(top, Card { id: next_id(cards), title, note, due, column: Column::Todo, comments: Vec::new(), tags: Vec::new() });
         }
         BoardChange::Edit { id, title, note, due } => {
             let at = position(cards, id)?;
@@ -203,6 +215,10 @@ pub fn apply(cards: &[Card], change: &BoardChange) -> Result<Vec<Card>, BoardErr
             let next_comment = card.comments.iter().map(|c| c.id).max().unwrap_or(0) + 1;
             card.comments.push(Comment { id: next_comment, text: text.to_string(), at: when.trim().to_string() });
         }
+        BoardChange::Tags { id, tags } => {
+            let at = position(cards, id)?;
+            next[at].tags = tag_list(tags)?;
+        }
         BoardChange::Uncomment { id, comment } => {
             let card = &mut next[position(cards, id)?];
             let at = card.comments.iter().position(|c| c.id == *comment).ok_or_else(|| BoardError::NoComment { id: id.clone(), comment: *comment })?;
@@ -227,6 +243,25 @@ fn text(title: &str, note: Option<&str>) -> Result<(String, Option<String>), Boa
         return Err(BoardError::NoteTooLong(chars));
     }
     Ok((title.to_string(), note.map(str::to_string)))
+}
+
+/// Tags trimmed, the empty ones dropped, and each once — the first spelling
+/// kept when two differ only in case.
+fn tag_list(tags: &[String]) -> Result<Vec<String>, BoardError> {
+    let mut kept: Vec<String> = Vec::new();
+    for tag in tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
+        let chars = tag.chars().count();
+        if chars > MAX_TAG_CHARS {
+            return Err(BoardError::TagTooLong(chars));
+        }
+        if !kept.iter().any(|k| k.to_lowercase() == tag.to_lowercase()) {
+            kept.push(tag.to_string());
+        }
+    }
+    if kept.len() > MAX_TAGS {
+        return Err(BoardError::TooManyTags);
+    }
+    Ok(kept)
 }
 
 /// A due date, written back as `YYYY-MM-DD`; an empty one is none.
@@ -305,8 +340,8 @@ mod tests {
         assert_eq!(
             two,
             [
-                Card { id: "T2".into(), title: "renew cert".into(), note: Some("wlbuh".into()), due: None, column: Column::Todo, comments: vec![] },
-                Card { id: "T1".into(), title: "file the memory request".into(), note: None, due: None, column: Column::Todo, comments: vec![] },
+                Card { id: "T2".into(), title: "renew cert".into(), note: Some("wlbuh".into()), due: None, column: Column::Todo, comments: vec![], tags: vec![] },
+                Card { id: "T1".into(), title: "file the memory request".into(), note: None, due: None, column: Column::Todo, comments: vec![], tags: vec![] },
             ]
         );
         // On top of To do's cards, wherever they stand among the others.
@@ -335,7 +370,7 @@ mod tests {
             assert!(matches!(apply(&cards, &BoardChange::Remove { id: id.into() }), Err(BoardError::NotFound { .. })), "{id}");
         }
         // Numbered on from the highest, whichever way it was keyed.
-        let old = vec![Card { id: "c7".into(), title: "old".into(), note: None, due: None, column: Column::Doing, comments: vec![] }];
+        let old = vec![Card { id: "c7".into(), title: "old".into(), note: None, due: None, column: Column::Doing, comments: vec![], tags: vec![] }];
         assert_eq!(add(&old, "new").iter().find(|c| c.title == "new").unwrap().id, "T8");
         // An id that is not a key is left as it is, and found as it is.
         let odd = vec![Card { id: "x".into(), ..old[0].clone() }, Card { id: "y".into(), ..old[0].clone() }];
@@ -407,7 +442,7 @@ mod tests {
     #[test]
     fn a_full_board_refuses_a_card_but_still_moves_and_removes() {
         let full: Vec<Card> = (1..=MAX_CARDS)
-            .map(|i| Card { id: format!("T{i}"), title: "t".into(), note: None, due: None, column: Column::Todo, comments: vec![] })
+            .map(|i| Card { id: format!("T{i}"), title: "t".into(), note: None, due: None, column: Column::Todo, comments: vec![], tags: vec![] })
             .collect();
         assert_eq!(apply(&full, &BoardChange::Add { title: "one more".into(), note: None, due: None }), Err(BoardError::Full));
         assert!(apply(&full, &BoardChange::Move { id: "T1".into(), column: Column::Done, index: None }).is_ok());
@@ -454,7 +489,7 @@ mod tests {
 
     #[test]
     fn the_archive_keeps_the_latest_and_does_not_fill_the_board() {
-        let card = |i: usize, column| Card { id: format!("T{i}"), title: format!("t{i}"), note: None, due: None, column, comments: vec![] };
+        let card = |i: usize, column| Card { id: format!("T{i}"), title: format!("t{i}"), note: None, due: None, column, comments: vec![], tags: vec![] };
         let mut cards: Vec<Card> = (1..=MAX_ARCHIVED).map(|i| card(i, Column::Archived)).collect();
         cards.extend((MAX_ARCHIVED + 1..MAX_ARCHIVED + MAX_DONE + 2).map(|i| card(i, Column::Todo)));
         for i in MAX_ARCHIVED + 1..MAX_ARCHIVED + MAX_DONE + 2 {
@@ -478,7 +513,7 @@ mod tests {
         let mut cards = add(&add(&add(&[], "a"), "b"), "c");
         cards = done(&cards, "T2");
         let edited = apply(&cards, &BoardChange::Edit { id: "T2".into(), title: Some("  bee  ".into()), note: Some(" stung ".into()), due: None }).unwrap();
-        assert_eq!(edited[2], Card { id: "T2".into(), title: "bee".into(), note: Some("stung".into()), due: None, column: Column::Done, comments: vec![] });
+        assert_eq!(edited[2], Card { id: "T2".into(), title: "bee".into(), note: Some("stung".into()), due: None, column: Column::Done, comments: vec![], tags: vec![] });
         assert_eq!(edited[..2], cards[..2]);
 
         let cleared = apply(&edited, &BoardChange::Edit { id: "T2".into(), title: None, note: Some("  ".into()), due: None }).unwrap();
@@ -530,7 +565,7 @@ mod tests {
         assert_eq!(err.to_string(), "no card with id T9 — the board has: T1");
 
         let full: Vec<Card> = (1..=MAX_CARDS)
-            .map(|i| Card { id: format!("T{i}"), title: "t".into(), note: None, due: None, column: Column::Todo, comments: vec![] })
+            .map(|i| Card { id: format!("T{i}"), title: "t".into(), note: None, due: None, column: Column::Todo, comments: vec![], tags: vec![] })
             .collect();
         assert_eq!(apply(&full, &BoardChange::Edit { id: "T1".into(), title: Some("u".into()), note: None, due: None }).unwrap()[0].title, "u");
     }
@@ -593,15 +628,50 @@ mod tests {
         assert_eq!(moved[0].comments, without[0].comments);
     }
 
+    fn tag(cards: &[Card], id: &str, tags: &[&str]) -> Result<Vec<Card>, BoardError> {
+        apply(cards, &BoardChange::Tags { id: id.into(), tags: tags.iter().map(|t| t.to_string()).collect() })
+    }
+
+    #[test]
+    fn tags_replace_the_cards_trimmed_once_each_in_the_order_given() {
+        let cards = add(&add(&[], "a"), "b");
+        let tagged = tag(&cards, "T1", &[" work ", "", "bank", "Work", "  "]).unwrap();
+        let card = |cards: &[Card], id: &str| cards.iter().find(|c| c.id == id).unwrap().clone();
+        assert_eq!(card(&tagged, "T1").tags, ["work", "bank"]);
+        assert_eq!(card(&tagged, "T2").tags, Vec::<String>::new());
+        assert_eq!(card(&tag(&tagged, "T1", &["home"]).unwrap(), "T1").tags, ["home"]);
+        assert_eq!(card(&tag(&tagged, "T1", &[]).unwrap(), "T1").tags, Vec::<String>::new());
+        // An edit or a move keeps them.
+        let edited = apply(&tagged, &BoardChange::Edit { id: "T1".into(), title: Some("c".into()), note: None, due: None }).unwrap();
+        let moved = apply(&edited, &BoardChange::Move { id: "T1".into(), column: Column::Done, index: None }).unwrap();
+        assert_eq!(card(&moved, "T1").tags, ["work", "bank"]);
+    }
+
+    #[test]
+    fn a_tag_too_long_or_too_many_is_refused() {
+        let cards = add(&[], "a");
+        let long = "x".repeat(MAX_TAG_CHARS + 1);
+        assert_eq!(tag(&cards, "T1", &[&long]), Err(BoardError::TagTooLong(MAX_TAG_CHARS + 1)));
+        assert!(tag(&cards, "T1", &[&"x".repeat(MAX_TAG_CHARS)]).is_ok());
+        let names: Vec<String> = (0..=MAX_TAGS).map(|i| format!("t{i}")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert_eq!(tag(&cards, "T1", &names), Err(BoardError::TooManyTags));
+        assert!(tag(&cards, "T1", &names[..MAX_TAGS]).is_ok());
+        // Ten spellings of one tag are one tag.
+        let same = ["a", "A", " a", "a ", "A ", "a", "A", "a", "A", "a", "A"];
+        assert_eq!(tag(&cards, "T1", &same).unwrap()[0].tags, ["a"]);
+        assert!(matches!(tag(&cards, "T9", &["a"]), Err(BoardError::NotFound { .. })));
+    }
+
     #[test]
     fn an_archived_card_is_removed_like_any_other() {
-        let cards = vec![Card { id: "T1".into(), title: "a".into(), note: None, due: None, column: Column::Archived, comments: vec![] }];
+        let cards = vec![Card { id: "T1".into(), title: "a".into(), note: None, due: None, column: Column::Archived, comments: vec![], tags: vec![] }];
         assert_eq!(apply(&cards, &BoardChange::Remove { id: "T1".into() }).unwrap(), []);
     }
 
     #[test]
     fn the_wire_shape_is_camel_case_and_a_card_without_a_note_or_column_reads() {
-        let card = Card { id: "T1".into(), title: "a".into(), note: None, due: None, column: Column::Doing, comments: vec![] };
+        let card = Card { id: "T1".into(), title: "a".into(), note: None, due: None, column: Column::Doing, comments: vec![], tags: vec![] };
         assert_eq!(serde_json::to_string(&card).unwrap(), r#"{"id":"T1","title":"a","column":"doing"}"#);
         let due = Card { due: Some("2026-11-01".into()), ..card.clone() };
         assert_eq!(serde_json::to_string(&due).unwrap(), r#"{"id":"T1","title":"a","due":"2026-11-01","column":"doing"}"#);
@@ -619,6 +689,10 @@ mod tests {
         assert_eq!(change, BoardChange::Edit { id: "T1".into(), title: None, note: Some("".into()), due: None });
         let change: BoardChange = serde_json::from_str(r#"{"op":"comment","id":"T1","text":"t","at":"2026-11-19T10:00:00Z"}"#).unwrap();
         assert_eq!(change, BoardChange::Comment { id: "T1".into(), text: "t".into(), at: "2026-11-19T10:00:00Z".into() });
+        let change: BoardChange = serde_json::from_str(r#"{"op":"tags","id":"T1","tags":["a","b"]}"#).unwrap();
+        assert_eq!(change, BoardChange::Tags { id: "T1".into(), tags: vec!["a".into(), "b".into()] });
+        let read: Card = serde_json::from_str(r#"{"id":"T1","title":"a","tags":["work"]}"#).unwrap();
+        assert_eq!(read.tags, ["work"]);
         let change: BoardChange = serde_json::from_str(r#"{"op":"uncomment","id":"T1","comment":3}"#).unwrap();
         assert_eq!(change, BoardChange::Uncomment { id: "T1".into(), comment: 3 });
         let commented = Card { comments: vec![Comment { id: 1, text: "t".into(), at: "2026-11-19T10:00:00Z".into() }], ..card };
