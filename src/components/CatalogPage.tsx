@@ -6,6 +6,7 @@ import { ArrowRight, AudioLines, BookOpen, Check, GitPullRequest, Keyboard, Load
 import { Markdown } from "./Markdown";
 import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
+import { CodeHostServers } from "./CodeHostServers";
 import { Page, PageEmpty, PageSheet } from "./Page";
 import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
 import { useFeatures } from "../hooks/useFeatures";
@@ -393,6 +394,8 @@ function FeatureDetails({
           <Switch label="Switch keyboard layout after Fix" on={feature.layoutSwitchOn} onChange={onSetLayoutSwitch} />
         </label>
       )}
+      {/* Its servers where it is turned on, rather than a trip to Settings after. */}
+      {feature.id === "pull-requests" && feature.on && <CodeHostServers />}
 
       <dl className="catalog-detail-facts">
         <dt>Source</dt>

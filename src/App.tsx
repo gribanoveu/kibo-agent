@@ -1023,7 +1023,6 @@ export default function App() {
       <Modal title="Settings" wide open={settingsOpen} onClose={() => setSettingsOpen(false)}>
         <Settings
           section={settingsAt}
-          codeHosts={features.isOn("pull-requests")}
           kube={kube}
           skills={{ view: skillSources.view, error: skillSources.error, onToggle: skillSources.setSourceEnabled }}
           provider={{

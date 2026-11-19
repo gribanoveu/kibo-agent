@@ -5,29 +5,30 @@ import { CodeHostConnect } from "./CodeHostConnect";
 import { useCodeHosts } from "../hooks/useCodeHosts";
 import { certificateCount } from "../lib/providerForm";
 import type { CodeHostServer } from "../lib/pullRequests";
-import "./CodeHostSettings.css";
+import "./CodeHostServers.css";
 
 const NEW: CodeHostServer = { id: "", baseUrl: "", hosts: [], trustedCertPem: null, tokenSet: false };
 
 /**
- * Settings → Bitbucket: the servers the pull request strip reads from, each
+ * The Pull requests feature's panel in Catalog: the servers the pull request
+ * under the branch is read from, each
  * with its address, the hosts learnt from its clone links, its certificate and
  * whether a token is kept. The token goes in and never comes back.
  */
-export function CodeHostSettings() {
+export function CodeHostServers() {
   const { servers, error, save, remove, detect } = useCodeHosts();
   const [editing, setEditing] = useState<CodeHostServer | null>(null);
   const [deleting, setDeleting] = useState<CodeHostServer | null>(null);
 
   return (
-    <>
-      <h3 className="settings-title">Bitbucket</h3>
-      <p className="modal-note code-hosts-intro">
+    <section className="code-hosts-section" aria-label="Bitbucket servers">
+      <h4 className="code-hosts-title">Bitbucket servers</h4>
+      <p className="code-hosts-intro">
         The Bitbucket Data Center servers the pull request under the branch in Overview is read from. A folder finds its server by
         its remote: by the address, or by a host the server's clone links have shown it answers to.
       </p>
-      {error && <p className="modal-note code-hosts-error">{error}</p>}
-      <ul className="code-hosts" aria-label="Bitbucket servers">
+      {error && <p className="code-hosts-error">{error}</p>}
+      <ul className="code-hosts">
         {servers.map((server) => {
           const certs = certificateCount(server.trustedCertPem ?? "");
           return (
@@ -93,6 +94,6 @@ export function CodeHostSettings() {
           Forget {deleting?.baseUrl} and its token? Its folders show "not connected" until it is added again.
         </p>
       </Modal>
-    </>
+    </section>
   );
 }

@@ -52,7 +52,7 @@ afterAll(() => {
 
 const { PullRequestStrip } = await import("../components/PullRequestStrip");
 const { usePullRequest } = await import("../hooks/usePullRequest");
-const { CodeHostSettings } = await import("../components/CodeHostSettings");
+const { CodeHostServers } = await import("../components/CodeHostServers");
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 
 function pr(over: Partial<PullRequest> = {}): PullRequest {
@@ -401,7 +401,7 @@ describe("the servers in Settings", () => {
       { id: "a", baseUrl: "https://bitbucket.example", hosts: ["git.example"], trustedCertPem: null, tokenSet: true },
       { id: "b", baseUrl: "https://other.example", hosts: [], trustedCertPem: null, tokenSet: false },
     ];
-    render(<CodeHostSettings />);
+    render(<CodeHostServers />);
     await settle();
     expect(screen.getByText("token kept · also git.example")).toBeTruthy();
     expect(screen.getByText("no token")).toBeTruthy();
@@ -416,7 +416,7 @@ describe("the servers in Settings", () => {
 
   test("an edit keeps the token unless a new one is typed", async () => {
     servers = [{ id: "a", baseUrl: "https://bitbucket.example", hosts: [], trustedCertPem: null, tokenSet: true }];
-    render(<CodeHostSettings />);
+    render(<CodeHostServers />);
     await settle();
     fireEvent.click(screen.getByLabelText("Edit https://bitbucket.example"));
     fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);

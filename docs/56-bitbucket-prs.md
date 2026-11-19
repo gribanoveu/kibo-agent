@@ -1,7 +1,7 @@
 # PR текущей ветки из Bitbucket Data Center — в панели Changes
 
 План, 2026-11-14. BB-0…BB-4 сделаны — проба на живом сервере, домен, клиент с хранилищем,
-сервис с командами и наблюдателем, строка PR в Overview и серверы в Settings; дальше BB-5…BB-9. Функция `pull-requests` в Catalog: под веткой в панели Overview
+сервис с командами и наблюдателем, строка PR в Overview и серверы в шторке функции в Catalog; дальше BB-5…BB-9. Функция `pull-requests` в Catalog: под веткой в панели Overview
 — строка pull request'а текущей ветки с self-hosted Bitbucket Data Center: заголовок,
 состояние, ревьюеры и их решения, сборки по HEAD-коммиту, можно ли мержить и почему нет;
 кнопки Create PR, Approve / Unapprove, Merge, Open in browser. У каждого сервера — свой
@@ -167,6 +167,13 @@ PR репозитория — другая задача (вне плана).
 - Сервер ответил, но не тем — отказ токена, сертификат, 5xx — последний снимок серым, под
   ним причина и кнопка перечитать: тут пользователю есть что сделать.
 
+Серверы добавляются в шторке самой функции в Catalog, под «Turn off», пока она включена
+(`CodeHostServers`) — решено 2026-11-19. Сначала они были разделом Settings → Bitbucket,
+который появлялся только с включённой функцией: включить в Catalog, потом искать раздел в
+другом окне — длинный путь. Теперь включил — и список с «Add server» тут же. Второй путь —
+«Connect Bitbucket…» под веткой — остаётся. Сообщения об ошибках токена, сертификата и
+адреса отправляют в Catalog → Pull requests.
+
 Кнопки Push нет — решено 2026-11-14. Push делает пользователь или агент.
 
 ### 6. Кнопка — только когда она что-то сделает, и причина, если нет
@@ -300,7 +307,7 @@ GitHub:
 - Фронт: `src/lib/pullRequests.ts` (обёртки и `onPullRequestChanged`),
   `src/hooks/usePullRequest.ts` (`useLiveRead` + watch на время жизни),
   `src/components/PrStrip.tsx` + `.css`, `CodeHostConnect.tsx` (форма в `Modal`, пока —
-  форма Bitbucket), список серверов — в Settings.
+  форма Bitbucket), список серверов — `CodeHostServers.tsx` в шторке функции в Catalog.
 - Функция `pull-requests` в `domain/features.rs`, `data: Some("code_hosts.enc")`,
   `tools: &[ToolName::PullRequestStatus]`.
 - Инструмент `pullRequestStatus` (BB-6) — все места из таблицы в `AGENTS.md`: `ToolName` и
@@ -484,7 +491,7 @@ blake3), сервер, не назвавший его, — полоска без
 `id` и `version` показанного PR, пустая цель Create — ветка по умолчанию. `CodeHostConnect` —
 адрес, сертификат до Check (Check — `identify` без токена), токен; из полоски — с проверкой
 клона (`forFolder`). `Certificate` вынесен в свой компонент со своим CSS, провайдеры на нём же.
-Settings → Bitbucket (только при включённой функции): серверы с «token kept», выученными
+Список серверов (сначала Settings → Bitbucket, 2026-11-19 переехал в шторку функции в Catalog — решение 5): серверы с «token kept», выученными
 хостами и сертификатами, правка и удаление с подтверждением. Функция `pull-requests` в
 `domain/features.rs`, выключена по умолчанию, «Delete data» — `code_hosts.enc`.
 
@@ -497,8 +504,8 @@ Settings → Bitbucket (только при включённой функции)
 Approve и Unapprove; серый снимок при сбое; подтверждение и `id`+`version`; пустая цель; отказ
 сказан, диалог остаётся; Open и сборка в браузере; чужой `root` не читает; `.git` читает
 только при сдвиге; watch/unwatch своей папки; чтение, пришедшее после смены папки, не
-рисуется; PEM из файла уходит в сервер; Check; серверы в Settings и удаление. Два в
-`Settings.test.tsx` — раздел только при функции. В Rust: `pushed_state` (push, второй push,
+рисуется; PEM из файла уходит в сервер; Check; серверы и удаление. Раздел только при функции —
+сначала два теста в `Settings.test.tsx`, после переезда один в `features.test.tsx`. В Rust: `pushed_state` (push, второй push,
 переключение, detached, коммит и индекс — не сдвиг), `git_changed` (remote, push, чужая папка),
 worktree через общий `.git`, файл данных функции.
 

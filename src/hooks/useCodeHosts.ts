@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { codeHostDelete, codeHostDetect, codeHosts, codeHostSave, type CodeHostServer } from "../lib/pullRequests";
 
 /**
- * The Bitbucket servers the user added, for Settings: read when the section
- * opens; a save or a delete answers with the list after it. Nothing else
+ * The Bitbucket servers the user added, for the Pull requests feature's panel
+ * in Catalog: read when it opens; a save or a delete answers with the list after it. Nothing else
  * changes them, so there is nothing to listen to.
  */
 export function useCodeHosts() {

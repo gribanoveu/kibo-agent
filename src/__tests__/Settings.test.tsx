@@ -14,7 +14,7 @@ const SOURCES: SkillsView["sources"] = [
   { id: "claude", path: "/Users/me/.claude/skills", enabled: true },
 ];
 
-const dialog = (debugLogging = false, skills: SkillsView["skills"] = [], codeHosts = false) => {
+const dialog = (debugLogging = false, skills: SkillsView["skills"] = []) => {
   const logging: boolean[] = [];
   const languages: string[] = [];
   const limits: { rounds: number; budget: number; parallel: number }[] = [];
@@ -57,7 +57,6 @@ const dialog = (debugLogging = false, skills: SkillsView["skills"] = [], codeHos
       onAlerts={(next) => alerts.push(next)}
       onOpenLog={() => logOpened++}
       policy={{ provider: null, debugLogging, mcpServers: [], hooks: [] }}
-      codeHosts={codeHosts}
     />,
   );
   return { limits, logging, languages, sizes, wraps, alerts, sources, modes, palettes, logOpened: () => logOpened };
@@ -161,19 +160,6 @@ describe("the settings dialog", () => {
     expect(screen.getByText("No skills here.")).toBeDefined();
     fireEvent.click(screen.getByText("Codex and other agents'"));
     expect(screen.getByText("Switched off — not read.")).toBeDefined();
-  });
-
-  test("Bitbucket servers have a section only while the pull request strip is on", () => {
-    dialog();
-    expect(screen.queryByText("Bitbucket")).toBeNull();
-  });
-
-  test("with the strip on, Bitbucket lists the servers and adds one", () => {
-    dialog(false, [], true);
-    fireEvent.click(screen.getByText("Bitbucket"));
-    expect(screen.getByText(/None yet/)).toBeTruthy();
-    fireEvent.click(screen.getByText("Add server"));
-    expect(screen.getByRole("dialog", { name: "Connect Bitbucket" })).toBeTruthy();
   });
 
   test("the font size is picked under Appearance", () => {

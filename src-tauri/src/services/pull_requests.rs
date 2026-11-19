@@ -943,7 +943,7 @@ mod tests {
         });
     }
 
-    /// A save from Settings is for no folder: nothing is proven or asked.
+    /// A save from the feature's panel in Catalog is for no folder: nothing is proven or asked.
     #[test]
     fn a_save_for_no_folder_asks_the_server_nothing() {
         with_app_dir("prs-save-plain", || {
@@ -969,7 +969,7 @@ mod tests {
         });
     }
 
-    /// A server added or removed in Settings turns the strip on screen from
+    /// A server added or removed in Catalog turns the strip on screen from
     /// NotConnected to Ready and back: the watched folder is told.
     #[test]
     fn a_server_saved_or_deleted_tells_the_watched_folder() {
