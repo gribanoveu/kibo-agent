@@ -157,6 +157,11 @@ fn board(cards: &[crate::domain::board::Card]) -> String {
             let note = card.note.as_deref().map(|n| format!(" — {}", n.replace('\n', " "))).unwrap_or_default();
             let due = card.due.as_deref().map(|d| format!(" (due {d})")).unwrap_or_default();
             out.push_str(&format!("\n- {} {}{due}{note}", card.id, card.title));
+            // The user's remarks, each on a line under the card, with its day.
+            for comment in &card.comments {
+                let day = comment.at.get(..10).unwrap_or(&comment.at);
+                out.push_str(&format!("\n  - comment {day}: {}", comment.text.replace('\n', " ")));
+            }
         }
     }
     if archived > 0 {
@@ -594,7 +599,7 @@ mod tests {
     #[test]
     fn the_board_reads_by_column_with_ids_and_notes_on_one_line() {
         use crate::domain::board::{Card, Column};
-        let card = |id: &str, title: &str, note: Option<&str>, column| Card { id: id.into(), title: title.into(), note: note.map(Into::into), due: None, column };
+        let card = |id: &str, title: &str, note: Option<&str>, column| Card { id: id.into(), title: title.into(), note: note.map(Into::into), due: None, column, comments: vec![] };
         let cards = [
             card("c1", "file the request", Some("wlbuh\n16 GB"), Column::Todo),
             card("c2", "renew cert", None, Column::Done),
@@ -605,6 +610,16 @@ mod tests {
             "The board, as the user sees it on the Board page:\n\nTo do:\n- c1 file the request — wlbuh 16 GB\n- c3 call the bank (due 2026-11-01)\n\nDone:\n- c2 renew cert"
         );
         assert_eq!(for_model(&ToolResult::Board { cards: vec![] }), "The board is empty.");
+        // The user's remarks, under their card, with the day.
+        use crate::domain::board::Comment;
+        let commented = Card {
+            comments: vec![Comment { id: 1, text: "asked\nthe bank".into(), at: "2026-11-19T10:00:00Z".into() }],
+            ..card("c5", "call the bank", None, Column::Doing)
+        };
+        assert_eq!(
+            for_model(&ToolResult::Board { cards: vec![commented] }),
+            "The board, as the user sees it on the Board page:\n\nDoing:\n- c5 call the bank\n  - comment 2026-11-19: asked the bank"
+        );
 
         let old = card("c4", "renewed last year", None, Column::Archived);
         let with_archive: Vec<Card> = cards.iter().cloned().chain([old.clone()]).collect();
