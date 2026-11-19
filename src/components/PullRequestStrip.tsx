@@ -209,8 +209,10 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
           <span className="pr-lines">
             <span className="pr-name">{pr.title}</span>
             <span className="pr-sub">
-              <span>
-                {strip.repo} #{pr.id}
+              {/* A long repository name gives way first; the number stays. */}
+              <span className="pr-where" title={`${strip.repo} #${pr.id}`}>
+                <span className="pr-repo">{strip.repo}</span>
+                <span>&nbsp;#{pr.id}</span>
               </span>
               {draft && <span className="pr-draft">Draft</span>}
               {reviews && <span aria-hidden>·</span>}

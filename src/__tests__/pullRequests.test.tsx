@@ -176,7 +176,8 @@ describe("the strip's states", () => {
     panel();
     await settle();
     expect(screen.getByText("Fix the tax profile")).toBeTruthy();
-    expect(screen.getByText("tax-api #153")).toBeTruthy();
+    expect(screen.getByText("#153")).toBeTruthy();
+    expect(screen.getByText("tax-api").closest("[title]")?.getAttribute("title")).toBe("tax-api #153");
     expect(screen.getByText("0/1 approved")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Ready to merge" })).toBeTruthy();
     expect(screen.getByText("Merge")).toBeTruthy();
@@ -258,7 +259,7 @@ describe("the strip's states", () => {
     strip = ready({ mergeBlocked: ["Requires 2 approvals", "conflicts"] });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("tax-api #153"));
+    fireEvent.click(screen.getByText("#153"));
     expect(screen.queryByText("Merge")).toBeNull();
     expect(screen.getByRole("img", { name: "Cannot merge yet: Requires 2 approvals; conflicts" })).toBeTruthy();
     // The line says it short; the reasons are under the pointer and in the list.
@@ -270,7 +271,7 @@ describe("the strip's states", () => {
   test("the author and reviewers are shown by name, the login under the pointer", async () => {
     panel();
     await settle();
-    fireEvent.click(screen.getByText("tax-api #153"));
+    fireEvent.click(screen.getByText("#153"));
     const reviewer = screen.getByText("Me Myself").closest("li")!;
     expect(reviewer.title).toBe("u_me");
     expect(reviewer.textContent).toBe("Me Myselfnot yet");
@@ -284,7 +285,7 @@ describe("the strip's states", () => {
     strip = ready({}, { pr: pr({ reviewers: [r("a", "approved"), r("b", "unapproved"), r("c", "needsWork"), r("d", "approved"), r("e", "unapproved"), r("f", "approved"), r("g", "approved")] }) });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("tax-api #153"));
+    fireEvent.click(screen.getByText("#153"));
     const names = () => [...screen.getByRole("list", { name: "Reviewers" }).querySelectorAll(".pr-reviewer-name")].map((n) => n.textContent);
     expect(names()).toEqual(["C", "B", "E", "A", "D"]);
     fireEvent.click(screen.getByText("2 more"));
@@ -296,7 +297,7 @@ describe("the strip's states", () => {
     strip = ready({}, { pr: pr({ reviewers: ["a", "b", "c", "d", "e", "f"].map(r) }) });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("tax-api #153"));
+    fireEvent.click(screen.getByText("#153"));
     expect(screen.getByRole("list", { name: "Reviewers" }).querySelectorAll(".pr-reviewer-name")).toHaveLength(6);
     expect(screen.queryByText(/more$/)).toBeNull();
   });
@@ -357,7 +358,7 @@ describe("the strip's states", () => {
     strip = Promise.reject("the server did not answer");
     emit("pull-requests:changed", { root: "/repo" });
     await settle();
-    expect(screen.getByText("tax-api #153")).toBeTruthy();
+    expect(screen.getByText("#153")).toBeTruthy();
     expect(container.querySelector(".pr-stale")).toBeTruthy();
     expect(screen.getByText("the server did not answer")).toBeTruthy();
   });
@@ -368,7 +369,7 @@ describe("the buttons", () => {
     const notes: string[] = [];
     panel(true, notes);
     await settle();
-    fireEvent.click(screen.getByText("tax-api #153"));
+    fireEvent.click(screen.getByText("#153"));
     fireEvent.click(screen.getByText("Merge").closest("button")!);
     expect(asked("pull_request_merge")).toEqual([]);
 
@@ -413,7 +414,7 @@ describe("the buttons", () => {
     const notes: string[] = [];
     panel(true, notes);
     await settle();
-    fireEvent.click(screen.getByText("tax-api #153"));
+    fireEvent.click(screen.getByText("#153"));
     fireEvent.click(screen.getByText("Merge").closest("button")!);
     fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
     await settle();

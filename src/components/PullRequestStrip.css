@@ -187,6 +187,15 @@
   color: var(--text-faint);
   white-space: nowrap;
 }
+.pr-where {
+  display: flex;
+  min-width: 0;
+}
+.pr-repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* No taller than the text beside it: the line keeps the title's rhythm. */
 .pr-draft {
   padding: 0 4px;
