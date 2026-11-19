@@ -734,9 +734,8 @@ export default function App() {
                       ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
                       : undefined,
                 }}
-                // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
-                chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
-                // A started chat stays in its folder: only a new one picks.
+                // A started chat stays in its folder, its branch shown in
+                // Overview: only a new one picks either.
                 folderFixed={!unstarted}
               />
             }

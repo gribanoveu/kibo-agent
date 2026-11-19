@@ -54,7 +54,8 @@ function serverStatus(server: McpServerItem): { label: string; tone: "ok" | "off
 
 /** The open session at a glance: how full the model's window is, which MCP
     servers are on, what runs in the background, and what the folder holds
-    against its last commit. The folder and branch are under the message box.
+    against its last commit, on which branch. The folder is under the message box;
+    the branch is picked there only for a new chat.
     Each section leads to the pane that does something about it. */
 export function OverviewPanel({
   branch,
