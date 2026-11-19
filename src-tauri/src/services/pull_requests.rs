@@ -524,6 +524,7 @@ mod tests {
             title: "a pull request".to_string(),
             version,
             author: "u_author".to_string(),
+            author_name: "Anna Author".to_string(),
             from_branch: "feature/x".to_string(),
             to_branch: "master".to_string(),
             reviewers: vec![Reviewer { slug: "u_me".to_string(), display_name: "Me".to_string(), status: ReviewStatus::Unapproved }],

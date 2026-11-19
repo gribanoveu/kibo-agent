@@ -27,7 +27,10 @@ export type PullRequest = {
   id: number;
   title: string;
   version: number;
+  /** The login the server matches on. */
   author: string;
+  /** What is shown — the login when the server gives no name. */
+  authorName: string;
   fromBranch: string;
   toBranch: string;
   reviewers: Reviewer[];

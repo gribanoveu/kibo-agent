@@ -413,6 +413,7 @@ impl Pr {
             id: self.id,
             title: self.title,
             version: self.version,
+            author_name: self.author.user.shown(),
             author: self.author.user.slug,
             from_branch: self.from_ref.display_id,
             to_branch: self.to_ref.display_id,
@@ -421,10 +422,7 @@ impl Pr {
                 .into_iter()
                 .filter(|reviewer| !reviewer.user.slug.is_empty())
                 .map(|reviewer| Reviewer {
-                    display_name: match reviewer.user.display_name.trim() {
-                        "" => reviewer.user.slug.clone(),
-                        name => name.to_string(),
-                    },
+                    display_name: reviewer.user.shown(),
                     slug: reviewer.user.slug,
                     status: review_status(&reviewer.status),
                 })
@@ -456,6 +454,16 @@ struct User {
     slug: String,
     #[serde(default, rename = "displayName")]
     display_name: String,
+}
+
+impl User {
+    /// The name a person reads; the slug when the server gives none.
+    fn shown(&self) -> String {
+        match self.display_name.trim() {
+            "" => self.slug.clone(),
+            name => name.to_string(),
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -533,7 +541,7 @@ mod tests {
         "fromRef":{"id":"refs/heads/docs/wowtax-8238","displayId":"docs/wowtax-8238",
                    "latestCommit":"94beed93512849804d03fe90d10a99b1418d4342","type":"BRANCH"},
         "toRef":{"id":"refs/heads/master","displayId":"master","type":"BRANCH"},
-        "author":{"user":{"name":"A","emailAddress":"a@example.com","id":1,"displayName":"A","active":true,"slug":"u_author","type":"NORMAL"}},
+        "author":{"user":{"name":"A","emailAddress":"a@example.com","id":1,"displayName":"Anna Author","active":true,"slug":"u_author","type":"NORMAL"}},
         "reviewers":[{"user":{"name":"R","emailAddress":"r@example.com","id":2,"displayName":"Rita Reviewer","active":true,"slug":"u_reviewer","type":"NORMAL"},
                       "lastReviewedCommit":"94beed9","approved":false,"status":"UNAPPROVED"},
                      {"user":{"name":"S","id":3,"displayName":" ","slug":"u_silent","type":"NORMAL"},"status":"APPROVED"}],
@@ -665,6 +673,7 @@ mod tests {
 
         assert_eq!((pr.id, pr.version), (153, 6));
         assert_eq!((pr.author.as_str(), pr.from_branch.as_str(), pr.to_branch.as_str()), ("u_author", "docs/wowtax-8238", "master"));
+        assert_eq!(pr.author_name, "Anna Author", "the slug for the rules, the name for the window");
         assert_eq!(
             pr.reviewers,
             [
@@ -831,6 +840,7 @@ mod tests {
             version: 6,
             title: "a pull request".to_string(),
             author: "u_author".to_string(),
+            author_name: "Anna Author".to_string(),
             from_branch: "docs/wowtax-8238".to_string(),
             to_branch: "master".to_string(),
             reviewers: Vec::new(),

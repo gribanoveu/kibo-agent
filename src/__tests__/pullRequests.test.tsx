@@ -61,6 +61,7 @@ function pr(over: Partial<PullRequest> = {}): PullRequest {
     title: "Fix the tax profile",
     version: 7,
     author: "u_author",
+    authorName: "Anna Author",
     fromBranch: "feature/x",
     toBranch: "master",
     reviewers: [{ slug: "u_me", displayName: "Me Myself", status: "unapproved" }],
@@ -196,13 +197,15 @@ describe("the strip's states", () => {
     expect(screen.getByText("conflicts")).toBeTruthy();
   });
 
-  test("a reviewer is shown by name, the login under the pointer", async () => {
+  test("the author and reviewers are shown by name, the login under the pointer", async () => {
     panel();
     await settle();
     fireEvent.click(screen.getByText("#153"));
     const reviewer = screen.getByText("Me Myself").closest("li")!;
     expect(reviewer.title).toBe("u_me — unapproved");
     expect(screen.queryByText("u_me")).toBeNull();
+    expect(screen.getByText("Anna Author").title).toBe("u_author");
+    expect(screen.queryByText(/u_author/)).toBeNull();
   });
 
   test("Approve sends the approval", async () => {

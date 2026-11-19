@@ -405,6 +405,8 @@ pub struct PullRequest {
     pub version: u64,
     /// The reviewer's slug, so that the author is recognised as one.
     pub author: String,
+    /// What a person reads; the slug when the server gives none.
+    pub author_name: String,
     pub from_branch: String,
     pub to_branch: String,
     pub reviewers: Vec<Reviewer>,
@@ -586,6 +588,7 @@ mod tests {
             title: "a pull request".to_string(),
             version: 6,
             author: author.to_string(),
+            author_name: author.to_string(),
             from_branch: "docs/wowtax-8238".to_string(),
             to_branch: "master".to_string(),
             reviewers: reviewers

@@ -164,7 +164,7 @@ function ReadyRow({ strip, error, create, approve, merge, onNotify, failed }: Pr
       {open && (
         <div className="pr-more">
           <div className="pr-meta">
-            {pr.author} → {pr.toBranch}
+            <span title={pr.author}>{pr.authorName}</span> → {pr.toBranch}
           </div>
           {pr.reviewers.length > 0 && (
             <ul className="pr-reviewers" aria-label="Reviewers">
