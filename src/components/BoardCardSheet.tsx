@@ -5,6 +5,10 @@ import { Dropdown } from "./Dropdown";
 import { ChatMenu } from "./ChatMenu";
 import { Markdown } from "./Markdown";
 import { InfoTip } from "./InfoTip";
+import { DictateButton } from "./DictateButton";
+import { DictationLine } from "./VoiceWave";
+import { ErrorNote } from "./ErrorNote";
+import { useDictation } from "../hooks/useDictation";
 import { dueState, localDay, type BoardChange, type Card, type Comment, type OpenColumn } from "../lib/board";
 import { matches } from "../lib/shortcuts";
 import "./BoardCardSheet.css";
@@ -19,6 +23,8 @@ type Props = {
   card: Card;
   /** Every tag on the board, offered as the card's are written. */
   tags: string[];
+  /** Voice input is on: a comment can be dictated, as a message is. */
+  dictate: boolean;
   /** The board's refusal of the last change, shown here while the sheet is open. */
   error: string | null;
   onChange: (change: BoardChange) => Promise<boolean>;
@@ -29,7 +35,7 @@ type Props = {
     status and actions on top, its title and description edited in place, then
     its fields one row each — a new field is one more `Field`. Each change is
     saved as it is made. */
-export function BoardCardSheet({ card, tags, error, onChange, onClose }: Props) {
+export function BoardCardSheet({ card, tags, dictate, error, onChange, onClose }: Props) {
   const edit = (fields: Omit<Extract<BoardChange, { op: "edit" }>, "op" | "id">) => onChange({ op: "edit", id: card.id, ...fields });
   const status = STATUS.find((s) => s.value === card.column)?.label ?? "Archived";
   return (
@@ -92,6 +98,8 @@ export function BoardCardSheet({ card, tags, error, onChange, onClose }: Props) 
       </dl>
 
       <Comments
+        card={card.id}
+        dictate={dictate}
         comments={card.comments ?? []}
         onAdd={(text) => onChange({ op: "comment", id: card.id, text, at: new Date().toISOString() })}
         onRemove={(comment) => void onChange({ op: "uncomment", id: card.id, comment })}
@@ -232,18 +240,23 @@ export function ago(at: string, now = Date.now()): string {
 }
 
 type CommentsProps = {
+  /** Whose comments: a dictation into another card's box is not this one's. */
+  card: string;
+  dictate: boolean;
   comments: Comment[];
   /** Whether it was kept: the box is emptied only then. */
   onAdd: (text: string) => Promise<boolean>;
   onRemove: (comment: number) => void;
 };
 
-/** The user's remarks on the card: a box to write one, then those there are,
-    the newest first. ⌘Enter or Save adds it, Escape leaves the box. */
-function Comments({ comments, onAdd, onRemove }: CommentsProps) {
+/** The user's remarks on the card: a box to write one — or dictate, with
+    voice input on, by its microphone or the chat's hold key — then those there
+    are, the newest first. ⌘Enter or Save adds it, Escape leaves the box. */
+function Comments({ card, dictate, comments, onAdd, onRemove }: CommentsProps) {
   const [text, setText] = useState("");
   const [writing, setWriting] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
+  const dictation = useDictation({ on: dictate, draftKey: card, text, setText, area: box, onChange: () => {} });
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -262,12 +275,16 @@ function Comments({ comments, onAdd, onRemove }: CommentsProps) {
         Comments
         {comments.length > 0 && <span className="board-sheet-count">{comments.length}</span>}
       </h4>
+      {dictation.error && <ErrorNote className="board-sheet-comment-error" message={dictation.error} onClose={dictation.clearError} />}
+      <div className="board-sheet-comment-field">
       <textarea
         ref={box}
         className="board-sheet-comment-box"
         aria-label="New comment"
         placeholder="Add a comment…"
         rows={1}
+        // What is said goes in as it is heard; typing waits for the dictation to end.
+        readOnly={dictation.active}
         value={text}
         onFocus={() => setWriting(true)}
         onBlur={() => !text.trim() && setWriting(false)}
@@ -282,12 +299,15 @@ function Comments({ comments, onAdd, onRemove }: CommentsProps) {
           }
         }}
       />
-      {(writing || text) && (
+      {dictate && <DictateButton dictation={dictation} />}
+      </div>
+      {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
+      {(writing || text || dictation.active) && (
         <div className="board-sheet-comment-actions">
-          <button type="button" className="btn btn-ghost" onClick={() => (setText(""), setWriting(false))}>
+          <button type="button" className="btn btn-ghost" disabled={dictation.active} onClick={() => (setText(""), setWriting(false))}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary" disabled={!text.trim()} onClick={() => void save()}>
+          <button type="button" className="btn btn-primary" disabled={!text.trim() || dictation.active} onClick={() => void save()}>
             Save
           </button>
         </div>

@@ -184,9 +184,20 @@
   color: var(--text-faint);
   font-size: var(--fs-xs);
 }
+/* The box, and the microphone at its right when voice input is on. */
+.board-sheet-comment-field {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+.board-sheet-comment-error {
+  margin-top: 10px;
+}
 .board-sheet-comment-box {
   display: block;
-  margin-top: 10px;
+  flex: 1;
+  min-width: 0;
   width: 100%;
   box-sizing: border-box;
   padding: 6px 8px;

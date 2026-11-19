@@ -6,6 +6,7 @@ import { Archive, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronU
 import { Page } from "./Page";
 import { BoardCardSheet } from "./BoardCardSheet";
 import { useBoard } from "../hooks/useBoard";
+import { useFeatures } from "../hooks/useFeatures";
 import { dropChange, dueState, filterOrder, hasAnyTag, localDay, orderOf, tagsOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
 import { matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import "./BoardPage.css";
@@ -32,6 +33,7 @@ const SENSORS = [
     under the columns on request. */
 export function BoardPage() {
   const { cards, error, change } = useBoard();
+  const dictate = useFeatures().isOn("voice-input");
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -79,7 +81,7 @@ export function BoardPage() {
     <Page
       title="Board"
       bar={tags.length > 0 && <TagFilter tags={tags} picked={filter} onPick={setPicked} />}
-      sheet={shown && <BoardCardSheet key={shown.id} card={shown} tags={tags} error={error} onChange={change} onClose={() => setOpenId(null)} />}
+      sheet={shown && <BoardCardSheet key={shown.id} card={shown} tags={tags} dictate={dictate} error={error} onChange={change} onClose={() => setOpenId(null)} />}
     >
       <DragDropProvider
         sensors={SENSORS}

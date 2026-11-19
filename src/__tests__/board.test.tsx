@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { Card } from "../lib/board";
 
 // The Board page: the Assistant's cards in three columns, read when the page
@@ -10,11 +10,13 @@ import type { Card } from "../lib/board";
 let stored: Card[];
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let refusal: string | null = null;
+let features: { id: string; on: boolean }[] = [];
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     if (command === "board_list") return Promise.resolve(structuredClone(stored));
+    if (command === "features_list") return Promise.resolve(features);
     if (command === "board_change") {
       if (refusal) return Promise.reject(refusal);
       const change = args!.change as { op: string; id: string; column?: Card["column"]; title?: string; note?: string; due?: string; text?: string; at?: string; comment?: number; tags?: string[] };
@@ -77,6 +79,7 @@ const column = (name: string) => within(screen.getByRole("region", { name }));
 beforeEach(() => {
   calls = [];
   refusal = null;
+  features = [];
   stored = [
     { id: "T1", title: "File the memory request", note: "wlbuh", column: "todo" },
     { id: "T2", title: "Renew the cert", column: "done" },
@@ -281,6 +284,23 @@ describe("the board page", () => {
     expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "uncomment", id: "T1", comment: 1 } } });
     expect(sheet.queryByText("asked the bank")).toBeNull();
     expect(column("To do").getByTitle("1 comments")).toBeTruthy();
+  });
+
+  test("a comment can be dictated while voice input is on, and not otherwise", async () => {
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByText("File the memory request"));
+    const comments = () => within(screen.getByRole("region", { name: "Comments" }));
+    expect(comments().queryByTitle("Dictate from")).toBeNull();
+    cleanup();
+
+    features = [{ id: "voice-input", on: true }];
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByText("File the memory request"));
+    await settle();
+    expect(comments().getByTitle("Dictate from")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Comments" }).querySelector(".dictate-mic")).toBeTruthy();
   });
 
   test("a refused comment stays in its box", async () => {
