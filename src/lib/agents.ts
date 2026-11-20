@@ -27,6 +27,9 @@ export type AgentInfo = {
   tokens: AgentTokens;
   answer: string | null;
   progress: AgentProgress;
+  /** The tool call that started it, when the backend named it; the calling
+      card pairs with its own run by this while it is still running. */
+  call?: string | null;
 };
 
 /**

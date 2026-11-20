@@ -262,8 +262,8 @@ pub(super) fn execute_call(
     // Built per call, because the id is what pairs a line of output with the
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
-    let explore = |args: &crate::domain::tools::ExploreArgs| run_explore(turn, args, history, &output);
-    let review_run = |args: &crate::domain::tools::ReviewArgs| run_review_tool(turn, args, &output);
+    let explore = |args: &crate::domain::tools::ExploreArgs| run_explore(turn, args, history, &output, &call.id);
+    let review_run = |args: &crate::domain::tools::ReviewArgs| run_review_tool(turn, args, &output, &call.id);
     let check = |prompt: &str, text: &str| check_with(turn.session, prompt, text);
     let ask = |server: &str, question: &crate::domain::mcp::McpQuestion| ask_user(turn, round, &call.id, server, question);
     let deps = ToolDeps {

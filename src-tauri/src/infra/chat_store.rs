@@ -1050,7 +1050,7 @@ mod tests {
         with_app_dir("chat-store-delete", || {
             save_one("one", "/repo", "first");
             save_one("two", "/repo", "second");
-            let run = |id| AgentInfo { id, task: "t".into(), state: AgentState::Done, steps: Vec::new(), tokens: Default::default(), answer: None, progress: Default::default() };
+            let run = |id| AgentInfo { id, task: "t".into(), state: AgentState::Done, steps: Vec::new(), tokens: Default::default(), answer: None, progress: Default::default(), call: None };
             RunStore.save_agent("one", &run(1));
             RunStore.save_agent("two", &run(2));
             delete("one").unwrap();

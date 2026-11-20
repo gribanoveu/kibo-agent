@@ -446,6 +446,11 @@ describe("how long the agent worked", () => {
     expect(facts()).toEqual(["~1k tokens · ~20 tok/s", "~570 tokens · ~10 tok/s"]);
   });
 
+  test("a run named by its call matches even when the brief's words differ", () => {
+    transcript([sub(1, { task: "something else entirely", call: "e1" })], [exploring("e1")]);
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
+  });
+
   test("a subagent too young to estimate shows its tokens, no speed", () => {
     transcript([sub(1, { progress: { streamSince: Date.now() - 500, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
     expect(facts()).toEqual(["~1k tokens"]);

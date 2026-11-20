@@ -39,6 +39,10 @@ pub struct AgentInfo {
     /// before it existed.
     #[serde(default)]
     pub progress: AgentProgress,
+    /// The tool call that started it, so the calling card pairs with its own
+    /// run while it is still running; absent in runs saved before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +212,7 @@ impl Agents {
                     tokens: AgentTokens::default(),
                     answer: None,
                     progress: AgentProgress::default(),
+                    call: None,
                 },
                 stop_asked: false,
                 chat: self.chat.clone(),
@@ -222,6 +227,12 @@ impl Agents {
 
     pub fn step(&self, id: u32, line: String) {
         self.update(id, |run| run.info.steps.push(line));
+    }
+
+    /// Names the call that started a run, so the calling card pairs with its
+    /// own helper while it runs instead of guessing by the brief's words.
+    pub fn link_call(&self, id: u32, call: &str) {
+        self.update(id, |run| run.info.call = Some(call.to_string()));
     }
 
     /// The round's cost, and its streaming time for the live meter.
@@ -460,6 +471,15 @@ mod tests {
         let run: AgentInfo = serde_json::from_value(old).unwrap();
         assert_eq!(run.progress, AgentProgress::default());
         assert_eq!(run.tokens, AgentTokens { prompt: 10, cached: 4, completion: 2 });
+    }
+
+    #[test]
+    fn a_run_can_be_named_by_the_call_that_started_it() {
+        let agents = Agents::default();
+        let id = agents.start("t");
+        assert_eq!(agents.get(id).unwrap().call, None);
+        agents.link_call(id, "c1");
+        assert_eq!(agents.get(id).unwrap().call.as_deref(), Some("c1"));
     }
 
     #[test]

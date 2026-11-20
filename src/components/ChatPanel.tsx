@@ -324,6 +324,14 @@ function helperAgents(blocks: Block[], agents: AgentInfo[]): Map<string, AgentIn
   const helpers = blocks.filter(
     (b): b is Extract<Block, { kind: "tool" }> => b.kind === "tool" && (b.name === "explore" || b.name === "review"),
   );
+  // The backend names the call a run started for: exact, while it runs.
+  for (const block of helpers) {
+    const agent = agents.find((a) => a.call === block.id);
+    if (agent) {
+      used.add(agent.id);
+      matched.set(block.id, agent);
+    }
+  }
   const taskOf = (block: Extract<Block, { kind: "tool" }>): string | undefined => {
     try {
       const args = JSON.parse(block.arguments) as { task?: unknown };
@@ -333,7 +341,7 @@ function helperAgents(blocks: Block[], agents: AgentInfo[]): Map<string, AgentIn
     }
   };
   for (const block of helpers) {
-    if (block.status !== "running" || block.name !== "explore") continue;
+    if (block.status !== "running" || block.name !== "explore" || matched.has(block.id)) continue;
     const task = taskOf(block);
     const agent = running.find((a) => !used.has(a.id) && a.task === task);
     if (agent) {
@@ -344,7 +352,7 @@ function helperAgents(blocks: Block[], agents: AgentInfo[]): Map<string, AgentIn
   const reviews = running.filter((a) => !used.has(a.id) && a.task.startsWith(REVIEW_TASK_PREFIX));
   let at = 0;
   for (const block of helpers) {
-    if (block.status !== "running" || block.name !== "review") continue;
+    if (block.status !== "running" || block.name !== "review" || matched.has(block.id)) continue;
     const agent = reviews[at++];
     if (agent) {
       used.add(agent.id);
