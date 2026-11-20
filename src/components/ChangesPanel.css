@@ -23,9 +23,6 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.stage-list::-webkit-scrollbar {
-  width: 6px;
-}
 .commit-section {
   flex: none;
   margin-top: auto;

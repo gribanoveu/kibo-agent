@@ -34,11 +34,7 @@
   flex-direction: column;
   gap: 8px;
 }
-/* A narrow scrollbar, as the app's other tight panes wear it. */
-.board-column-cards::-webkit-scrollbar,
-.board-archive-list::-webkit-scrollbar {
-  width: 6px;
-}
+/* A narrow scrollbar, as the app wears it everywhere. */
 .board-column-cards,
 .board-archive-list {
   scrollbar-width: thin;

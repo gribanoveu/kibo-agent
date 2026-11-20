@@ -798,9 +798,12 @@ textarea,
   user-select: none;
 }
 
+/* One narrow scrollbar for the whole app. The thumb stays visible: WebKit
+   does not reliably repaint a scrollbar thumb restyled on :hover, so a
+   hide-until-hover thumb can read as no scrollbar at all. */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-corner {
