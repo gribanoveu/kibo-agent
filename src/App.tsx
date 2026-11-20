@@ -497,15 +497,19 @@ export default function App() {
   // Before the first message the branch is where the chat starts; after it,
   // the chat's own branch — switched only between turns, never under one.
   const branchPicker = useBranchPicker({
-    chatId: agent.chatId,
     workspace: workspace.path,
     current: branch,
     guard: folderSwitch.guard,
     open: workspace.open,
     notify: toast.show,
-    send: agent.send,
     onSwitched: agent.saveBranch,
   });
+  // A turn working in the folder forbids switching its branch under it; the
+  // menu still opens, so a worktree — the way round — stays reachable.
+  const branchLocked =
+    workspace.path && turnsInFolder(workspace.path).length > 0
+      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
+      : undefined;
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
   const turnBusy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   // The provider turns go to now: its own switch in Settings → Models.
@@ -528,12 +532,6 @@ export default function App() {
     // The composer has already cleared the box: a picker closed without a
     // folder gives the message back rather than losing it.
     if (!workspace.path && !(await workspace.pick())) return giveBack(text, images);
-    // With Worktree ticked the first message is where the worktree is made:
-    // sent here, it would be worked on in the folder the user meant to keep out of.
-    if (unstarted && branchPicker.worktree && branchPicker.base) {
-      if (!(await branchPicker.startWorktree(branchPicker.base, text, sent, images))) giveBack(text, images);
-      return;
-    }
     agent.send(text, sent, images);
   };
 
@@ -726,13 +724,15 @@ export default function App() {
                 branchPicker={{
                   branches: branchPicker.branches,
                   onOpen: branchPicker.load,
-                  onPick: (name) => void branchPicker.pick(name),
-                  worktree: branchPicker.worktree,
-                  base: branchPicker.base,
-                  locked:
-                    workspace.path && turnsInFolder(workspace.path).length > 0
-                      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
-                      : undefined,
+                  onPick: (name) => {
+                    if (branchLocked) {
+                      toast.show(branchLocked);
+                      return;
+                    }
+                    void branchPicker.pick(name);
+                  },
+                  onWorktreeFrom: (name) => void branchPicker.startWorktree(name),
+                  locked: branchLocked,
                 }}
                 // A started chat stays in its folder, its branch shown in
                 // Overview: only a new one picks either.
@@ -741,15 +741,6 @@ export default function App() {
             }
             end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
             index={workspace.path ? index : null}
-            worktree={
-              unstarted && workspace.path && branch
-                ? {
-                    on: branchPicker.worktree,
-                    title: `The first message starts a worktree from ${branchPicker.base || branch}: its own folder on a new branch, this one left as it is`,
-                    onChange: branchPicker.setWorktree,
-                  }
-                : undefined
-            }
             onSend={(text, images) => send(text, undefined, images)}
             imagesEnabled={imagesEnabled}
             onQueue={agent.queue}
@@ -962,6 +953,7 @@ export default function App() {
           activeFolder={agentMode ? workspace.path : null}
           onNewChatIn={agentMode ? newChatIn : undefined}
           onCloseFolder={agentMode ? closeFolder : undefined}
+          onMoveFolder={agentMode ? workspace.move : undefined}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- 2026-11-20 A hairline ring just darker than the theme outlines the app window on macOS (uniform over the panels; Windows keeps its system edge)
+- 2026-11-20 Scrollbars are narrower app-wide (6px), one style for every pane
+- 2026-11-20 Done keeps the last 8 finished cards (was 5); an info hint on its header says older ones move to the Archive, and the Archive toggle's chevron sits at the row's right end
+- 2026-11-20 Board columns are fixed boxes that fill the page: each scrolls its own cards with its header pinned, so a column's top and bottom stay in view; an open archive scrolls itself under its pinned Archive button
+- 2026-11-20 A running helper's card shows its own live token speed and count (the estimate that used to sit on the Working line); the Working line keeps only the chat's own meter
+- 2026-11-20 A helper's card shows a shimmering skeleton and “writing the task…” while the model is still writing its prompt, instead of an empty title
+- 2026-11-20 Make a worktree straight from a branch row in the branch menu (a worktree-from-here action on each branch): created and opened at once, and reachable even while a turn locks branch switching
+- 2026-11-20 Reorder the open folders in Agent mode from a section's ⋮ menu (Move up / Move down); the order is remembered across restarts
 - 2026-11-20 A chat's ⋮ menu stays open while the agent replies: only scrolling the list that holds the row closes it, not the chat log's own autoscroll
 - 2026-11-20 A folder's chat list in Agent mode shows its first four chats; the rest open with a "Show all" button, and a search still finds every chat
 - 2026-11-19 The Board is kept in SQLite, `~/.kibo/board.db`: a card is a row, its tags and comments rows of their own; a board kept in `board.json` is taken in on first open

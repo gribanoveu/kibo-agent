@@ -627,6 +627,60 @@ describe("open folders", () => {
     expect(screen.queryByRole("button", { name: "Show all 8 chats" })).toBeNull();
   });
 
+  /// FO-1: a section's menu moves it among its neighbours; the edge one is
+  /// disabled, and the move is the view's (a callback, not a backend call).
+  test("a section's menu moves it up or down, the edge one disabled", () => {
+    const moves: [string, -1 | 1][] = [];
+    render(
+      <Sidebar
+        mode="agent"
+        onMode={() => {}}
+        pages={[]}
+        page={null}
+        onPage={() => {}}
+        sections={[
+          { path: "/a", chats: [] },
+          { path: "/b", chats: [] },
+          { path: "/c", chats: [] },
+        ]}
+        groups={[]}
+        activeFolder="/a"
+        activeChat={null}
+        onSelectChat={() => {}}
+        onArchiveChat={() => {}}
+        onPinChat={() => {}}
+        onMoveChat={() => {}}
+        onCreateGroup={async () => ({})}
+        onRenameGroup={async () => ({})}
+        onDeleteGroup={() => {}}
+        onCloseFolder={() => {}}
+        onMoveFolder={(folder, dir) => moves.push([folder, dir])}
+        onDeleteChat={() => {}}
+        onOpenSettings={() => {}}
+        onOnboardingAction={() => {}}
+        themeSide="dark"
+        onToggleTheme={() => {}}
+      />,
+    );
+    const openMenu = (name: string) =>
+      fireEvent.click(within(screen.getByText(name).closest(".chat-workspace-head") as HTMLElement).getByTitle("More"));
+    const shut = () => fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+
+    openMenu("b");
+    fireEvent.click(screen.getByRole("menuitem", { name: /Move up/ }));
+    expect(moves).toEqual([["/b", -1]]);
+    openMenu("b");
+    fireEvent.click(screen.getByRole("menuitem", { name: /Move down/ }));
+    expect(moves).toEqual([["/b", -1], ["/b", 1]]);
+
+    openMenu("a");
+    expect(screen.getByRole("menuitem", { name: /Move up/ }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("menuitem", { name: /Move down/ }).hasAttribute("disabled")).toBe(false);
+    shut();
+    openMenu("c");
+    expect(screen.getByRole("menuitem", { name: /Move down/ }).hasAttribute("disabled")).toBe(true);
+  });
+
   /// A linked worktree is a folder of its own, and its head says whose it is.
   test("a worktree's section says whose worktree it is", () => {
     render(

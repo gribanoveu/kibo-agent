@@ -74,6 +74,10 @@
   font-size: var(--fs-sm);
   color: var(--text);
 }
+/* The placeholder bar keeps its own width, not the row's full stretch. */
+.agent-title.skeleton {
+  flex: none;
+}
 .agent-now {
   flex: none;
   max-width: 40%;

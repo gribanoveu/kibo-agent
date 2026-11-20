@@ -122,8 +122,9 @@
   flex-direction: column;
   gap: 2px;
   width: 100%;
-  /* The command reads to the measure of a line, not to the thread's edge. */
-  max-width: 80ch;
+  /* The notice sits in the same column as the message text; a long command
+     wraps inside it rather than running on to the panel's edge. */
+  max-width: 100%;
   margin: 8px 0 6px;
   padding: 0;
   border: none;
@@ -167,9 +168,10 @@
   font-size: var(--fs-xs);
   color: var(--text-dim);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* A long command wraps (keeping its own line breaks) instead of being
+     cut off at the column's edge. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* With no description the command is the title. */
 .process-ended-command.solo {
@@ -560,6 +562,11 @@ button.turn-processes:hover {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+/* The run's summed diff beside the summary that folds it. */
+.tool-run-stat {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
 @media (prefers-reduced-motion: reduce) {
   .tool-run-spin,
   .tool-run-step,
@@ -630,6 +637,11 @@ button.turn-processes:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The model's intent read as words, not code, when it said one. */
+.tool .arg.as-note {
+  font-family: var(--font-ui);
+  color: var(--text-dim);
+}
 .tool .meta {
   font-size: var(--fs-xs);
   color: var(--text-faint);
@@ -646,11 +658,75 @@ button.turn-processes:hover {
 .tool-item.open .tool .chev {
   transform: rotate(90deg);
 }
-/* The model's few words for a command, under the row they explain. */
-.tool-note {
-  margin: 0 8px 4px;
-  font-size: var(--fs-xs);
+/* The command a call ran, revealed when the row opens: its own panel with a
+   shell prompt, highlighted and wrapped; the output follows as plain text. */
+.tool-cmd {
+  display: flex;
+  gap: 8px;
+  margin: 0 10px 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+}
+.tool-cmd-prompt {
+  flex: none;
   color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.tool-cmd-text {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-output {
+  margin: 0 10px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* A diff stat in the row: added green, removed muted. */
+.tool .meta .add {
+  color: var(--green);
+}
+.tool .meta .del {
+  color: var(--text-faint);
+}
+/* The opened run as Claude Code Desktop draws it: a bordered group, its rows
+   separated, the verb quiet and the target read first. The folded summary
+   above the box is left as it was. */
+.tool-run > .tools {
+  margin-top: 6px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.tool-run .tools > .tool-item + .tool-item {
+  border-top: 1px solid var(--border-soft);
+}
+.tool-run .tool {
+  padding: 8px 10px;
+  border-radius: 0;
+}
+.tool-run .tool .name {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.tool-run .tool-item.failed .tool .name {
+  color: var(--red);
+}
+.tool-run .tool-item:not(.failed) .tool .arg {
+  color: var(--text);
+}
+.tool-run .tool-item:not(.failed) .tool .arg.as-note {
+  color: var(--text-dim);
 }
 /* An explore row, unfolded: its run in the Agents tab, above its answer. */
 .tool-open-agent {

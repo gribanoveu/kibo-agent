@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { SendHorizontal, Square, ShieldCheck, CornerDownRight, GitFork, X } from "lucide-react";
+import { SendHorizontal, Square, ShieldCheck, CornerDownRight, X } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
 import { ContextMeter } from "./ContextMeter";
@@ -51,9 +51,6 @@ type Props = {
   /** `true` when the turn runs without asking — `ApprovalPolicy::skip_all`. */
   unattended: boolean;
   onUnattended: (unattended: boolean) => void;
-  /** Offered only before the chat starts: a worktree is a new folder, and a new
-      chat in it. `title` says where it would start. */
-  worktree?: { on: boolean; title: string; onChange: (on: boolean) => void };
   /** Text put into the box from outside — a branch hands back its message.
       Replaces what was typed; `seq` makes the same text twice land twice, and
       `images` come back with a note taken out of a running turn. */
@@ -107,7 +104,6 @@ export function Composer({
   onConversation,
   unattended,
   onUnattended,
-  worktree,
   draft = null,
   quote = null,
   models,
@@ -472,7 +468,6 @@ export function Composer({
           note={<span>{unattended ? "auto" : "ask"}</span>}
           status={index && <IndexBadge state={index} />}
           toggles={[
-            ...(worktree ? [{ label: "Worktree", icon: <GitFork size={14} />, ...worktree }] : []),
             {
               label: "Approve automatically",
               icon: <ShieldCheck size={14} />,

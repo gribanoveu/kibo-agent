@@ -26,5 +26,6 @@ const { cleanup } = await import("@testing-library/react");
 // imports `once` and the rest, in every file loaded after that test.
 await import("@tauri-apps/api/core");
 await import("@tauri-apps/api/event");
+await import("@tauri-apps/api/window");
 
 afterEach(cleanup);

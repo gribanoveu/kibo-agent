@@ -465,6 +465,7 @@ fn a_named_empty_range_says_so() {
             turn,
             &crate::domain::tools::ReviewArgs { from: Some("HEAD".into()), to: Some("HEAD".into()), focus: None },
             &progress,
+            "r1",
         )
     })
     .unwrap_err();
@@ -487,7 +488,7 @@ fn a_stopped_review_keeps_its_findings() {
 
     let result = h.run(|turn| {
         let progress = command_output_sink(turn.events, 0, "r1");
-        run_review(turn, &brief, desk, range, &progress)
+        run_review(turn, &brief, desk, range, &progress, "r1")
     });
 
     let result = result.expect("a review result, never an error now");
@@ -518,7 +519,7 @@ fn a_review_out_of_rounds_keeps_its_findings() {
 
     let result = h.run(|turn| {
         let progress = command_output_sink(turn.events, 0, "r1");
-        run_review(turn, &brief, desk, range, &progress)
+        run_review(turn, &brief, desk, range, &progress, "r1")
     });
 
     let result = result.expect("a review result, never an error now");

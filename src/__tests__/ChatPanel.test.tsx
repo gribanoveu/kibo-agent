@@ -392,8 +392,9 @@ describe("how long the agent worked", () => {
     expect(screen.queryByText(/running/)).toBeNull();
   });
 
-  /// The subagents' own line: their tokens are not the chat's context, and
-  /// while they stream their speed and tokens are the chat's own estimate.
+  /// The subagents' own meter: their tokens are not the chat's context, and
+  /// while they stream their speed and tokens are the chat's own estimate —
+  /// read on each helper's card, not on the chat's Working line.
   const sub = (id: number, over: Partial<AgentInfo> = {}): AgentInfo => ({
     id,
     task: "t",
@@ -404,31 +405,69 @@ describe("how long the agent worked", () => {
     progress: { streamSince: Date.now() - 2000, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } },
     ...over,
   });
-  const liveTurn = () => state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 });
-  const transcript = (subagents: AgentInfo[]) =>
-    render(<Transcript turn={liveTurn()} onDecide={() => {}} subagents={subagents} />);
+  const exploring = (id: string, task = "t") =>
+    ({ kind: "tool", id, round: 1, name: "explore", arguments: JSON.stringify({ task }), status: "running", output: "" }) as Block;
+  const liveTurn = (blocks: Block[] = [exploring("e1")]) =>
+    state([{ kind: "user", id: "u0", text: "fix it" }, ...blocks], { status: "running", runningSince: Date.now() - 5_000 });
+  const transcript = (subagents: AgentInfo[], blocks?: Block[]) =>
+    render(<Transcript turn={liveTurn(blocks)} onDecide={() => {}} subagents={subagents} />);
+  const facts = () => [...document.querySelectorAll(".subagent-card .subagent-facts")].map((e) => e.textContent);
 
-  test("a running subagent's speed and tokens beside the clock, estimated while it streams", () => {
+  test("a running subagent's speed and tokens on its card, and not on the Working line", () => {
     transcript([sub(1)]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·subagent·~20 tok/s·~1.1k tokens");
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
   });
 
-  test("several run at once: one line, summed, with the count", () => {
-    transcript([sub(1), sub(2, { tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·2 subagents·~30 tok/s·~1.7k tokens");
+  test("several run at once: each card carries its own meter", () => {
+    transcript(
+      [sub(1, { task: "t1" }), sub(2, { task: "t2", tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } })],
+      [exploring("e1", "t1"), exploring("e2", "t2")],
+    );
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s", "~570 tokens · ~10 tok/s"]);
+  });
+
+  test("an explore whose brief opens with a context line still matches its run", () => {
+    const brief = "Repository: /work/kibo\nQuestion: where is X?";
+    const block = { ...exploring("e1"), arguments: JSON.stringify({ task: brief }) } as Block;
+    transcript([sub(1, { task: brief })], [block]);
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
+  });
+
+  test("two running reviews each carry their own meter, in run order however the list is ordered", () => {
+    const review = (id: string) => ({ kind: "tool", id, round: 1, name: "review", arguments: "{}", status: "running", output: "" }) as Block;
+    transcript(
+      [
+        // newest-first, as agents_list returns it: order must not swap the meters.
+        sub(2, { task: "Review the change in this repository.\nRange: b.", tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } }),
+        sub(1, { task: "Review the change in this repository.\nRange: a." }),
+      ],
+      [review("r1"), review("r2")],
+    );
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s", "~570 tokens · ~10 tok/s"]);
+  });
+
+  test("a run named by its call matches even when the brief's words differ", () => {
+    transcript([sub(1, { task: "something else entirely", call: "e1" })], [exploring("e1")]);
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
   });
 
   test("a subagent too young to estimate shows its tokens, no speed", () => {
     transcript([sub(1, { progress: { streamSince: Date.now() - 500, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·subagent·~1.1k tokens");
+    expect(facts()).toEqual(["~1k tokens"]);
   });
 
-  test("no line with none running, and none once the turn ends", () => {
-    const live = transcript([sub(1, { state: { state: "done" } })]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
-    live.unmount();
-    render(<Transcript turn={state(turn, { status: "done" })} onDecide={() => {}} subagents={[sub(1)]} />);
-    expect(screen.queryByText(/subagent/)).toBeNull();
+  test("a settled card shows what the provider reported, and the clock never carries a subagent line", () => {
+    const done = { ...exploring("e1"), status: "done", result: { text: "ok", agent: 1, tokens: { prompt: 1000, cached: 0, completion: 100 } }, output: "grep t\n" } as Block;
+    render(
+      <Transcript
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }, done], { status: "done" })}
+        onDecide={() => {}}
+        subagents={[sub(1, { state: { state: "done" } })]}
+      />,
+    );
+    expect(facts()[0]).toContain("1k tokens");
+    expect(screen.queryByRole("timer")).toBeNull();
   });
 });
 
@@ -792,6 +831,12 @@ describe("a helper's explore card", () => {
     expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
   });
 
+  test("before the model writes the task, the card shows a skeleton and says it is writing", () => {
+    panel(state([{ ...explored, arguments: "", status: "running", result: undefined, output: "" } as Block]));
+    expect(document.querySelector(".subagent-card.running .subagent-title.skeleton")).toBeTruthy();
+    expect(screen.getByText("writing the task…")).toBeTruthy();
+  });
+
   test("its run is a click away in the sheet over the chat", () => {
     const opened: unknown[] = [];
     render(
@@ -1109,7 +1154,7 @@ describe("a call with no body of its own", () => {
 });
 
 describe("a command's own words for itself", () => {
-  test("stand under the row without unfolding it, and the line stays the row's text", () => {
+  test("the row reads the intent; opening reveals the command panel and its output", () => {
     const { container } = panel(
       state([
         {
@@ -1119,12 +1164,78 @@ describe("a command's own words for itself", () => {
           name: "runCommand",
           arguments: JSON.stringify({ command: "python fix.py --apply", description: "Rewrites imports in place" }),
           status: "done",
-          result: { stdout: "", stderr: "", exitCode: 0, timedOut: false },
+          result: { stdout: "ok\n", stderr: "", exitCode: 0, timedOut: false },
           output: "",
         } as Block,
       ]),
     );
-    expect(container.querySelector(".tool-note")?.textContent).toBe("Rewrites imports in place");
-    expect(container.querySelector(".tool .arg")?.textContent).toBe("python fix.py --apply");
+    expect(container.querySelector(".tool .arg")?.textContent).toBe("Rewrites imports in place");
+    expect(container.querySelector(".tool .arg")?.className).toContain("as-note");
+    // Collapsed, the command itself is not shown — only the intent.
+    expect(container.querySelector(".tool-cmd")).toBeNull();
+
+    fireEvent.click(container.querySelector(".tool-item button.tool")!);
+    expect(container.querySelector(".tool-cmd-text")?.textContent).toContain("python fix.py --apply");
+    expect(container.querySelector(".tool-output")?.textContent).toBe("ok\n");
+  });
+});
+
+describe("the folded run's summed diff", () => {
+  test("the summary carries the group's + and - beside the line that folds it", () => {
+    const edit = (id: string, added: number, removed: number) =>
+      ({
+        kind: "tool",
+        id,
+        round: 1,
+        name: "editFile",
+        arguments: JSON.stringify({ path: "src/a.ts" }),
+        status: "done",
+        result: { diff: { linesAdded: added, linesRemoved: removed, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+      }) as Block;
+    const { container } = panel(state([edit("e1", 7, 3), edit("e2", 13, 3)]));
+    expect(container.querySelector(".tool-run-stat")?.textContent).toBe("+20 -6");
+  });
+
+  test("a run that changed no lines shows no stat", () => {
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "g1",
+          round: 1,
+          name: "grep",
+          arguments: JSON.stringify({ pattern: "x" }),
+          status: "done",
+          result: { matches: [] },
+        } as Block,
+      ]),
+    );
+    expect(container.querySelector(".tool-run-stat")).toBeNull();
+  });
+
+  test("a read-only gitDiff beside an edit is not counted twice, and alone is no change", () => {
+    const edit = {
+      kind: "tool",
+      id: "e1",
+      round: 1,
+      name: "editFile",
+      arguments: JSON.stringify({ path: "src/a.ts" }),
+      status: "done",
+      result: { diff: { linesAdded: 7, linesRemoved: 3, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+    } as Block;
+    const diff = {
+      kind: "tool",
+      id: "d1",
+      round: 1,
+      name: "gitDiff",
+      arguments: JSON.stringify({ path: "src/a.ts" }),
+      status: "done",
+      result: { diff: { linesAdded: 100, linesRemoved: 50, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+    } as Block;
+    const both = panel(state([edit, diff]));
+    expect(both.container.querySelector(".tool-run-stat")?.textContent).toBe("+7 -3");
+    both.unmount();
+    const alone = panel(state([diff]));
+    expect(alone.container.querySelector(".tool-run-stat")).toBeNull();
   });
 });

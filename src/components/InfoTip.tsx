@@ -9,7 +9,7 @@ import "./InfoTip.css";
  * as Dropdown and Modal do, not the platform's `title`. Reusable wherever a
  * label needs a sentence of explanation.
  */
-export function InfoTip({ text }: { text: string }) {
+export function InfoTip({ text, below = false }: { text: string; below?: boolean }) {
   const [hovered, setHovered] = useState(false);
   const [pinned, setPinned] = useState(false);
   const wrap = useRef<HTMLSpanElement>(null);
@@ -79,7 +79,7 @@ export function InfoTip({ text }: { text: string }) {
         <Info size={12} aria-hidden />
       </button>
       {shown && (
-        <span ref={pop} role="tooltip" className="info-tip-pop" style={shift ? { transform: `translateX(calc(-50% + ${shift}px))` } : undefined}>
+        <span ref={pop} role="tooltip" className={`info-tip-pop${below ? " below" : ""}`} style={shift ? { transform: `translateX(calc(-50% + ${shift}px))` } : undefined}>
           {text}
         </span>
       )}

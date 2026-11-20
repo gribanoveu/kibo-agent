@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   AppWindow,
@@ -56,8 +56,10 @@ import { CopyAction } from "./CopyAction";
 import { ImageThumbs } from "./ImageThumbs";
 import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
-import { describeActive, describeHelperStep, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
-import { type AgentInfo, type AgentTokens, subagentMeter, tokensSpent } from "../lib/agents";
+import { describeActive, describeHelperStep, describeRun, describeTool, diffStatOf, type AgentFocus } from "../lib/describeTool";
+import { highlight, splitLines, type Token } from "../lib/highlight";
+import { type AgentInfo, type AgentTokens, agentSpeed, tokensLive, tokensSpent } from "../lib/agents";
+import { compactTokens } from "../lib/usage";
 import { useAgents } from "../hooks/useAgents";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
@@ -174,6 +176,55 @@ function CompactionCard({ block }: { block: Extract<Block, { kind: "compaction" 
   );
 }
 
+/** A diff stat read as colour: added green, removed muted, and a zero
+ * removed left unsaid — the row carries the fact, not the arithmetic. */
+function metaStat(meta: string) {
+  const stat = /^\+(\d+) -(\d+)$/.exec(meta);
+  if (!stat) return meta;
+  const removed = Number(stat[2]);
+  return (
+    <>
+      <span className="add">+{stat[1]}</span>
+      {removed > 0 && <span className="del"> -{removed}</span>}
+    </>
+  );
+}
+
+/** The command a call ran, in its own panel with a shell prompt, highlighted
+ * and wrapped — revealed when the row is opened, as Claude Code Desktop does. */
+function ShellCommand({ command }: { command: string }) {
+  const [tokens, setTokens] = useState<Token[][] | null>(null);
+  useEffect(() => {
+    let live = true;
+    setTokens(null);
+    void highlight(command, "bash").then((result) => live && setTokens(result));
+    return () => {
+      live = false;
+    };
+  }, [command]);
+  return (
+    <div className="tool-cmd">
+      <span className="tool-cmd-prompt" aria-hidden>
+        $
+      </span>
+      <code className="tool-cmd-text">
+        {splitLines(command).map((line, i) => (
+          <span key={i}>
+            {tokens?.[i]?.length
+              ? tokens[i].map((token, j) => (
+                  <span key={j} style={token.htmlStyle}>
+                    {token.content}
+                  </span>
+                ))
+              : line || " "}
+            {"\n"}
+          </span>
+        ))}
+      </code>
+    </div>
+  );
+}
+
 function ToolRow({
   block,
   onOpenProcess,
@@ -185,6 +236,9 @@ function ToolRow({
 }) {
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
+  // The row reads the model's intent when it said one; the command itself
+  // is revealed in a panel when the row is opened, as Claude Code Desktop does.
+  const preview = shown.note ?? shown.arg;
   // A cluster call wears its role's sign, whatever its label.
   const Icon = block.name.startsWith("kube") ? ShipWheel : (TOOL_ICON[shown.name] ?? Terminal);
   // A background start has nothing to unfold here: its output is the
@@ -208,16 +262,14 @@ function ToolRow({
           <Icon size={13} />
         </span>
         <span className="name">{shown.name}</span>
-        <span className="arg">{shown.arg}</span>
-        {shown.meta && <span className="meta">{shown.meta}</span>}
+        <span className={`arg${shown.note ? " as-note" : ""}`}>{preview}</span>
+        {shown.meta && <span className="meta">{metaStat(shown.meta)}</span>}
         {process !== undefined ? (
           <ArrowUpRight className="chev" size={12} />
         ) : (
           detail && <ChevronRight className="chev" size={12} />
         )}
       </button>
-      {/* The model's words for the command, under the line they explain. */}
-      {shown.note && <div className="tool-note">{shown.note}</div>}
       {/* Unfolded rather than instead of it, as a process row does: the
           answer stays readable here after the app has forgotten the run. */}
       {open && shown.agent && onOpenAgent && (
@@ -226,7 +278,14 @@ function ToolRow({
           <ArrowUpRight size={12} aria-hidden />
         </button>
       )}
+      {open && block.name === "runCommand" && (
+        <>
+          <ShellCommand command={shown.arg} />
+          {shown.detail && <pre className="tool-output">{shown.detail}</pre>}
+        </>
+      )}
       {open &&
+        block.name !== "runCommand" &&
         detail &&
         (diff ? (
           <div className="tool-detail-diff">
@@ -248,25 +307,101 @@ const previewInOpenWorkspace: PreviewCalls = (calls) => previewCalls("", calls);
  * unfolds the steps so far, a settled one its answer, with its run in the
  * Agents tab a link away.
  */
+/** The line every review brief opens with (`domain::review::review_message`);
+ * a running review's helper is found by it, in call order. */
+const REVIEW_TASK_PREFIX = "Review the change in this repository.";
+
+/** Which helper run each helper card is. An explore by its whole brief — the
+ * row's title is only the brief's question, which a context line can precede,
+ * so a prefix of the title would miss it. A running review by the shared
+ * opening line in call order, since two reviews share it and order tells them
+ * apart. A settled one by the id its result names.
+ */
+function helperAgents(blocks: Block[], agents: AgentInfo[]): Map<string, AgentInfo> {
+  const matched = new Map<string, AgentInfo>();
+  const used = new Set<number>();
+  const running = agents.filter((a) => a.state.state === "running").sort((a, b) => a.id - b.id);
+  const helpers = blocks.filter(
+    (b): b is Extract<Block, { kind: "tool" }> => b.kind === "tool" && (b.name === "explore" || b.name === "review"),
+  );
+  // The backend names the call a run started for: exact, while it runs.
+  for (const block of helpers) {
+    const agent = agents.find((a) => a.call === block.id);
+    if (agent) {
+      used.add(agent.id);
+      matched.set(block.id, agent);
+    }
+  }
+  const taskOf = (block: Extract<Block, { kind: "tool" }>): string | undefined => {
+    try {
+      const args = JSON.parse(block.arguments) as { task?: unknown };
+      return typeof args.task === "string" ? args.task : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  for (const block of helpers) {
+    if (block.status !== "running" || block.name !== "explore" || matched.has(block.id)) continue;
+    const task = taskOf(block);
+    const agent = running.find((a) => !used.has(a.id) && a.task === task);
+    if (agent) {
+      used.add(agent.id);
+      matched.set(block.id, agent);
+    }
+  }
+  const reviews = running.filter((a) => !used.has(a.id) && a.task.startsWith(REVIEW_TASK_PREFIX));
+  let at = 0;
+  for (const block of helpers) {
+    if (block.status !== "running" || block.name !== "review" || matched.has(block.id)) continue;
+    const agent = reviews[at++];
+    if (agent) {
+      used.add(agent.id);
+      matched.set(block.id, agent);
+    }
+  }
+  for (const block of helpers) {
+    if (matched.has(block.id)) continue;
+    const id = block.result && typeof block.result === "object" ? (block.result as { agent?: number }).agent : undefined;
+    const agent = id === undefined ? undefined : agents.find((a) => a.id === id);
+    if (agent) matched.set(block.id, agent);
+  }
+  return matched;
+}
+
 function SubagentCard({
   block,
   onOpenAgent,
+  agent,
 }: {
   block: Extract<Block, { kind: "tool" }>;
   onOpenAgent?: OpenAgent;
+  agent?: AgentInfo;
 }) {
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
   const running = block.status === "running";
+  const title = block.name === "review" ? shown.name : shown.arg;
+  // The card appears as soon as the call does, before the model has written
+  // the task: a shimmering bar stands where the title will land.
+  const awaiting = running && !title.trim();
   // A helper's steps are its output, one line each; the last one is what it
   // is doing now. Held a moment each, so quick steps do not flicker past.
   const steps = block.output.split("\n").filter(Boolean);
   const now = useSteadyValue(running && steps.length > 0 ? describeHelperStep(steps[steps.length - 1]) : null, STEP_MS);
   const tokens =
     !block.error && block.result && typeof block.result === "object" ? (block.result as { tokens?: AgentTokens }).tokens : undefined;
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [running]);
+  const liveSpeed = running && agent ? agentSpeed(agent, nowMs) : null;
+  const liveTokens = running && agent ? tokensLive(agent) : null;
   const facts = [
     steps.length > 0 ? `${steps.length} ${steps.length === 1 ? "step" : "steps"}` : "",
-    tokens ? tokensSpent(tokens) : "",
+    tokens ? tokensSpent(tokens) : liveTokens !== null ? `~${compactTokens(liveTokens)} tokens` : "",
+    liveSpeed !== null ? `~${Math.round(liveSpeed)} tok/s` : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -279,9 +414,13 @@ function SubagentCard({
           <Bot size={14} />
         </span>
         <span className="subagent-body">
-          <span className="subagent-title">{block.name === "review" ? shown.name : shown.arg}</span>
+          <span className={`subagent-title${awaiting ? " skeleton" : ""}`}>{awaiting ? "" : title}</span>
           <span className="subagent-meta">
-            {now && <span className="subagent-now">{now}</span>}
+            {awaiting && !now ? (
+              <span className="subagent-now">writing the task…</span>
+            ) : (
+              now && <span className="subagent-now">{now}</span>
+            )}
             {facts && <span className="subagent-facts">{facts}</span>}
           </span>
         </span>
@@ -555,28 +694,6 @@ function Spent({ spent }: { spent: number }) {
   );
 }
 
-/**
- * "· subagent ~42 tok/s · 3.1k tokens": what the chat's running subagents
- * spend, estimated while they stream — their own, not the chat's context.
- * Several run at once; the line is theirs together.
- */
-function SubagentLine({ agents, now }: { agents: AgentInfo[]; now: number }) {
-  const meter = subagentMeter(agents, now);
-  if (!meter) return null;
-  return (
-    <>
-      <span className="turn-clock-sep">·</span>
-      <span className="turn-clock-time">{meter.count === 1 ? "subagent" : `${meter.count} subagents`}</span>
-      <Speed rate={meter.speed} prefix="~" />
-      <span className="turn-clock-sep">·</span>
-      <span className="turn-clock-time">
-        {meter.streaming ? "~" : ""}
-        {formatTokens(meter.tokens)} tokens
-      </span>
-    </>
-  );
-}
-
 /** The session's average output speed, or `null` before anything was timed. */
 const averageSpeed = ({ speed }: TurnState) => (speed.ms > 0 ? (speed.tokens * 1000) / speed.ms : null);
 
@@ -588,13 +705,11 @@ function WorkingClock({
   since,
   before,
   turn,
-  subagents = [],
   children,
 }: {
   since: number;
   before: number;
   turn: TurnState;
-  subagents?: AgentInfo[];
   children?: ReactNode;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -610,7 +725,6 @@ function WorkingClock({
       <span className="turn-clock-time">{formatDuration(before + Math.max(0, now - since))}</span>
       {live === null ? <Speed rate={turn.speed.last} /> : <Speed rate={live} prefix="~" />}
       <Spent spent={turn.spent} />
-      <SubagentLine agents={subagents} now={now} />
       {children}
     </div>
   );
@@ -726,6 +840,19 @@ function ToolRun({
 }) {
   const tools = run.blocks.filter((b): b is Tool => b.kind === "tool");
   const failed = tools.filter((t) => t.status === "failed").length;
+  // The run's diff arithmetic, summed beside the summary that folds it —
+  // the "+20 -6" Claude Code shows against the group, not per row only.
+  const stat = tools.reduce(
+    (acc, tool) => {
+      const s = diffStatOf(tool);
+      if (s) {
+        acc.added += s.added;
+        acc.removed += s.removed;
+      }
+      return acc;
+    },
+    { added: 0, removed: 0 },
+  );
   // Held for a moment each, so quick calls do not flicker past unread.
   const step = useSteadyValue(live ? activity(run) : null, STEP_MS);
 
@@ -744,6 +871,9 @@ function ToolRun({
           <span className="tool-run-count">
             {tools.length} {tools.length === 1 ? "call" : "calls"}
           </span>
+        )}
+        {(stat.added > 0 || stat.removed > 0) && (
+          <span className="tool-run-stat">{metaStat(`+${stat.added} -${stat.removed}`)}</span>
         )}
         {failed > 0 && <span className="tool-run-failed">{failed} failed</span>}
         <ChevronRight className="chev" size={12} />
@@ -910,6 +1040,8 @@ export function Transcript({
   const offers = onOffer && turn.status === "done" ? offersOf(turn.blocks.slice(lastAsked + 1)) : [];
   // The one answer still arriving: the last block of a running turn.
   const streamingId = turn.status === "running" ? turn.blocks[turn.blocks.length - 1]?.id : undefined;
+  // Each helper card's own run, matched once for the whole transcript.
+  const helper = useMemo(() => helperAgents(turn.blocks, subagents), [turn.blocks, subagents]);
   return (
     <>
       {groups.map((turnGroup, index) => (
@@ -936,7 +1068,7 @@ export function Transcript({
               renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview, {
                 live: turn.status === "running",
                 onAnswer: onAnswerQuestion,
-              }, onOpenVersion)
+              }, onOpenVersion, helper.get(block.id))
             ),
           )}
           {workedFooter(
@@ -964,7 +1096,7 @@ export function Transcript({
       {turn.status === "running" && turn.runningSince !== null && (
         <>
           <TaskTicker checklist={checklist} />
-          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn} subagents={subagents}>
+          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn}>
             <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
           </WorkingClock>
         </>
@@ -1231,6 +1363,7 @@ function renderBlock(
   preview?: PreviewCalls,
   questions?: { live: boolean; onAnswer?: (id: string, answer: McpAnswer) => void },
   onOpenVersion?: (version: number) => void,
+  agent?: AgentInfo,
 ) {
   switch (block.kind) {
     case "user":
@@ -1303,7 +1436,7 @@ function renderBlock(
       // row in the calls — a review here is the running or the failed one, a
       // settled one stood as its report above.
       if (block.name === "review" || block.name === "explore") {
-        return <SubagentCard key={block.id} block={block} onOpenAgent={onOpenAgent} />;
+        return <SubagentCard key={block.id} block={block} onOpenAgent={onOpenAgent} agent={agent} />;
       }
       return (
         <div className="tools" key={block.id}>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   addWorkspace,
   closeWorkspace,
@@ -23,6 +23,29 @@ export function keepOrder(shown: string[], open: string[]): string[] {
   return [...kept, ...added];
 }
 
+/** The manual order of the folder sections (FO-1) — a view state, kept in
+ * window storage like a section's fold, not in the backend's open set: that
+ * list also remembers which folder to reopen at launch (F-8.8), and a chat
+ * switch moves its head, so reordering it would scramble the manual order on
+ * the next switch. Here the two facts stay apart. */
+const ORDER_KEY = "kibo-folder-order";
+const isOrder = (value: unknown): value is string[] => Array.isArray(value) && value.every((path) => typeof path === "string");
+function storedOrder(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(ORDER_KEY) ?? "null");
+    return isOrder(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function saveOrder(order: string[]) {
+  try {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+  } catch {
+    // Only the next launch's order is lost.
+  }
+}
+
 /**
  * The folders open in the window (F-8) and the active one — the folder of the
  * chat on screen, which the right panel and a new chat work in. Resolved by
@@ -38,15 +61,23 @@ export function useWorkspace() {
   // Whether the folder is the one the app came back to rather than one the
   // user just chose: only then is its last conversation reopened too.
   const [resumed, setResumed] = useState(false);
+  // The stored order mirrors the screen, but only once the screen has been
+  // seeded from the backend: the empty list a window starts with is not an
+  // order to remember.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current) saveOrder(folders);
+  }, [folders]);
 
   /** The open set and the active mark as the backend has them now. */
   const reread = useCallback(async () => {
     const [open, active] = await Promise.all([listWorkspaces().catch(() => null), currentWorkspace().catch(() => null)]);
     setFolders((shown) => {
-      const next = open ? keepOrder(shown, open.map((folder) => folder.path)) : shown;
+      const next = open ? keepOrder(shown.length ? shown : storedOrder(), open.map((folder) => folder.path)) : shown;
       // The active folder always has its section, even when the list could not be read.
       return active && !next.includes(active) ? [...next, active] : next;
     });
+    if (open) seeded.current = true;
     if (open) setWorktrees(Object.fromEntries(open.flatMap((one) => (one.worktreeOf ? [[one.path, one.worktreeOf]] : []))));
     setPath(active);
   }, []);
@@ -104,6 +135,19 @@ export function useWorkspace() {
     })();
   }, [reread]);
 
+  /** Moves a folder one place up (-1) or down (+1) among the sections (FO-1);
+   * at an edge, nothing. The order is the view's, kept in window storage. */
+  const move = useCallback((folder: string, dir: -1 | 1) => {
+    setFolders((shown) => {
+      const i = shown.indexOf(folder);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= shown.length) return shown;
+      const next = [...shown];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  }, []);
+
   /** Asks for a folder and opens it. `false` also means "the user cancelled". */
   const pick = useCallback(async () => {
     const chosen = await pickFolder();
@@ -131,5 +175,5 @@ export function useWorkspace() {
     [refreshRecent],
   );
 
-  return { path, folders, worktrees, error, recent, resumed, open, close, pick, refreshRecent, forget };
+  return { path, folders, worktrees, error, recent, resumed, open, close, move, pick, refreshRecent, forget };
 }

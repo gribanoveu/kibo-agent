@@ -484,6 +484,7 @@ fn a_run_costs_its_own_requests_and_its_helpers() {
         tokens: AgentTokens { prompt: 5000, cached: 4000, completion: 300 },
         answer: None,
         progress: Default::default(),
+        call: None,
     };
     let events = [usage(1000, 800, 50), usage(1200, 1000, 70)];
     assert_eq!(tokens_spent(&events, &[]), (2200, 1800, 120));

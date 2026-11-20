@@ -50,11 +50,11 @@ type Props = {
     branches: BranchRef[];
     onOpen: () => void;
     onPick: (name: string) => void;
-    worktree: boolean;
-    /** Where a worktree starts, shown in place of the branch while Worktree is on. */
-    base?: string | null;
     /** Why the branch cannot be switched now — a turn is working in it. */
     locked?: string;
+    /** Makes a worktree from this branch straight away — the direct gesture,
+        no toggle and no base to pick first. */
+    onWorktreeFrom?: (name: string) => void;
   };
   /** The chat on screen has started: its folder is its own, shown and not
       chosen here, and its branch is left to Overview — a new chat is where a
@@ -77,7 +77,7 @@ export function FolderTab({
   branchPicker,
   folderFixed = false,
 }: Props) {
-  const shownBranch = (branchPicker?.worktree && branchPicker.base) || branch || "";
+  const shownBranch = branch || "";
   const branchShown = path && branch && !folderFixed;
   return (
     <div className={`folder-tab${path ? "" : " no-folder"}`}>
@@ -143,14 +143,13 @@ export function FolderTab({
       />
       {branchShown && branchPicker && (
         <Dropdown
-          locked={!!branchPicker.locked && !branchPicker.worktree}
-          title={
-            (branchPicker.locked && !branchPicker.worktree
-              ? branchPicker.locked
-              : undefined) ??
-            (branchPicker.worktree ? "The branch a new worktree starts from" : "Switch the folder's branch")
-          }
-          heading={branchPicker.worktree ? "Start a worktree from" : "Branch"}
+          // Openable even while a turn locks switching: the worktree rows are
+          // the way round it, so they must stay reachable; the pick itself is
+          // refused upstream with the reason.
+          locked={false}
+          title={branchPicker.locked ?? "Switch the folder's branch"}
+          heading="Branch"
+          note={branchPicker.locked}
           label={
             <span className="folder-tab-name">
               <GitBranch size={12} />
@@ -158,7 +157,20 @@ export function FolderTab({
             </span>
           }
           value={shownBranch}
-          options={branchPicker.branches.map((one) => ({ value: one.name, hint: one.remote ? "remote" : undefined }))}
+          options={branchPicker.branches.map((one) => ({
+            value: one.name,
+            hint: one.remote ? "remote" : undefined,
+            // The direct gesture: a worktree from this branch, made now.
+            ...(branchPicker.onWorktreeFrom
+              ? {
+                  action: {
+                    icon: <GitFork size={13} />,
+                    title: `New worktree from ${one.name}`,
+                    onRun: () => branchPicker.onWorktreeFrom!(one.name),
+                  },
+                }
+              : {}),
+          }))}
           emptyLabel="Reading branches…"
           onOpen={branchPicker.onOpen}
           onPick={branchPicker.onPick}

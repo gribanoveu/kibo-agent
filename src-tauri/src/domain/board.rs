@@ -15,8 +15,8 @@ use thiserror::Error;
 /// Past this the board is a backlog nobody reads, and the model's `list`
 /// would cost every turn that calls it. The archive does not count.
 pub const MAX_CARDS: usize = 200;
-/// Done shows what was just finished; a sixth sends the oldest to the archive.
-pub const MAX_DONE: usize = 5;
+/// Done shows what was just finished; a ninth sends the oldest to the archive.
+pub const MAX_DONE: usize = 8;
 /// The archive keeps the latest; the oldest past this are dropped.
 pub const MAX_ARCHIVED: usize = 100;
 pub const MAX_TITLE_CHARS: usize = 200;
@@ -465,21 +465,21 @@ mod tests {
     }
 
     #[test]
-    fn done_keeps_the_last_five_finished_and_the_one_before_goes_to_the_archive() {
+    fn done_keeps_the_last_eight_finished_and_the_one_before_goes_to_the_archive() {
         let mut cards = Vec::new();
-        for title in ["a", "b", "c", "d", "e", "f", "g"] {
+        for title in ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"] {
             cards = add(&cards, title);
         }
-        // Finished out of the order they were added: g first, a last.
-        for id in ["T7", "T6", "T5", "T4", "T3", "T2"] {
+        // Finished out of the order they were added: j first, b last of the nine.
+        for id in ["T10", "T9", "T8", "T7", "T6", "T5", "T4", "T3", "T2"] {
             cards = done(&cards, id);
         }
-        assert_eq!(titles_in(&cards, Column::Done), ["f", "e", "d", "c", "b"]);
-        assert_eq!(titles_in(&cards, Column::Archived), ["g"]);
+        assert_eq!(titles_in(&cards, Column::Done), ["i", "h", "g", "f", "e", "d", "c", "b"]);
+        assert_eq!(titles_in(&cards, Column::Archived), ["j"]);
 
         cards = done(&cards, "T1");
-        assert_eq!(titles_in(&cards, Column::Done), ["e", "d", "c", "b", "a"]);
-        assert_eq!(titles_in(&cards, Column::Archived), ["g", "f"]);
+        assert_eq!(titles_in(&cards, Column::Done), ["h", "g", "f", "e", "d", "c", "b", "a"]);
+        assert_eq!(titles_in(&cards, Column::Archived), ["j", "i"]);
     }
 
     #[test]

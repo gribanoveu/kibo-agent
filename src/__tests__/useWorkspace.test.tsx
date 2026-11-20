@@ -76,6 +76,7 @@ afterEach(() => {
   openSet = [];
   saved = null;
   worktreeOf = {};
+  localStorage.removeItem("kibo-folder-order");
 });
 
 const settle = () => act(async () => {
@@ -270,5 +271,108 @@ describe("keepOrder", () => {
     const { keepOrder } = await import("../hooks/useWorkspace");
     expect(keepOrder(["/a", "/b", "/c"], ["/b", "/d", "/a"])).toEqual(["/a", "/b", "/d"]);
     expect(keepOrder([], ["/c", "/b", "/a"])).toEqual(["/a", "/b", "/c"]);
+  });
+});
+
+// FO-1: the manual order of the sections is a view state in window storage,
+// apart from the backend's open set (which also remembers the launch folder).
+describe("manual folder order", () => {
+  const openThree = async (result: { current: ReturnType<typeof useWorkspace> }) => {
+    for (const path of ["/work/a", "/work/b", "/work/c"]) {
+      await act(async () => {
+        await result.current.open(path);
+      });
+    }
+  };
+
+  test("move swaps a folder with its neighbour and keeps the order in storage", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+    expect(result.current.folders).toEqual(["/work/a", "/work/b", "/work/c"]);
+
+    act(() => result.current.move("/work/c", -1));
+    expect(result.current.folders).toEqual(["/work/a", "/work/c", "/work/b"]);
+    expect(JSON.parse(localStorage.getItem("kibo-folder-order") ?? "null")).toEqual(["/work/a", "/work/c", "/work/b"]);
+    // The order is the view's: no backend call is made for it.
+    expect(calls.filter((call) => call.command === "workspaces_reorder")).toEqual([]);
+  });
+
+  test("two moves before a rerender both land, not just the last", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+    act(() => {
+      result.current.move("/work/a", 1);
+      result.current.move("/work/a", 1);
+    });
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/a"]);
+  });
+
+  test("at an edge, or for a folder not open, move does nothing", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+
+    act(() => result.current.move("/work/a", -1));
+    act(() => result.current.move("/work/c", 1));
+    act(() => result.current.move("/nowhere", -1));
+    expect(result.current.folders).toEqual(["/work/a", "/work/b", "/work/c"]);
+    // The order the reads already stored is left as it was — no new write.
+    expect(JSON.parse(localStorage.getItem("kibo-folder-order") ?? "null")).toEqual(["/work/a", "/work/b", "/work/c"]);
+  });
+
+  /// A close and reopen move sections without a `move`; the stored order must
+  /// follow the screen, or a restart would seed a stale arrangement.
+  test("the order after a close and reopen is the one a restart seeds", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+    act(() => result.current.move("/work/c", -1));
+    await act(async () => {
+      await result.current.close("/work/a");
+    });
+    await act(async () => {
+      await result.current.open("/work/d");
+    });
+    await act(async () => {
+      await result.current.open("/work/a");
+    });
+    expect(result.current.folders).toEqual(["/work/c", "/work/b", "/work/d", "/work/a"]);
+    expect(JSON.parse(localStorage.getItem("kibo-folder-order") ?? "null")).toEqual(["/work/c", "/work/b", "/work/d", "/work/a"]);
+  });
+
+  test("the stored order seeds the first read, surviving a restart", async () => {
+    // Deliberately not the default (reverse of the file): the seed must show.
+    localStorage.setItem("kibo-folder-order", JSON.stringify(["/work/b", "/work/c", "/work/a"]));
+    saved = ["/work/b", "/work/a", "/work/c"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/a"]);
+  });
+
+  test("a new folder joins the end of the stored order, a closed one leaves it", async () => {
+    localStorage.setItem("kibo-folder-order", JSON.stringify(["/work/b", "/work/c", "/work/a"]));
+    saved = ["/work/b", "/work/a", "/work/c"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+
+    await act(async () => {
+      await result.current.open("/work/d");
+    });
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/a", "/work/d"]);
+
+    await act(async () => {
+      await result.current.close("/work/a");
+    });
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/d"]);
+  });
+
+  test("a stored value of the wrong shape is ignored, not a broken order", async () => {
+    localStorage.setItem("kibo-folder-order", JSON.stringify({ not: "a list" }));
+    saved = ["/work/b", "/work/a"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    expect(result.current.folders).toEqual(["/work/a", "/work/b"]);
   });
 });

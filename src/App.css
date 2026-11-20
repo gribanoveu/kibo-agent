@@ -1,23 +1,44 @@
 /* The OS window is transparent, so this element paints the app: its radius is
-   what gives the window its rounded corners. */
+   what gives the window its rounded corners. A hairline ring just darker than
+   the theme sets the window off from the desktop on every frame, inset so it
+   follows the corners and adds no layout. */
 .window {
   height: 100%;
+  position: relative;
   /* What shows of it is the titlebar: the side columns' colour, running on
      into them, whatever sits under the traffic lights or beside Windows'
      buttons. Only the page in the middle is set off by a hairline. */
   background: var(--bg-box);
-  border: 1px solid var(--window-border);
+  border: 0;
   border-radius: 12px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-/* The native frame draws its own corners and edge — on Windows the system
-   shadow of the undecorated window does. */
-.window.native-frame,
-.window.windows-frame {
-  border: 0;
+/* The ring rides over the panels, not under them: an inset shadow on the
+   window itself paints below its children, whose fills hid it in places and
+   made the edge read as broken and uneven. As an overlay it is one hairline
+   all the way round, and clicks pass through it. */
+.window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--bg-box) 94%, var(--shade));
+  pointer-events: none;
+  z-index: 5;
+}
+/* The native frame draws its own corners — the ring stays, square under them. */
+.window.native-frame {
   border-radius: 0;
+}
+/* Windows' undecorated window carries the system shadow as its edge; an extra
+   ring inside it reads as a double border, so there it keeps none. */
+.window.windows-frame {
+  border-radius: 0;
+}
+.window.windows-frame::after {
+  content: none;
 }
 
 /* A window narrower than every open panel's minimum cuts them at its edge,

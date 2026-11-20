@@ -1,19 +1,43 @@
-/* Three columns side by side, as tall as the longest: an empty one is still
-   somewhere to drop a card. */
+/* Three columns side by side, filling the body's height: each is a fixed box
+   whose cards scroll inside it, so a column's top and bottom stay in view
+   however long its list is. */
+.page-body:has(.board-columns) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .board-columns {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
   gap: 12px;
   margin-top: 4px;
 }
 .board-column {
-  min-height: 120px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px 10px 12px;
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
+}
+/* The cards' own scroll box under the head: the head stays put above it,
+   outside the scroll, so nothing scrolls under or shows through it. */
+.board-column-cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* A narrow scrollbar, as the app wears it everywhere. */
+.board-column-cards,
+.board-archive-list {
+  scrollbar-width: thin;
 }
 /* The column's name after a dot in its colour: waiting, under way, finished. */
 .board-column-head {
@@ -45,6 +69,11 @@
   color: var(--text-faint);
   font-size: var(--fs-xs);
   font-weight: 500;
+}
+/* The Done column's archive hint, at the head's right end. */
+.board-column-tip {
+  margin-left: auto;
+  display: inline-flex;
 }
 /* An empty column says what it is for, inside the place a card drops into. */
 .board-column-empty {
@@ -318,14 +347,22 @@
   color: var(--red);
   font-size: var(--fs-md);
 }
-/* Under the columns, folded until asked for. */
+/* Under the columns, folded until asked for; kept to its own share of the
+   body so an open archive scrolls itself instead of eating the columns. */
 .board-archive {
-  margin-top: 20px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  max-height: 40%;
+  overflow: hidden;
+  margin-top: 12px;
 }
 .board-archive-toggle {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   height: var(--control);
   padding: 0 10px;
   border: none;
@@ -340,7 +377,14 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+/* The open/close sign at the row's right end, away from the count. */
+.board-archive-chev {
+  margin-left: auto;
+}
 .board-archive-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;

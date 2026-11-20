@@ -45,6 +45,7 @@ pub(super) fn run_helper(
     review: Option<Arc<crate::domain::review::ReviewDesk>>,
     approval: &ApprovalPolicy,
     progress: &CommandSink,
+    call: &str,
 ) -> Result<(Arc<crate::domain::agents::Agents>, u32, Result<ChatStreamOutcome, TurnError>), crate::domain::tools::ToolError> {
     // Offered only in a folder; the chat's preflight refuses it first.
     let Some(scope) = turn.place.scope() else {
@@ -55,6 +56,8 @@ pub(super) fn run_helper(
     // same way either way.
     let agents = turn.agents.clone().unwrap_or_default();
     let id = agents.start(brief);
+    // The calling card finds its own run by this, while it is still running.
+    agents.link_call(id, call);
     let events: ChatEventSink = {
         let agents = Arc::clone(&agents);
         let progress = progress.clone();
@@ -181,6 +184,7 @@ pub(super) fn run_explore(
     args: &crate::domain::tools::ExploreArgs,
     history: &[LlmMessage],
     progress: &CommandSink,
+    call: &str,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
     use crate::domain::tools::ToolError;
@@ -190,7 +194,7 @@ pub(super) fn run_explore(
     if let Some(start) = fork {
         fork_can_start(turn, start, &history[before_reply..])?;
     }
-    let (agents, id, outcome) = run_helper(turn, task, fork, ConversationMode::Explore, None, &ApprovalPolicy::default(), progress)?;
+    let (agents, id, outcome) = run_helper(turn, task, fork, ConversationMode::Explore, None, &ApprovalPolicy::default(), progress, call)?;
     let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
     let (state, answer) = match outcome {
         Ok(ChatStreamOutcome::Done(ChatDone { limit_reached: Some(rounds), .. })) => failed(format!(
@@ -289,6 +293,7 @@ pub(super) fn run_review(
     desk: Arc<crate::domain::review::ReviewDesk>,
     range: crate::domain::review::ReviewRange,
     progress: &CommandSink,
+    call: &str,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
     enum Close {
@@ -297,7 +302,7 @@ pub(super) fn run_review(
         Stopped,
         Failed(String),
     }
-    let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress)?;
+    let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress, call)?;
     let (state, answer, close) = match outcome {
         Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => (AgentState::Done, Some(done.result.text), Close::Rounds),
         Ok(ChatStreamOutcome::Done(done)) => (AgentState::Done, Some(done.result.text), Close::Clean),
@@ -347,6 +352,7 @@ pub(super) fn run_review_tool(
     turn: &Turn,
     args: &crate::domain::tools::ReviewArgs,
     progress: &CommandSink,
+    call: &str,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     // The turn's folder, never the app's global one: a chat working in a
     // worktree reviews the worktree.
@@ -378,7 +384,7 @@ pub(super) fn run_review_tool(
     };
     let brief = crate::domain::review::review_message(&kept, &range, crate::services::llm_session::reply_language(), args.focus.as_deref());
     let desk = Arc::new(crate::domain::review::ReviewDesk::new(kept));
-    run_review(turn, &brief, desk, range, progress)
+    run_review(turn, &brief, desk, range, progress, call)
 }
 
 /// One line of a helper's progress: the tool, and what it was pointed at.

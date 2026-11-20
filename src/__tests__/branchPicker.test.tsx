@@ -1,6 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import { useState } from "react";
 import type { CheckoutOutcome } from "../lib/git";
 
 // A chat not yet started picks its branch. The app switches only when git
@@ -39,7 +38,6 @@ afterEach(() => {
 const { useBranchPicker } = await import("../hooks/useBranchPicker");
 const { FolderTab } = await import("../components/FolderTab");
 const { BranchConflictDialog } = await import("../components/BranchConflictDialog");
-const { useFolderConversation } = await import("../hooks/useFolderConversation");
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 const commands = () => calls.map((call) => call.command);
@@ -52,7 +50,6 @@ const picker = ({ agree = true }: Setup = {}) => {
   let switched = 0;
   const hook = renderHook(() =>
     useBranchPicker({ workspace: "/work/kibo",
-      chatId: null,
       current: "main",
       guard: (go, onCancel) => {
         guarded++;
@@ -64,7 +61,6 @@ const picker = ({ agree = true }: Setup = {}) => {
         return true;
       },
       notify: (message) => notes.push(message),
-      send: () => {},
       onSwitched: () => switched++,
     }),
   );
@@ -98,42 +94,8 @@ describe("picking a branch", () => {
     expect(hook.result.current.conflict).toBeNull();
   });
 
-  test("with Worktree on, a pick is only where the worktree will start", async () => {
-    const { hook, guarded } = picker();
-    expect(hook.result.current.base).toBe("main");
-    act(() => hook.result.current.setWorktree(true));
-    await act(() => hook.result.current.pick("origin/feature"));
-    expect(hook.result.current.base).toBe("origin/feature");
-    expect(commands()).toEqual([]);
-    expect(guarded()).toBe(0);
-
-    // Off again, the choice is forgotten: on again starts from the folder's own branch.
-    act(() => hook.result.current.setWorktree(false));
-    act(() => hook.result.current.setWorktree(true));
-    expect(hook.result.current.base).toBe("main");
-  });
-
-  /// Picked for a new chat, the tick is that chat's: going back to another and
-  /// then to a new chat again does not start a worktree nobody asked for there.
-  test("Worktree and its base are dropped when another chat is opened", async () => {
-    const hook = renderHook(
-      ({ chatId }) =>
-        useBranchPicker({ workspace: "/work/kibo", chatId, current: "main", guard: (go) => go(), open: async () => true, notify: () => {}, send: () => {} }),
-      { initialProps: { chatId: null as string | null } },
-    );
-    act(() => hook.result.current.setWorktree(true));
-    await act(() => hook.result.current.pick("feature"));
-    expect(hook.result.current.base).toBe("feature");
-
-    hook.rerender({ chatId: "chat-a" });
-    expect(hook.result.current.worktree).toBe(false);
-    expect(hook.result.current.base).toBe("main");
-  });
-
-  test("starting one makes it after the folder switch is agreed to, opens it, and turns Worktree off", async () => {
+  test("starting one makes it after the folder switch is agreed to, and opens it", async () => {
     const { hook, opened, guarded } = picker();
-    act(() => hook.result.current.setWorktree(true));
-    await act(() => hook.result.current.pick("feature"));
     let started: boolean | null = null;
     await act(async () => {
       started = await hook.result.current.startWorktree("feature");
@@ -142,8 +104,6 @@ describe("picking a branch", () => {
     expect(guarded()).toBe(1);
     expect(calls).toEqual([{ command: "git_worktree_add", args: { base: "feature", workspace: "/work/kibo" } }]);
     expect(opened).toEqual(["/home/.kibo/worktrees/kibo/main"]);
-    expect(hook.result.current.worktree).toBe(false);
-    expect(hook.result.current.base).toBe("main");
   });
 
   /// A worktree nobody opens would be left on disk; the message goes back to the box.
@@ -156,60 +116,6 @@ describe("picking a branch", () => {
     expect(started).toBe(false);
     expect(commands()).toEqual([]);
     expect(opened).toEqual([]);
-  });
-
-  /// Sent into the old folder, the agent would work where the user meant to keep out of; sent
-  /// before the switch's fresh thread, it would be wiped by it.
-  test("the first message is sent in the worktree, after the folder switch has started its thread", async () => {
-    const log: string[] = [];
-    const agent = { turn: { blocks: [] }, open: () => {}, reset: () => log.push("reset") };
-    const hook = renderHook(() => {
-      const [folder, setFolder] = useState("/work/kibo");
-      useFolderConversation(folder, false, undefined, agent);
-      const picker = useBranchPicker({ workspace: "/work/kibo",
-        chatId: null,
-        current: "main",
-        guard: (go) => go(),
-        open: async (path) => {
-          log.push(`open ${path}`);
-          setFolder(path);
-          return true;
-        },
-        notify: () => {},
-        send: (text) => log.push(`send "${text}" in ${folder}`),
-      });
-      return picker;
-    });
-    await act(async () => {
-      await hook.result.current.startWorktree("main", "fix the parser");
-    });
-    await settle();
-    expect(log).toEqual([
-      "open /home/.kibo/worktrees/kibo/main",
-      "reset",
-      'send "fix the parser" in /home/.kibo/worktrees/kibo/main',
-    ]);
-  });
-
-  test("nothing is sent when the worktree does not open", async () => {
-    const sent: string[] = [];
-    const { result } = renderHook(() =>
-      useBranchPicker({ workspace: "/work/kibo",
-        chatId: null,
-        current: "main",
-        guard: (_go, onCancel) => onCancel?.(),
-        open: async () => true,
-        notify: () => {},
-        send: (text) => sent.push(text),
-      }),
-    );
-    let started: boolean | null = null;
-    await act(async () => {
-      started = await result.current.startWorktree("main", "fix it");
-    });
-    await settle();
-    expect(started).toBe(false);
-    expect(sent).toEqual([]);
   });
 
   test("says it did not start one when git refuses", async () => {
@@ -267,7 +173,6 @@ describe("the folder tab's branch", () => {
     ],
     onOpen: () => {},
     onPick: () => {},
-    worktree: false,
     ...over,
   });
 
@@ -286,13 +191,20 @@ describe("the folder tab's branch", () => {
       ],
       onOpen: () => opened++,
       onPick: (name) => picked.push(name),
-      worktree: false,
     });
     fireEvent.click(screen.getByTitle("Switch the folder's branch"));
     expect(opened).toBe(1);
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["main", "origin/featureremote"]);
     fireEvent.click(screen.getByRole("option", { name: /origin\/feature/ }));
     expect(picked).toEqual(["origin/feature"]);
+  });
+
+  test("each branch row carries a worktree-from-here action that makes it straight away", () => {
+    const from: string[] = [];
+    tab(started({ onWorktreeFrom: (name) => from.push(name) }));
+    fireEvent.click(screen.getByTitle("Switch the folder's branch"));
+    fireEvent.click(screen.getByTitle("New worktree from feature"));
+    expect(from).toEqual(["feature"]);
   });
 
   test("once the chat has started, is left to Overview", () => {
@@ -303,25 +215,16 @@ describe("the folder tab's branch", () => {
     expect(screen.queryByTitle("Switch the folder's branch")).toBeNull();
   });
 
-  /// Switched under a running turn, the agent's next edit would land on another branch.
-  test("is locked while a turn works on it, saying why", () => {
-    tab(started({ locked: "The agent is working on this branch" }));
+  /// Switched under a running turn, the agent's next edit would land on another
+  /// branch: the pick is refused upstream, but the menu stays open so the
+  /// worktree — the way round — is reachable, and says why.
+  test("while a turn works, the menu says why and still offers a worktree", () => {
+    tab(started({ locked: "The agent is working on this branch", onWorktreeFrom: () => {} }));
     fireEvent.click(screen.getByTitle("The agent is working on this branch"));
-    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.getByText("The agent is working on this branch")).toBeTruthy();
+    expect(screen.getByTitle("New worktree from feature")).toBeTruthy();
   });
 
-  test("with Worktree on, another turn does not lock the choice of its base", () => {
-    tab(started({ worktree: true, base: "feature", locked: "An agent is working in this folder" }));
-    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
-    expect(screen.getByRole("option", { name: "feature" })).toBeTruthy();
-  });
-
-  test("with Worktree on, the menu asks where the worktree starts and shows that branch", () => {
-    tab({ branches: [], onOpen: () => {}, onPick: () => {}, worktree: true, base: "feature" });
-    expect(screen.getByTitle("The branch a new worktree starts from").textContent).toContain("feature");
-    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
-    expect(screen.getByText("Start a worktree from")).toBeTruthy();
-  });
 });
 
 describe("a folder that is a worktree", () => {
