@@ -6,8 +6,9 @@ import { Archive, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ChevronU
 import { Page } from "./Page";
 import { BoardCardSheet } from "./BoardCardSheet";
 import { useBoard } from "../hooks/useBoard";
+import { InfoTip } from "./InfoTip";
 import { useFeatures } from "../hooks/useFeatures";
-import { dropChange, dueState, filterOrder, hasAnyTag, localDay, orderOf, tagsOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
+import { DONE_KEEP, dropChange, dueState, filterOrder, hasAnyTag, localDay, orderOf, tagsOf, type BoardChange, type Card, type Column, type OpenColumn, type Order } from "../lib/board";
 import { matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import "./BoardPage.css";
 
@@ -144,7 +145,7 @@ export function BoardPage() {
             <Archive size={14} />
             Archive
             <span className="board-count">{archived.length}</span>
-            {archiveOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {archiveOpen ? <ChevronUp className="board-archive-chev" size={14} /> : <ChevronDown className="board-archive-chev" size={14} />}
           </button>
           {archiveOpen && (
             <div className="board-archive-list">
@@ -211,6 +212,11 @@ function BoardColumn({ column, label, count, empty, action, children }: ColumnPr
         {label}
         <span className="board-count">{count}</span>
         {action}
+        {column === "done" && (
+          <span className="board-column-tip">
+            <InfoTip text={`Done keeps the last ${DONE_KEEP} finished cards; older ones move to the Archive.`} />
+          </span>
+        )}
       </h2>
       {/* The cards scroll in their own box under the head, so the head is
           never over them and nothing shows through it. */}

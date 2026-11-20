@@ -3,8 +3,12 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inTauri } from "./backend";
 
 /** The Assistant's board (`domain::board`): what the user asked to keep for later. */
-/** `archived`: Done's oldest, past the last five (`domain::board::MAX_DONE`). */
+/** `archived`: Done's oldest, past the last eight (`domain::board::MAX_DONE`). */
 export type Column = "todo" | "doing" | "done" | "archived";
+
+/** How many finished cards Done keeps; the oldest past this go to the archive
+    (`domain::board::MAX_DONE`). */
+export const DONE_KEEP = 8;
 
 export type Card = {
   id: string;

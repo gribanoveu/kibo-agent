@@ -65,6 +65,11 @@
   font-size: var(--fs-xs);
   font-weight: 500;
 }
+/* The Done column's archive hint, at the head's right end. */
+.board-column-tip {
+  margin-left: auto;
+  display: inline-flex;
+}
 /* An empty column says what it is for, inside the place a card drops into. */
 .board-column-empty {
   flex: 1;
@@ -352,6 +357,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   height: var(--control);
   padding: 0 10px;
   border: none;
@@ -365,6 +371,10 @@
 .board-archive-toggle:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+/* The open/close sign at the row's right end, away from the count. */
+.board-archive-chev {
+  margin-left: auto;
 }
 .board-archive-list {
   flex: 1;

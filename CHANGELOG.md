@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-20 Done keeps the last 8 finished cards (was 5); an info hint on its header says older ones move to the Archive, and the Archive toggle's chevron sits at the row's right end
 - 2026-11-20 Board columns are fixed boxes that fill the page: each scrolls its own cards with its header pinned, so a column's top and bottom stay in view; an open archive scrolls itself under its pinned Archive button
 - 2026-11-20 A running helper's card shows its own live token speed and count (the estimate that used to sit on the Working line); the Working line keeps only the chat's own meter
 - 2026-11-20 A helper's card shows a shimmering skeleton and “writing the task…” while the model is still writing its prompt, instead of an empty title
