@@ -298,6 +298,17 @@ describe("manual folder order", () => {
     expect(calls.filter((call) => call.command === "workspaces_reorder")).toEqual([]);
   });
 
+  test("two moves before a rerender both land, not just the last", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+    act(() => {
+      result.current.move("/work/a", 1);
+      result.current.move("/work/a", 1);
+    });
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/a"]);
+  });
+
   test("at an edge, or for a folder not open, move does nothing", async () => {
     const { result } = renderHook(() => useWorkspace());
     await settle();

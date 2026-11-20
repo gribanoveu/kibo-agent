@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   addWorkspace,
   closeWorkspace,
@@ -61,6 +61,13 @@ export function useWorkspace() {
   // Whether the folder is the one the app came back to rather than one the
   // user just chose: only then is its last conversation reopened too.
   const [resumed, setResumed] = useState(false);
+  // The stored order mirrors the screen, but only once the screen has been
+  // seeded from the backend: the empty list a window starts with is not an
+  // order to remember.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current) saveOrder(folders);
+  }, [folders]);
 
   /** The open set and the active mark as the backend has them now. */
   const reread = useCallback(async () => {
@@ -68,12 +75,9 @@ export function useWorkspace() {
     setFolders((shown) => {
       const next = open ? keepOrder(shown.length ? shown : storedOrder(), open.map((folder) => folder.path)) : shown;
       // The active folder always has its section, even when the list could not be read.
-      const withActive = active && !next.includes(active) ? [...next, active] : next;
-      // The stored order mirrors the screen: opening and closing move sections
-      // too, so a restart seeds from the last order seen, not the last `move`.
-      if (open) saveOrder(withActive);
-      return withActive;
+      return active && !next.includes(active) ? [...next, active] : next;
     });
+    if (open) seeded.current = true;
     if (open) setWorktrees(Object.fromEntries(open.flatMap((one) => (one.worktreeOf ? [[one.path, one.worktreeOf]] : []))));
     setPath(active);
   }, []);
@@ -133,18 +137,16 @@ export function useWorkspace() {
 
   /** Moves a folder one place up (-1) or down (+1) among the sections (FO-1);
    * at an edge, nothing. The order is the view's, kept in window storage. */
-  const move = useCallback(
-    (folder: string, dir: -1 | 1) => {
-      const i = folders.indexOf(folder);
+  const move = useCallback((folder: string, dir: -1 | 1) => {
+    setFolders((shown) => {
+      const i = shown.indexOf(folder);
       const j = i + dir;
-      if (i < 0 || j < 0 || j >= folders.length) return;
-      const next = [...folders];
+      if (i < 0 || j < 0 || j >= shown.length) return shown;
+      const next = [...shown];
       [next[i], next[j]] = [next[j], next[i]];
-      setFolders(next);
-      saveOrder(next);
-    },
-    [folders],
-  );
+      return next;
+    });
+  }, []);
 
   /** Asks for a folder and opens it. `false` also means "the user cancelled". */
   const pick = useCallback(async () => {
