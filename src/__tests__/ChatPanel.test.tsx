@@ -1109,7 +1109,7 @@ describe("a call with no body of its own", () => {
 });
 
 describe("a command's own words for itself", () => {
-  test("the row reads the intent and the command wraps under it, without unfolding", () => {
+  test("the row reads the intent; opening reveals the command panel and its output", () => {
     const { container } = panel(
       state([
         {
@@ -1119,13 +1119,18 @@ describe("a command's own words for itself", () => {
           name: "runCommand",
           arguments: JSON.stringify({ command: "python fix.py --apply", description: "Rewrites imports in place" }),
           status: "done",
-          result: { stdout: "", stderr: "", exitCode: 0, timedOut: false },
+          result: { stdout: "ok\n", stderr: "", exitCode: 0, timedOut: false },
           output: "",
         } as Block,
       ]),
     );
     expect(container.querySelector(".tool .arg")?.textContent).toBe("Rewrites imports in place");
     expect(container.querySelector(".tool .arg")?.className).toContain("as-note");
-    expect(container.querySelector(".tool-command")?.textContent).toBe("python fix.py --apply");
+    // Collapsed, the command itself is not shown — only the intent.
+    expect(container.querySelector(".tool-cmd")).toBeNull();
+
+    fireEvent.click(container.querySelector(".tool-item button.tool")!);
+    expect(container.querySelector(".tool-cmd-text")?.textContent).toContain("python fix.py --apply");
+    expect(container.querySelector(".tool-output")?.textContent).toBe("ok\n");
   });
 });

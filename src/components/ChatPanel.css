@@ -653,16 +653,75 @@ button.turn-processes:hover {
 .tool-item.open .tool .chev {
   transform: rotate(90deg);
 }
-/* The command itself, under the row it explains: wrapped so a long line
-   reads instead of being clipped at the column's edge. */
-.tool-command {
-  display: block;
-  margin: 0 8px 4px;
+/* The command a call ran, revealed when the row opens: its own panel with a
+   shell prompt, highlighted and wrapped; the output follows as plain text. */
+.tool-cmd {
+  display: flex;
+  gap: 8px;
+  margin: 0 10px 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+}
+.tool-cmd-prompt {
+  flex: none;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.tool-cmd-text {
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-dim);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.tool-output {
+  margin: 0 10px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* A diff stat in the row: added green, removed muted. */
+.tool .meta .add {
+  color: var(--green);
+}
+.tool .meta .del {
+  color: var(--text-faint);
+}
+/* The opened run as Claude Code Desktop draws it: a bordered group, its rows
+   separated, the verb quiet and the target read first. The folded summary
+   above the box is left as it was. */
+.tool-run > .tools {
+  margin-top: 6px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.tool-run .tools > .tool-item + .tool-item {
+  border-top: 1px solid var(--border-soft);
+}
+.tool-run .tool {
+  padding: 8px 10px;
+  border-radius: 0;
+}
+.tool-run .tool .name {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.tool-run .tool-item.failed .tool .name {
+  color: var(--red);
+}
+.tool-run .tool-item:not(.failed) .tool .arg {
+  color: var(--text);
+}
+.tool-run .tool-item:not(.failed) .tool .arg.as-note {
+  color: var(--text-dim);
 }
 /* An explore row, unfolded: its run in the Agents tab, above its answer. */
 .tool-open-agent {

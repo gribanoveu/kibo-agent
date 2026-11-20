@@ -57,6 +57,7 @@ import { ImageThumbs } from "./ImageThumbs";
 import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
 import { describeActive, describeHelperStep, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
+import { highlight, splitLines, type Token } from "../lib/highlight";
 import { type AgentInfo, type AgentTokens, subagentMeter, tokensSpent } from "../lib/agents";
 import { useAgents } from "../hooks/useAgents";
 import { useFollowBottom } from "../hooks/useFollowBottom";
@@ -174,6 +175,55 @@ function CompactionCard({ block }: { block: Extract<Block, { kind: "compaction" 
   );
 }
 
+/** A diff stat read as colour: added green, removed muted, and a zero
+ * removed left unsaid — the row carries the fact, not the arithmetic. */
+function metaStat(meta: string) {
+  const stat = /^\+(\d+) -(\d+)$/.exec(meta);
+  if (!stat) return meta;
+  const removed = Number(stat[2]);
+  return (
+    <>
+      <span className="add">+{stat[1]}</span>
+      {removed > 0 && <span className="del"> -{removed}</span>}
+    </>
+  );
+}
+
+/** The command a call ran, in its own panel with a shell prompt, highlighted
+ * and wrapped — revealed when the row is opened, as Claude Code Desktop does. */
+function ShellCommand({ command }: { command: string }) {
+  const [tokens, setTokens] = useState<Token[][] | null>(null);
+  useEffect(() => {
+    let live = true;
+    setTokens(null);
+    void highlight(command, "bash").then((result) => live && setTokens(result));
+    return () => {
+      live = false;
+    };
+  }, [command]);
+  return (
+    <div className="tool-cmd">
+      <span className="tool-cmd-prompt" aria-hidden>
+        $
+      </span>
+      <code className="tool-cmd-text">
+        {splitLines(command).map((line, i) => (
+          <span key={i}>
+            {tokens?.[i]?.length
+              ? tokens[i].map((token, j) => (
+                  <span key={j} style={token.htmlStyle}>
+                    {token.content}
+                  </span>
+                ))
+              : line || " "}
+            {"\n"}
+          </span>
+        ))}
+      </code>
+    </div>
+  );
+}
+
 function ToolRow({
   block,
   onOpenProcess,
@@ -186,7 +236,7 @@ function ToolRow({
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
   // The row reads the model's intent when it said one; the command itself
-  // goes under the row, wrapped, rather than being cut off in the line.
+  // is revealed in a panel when the row is opened, as Claude Code Desktop does.
   const preview = shown.note ?? shown.arg;
   // A cluster call wears its role's sign, whatever its label.
   const Icon = block.name.startsWith("kube") ? ShipWheel : (TOOL_ICON[shown.name] ?? Terminal);
@@ -212,16 +262,13 @@ function ToolRow({
         </span>
         <span className="name">{shown.name}</span>
         <span className={`arg${shown.note ? " as-note" : ""}`}>{preview}</span>
-        {shown.meta && <span className="meta">{shown.meta}</span>}
+        {shown.meta && <span className="meta">{metaStat(shown.meta)}</span>}
         {process !== undefined ? (
           <ArrowUpRight className="chev" size={12} />
         ) : (
           detail && <ChevronRight className="chev" size={12} />
         )}
       </button>
-      {/* The command itself, under the row it explains, wrapped so a long
-          line reads instead of being clipped at the column's edge. */}
-      {shown.note && <code className="tool-command">{shown.arg}</code>}
       {/* Unfolded rather than instead of it, as a process row does: the
           answer stays readable here after the app has forgotten the run. */}
       {open && shown.agent && onOpenAgent && (
@@ -230,7 +277,14 @@ function ToolRow({
           <ArrowUpRight size={12} aria-hidden />
         </button>
       )}
+      {open && block.name === "runCommand" && (
+        <>
+          <ShellCommand command={shown.arg} />
+          {shown.detail && <pre className="tool-output">{shown.detail}</pre>}
+        </>
+      )}
       {open &&
+        block.name !== "runCommand" &&
         detail &&
         (diff ? (
           <div className="tool-detail-diff">
