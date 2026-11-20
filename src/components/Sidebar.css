@@ -337,6 +337,24 @@
   font-weight: 500;
 }
 
+/* The rest of a folder's long list, behind "Show all". */
+.chat-show-all {
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-show-all:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 /* A row is the chat and its ⋮, which shows on hover or while its menu is open. */
 .chat-row {
   position: relative;

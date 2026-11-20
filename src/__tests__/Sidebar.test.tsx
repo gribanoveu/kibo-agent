@@ -111,6 +111,20 @@ describe("the chat list", () => {
     expect(screen.getByText("kept in view")).toBeTruthy();
   });
 
+  /// A streamed reply scrolls the chat log, not the sidebar: only a scroll
+  /// of what holds the trigger closes its menu.
+  test("a row's menu survives an unrelated scroll, and its own list's scroll closes it", () => {
+    sidebar();
+    fireEvent.click(screen.getByTitle("More"));
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    fireEvent.scroll(screen.getByRole("textbox", { name: "Search chats" }));
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    fireEvent.scroll(document.querySelector(".group") as Element);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
   test("archives from a row's menu, and an archived row offers to bring it back", () => {
     const calls: [string, boolean][] = [];
     sidebar({ archive: (id, archived) => calls.push([id, archived]) });
@@ -566,6 +580,51 @@ describe("open folders", () => {
     } finally {
       localStorage.removeItem("kibo-folder-folded-/work/api");
     }
+  });
+
+  /// A folder's long list shows four chats; "Show all" gives the rest, and a
+  /// search sees through the cap.
+  test("a folder shows its first four chats, the rest behind Show all", () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, title: `chat ${i}`, updatedAt: 8 - i, archived: false }));
+    render(
+      <Sidebar
+        mode="agent"
+        onMode={() => {}}
+        pages={[]}
+        page={null}
+        onPage={() => {}}
+        sections={[{ path: "/work/api", chats: many }]}
+        groups={[]}
+        activeFolder="/work/api"
+        activeChat={null}
+        onSelectChat={() => {}}
+        onArchiveChat={() => {}}
+        onPinChat={() => {}}
+        onMoveChat={() => {}}
+        onCreateGroup={async () => ({})}
+        onRenameGroup={async () => ({})}
+        onDeleteGroup={() => {}}
+        onDeleteChat={() => {}}
+        onOpenSettings={() => {}}
+        onOnboardingAction={() => {}}
+        themeSide="dark"
+        onToggleTheme={() => {}}
+      />,
+    );
+    expect(screen.getByText("chat 3")).toBeTruthy();
+    expect(screen.queryByText("chat 4")).toBeNull();
+
+    // A search finds a chat past the cap without expanding anything.
+    const box = screen.getByRole("textbox", { name: "Search chats" });
+    fireEvent.change(box, { target: { value: "chat 7" } });
+    expect(screen.getByText("chat 7")).toBeTruthy();
+    fireEvent.change(box, { target: { value: "" } });
+    expect(screen.queryByText("chat 7")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all 8 chats" }));
+    expect(screen.getByText("chat 4")).toBeTruthy();
+    expect(screen.getByText("chat 7")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Show all 8 chats" })).toBeNull();
   });
 
   /// A linked worktree is a folder of its own, and its head says whose it is.

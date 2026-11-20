@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-20 A chat's ⋮ menu stays open while the agent replies: only scrolling the list that holds the row closes it, not the chat log's own autoscroll
+- 2026-11-20 A folder's chat list in Agent mode shows its first four chats; the rest open with a "Show all" button, and a search still finds every chat
 - 2026-11-19 The Board is kept in SQLite, `~/.kibo/board.db`: a card is a row, its tags and comments rows of their own; a board kept in `board.json` is taken in on first open
 - 2026-11-19 Dictate a comment on a Board card, as a message is, while voice input is on
 - 2026-11-19 Filter the Board by tag: the board's tags sit over the columns as toggles, with All to show every card again; a card added under the filter gets its tags

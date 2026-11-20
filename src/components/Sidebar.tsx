@@ -724,8 +724,12 @@ function SectionList({ section, groups, filter, wanted, active, row, onNewChat, 
   // An open folder's whole section folds under its head, remembered per
   // folder; a search shows what matches in it all the same.
   const [folded, setFolded] = useStoredState(`kibo-folder-folded-${path ?? ""}`, false, isBoolean);
+  const [showAll, setShowAll] = useState(false);
   const open = path === null || !folded || !!wanted;
   const { listed, pinned: pinnedRows, rest: restRows } = rowsOf(section, groups, filter, wanted);
+  // A folder's long list shows its first four chats; the rest wait behind a
+  // button. A search shows every match — hiding one it found is noise.
+  const shownRest = path !== null && !wanted && !showAll ? restRows.slice(0, 4) : restRows;
   // Searching, a folder with nothing matching says nothing — its head stays
   // out of the way the rest does.
   if (path !== null && wanted && listed.length === 0) return null;
@@ -774,7 +778,16 @@ function SectionList({ section, groups, filter, wanted, active, row, onNewChat, 
           )}
           {/* The rest under no heading, in the order the store gives — the
               last touched first. */}
-          {restRows.length > 0 && <section className="chat-rest">{restRows.map(row)}</section>}
+          {restRows.length > 0 && (
+            <section className="chat-rest">
+              {shownRest.map(row)}
+              {shownRest.length < restRows.length && (
+                <button type="button" className="chat-show-all" onClick={() => setShowAll(true)}>
+                  Show all {restRows.length} chats
+                </button>
+              )}
+            </section>
+          )}
         </>
       )}
     </div>

@@ -91,13 +91,18 @@ export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
   }, [open, trail.length, close]);
 
   // The trigger moves with the scrollable list under the fixed menu: rather
-  // than point the menu at another row, it goes away.
+  // than point the menu at another row, it goes away. Only a scroll of what
+  // contains the trigger moves it — a streamed reply scrolling the chat log
+  // must not shut a sidebar row's menu.
   useEffect(() => {
     if (!open) return;
-    document.addEventListener("scroll", close, true);
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && wrap.current && e.target.contains(wrap.current)) close();
+    };
+    document.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", close);
     return () => {
-      document.removeEventListener("scroll", close, true);
+      document.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
     };
   }, [open, close]);
