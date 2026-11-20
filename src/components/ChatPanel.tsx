@@ -320,7 +320,7 @@ const REVIEW_TASK_PREFIX = "Review the change in this repository.";
 function helperAgents(blocks: Block[], agents: AgentInfo[]): Map<string, AgentInfo> {
   const matched = new Map<string, AgentInfo>();
   const used = new Set<number>();
-  const running = agents.filter((a) => a.state.state === "running");
+  const running = agents.filter((a) => a.state.state === "running").sort((a, b) => a.id - b.id);
   const helpers = blocks.filter(
     (b): b is Extract<Block, { kind: "tool" }> => b.kind === "tool" && (b.name === "explore" || b.name === "review"),
   );

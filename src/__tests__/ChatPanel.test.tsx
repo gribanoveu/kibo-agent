@@ -434,12 +434,13 @@ describe("how long the agent worked", () => {
     expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
   });
 
-  test("two running reviews each carry their own meter, in call order", () => {
+  test("two running reviews each carry their own meter, in run order however the list is ordered", () => {
     const review = (id: string) => ({ kind: "tool", id, round: 1, name: "review", arguments: "{}", status: "running", output: "" }) as Block;
     transcript(
       [
-        sub(1, { task: "Review the change in this repository.\nRange: a." }),
+        // newest-first, as agents_list returns it: order must not swap the meters.
         sub(2, { task: "Review the change in this repository.\nRange: b.", tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } }),
+        sub(1, { task: "Review the change in this repository.\nRange: a." }),
       ],
       [review("r1"), review("r2")],
     );
@@ -1210,5 +1211,31 @@ describe("the folded run's summed diff", () => {
       ]),
     );
     expect(container.querySelector(".tool-run-stat")).toBeNull();
+  });
+
+  test("a read-only gitDiff beside an edit is not counted twice, and alone is no change", () => {
+    const edit = {
+      kind: "tool",
+      id: "e1",
+      round: 1,
+      name: "editFile",
+      arguments: JSON.stringify({ path: "src/a.ts" }),
+      status: "done",
+      result: { diff: { linesAdded: 7, linesRemoved: 3, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+    } as Block;
+    const diff = {
+      kind: "tool",
+      id: "d1",
+      round: 1,
+      name: "gitDiff",
+      arguments: JSON.stringify({ path: "src/a.ts" }),
+      status: "done",
+      result: { diff: { linesAdded: 100, linesRemoved: 50, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+    } as Block;
+    const both = panel(state([edit, diff]));
+    expect(both.container.querySelector(".tool-run-stat")?.textContent).toBe("+7 -3");
+    both.unmount();
+    const alone = panel(state([diff]));
+    expect(alone.container.querySelector(".tool-run-stat")).toBeNull();
   });
 });
