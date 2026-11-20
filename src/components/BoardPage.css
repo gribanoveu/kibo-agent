@@ -341,11 +341,14 @@
    body so an open archive scrolls itself instead of eating the columns. */
 .board-archive {
   flex: none;
+  display: flex;
+  flex-direction: column;
   max-height: 40%;
-  overflow-y: auto;
+  overflow: hidden;
   margin-top: 12px;
 }
 .board-archive-toggle {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -364,6 +367,9 @@
   color: var(--text);
 }
 .board-archive-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
