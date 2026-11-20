@@ -24,6 +24,7 @@ Backend: Tauri v2 (Rust), ureq (blocking HTTP client, not reqwest) for LLM provi
 ```bash
 bun install                 # install frontend deps
 bun run tauri dev           # run the app with hot reload
+bun run tauri dev second    # a second dev instance beside the first (own identifier + port)
 bun run tauri build         # production bundle
 bun run tsc --noEmit        # type-check frontend only
 cd src-tauri && cargo check # fast Rust check while iterating
@@ -33,6 +34,8 @@ bun add <pkg>                       # add a JS dependency
 ```
 
 Run `bun run tsc --noEmit` and `cargo check` before considering a change done. If tests exist for the touched area, run them too — don't assume green.
+
+`bun run tauri dev second` runs a second dev instance beside the first: `scripts/tauri.ts` hands the CLI `src-tauri/tauri.dev.conf.json`, which gives it the identifier `com.kibo.agent.dev` and vite port 1422, so the first instance's single-instance lock does not turn it away. The data in `~/.kibo` is shared between the two.
 
 ## Architecture
 

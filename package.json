@@ -8,7 +8,7 @@
     "dev": "bun scripts/build-prototype-libs.ts && vite",
     "build": "bun scripts/build-prototype-libs.ts && tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "bun scripts/tauri.ts"
   },
   "dependencies": {
     "@asciidoctor/core": "^4.0.6",
