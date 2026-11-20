@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { appVersion, openExternal } from "../lib/window";
 import {
   AppWindow,
+  ArrowDown,
+  ArrowUp,
   Archive,
   ArchiveRestore,
   ChevronRight,
@@ -120,6 +122,8 @@ type Props = {
   /** Agent mode's section heads: a new chat in that folder, and closing it. */
   onNewChatIn?: (folder: string) => void;
   onCloseFolder?: (folder: string) => void;
+  /** Moves a folder's section one place up (-1) or down (+1) (FO-1). */
+  onMoveFolder?: (folder: string, dir: -1 | 1) => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
   onOnboardingAction: (tab: AsideTab) => void;
@@ -148,6 +152,7 @@ export function Sidebar({
   onDeleteGroup,
   onNewChatIn,
   onCloseFolder,
+  onMoveFolder,
   onDeleteChat,
   onOpenSettings,
   onOnboardingAction,
@@ -402,7 +407,7 @@ export function Sidebar({
             onDeleteGroup={setDeletingGroup}
           />
         )}
-        {sections.map((section) => (
+        {sections.map((section, i) => (
           <SectionList
             key={section.path ?? ""}
             section={section}
@@ -413,6 +418,8 @@ export function Sidebar({
             row={(chat) => chatRow(chat, section)}
             onNewChat={section.path !== null && onNewChatIn ? () => onNewChatIn(section.path as string) : undefined}
             onClose={section.path !== null && onCloseFolder ? () => onCloseFolder(section.path as string) : undefined}
+            onMoveUp={section.path !== null && onMoveFolder && i > 0 ? () => onMoveFolder(section.path as string, -1) : undefined}
+            onMoveDown={section.path !== null && onMoveFolder && i < sections.length - 1 ? () => onMoveFolder(section.path as string, 1) : undefined}
           />
         ))}
       </div>
@@ -644,6 +651,9 @@ type SectionProps = {
   /** Set for an open folder's section — the head that names it. */
   onNewChat?: () => void;
   onClose?: () => void;
+  /** Moving the section among its neighbours (FO-1); unset at an edge. */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 };
 
 /** A section's rows the filter and search leave, split three ways: pinned,
@@ -719,7 +729,7 @@ function ChatFolders({ mode, groups, sections, wanted, row, onRenameGroup, onDel
 
 /** One section's rows under its head: pinned first, then the rest — its chat
  * folders stand above every section (`ChatFolders`). */
-function SectionList({ section, groups, filter, wanted, active, row, onNewChat, onClose }: SectionProps) {
+function SectionList({ section, groups, filter, wanted, active, row, onNewChat, onClose, onMoveUp, onMoveDown }: SectionProps) {
   const { path, chats, worktreeOf } = section;
   // An open folder's whole section folds under its head, remembered per
   // folder; a search shows what matches in it all the same.
@@ -757,7 +767,14 @@ function SectionList({ section, groups, filter, wanted, active, row, onNewChat, 
             <ChatMenu
               items={[
                 ...(onNewChat ? [{ id: "new", label: "New chat", icon: <Plus size={14} />, onSelect: onNewChat }] : []),
-                { id: "close", label: "Close folder", icon: <X size={14} />, divided: !!onNewChat, onSelect: onClose },
+                // Shown while either neighbour exists; the edge one is disabled.
+                ...(onMoveUp || onMoveDown
+                  ? [
+                      { id: "up", label: "Move up", icon: <ArrowUp size={14} />, disabled: !onMoveUp, hint: onMoveUp ? undefined : "Already first", onSelect: () => onMoveUp?.() },
+                      { id: "down", label: "Move down", icon: <ArrowDown size={14} />, disabled: !onMoveDown, hint: onMoveDown ? undefined : "Already last", onSelect: () => onMoveDown?.() },
+                    ]
+                  : []),
+                { id: "close", label: "Close folder", icon: <X size={14} />, divided: true, onSelect: onClose },
               ]}
             />
           )}

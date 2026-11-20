@@ -962,6 +962,7 @@ export default function App() {
           activeFolder={agentMode ? workspace.path : null}
           onNewChatIn={agentMode ? newChatIn : undefined}
           onCloseFolder={agentMode ? closeFolder : undefined}
+          onMoveFolder={agentMode ? workspace.move : undefined}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
