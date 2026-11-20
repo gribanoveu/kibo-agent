@@ -365,14 +365,13 @@
   margin-top: 14px;
   color: var(--text-dim);
 }
-.turn-clock-paw {
+.turn-clock-cosmos {
   display: inline-flex;
   width: 26px;
   height: 26px;
-  transform: translateY(3px);
 }
 /* The file's own purple gives way to the theme's accent. */
-.turn-clock-paw path {
+.turn-clock-cosmos path {
   fill: var(--accent);
 }
 .turn-clock-text {
