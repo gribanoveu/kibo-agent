@@ -729,6 +729,7 @@ export default function App() {
                   onPick: (name) => void branchPicker.pick(name),
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
+                  onWorktree: branchPicker.setWorktree,
                   locked:
                     workspace.path && turnsInFolder(workspace.path).length > 0
                       ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"

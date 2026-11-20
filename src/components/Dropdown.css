@@ -141,6 +141,12 @@
   padding-left: 9px;
   border-left: 1px solid var(--border);
 }
+/* Set apart from what precedes it: a line above, a little air. */
+.dropdown-item.divided {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 7px;
+}
 /* An option with a button of its own at the right edge. */
 .dropdown-row {
   display: flex;

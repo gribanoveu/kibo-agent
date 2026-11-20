@@ -295,6 +295,29 @@ describe("the folder tab's branch", () => {
     expect(picked).toEqual(["origin/feature"]);
   });
 
+  test("the branch menu offers a worktree as its own top row, and turns it on", () => {
+    const toggled: boolean[] = [];
+    tab(started({ onWorktree: (on) => toggled.push(on) }));
+    fireEvent.click(screen.getByTitle("Switch the folder's branch"));
+    expect(screen.getAllByRole("option")[0].textContent).toContain("New worktree");
+    fireEvent.click(screen.getByRole("option", { name: /New worktree/ }));
+    expect(toggled).toEqual([true]);
+  });
+
+  test("with worktree on the top row cancels it, and a branch still picks the base", () => {
+    const toggled: boolean[] = [];
+    const picked: string[] = [];
+    tab(started({ worktree: true, base: "main", onWorktree: (on) => toggled.push(on), onPick: (n) => picked.push(n) }));
+    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
+    fireEvent.click(screen.getByRole("option", { name: /Cancel worktree/ }));
+    expect(toggled).toEqual([false]);
+
+    // Picking a branch with Worktree on chooses the base — it is not blocked.
+    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
+    fireEvent.click(screen.getByRole("option", { name: /^feature/ }));
+    expect(picked).toEqual(["feature"]);
+  });
+
   test("once the chat has started, is left to Overview", () => {
     render(
       <FolderTab path="/work/kibo" recent={[]} branch="main" onOpenFolder={() => {}} onPickFolder={() => {}} branchPicker={started()} folderFixed />,

@@ -11,6 +11,8 @@ type Option = {
   hint?: string;
   /** Drawn under the option before it, as something that belongs to it. */
   nested?: boolean;
+  /** A line above the row, setting it apart from what precedes it. */
+  divided?: boolean;
   /** A button at the row's right edge, doing something to the option rather
       than picking it. Unavailable, it stays in place and its `title` says why. */
   action?: { icon: ReactNode; title: string; unavailable?: boolean; onRun: () => void };
@@ -122,7 +124,7 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
                 type="button"
                 role="option"
                 aria-selected={opt.value === value}
-                className={`dropdown-item${opt.value === value ? " active" : ""}${opt.nested ? " nested" : ""}`}
+                className={`dropdown-item${opt.value === value ? " active" : ""}${opt.nested ? " nested" : ""}${opt.divided ? " divided" : ""}`}
                 onClick={() => {
                   onPick(opt.value);
                   setOpen(false);

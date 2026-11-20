@@ -6,6 +6,8 @@ import "./FolderTab.css";
 
 /** Not a path: no folder is called this. */
 const PICK = "\u0000pick";
+/** Not a branch: the row that turns Worktree on or off from the branch menu. */
+const WORKTREE = "\u0000worktree";
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
@@ -55,6 +57,9 @@ type Props = {
     base?: string | null;
     /** Why the branch cannot be switched now — a turn is working in it. */
     locked?: string;
+    /** Turns Worktree on/off from the branch menu's own top row. Without it
+        the menu only lists branches. */
+    onWorktree?: (on: boolean) => void;
   };
   /** The chat on screen has started: its folder is its own, shown and not
       chosen here, and its branch is left to Overview — a new chat is where a
@@ -158,10 +163,29 @@ export function FolderTab({
             </span>
           }
           value={shownBranch}
-          options={branchPicker.branches.map((one) => ({ value: one.name, hint: one.remote ? "remote" : undefined }))}
+          options={[
+            // Worktree as its own row above the branches, not only a checkbox
+            // elsewhere: creating one starts here, from a base picked below.
+            ...(branchPicker.onWorktree
+              ? [
+                  {
+                    value: WORKTREE,
+                    label: branchPicker.worktree ? "Cancel worktree" : "New worktree…",
+                    hint: branchPicker.worktree ? "back to switching the folder's branch" : "its own folder on a new branch",
+                  },
+                ]
+              : []),
+            ...branchPicker.branches.map((one, i) => ({
+              value: one.name,
+              hint: one.remote ? "remote" : undefined,
+              divided: i === 0 && !!branchPicker.onWorktree,
+            })),
+          ]}
           emptyLabel="Reading branches…"
           onOpen={branchPicker.onOpen}
-          onPick={branchPicker.onPick}
+          onPick={(value) =>
+            value === WORKTREE ? branchPicker.onWorktree?.(!branchPicker.worktree) : branchPicker.onPick(value)
+          }
         />
       )}
       {branchShown && !branchPicker && (
