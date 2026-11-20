@@ -6,8 +6,6 @@ import "./FolderTab.css";
 
 /** Not a path: no folder is called this. */
 const PICK = "\u0000pick";
-/** Not a branch: the row that turns Worktree on or off from the branch menu. */
-const WORKTREE = "\u0000worktree";
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
@@ -52,14 +50,8 @@ type Props = {
     branches: BranchRef[];
     onOpen: () => void;
     onPick: (name: string) => void;
-    worktree: boolean;
-    /** Where a worktree starts, shown in place of the branch while Worktree is on. */
-    base?: string | null;
     /** Why the branch cannot be switched now — a turn is working in it. */
     locked?: string;
-    /** Turns Worktree on/off from the branch menu's own top row. Without it
-        the menu only lists branches. */
-    onWorktree?: (on: boolean) => void;
     /** Makes a worktree from this branch straight away — the direct gesture,
         no toggle and no base to pick first. */
     onWorktreeFrom?: (name: string) => void;
@@ -85,7 +77,7 @@ export function FolderTab({
   branchPicker,
   folderFixed = false,
 }: Props) {
-  const shownBranch = (branchPicker?.worktree && branchPicker.base) || branch || "";
+  const shownBranch = branch || "";
   const branchShown = path && branch && !folderFixed;
   return (
     <div className={`folder-tab${path ? "" : " no-folder"}`}>
@@ -155,61 +147,33 @@ export function FolderTab({
           // the way round it, so they must stay reachable; the pick itself is
           // refused upstream with the reason.
           locked={false}
-          title={
-            (branchPicker.locked && !branchPicker.worktree
-              ? branchPicker.locked
-              : undefined) ??
-            (branchPicker.worktree ? "The branch a new worktree starts from" : "Switch the folder's branch")
-          }
-          heading={branchPicker.worktree ? "Start a worktree from" : "Branch"}
-          note={
-            branchPicker.locked ??
-            (branchPicker.worktree
-              ? "The first message creates the worktree from the base picked here, opens it and is sent there."
-              : undefined)
-          }
+          title={branchPicker.locked ?? "Switch the folder's branch"}
+          heading="Branch"
+          note={branchPicker.locked}
           label={
             <span className="folder-tab-name">
-              {branchPicker.worktree ? <GitFork size={12} /> : <GitBranch size={12} />}
+              <GitBranch size={12} />
               <span className="folder-tab-text">{shownBranch}</span>
             </span>
           }
           value={shownBranch}
-          options={[
-            // The Worktree switch itself, moved here from the composer's panel:
-            // a toggle row above the branches, which become the base while on.
-            ...(branchPicker.onWorktree
-              ? [
-                  {
-                    value: WORKTREE,
-                    label: "Worktree",
-                    hint: branchPicker.worktree ? "on — the branch below is where it starts" : "a new folder on its own branch",
-                    checked: branchPicker.worktree,
-                    keepOpen: true,
+          options={branchPicker.branches.map((one) => ({
+            value: one.name,
+            hint: one.remote ? "remote" : undefined,
+            // The direct gesture: a worktree from this branch, made now.
+            ...(branchPicker.onWorktreeFrom
+              ? {
+                  action: {
+                    icon: <GitFork size={13} />,
+                    title: `New worktree from ${one.name}`,
+                    onRun: () => branchPicker.onWorktreeFrom!(one.name),
                   },
-                ]
-              : []),
-            ...branchPicker.branches.map((one, i) => ({
-              value: one.name,
-              hint: one.remote ? "remote" : undefined,
-              divided: i === 0 && !!branchPicker.onWorktree,
-              // The direct gesture: a worktree from this branch, made now.
-              ...(branchPicker.onWorktreeFrom
-                ? {
-                    action: {
-                      icon: <GitFork size={13} />,
-                      title: `New worktree from ${one.name}`,
-                      onRun: () => branchPicker.onWorktreeFrom!(one.name),
-                    },
-                  }
-                : {}),
-            })),
-          ]}
+                }
+              : {}),
+          }))}
           emptyLabel="Reading branches…"
           onOpen={branchPicker.onOpen}
-          onPick={(value) =>
-            value === WORKTREE ? branchPicker.onWorktree?.(!branchPicker.worktree) : branchPicker.onPick(value)
-          }
+          onPick={branchPicker.onPick}
         />
       )}
       {branchShown && !branchPicker && (

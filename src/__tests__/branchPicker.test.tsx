@@ -98,42 +98,8 @@ describe("picking a branch", () => {
     expect(hook.result.current.conflict).toBeNull();
   });
 
-  test("with Worktree on, a pick is only where the worktree will start", async () => {
-    const { hook, guarded } = picker();
-    expect(hook.result.current.base).toBe("main");
-    act(() => hook.result.current.setWorktree(true));
-    await act(() => hook.result.current.pick("origin/feature"));
-    expect(hook.result.current.base).toBe("origin/feature");
-    expect(commands()).toEqual([]);
-    expect(guarded()).toBe(0);
-
-    // Off again, the choice is forgotten: on again starts from the folder's own branch.
-    act(() => hook.result.current.setWorktree(false));
-    act(() => hook.result.current.setWorktree(true));
-    expect(hook.result.current.base).toBe("main");
-  });
-
-  /// Picked for a new chat, the tick is that chat's: going back to another and
-  /// then to a new chat again does not start a worktree nobody asked for there.
-  test("Worktree and its base are dropped when another chat is opened", async () => {
-    const hook = renderHook(
-      ({ chatId }) =>
-        useBranchPicker({ workspace: "/work/kibo", chatId, current: "main", guard: (go) => go(), open: async () => true, notify: () => {}, send: () => {} }),
-      { initialProps: { chatId: null as string | null } },
-    );
-    act(() => hook.result.current.setWorktree(true));
-    await act(() => hook.result.current.pick("feature"));
-    expect(hook.result.current.base).toBe("feature");
-
-    hook.rerender({ chatId: "chat-a" });
-    expect(hook.result.current.worktree).toBe(false);
-    expect(hook.result.current.base).toBe("main");
-  });
-
-  test("starting one makes it after the folder switch is agreed to, opens it, and turns Worktree off", async () => {
+  test("starting one makes it after the folder switch is agreed to, and opens it", async () => {
     const { hook, opened, guarded } = picker();
-    act(() => hook.result.current.setWorktree(true));
-    await act(() => hook.result.current.pick("feature"));
     let started: boolean | null = null;
     await act(async () => {
       started = await hook.result.current.startWorktree("feature");
@@ -142,8 +108,6 @@ describe("picking a branch", () => {
     expect(guarded()).toBe(1);
     expect(calls).toEqual([{ command: "git_worktree_add", args: { base: "feature", workspace: "/work/kibo" } }]);
     expect(opened).toEqual(["/home/.kibo/worktrees/kibo/main"]);
-    expect(hook.result.current.worktree).toBe(false);
-    expect(hook.result.current.base).toBe("main");
   });
 
   /// A worktree nobody opens would be left on disk; the message goes back to the box.
@@ -267,7 +231,6 @@ describe("the folder tab's branch", () => {
     ],
     onOpen: () => {},
     onPick: () => {},
-    worktree: false,
     ...over,
   });
 
@@ -286,40 +249,12 @@ describe("the folder tab's branch", () => {
       ],
       onOpen: () => opened++,
       onPick: (name) => picked.push(name),
-      worktree: false,
     });
     fireEvent.click(screen.getByTitle("Switch the folder's branch"));
     expect(opened).toBe(1);
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["main", "origin/featureremote"]);
     fireEvent.click(screen.getByRole("option", { name: /origin\/feature/ }));
     expect(picked).toEqual(["origin/feature"]);
-  });
-
-  test("the branch menu carries the Worktree switch; toggling keeps the menu open", () => {
-    const toggled: boolean[] = [];
-    tab(started({ onWorktree: (on) => toggled.push(on) }));
-    fireEvent.click(screen.getByTitle("Switch the folder's branch"));
-    expect(screen.getAllByRole("option")[0].textContent).toContain("Worktree");
-    fireEvent.click(screen.getByRole("option", { name: /^Worktree/ }));
-    expect(toggled).toEqual([true]);
-    // keepOpen: the base can be picked straight after, without reopening.
-    expect(screen.getByRole("listbox")).toBeTruthy();
-  });
-
-  test("with worktree on the switch is checked, the note says how it is made, and a branch picks the base", () => {
-    const toggled: boolean[] = [];
-    const picked: string[] = [];
-    tab(started({ worktree: true, base: "main", onWorktree: (on) => toggled.push(on), onPick: (n) => picked.push(n) }));
-    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
-    expect(screen.getByText(/The first message creates the worktree/)).toBeTruthy();
-    const row = screen.getByRole("option", { name: /^Worktree/ });
-    expect(row.querySelector(".dropdown-check")).toBeTruthy();
-    fireEvent.click(row);
-    expect(toggled).toEqual([false]);
-
-    // Picking a branch with Worktree on chooses the base — it is not blocked.
-    fireEvent.click(screen.getByRole("option", { name: /^feature/ }));
-    expect(picked).toEqual(["feature"]);
   });
 
   test("each branch row carries a worktree-from-here action that makes it straight away", () => {
@@ -348,18 +283,6 @@ describe("the folder tab's branch", () => {
     expect(screen.getByTitle("New worktree from feature")).toBeTruthy();
   });
 
-  test("with Worktree on, another turn does not lock the choice of its base", () => {
-    tab(started({ worktree: true, base: "feature", locked: "An agent is working in this folder" }));
-    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
-    expect(screen.getByRole("option", { name: "feature" })).toBeTruthy();
-  });
-
-  test("with Worktree on, the menu asks where the worktree starts and shows that branch", () => {
-    tab({ branches: [], onOpen: () => {}, onPick: () => {}, worktree: true, base: "feature" });
-    expect(screen.getByTitle("The branch a new worktree starts from").textContent).toContain("feature");
-    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
-    expect(screen.getByText("Start a worktree from")).toBeTruthy();
-  });
 });
 
 describe("a folder that is a worktree", () => {

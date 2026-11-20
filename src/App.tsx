@@ -534,12 +534,6 @@ export default function App() {
     // The composer has already cleared the box: a picker closed without a
     // folder gives the message back rather than losing it.
     if (!workspace.path && !(await workspace.pick())) return giveBack(text, images);
-    // With Worktree ticked the first message is where the worktree is made:
-    // sent here, it would be worked on in the folder the user meant to keep out of.
-    if (unstarted && branchPicker.worktree && branchPicker.base) {
-      if (!(await branchPicker.startWorktree(branchPicker.base, text, sent, images))) giveBack(text, images);
-      return;
-    }
     agent.send(text, sent, images);
   };
 
@@ -739,9 +733,6 @@ export default function App() {
                     }
                     void branchPicker.pick(name);
                   },
-                  worktree: branchPicker.worktree,
-                  base: branchPicker.base,
-                  onWorktree: branchPicker.setWorktree,
                   onWorktreeFrom: (name) => void branchPicker.startWorktree(name),
                   locked: branchLocked,
                 }}

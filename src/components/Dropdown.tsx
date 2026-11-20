@@ -11,12 +11,6 @@ type Option = {
   hint?: string;
   /** Drawn under the option before it, as something that belongs to it. */
   nested?: boolean;
-  /** A line above the row, setting it apart from what precedes it. */
-  divided?: boolean;
-  /** A toggle row: shows the check from this, not from being the picked value. */
-  checked?: boolean;
-  /** Picking it acts but leaves the menu open — a toggle, then a choice under it. */
-  keepOpen?: boolean;
   /** A button at the row's right edge, doing something to the option rather
       than picking it. Unavailable, it stays in place and its `title` says why. */
   action?: { icon: ReactNode; title: string; unavailable?: boolean; onRun: () => void };
@@ -128,17 +122,17 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
                 type="button"
                 role="option"
                 aria-selected={opt.value === value}
-                className={`dropdown-item${opt.value === value ? " active" : ""}${opt.nested ? " nested" : ""}${opt.divided ? " divided" : ""}`}
+                className={`dropdown-item${opt.value === value ? " active" : ""}${opt.nested ? " nested" : ""}`}
                 onClick={() => {
                   onPick(opt.value);
-                  if (!opt.keepOpen) setOpen(false);
+                  setOpen(false);
                 }}
               >
                 <span className="dropdown-item-text">
                   <span className="dropdown-item-label">{opt.label ?? opt.value}</span>
                   {opt.hint && <span className="hint">{opt.hint}</span>}
                 </span>
-                {(opt.checked || opt.value === value) && <Check className="dropdown-check" size={13} />}
+                {opt.value === value && <Check className="dropdown-check" size={13} />}
               </button>
             );
             const action = opt.action;

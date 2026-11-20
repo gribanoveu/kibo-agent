@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-11-20 Make a worktree straight from a branch row in the branch menu (a worktree-from-here action on each branch); the Worktree switch also lives there for starting one with the first message
+- 2026-11-20 Make a worktree straight from a branch row in the branch menu (a worktree-from-here action on each branch): created and opened at once, and reachable even while a turn locks branch switching
 - 2026-11-20 Reorder the open folders in Agent mode from a section's ⋮ menu (Move up / Move down); the order is remembered across restarts
 - 2026-11-20 A chat's ⋮ menu stays open while the agent replies: only scrolling the list that holds the row closes it, not the chat log's own autoscroll
 - 2026-11-20 A folder's chat list in Agent mode shows its first four chats; the rest open with a "Show all" button, and a search still finds every chat

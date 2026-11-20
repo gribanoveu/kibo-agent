@@ -6,7 +6,8 @@ import type { ImagePart } from "../lib/images";
 export type BranchConflict = { branch: string; paths: string[] };
 
 type Deps = {
-  /** The chat on screen: Worktree and its base are that chat's choice, not the next one's. */
+  /** The chat on screen. Accepted from callers; the picker keeps no per-chat
+      mode now that a worktree is an explicit action, not a tick to remember. */
   chatId: string | null;
   /** The folder the branches are read from and switched in — the active one. */
   workspace: string | null;
@@ -23,9 +24,9 @@ type Deps = {
 };
 
 /**
- * The branch a new chat starts on. With Worktree off, picking a branch
- * switches the open folder. With it on, the pick is only where the worktree
- * will start (`base`); the first message makes it, opens it and is sent there.
+ * The branch a new chat starts on: picking a branch switches the open folder.
+ * A worktree is made from a branch by an explicit action (`startWorktree`),
+ * which opens it and can send a first message there — no deferred mode.
  *
  * Call it after `useFolderConversation`: the message is sent from an effect,
  * and the fresh thread the folder switch starts has to be in place first.
@@ -35,20 +36,11 @@ type Deps = {
  * worktree as the way round it; committing or stashing is left to the user,
  * or to the agent when asked.
  */
-export function useBranchPicker({ chatId, workspace, current, guard, open, notify, send, onSwitched }: Deps) {
+export function useBranchPicker({ workspace, current, guard, open, notify, send, onSwitched }: Deps) {
   const [branches, setBranches] = useState<BranchRef[]>([]);
-  const [worktree, setWorktree] = useState(false);
-  // Where a worktree starts; `null` is the branch checked out now.
-  const [base, setBase] = useState<string | null>(null);
   const [conflict, setConflict] = useState<BranchConflict | null>(null);
   // A first message waiting for its worktree to be the open folder.
   const [waiting, setWaiting] = useState<{ text: string; sent?: string; images?: ImagePart[] } | null>(null);
-
-  // Another chat is not this one's start: whatever was ticked for it is dropped.
-  useEffect(() => {
-    setWorktree(false);
-    setBase(null);
-  }, [chatId]);
 
   useEffect(() => {
     if (waiting === null) return;
@@ -79,8 +71,6 @@ export function useBranchPicker({ chatId, workspace, current, guard, open, notif
               try {
                 const opened = await open(await gitWorktreeAdd(from, workspace));
                 if (opened) {
-                  setWorktree(false);
-                  setBase(null);
                   if (message !== undefined) setWaiting({ text: message, sent, images });
                 }
                 resolve(opened);
@@ -98,7 +88,6 @@ export function useBranchPicker({ chatId, workspace, current, guard, open, notif
 
   const pick = useCallback(
     async (name: string) => {
-      if (worktree) return setBase(name === current ? null : name);
       if (name === current) return;
       try {
         const outcome = await gitCheckout(name, workspace);
@@ -108,23 +97,15 @@ export function useBranchPicker({ chatId, workspace, current, guard, open, notif
         notify(String(e));
       }
     },
-    [worktree, current, notify, onSwitched, workspace],
+    [current, notify, onSwitched, workspace],
   );
 
   const closeConflict = useCallback(() => setConflict(null), []);
-  // Off, a base chosen earlier is forgotten: on again starts from where the folder is.
-  const toggleWorktree = useCallback((on: boolean) => {
-    setWorktree(on);
-    if (!on) setBase(null);
-  }, []);
 
   return {
     branches,
     load,
     pick,
-    worktree,
-    setWorktree: toggleWorktree,
-    base: base ?? current,
     conflict,
     closeConflict,
     startWorktree,
