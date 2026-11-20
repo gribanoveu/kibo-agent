@@ -122,8 +122,9 @@
   flex-direction: column;
   gap: 2px;
   width: 100%;
-  /* The command reads to the measure of a line, not to the thread's edge. */
-  max-width: 80ch;
+  /* The notice sits in the same column as the message text; a long command
+     wraps inside it rather than running on to the panel's edge. */
+  max-width: 100%;
   margin: 8px 0 6px;
   padding: 0;
   border: none;
@@ -167,9 +168,10 @@
   font-size: var(--fs-xs);
   color: var(--text-dim);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* A long command wraps (keeping its own line breaks) instead of being
+     cut off at the column's edge. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* With no description the command is the title. */
 .process-ended-command.solo {
