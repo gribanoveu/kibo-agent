@@ -316,6 +316,10 @@ function SubagentCard({
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
   const running = block.status === "running";
+  const title = block.name === "review" ? shown.name : shown.arg;
+  // The card appears as soon as the call does, before the model has written
+  // the task: a shimmering bar stands where the title will land.
+  const awaiting = running && !title.trim();
   // A helper's steps are its output, one line each; the last one is what it
   // is doing now. Held a moment each, so quick steps do not flicker past.
   const steps = block.output.split("\n").filter(Boolean);
@@ -337,9 +341,13 @@ function SubagentCard({
           <Bot size={14} />
         </span>
         <span className="subagent-body">
-          <span className="subagent-title">{block.name === "review" ? shown.name : shown.arg}</span>
+          <span className={`subagent-title${awaiting ? " skeleton" : ""}`}>{awaiting ? "" : title}</span>
           <span className="subagent-meta">
-            {now && <span className="subagent-now">{now}</span>}
+            {awaiting && !now ? (
+              <span className="subagent-now">writing the task…</span>
+            ) : (
+              now && <span className="subagent-now">{now}</span>
+            )}
             {facts && <span className="subagent-facts">{facts}</span>}
           </span>
         </span>

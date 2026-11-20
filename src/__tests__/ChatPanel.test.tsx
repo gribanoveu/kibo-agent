@@ -792,6 +792,12 @@ describe("a helper's explore card", () => {
     expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
   });
 
+  test("before the model writes the task, the card shows a skeleton and says it is writing", () => {
+    panel(state([{ ...explored, arguments: "", status: "running", result: undefined, output: "" } as Block]));
+    expect(document.querySelector(".subagent-card.running .subagent-title.skeleton")).toBeTruthy();
+    expect(screen.getByText("writing the task…")).toBeTruthy();
+  });
+
   test("its run is a click away in the sheet over the chat", () => {
     const opened: unknown[] = [];
     render(

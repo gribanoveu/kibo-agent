@@ -892,6 +892,31 @@ textarea,
 .del {
   color: var(--red);
 }
+/* A placeholder bar where content is still being written — a helper's task
+   before the model has produced it. Sweeps like the live step does. */
+.skeleton {
+  display: block;
+  width: 70%;
+  max-width: 320px;
+  height: 0.85em;
+  border-radius: var(--radius-xs);
+  background: linear-gradient(90deg, var(--bg-panel-soft) 0%, var(--border-soft) 50%, var(--bg-panel-soft) 100%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.6s linear infinite;
+}
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
 .mono {
   font-family: var(--font-mono);
 }
