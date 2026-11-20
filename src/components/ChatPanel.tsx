@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   AppWindow,
@@ -307,14 +307,67 @@ const previewInOpenWorkspace: PreviewCalls = (calls) => previewCalls("", calls);
  * unfolds the steps so far, a settled one its answer, with its run in the
  * Agents tab a link away.
  */
+/** The line every review brief opens with (`domain::review::review_message`);
+ * a running review's helper is found by it, in call order. */
+const REVIEW_TASK_PREFIX = "Review the change in this repository.";
+
+/** Which helper run each helper card is. An explore by its whole brief — the
+ * row's title is only the brief's question, which a context line can precede,
+ * so a prefix of the title would miss it. A running review by the shared
+ * opening line in call order, since two reviews share it and order tells them
+ * apart. A settled one by the id its result names.
+ */
+function helperAgents(blocks: Block[], agents: AgentInfo[]): Map<string, AgentInfo> {
+  const matched = new Map<string, AgentInfo>();
+  const used = new Set<number>();
+  const running = agents.filter((a) => a.state.state === "running");
+  const helpers = blocks.filter(
+    (b): b is Extract<Block, { kind: "tool" }> => b.kind === "tool" && (b.name === "explore" || b.name === "review"),
+  );
+  const taskOf = (block: Extract<Block, { kind: "tool" }>): string | undefined => {
+    try {
+      const args = JSON.parse(block.arguments) as { task?: unknown };
+      return typeof args.task === "string" ? args.task : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  for (const block of helpers) {
+    if (block.status !== "running" || block.name !== "explore") continue;
+    const task = taskOf(block);
+    const agent = running.find((a) => !used.has(a.id) && a.task === task);
+    if (agent) {
+      used.add(agent.id);
+      matched.set(block.id, agent);
+    }
+  }
+  const reviews = running.filter((a) => !used.has(a.id) && a.task.startsWith(REVIEW_TASK_PREFIX));
+  let at = 0;
+  for (const block of helpers) {
+    if (block.status !== "running" || block.name !== "review") continue;
+    const agent = reviews[at++];
+    if (agent) {
+      used.add(agent.id);
+      matched.set(block.id, agent);
+    }
+  }
+  for (const block of helpers) {
+    if (matched.has(block.id)) continue;
+    const id = block.result && typeof block.result === "object" ? (block.result as { agent?: number }).agent : undefined;
+    const agent = id === undefined ? undefined : agents.find((a) => a.id === id);
+    if (agent) matched.set(block.id, agent);
+  }
+  return matched;
+}
+
 function SubagentCard({
   block,
   onOpenAgent,
-  agents,
+  agent,
 }: {
   block: Extract<Block, { kind: "tool" }>;
   onOpenAgent?: OpenAgent;
-  agents?: AgentInfo[];
+  agent?: AgentInfo;
 }) {
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
@@ -329,12 +382,6 @@ function SubagentCard({
   const now = useSteadyValue(running && steps.length > 0 ? describeHelperStep(steps[steps.length - 1]) : null, STEP_MS);
   const tokens =
     !block.error && block.result && typeof block.result === "object" ? (block.result as { tokens?: AgentTokens }).tokens : undefined;
-  // The run this card is, among the chat's helpers: by id once settled, by
-  // the task's own words while it runs. Its live meter reads on the card.
-  const resultAgent = block.result && typeof block.result === "object" ? (block.result as { agent?: number }).agent : undefined;
-  const agent = agents?.find(
-    (a) => (resultAgent !== undefined && a.id === resultAgent) || (!!title && a.task.startsWith(title)),
-  );
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     if (!running) return;
@@ -985,6 +1032,8 @@ export function Transcript({
   const offers = onOffer && turn.status === "done" ? offersOf(turn.blocks.slice(lastAsked + 1)) : [];
   // The one answer still arriving: the last block of a running turn.
   const streamingId = turn.status === "running" ? turn.blocks[turn.blocks.length - 1]?.id : undefined;
+  // Each helper card's own run, matched once for the whole transcript.
+  const helper = useMemo(() => helperAgents(turn.blocks, subagents), [turn.blocks, subagents]);
   return (
     <>
       {groups.map((turnGroup, index) => (
@@ -1011,7 +1060,7 @@ export function Transcript({
               renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview, {
                 live: turn.status === "running",
                 onAnswer: onAnswerQuestion,
-              }, onOpenVersion, subagents)
+              }, onOpenVersion, helper.get(block.id))
             ),
           )}
           {workedFooter(
@@ -1306,7 +1355,7 @@ function renderBlock(
   preview?: PreviewCalls,
   questions?: { live: boolean; onAnswer?: (id: string, answer: McpAnswer) => void },
   onOpenVersion?: (version: number) => void,
-  agents?: AgentInfo[],
+  agent?: AgentInfo,
 ) {
   switch (block.kind) {
     case "user":
@@ -1379,7 +1428,7 @@ function renderBlock(
       // row in the calls — a review here is the running or the failed one, a
       // settled one stood as its report above.
       if (block.name === "review" || block.name === "explore") {
-        return <SubagentCard key={block.id} block={block} onOpenAgent={onOpenAgent} agents={agents} />;
+        return <SubagentCard key={block.id} block={block} onOpenAgent={onOpenAgent} agent={agent} />;
       }
       return (
         <div className="tools" key={block.id}>

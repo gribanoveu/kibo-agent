@@ -427,6 +427,25 @@ describe("how long the agent worked", () => {
     expect(facts()).toEqual(["~1k tokens · ~20 tok/s", "~570 tokens · ~10 tok/s"]);
   });
 
+  test("an explore whose brief opens with a context line still matches its run", () => {
+    const brief = "Repository: /work/kibo\nQuestion: where is X?";
+    const block = { ...exploring("e1"), arguments: JSON.stringify({ task: brief }) } as Block;
+    transcript([sub(1, { task: brief })], [block]);
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
+  });
+
+  test("two running reviews each carry their own meter, in call order", () => {
+    const review = (id: string) => ({ kind: "tool", id, round: 1, name: "review", arguments: "{}", status: "running", output: "" }) as Block;
+    transcript(
+      [
+        sub(1, { task: "Review the change in this repository.\nRange: a." }),
+        sub(2, { task: "Review the change in this repository.\nRange: b.", tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } }),
+      ],
+      [review("r1"), review("r2")],
+    );
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s", "~570 tokens · ~10 tok/s"]);
+  });
+
   test("a subagent too young to estimate shows its tokens, no speed", () => {
     transcript([sub(1, { progress: { streamSince: Date.now() - 500, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
     expect(facts()).toEqual(["~1k tokens"]);
