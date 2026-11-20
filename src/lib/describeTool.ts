@@ -770,6 +770,24 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Diagnose: (n) => `diagnosed ${n === 1 ? "a workload" : `${n} workloads`}`,
 };
 
+/** A call's diff arithmetic from its result, not from the row's wording: the
+ * added and removed lines, or `null` when the call carries no diff. Summing
+ * this keeps the group's stat honest however the row's meta is phrased. */
+export function diffStatOf(block: Extract<Block, { kind: "tool" }>): { added: number; removed: number } | null {
+  const result = asObject(block.result);
+  const diff = asObject(result.diff);
+  const added = num(diff.linesAdded);
+  if (added !== undefined) return { added, removed: num(diff.linesRemoved) ?? 0 };
+  if (Array.isArray(result.files)) {
+    const files = result.files as Json[];
+    return {
+      added: files.reduce((n, f) => n + (num(asObject(f.diff).linesAdded) ?? 0), 0),
+      removed: files.reduce((n, f) => n + (num(asObject(f.diff).linesRemoved) ?? 0), 0),
+    };
+  }
+  return null;
+}
+
 export function describeRun(tools: Extract<Block, { kind: "tool" }>[]): string {
   const counts = new Map<string, number>();
   for (const tool of tools) {

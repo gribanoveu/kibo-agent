@@ -56,7 +56,7 @@ import { CopyAction } from "./CopyAction";
 import { ImageThumbs } from "./ImageThumbs";
 import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
-import { describeActive, describeHelperStep, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
+import { describeActive, describeHelperStep, describeRun, describeTool, diffStatOf, type AgentFocus } from "../lib/describeTool";
 import { highlight, splitLines, type Token } from "../lib/highlight";
 import { type AgentInfo, type AgentTokens, agentSpeed, tokensLive, tokensSpent } from "../lib/agents";
 import { compactTokens } from "../lib/usage";
@@ -836,10 +836,10 @@ function ToolRun({
   // the "+20 -6" Claude Code shows against the group, not per row only.
   const stat = tools.reduce(
     (acc, tool) => {
-      const m = /\+(\d+) -(\d+)/.exec(describeTool(tool).meta ?? "");
-      if (m) {
-        acc.added += Number(m[1]);
-        acc.removed += Number(m[2]);
+      const s = diffStatOf(tool);
+      if (s) {
+        acc.added += s.added;
+        acc.removed += s.removed;
       }
       return acc;
     },
