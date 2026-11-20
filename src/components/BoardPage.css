@@ -1,13 +1,23 @@
-/* Three columns side by side, as tall as the longest: an empty one is still
-   somewhere to drop a card. */
+/* Three columns side by side, filling the body's height: each is a fixed box
+   whose cards scroll inside it, so a column's top and bottom stay in view
+   however long its list is. */
+.page-body:has(.board-columns) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .board-columns {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
   gap: 12px;
   margin-top: 4px;
 }
 .board-column {
-  min-height: 120px;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -16,8 +26,8 @@
   background: var(--bg-panel-soft);
 }
 /* The column's name after a dot in its colour: waiting, under way, finished.
-   Pinned to the body's top while its cards scroll under it, so the column
-   stays named however far down the board is read. */
+   Pinned to the column's own top while its cards scroll under it, so the
+   column stays named however far down its list is read. */
 .board-column-head {
   position: sticky;
   top: 0;
@@ -324,9 +334,13 @@
   color: var(--red);
   font-size: var(--fs-md);
 }
-/* Under the columns, folded until asked for. */
+/* Under the columns, folded until asked for; kept to its own share of the
+   body so an open archive scrolls itself instead of eating the columns. */
 .board-archive {
-  margin-top: 20px;
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+  margin-top: 12px;
 }
 .board-archive-toggle {
   display: flex;
