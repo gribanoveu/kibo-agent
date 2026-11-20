@@ -497,13 +497,11 @@ export default function App() {
   // Before the first message the branch is where the chat starts; after it,
   // the chat's own branch — switched only between turns, never under one.
   const branchPicker = useBranchPicker({
-    chatId: agent.chatId,
     workspace: workspace.path,
     current: branch,
     guard: folderSwitch.guard,
     open: workspace.open,
     notify: toast.show,
-    send: agent.send,
     onSwitched: agent.saveBranch,
   });
   // A turn working in the folder forbids switching its branch under it; the

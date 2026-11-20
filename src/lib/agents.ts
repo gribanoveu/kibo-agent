@@ -107,26 +107,6 @@ export function tokensLive(a: AgentInfo): number {
   return a.tokens.prompt + a.tokens.completion + Math.round(a.progress.streamChars / charsPerToken(a));
 }
 
-/**
- * The Working panel's subagent line: the running ones' summed speed and
- * tokens, or `null` with none running. `speed` is `null` until one has an
- * estimate; `streaming` says the tokens carry an estimate of their own.
- */
-export function subagentMeter(
-  agents: AgentInfo[],
-  now: number,
-): { count: number; speed: number | null; tokens: number; streaming: boolean } | null {
-  const running = agents.filter((a) => a.state.state === "running");
-  if (running.length === 0) return null;
-  const speeds = running.map((a) => agentSpeed(a, now)).filter((rate): rate is number => rate !== null);
-  return {
-    count: running.length,
-    speed: speeds.length ? speeds.reduce((sum, rate) => sum + rate, 0) : null,
-    tokens: running.reduce((sum, a) => sum + tokensLive(a), 0),
-    streaming: running.some((a) => a.progress.streamSince !== null),
-  };
-}
-
 /** A step as the helper logged it, `readFile src/auth.rs`: the tool, then what it was called on. */
 export function splitStep(step: string): { tool: string; on: string } {
   const space = step.indexOf(" ");

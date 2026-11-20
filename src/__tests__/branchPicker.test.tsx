@@ -1,6 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
-import { useState } from "react";
 import type { CheckoutOutcome } from "../lib/git";
 
 // A chat not yet started picks its branch. The app switches only when git
@@ -39,7 +38,6 @@ afterEach(() => {
 const { useBranchPicker } = await import("../hooks/useBranchPicker");
 const { FolderTab } = await import("../components/FolderTab");
 const { BranchConflictDialog } = await import("../components/BranchConflictDialog");
-const { useFolderConversation } = await import("../hooks/useFolderConversation");
 
 const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
 const commands = () => calls.map((call) => call.command);
@@ -52,7 +50,6 @@ const picker = ({ agree = true }: Setup = {}) => {
   let switched = 0;
   const hook = renderHook(() =>
     useBranchPicker({ workspace: "/work/kibo",
-      chatId: null,
       current: "main",
       guard: (go, onCancel) => {
         guarded++;
@@ -64,7 +61,6 @@ const picker = ({ agree = true }: Setup = {}) => {
         return true;
       },
       notify: (message) => notes.push(message),
-      send: () => {},
       onSwitched: () => switched++,
     }),
   );
@@ -120,60 +116,6 @@ describe("picking a branch", () => {
     expect(started).toBe(false);
     expect(commands()).toEqual([]);
     expect(opened).toEqual([]);
-  });
-
-  /// Sent into the old folder, the agent would work where the user meant to keep out of; sent
-  /// before the switch's fresh thread, it would be wiped by it.
-  test("the first message is sent in the worktree, after the folder switch has started its thread", async () => {
-    const log: string[] = [];
-    const agent = { turn: { blocks: [] }, open: () => {}, reset: () => log.push("reset") };
-    const hook = renderHook(() => {
-      const [folder, setFolder] = useState("/work/kibo");
-      useFolderConversation(folder, false, undefined, agent);
-      const picker = useBranchPicker({ workspace: "/work/kibo",
-        chatId: null,
-        current: "main",
-        guard: (go) => go(),
-        open: async (path) => {
-          log.push(`open ${path}`);
-          setFolder(path);
-          return true;
-        },
-        notify: () => {},
-        send: (text) => log.push(`send "${text}" in ${folder}`),
-      });
-      return picker;
-    });
-    await act(async () => {
-      await hook.result.current.startWorktree("main", "fix the parser");
-    });
-    await settle();
-    expect(log).toEqual([
-      "open /home/.kibo/worktrees/kibo/main",
-      "reset",
-      'send "fix the parser" in /home/.kibo/worktrees/kibo/main',
-    ]);
-  });
-
-  test("nothing is sent when the worktree does not open", async () => {
-    const sent: string[] = [];
-    const { result } = renderHook(() =>
-      useBranchPicker({ workspace: "/work/kibo",
-        chatId: null,
-        current: "main",
-        guard: (_go, onCancel) => onCancel?.(),
-        open: async () => true,
-        notify: () => {},
-        send: (text) => sent.push(text),
-      }),
-    );
-    let started: boolean | null = null;
-    await act(async () => {
-      started = await result.current.startWorktree("main", "fix it");
-    });
-    await settle();
-    expect(started).toBe(false);
-    expect(sent).toEqual([]);
   });
 
   test("says it did not start one when git refuses", async () => {
