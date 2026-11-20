@@ -214,7 +214,7 @@ function BoardColumn({ column, label, count, empty, action, children }: ColumnPr
         {action}
         {column === "done" && (
           <span className="board-column-tip">
-            <InfoTip text={`Done keeps the last ${DONE_KEEP} finished cards; older ones move to the Archive.`} />
+            <InfoTip below text={`Done keeps the last ${DONE_KEEP} finished cards; older ones move to the Archive.`} />
           </span>
         )}
       </h2>
