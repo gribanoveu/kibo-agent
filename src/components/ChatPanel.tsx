@@ -58,7 +58,8 @@ import { McpQuestionCard } from "./McpQuestionCard";
 import { Markdown } from "./Markdown";
 import { describeActive, describeHelperStep, describeRun, describeTool, type AgentFocus } from "../lib/describeTool";
 import { highlight, splitLines, type Token } from "../lib/highlight";
-import { type AgentInfo, type AgentTokens, subagentMeter, tokensSpent } from "../lib/agents";
+import { type AgentInfo, type AgentTokens, agentSpeed, tokensLive, tokensSpent } from "../lib/agents";
+import { compactTokens } from "../lib/usage";
 import { useAgents } from "../hooks/useAgents";
 import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
@@ -309,9 +310,11 @@ const previewInOpenWorkspace: PreviewCalls = (calls) => previewCalls("", calls);
 function SubagentCard({
   block,
   onOpenAgent,
+  agents,
 }: {
   block: Extract<Block, { kind: "tool" }>;
   onOpenAgent?: OpenAgent;
+  agents?: AgentInfo[];
 }) {
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
@@ -326,9 +329,24 @@ function SubagentCard({
   const now = useSteadyValue(running && steps.length > 0 ? describeHelperStep(steps[steps.length - 1]) : null, STEP_MS);
   const tokens =
     !block.error && block.result && typeof block.result === "object" ? (block.result as { tokens?: AgentTokens }).tokens : undefined;
+  // The run this card is, among the chat's helpers: by id once settled, by
+  // the task's own words while it runs. Its live meter reads on the card.
+  const resultAgent = block.result && typeof block.result === "object" ? (block.result as { agent?: number }).agent : undefined;
+  const agent = agents?.find(
+    (a) => (resultAgent !== undefined && a.id === resultAgent) || (!!title && a.task.startsWith(title)),
+  );
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [running]);
+  const liveSpeed = running && agent ? agentSpeed(agent, nowMs) : null;
+  const liveTokens = running && agent ? tokensLive(agent) : null;
   const facts = [
     steps.length > 0 ? `${steps.length} ${steps.length === 1 ? "step" : "steps"}` : "",
-    tokens ? tokensSpent(tokens) : "",
+    tokens ? tokensSpent(tokens) : liveTokens !== null ? `~${compactTokens(liveTokens)} tokens` : "",
+    liveSpeed !== null ? `~${Math.round(liveSpeed)} tok/s` : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -621,28 +639,6 @@ function Spent({ spent }: { spent: number }) {
   );
 }
 
-/**
- * "· subagent ~42 tok/s · 3.1k tokens": what the chat's running subagents
- * spend, estimated while they stream — their own, not the chat's context.
- * Several run at once; the line is theirs together.
- */
-function SubagentLine({ agents, now }: { agents: AgentInfo[]; now: number }) {
-  const meter = subagentMeter(agents, now);
-  if (!meter) return null;
-  return (
-    <>
-      <span className="turn-clock-sep">·</span>
-      <span className="turn-clock-time">{meter.count === 1 ? "subagent" : `${meter.count} subagents`}</span>
-      <Speed rate={meter.speed} prefix="~" />
-      <span className="turn-clock-sep">·</span>
-      <span className="turn-clock-time">
-        {meter.streaming ? "~" : ""}
-        {formatTokens(meter.tokens)} tokens
-      </span>
-    </>
-  );
-}
-
 /** The session's average output speed, or `null` before anything was timed. */
 const averageSpeed = ({ speed }: TurnState) => (speed.ms > 0 ? (speed.tokens * 1000) / speed.ms : null);
 
@@ -654,13 +650,11 @@ function WorkingClock({
   since,
   before,
   turn,
-  subagents = [],
   children,
 }: {
   since: number;
   before: number;
   turn: TurnState;
-  subagents?: AgentInfo[];
   children?: ReactNode;
 }) {
   const [now, setNow] = useState(() => Date.now());
@@ -676,7 +670,6 @@ function WorkingClock({
       <span className="turn-clock-time">{formatDuration(before + Math.max(0, now - since))}</span>
       {live === null ? <Speed rate={turn.speed.last} /> : <Speed rate={live} prefix="~" />}
       <Spent spent={turn.spent} />
-      <SubagentLine agents={subagents} now={now} />
       {children}
     </div>
   );
@@ -1018,7 +1011,7 @@ export function Transcript({
               renderBlock(block, onDecide, block.id === streamingId, onOpenProcess, onPasteCommand, onOpenFile, onFix, onOpenAgent, preview, {
                 live: turn.status === "running",
                 onAnswer: onAnswerQuestion,
-              }, onOpenVersion)
+              }, onOpenVersion, subagents)
             ),
           )}
           {workedFooter(
@@ -1046,7 +1039,7 @@ export function Transcript({
       {turn.status === "running" && turn.runningSince !== null && (
         <>
           <TaskTicker checklist={checklist} />
-          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn} subagents={subagents}>
+          <WorkingClock since={turn.runningSince} before={turnMessage(groups, groups.length - 1)?.workedMs ?? 0} turn={turn}>
             <RunningProcesses ids={runningProcesses} onOpen={onOpenProcess} />
           </WorkingClock>
         </>
@@ -1313,6 +1306,7 @@ function renderBlock(
   preview?: PreviewCalls,
   questions?: { live: boolean; onAnswer?: (id: string, answer: McpAnswer) => void },
   onOpenVersion?: (version: number) => void,
+  agents?: AgentInfo[],
 ) {
   switch (block.kind) {
     case "user":
@@ -1385,7 +1379,7 @@ function renderBlock(
       // row in the calls — a review here is the running or the failed one, a
       // settled one stood as its report above.
       if (block.name === "review" || block.name === "explore") {
-        return <SubagentCard key={block.id} block={block} onOpenAgent={onOpenAgent} />;
+        return <SubagentCard key={block.id} block={block} onOpenAgent={onOpenAgent} agents={agents} />;
       }
       return (
         <div className="tools" key={block.id}>

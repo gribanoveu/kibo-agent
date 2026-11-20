@@ -392,8 +392,9 @@ describe("how long the agent worked", () => {
     expect(screen.queryByText(/running/)).toBeNull();
   });
 
-  /// The subagents' own line: their tokens are not the chat's context, and
-  /// while they stream their speed and tokens are the chat's own estimate.
+  /// The subagents' own meter: their tokens are not the chat's context, and
+  /// while they stream their speed and tokens are the chat's own estimate —
+  /// read on each helper's card, not on the chat's Working line.
   const sub = (id: number, over: Partial<AgentInfo> = {}): AgentInfo => ({
     id,
     task: "t",
@@ -404,31 +405,44 @@ describe("how long the agent worked", () => {
     progress: { streamSince: Date.now() - 2000, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } },
     ...over,
   });
-  const liveTurn = () => state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 });
-  const transcript = (subagents: AgentInfo[]) =>
-    render(<Transcript turn={liveTurn()} onDecide={() => {}} subagents={subagents} />);
+  const exploring = (id: string, task = "t") =>
+    ({ kind: "tool", id, round: 1, name: "explore", arguments: JSON.stringify({ task }), status: "running", output: "" }) as Block;
+  const liveTurn = (blocks: Block[] = [exploring("e1")]) =>
+    state([{ kind: "user", id: "u0", text: "fix it" }, ...blocks], { status: "running", runningSince: Date.now() - 5_000 });
+  const transcript = (subagents: AgentInfo[], blocks?: Block[]) =>
+    render(<Transcript turn={liveTurn(blocks)} onDecide={() => {}} subagents={subagents} />);
+  const facts = () => [...document.querySelectorAll(".subagent-card .subagent-facts")].map((e) => e.textContent);
 
-  test("a running subagent's speed and tokens beside the clock, estimated while it streams", () => {
+  test("a running subagent's speed and tokens on its card, and not on the Working line", () => {
     transcript([sub(1)]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·subagent·~20 tok/s·~1.1k tokens");
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
   });
 
-  test("several run at once: one line, summed, with the count", () => {
-    transcript([sub(1), sub(2, { tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·2 subagents·~30 tok/s·~1.7k tokens");
+  test("several run at once: each card carries its own meter", () => {
+    transcript(
+      [sub(1, { task: "t1" }), sub(2, { task: "t2", tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } })],
+      [exploring("e1", "t1"), exploring("e2", "t2")],
+    );
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s", "~570 tokens · ~10 tok/s"]);
   });
 
   test("a subagent too young to estimate shows its tokens, no speed", () => {
     transcript([sub(1, { progress: { streamSince: Date.now() - 500, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·subagent·~1.1k tokens");
+    expect(facts()).toEqual(["~1k tokens"]);
   });
 
-  test("no line with none running, and none once the turn ends", () => {
-    const live = transcript([sub(1, { state: { state: "done" } })]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
-    live.unmount();
-    render(<Transcript turn={state(turn, { status: "done" })} onDecide={() => {}} subagents={[sub(1)]} />);
-    expect(screen.queryByText(/subagent/)).toBeNull();
+  test("a settled card shows what the provider reported, and the clock never carries a subagent line", () => {
+    const done = { ...exploring("e1"), status: "done", result: { text: "ok", agent: 1, tokens: { prompt: 1000, cached: 0, completion: 100 } }, output: "grep t\n" } as Block;
+    render(
+      <Transcript
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }, done], { status: "done" })}
+        onDecide={() => {}}
+        subagents={[sub(1, { state: { state: "done" } })]}
+      />,
+    );
+    expect(facts()[0]).toContain("1k tokens");
+    expect(screen.queryByRole("timer")).toBeNull();
   });
 });
 
