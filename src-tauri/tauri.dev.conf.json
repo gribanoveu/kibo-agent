@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "com.kibo.agent.dev",
+  "productName": "Kibo Agent Dev",
+  "build": {
+    "devUrl": "http://localhost:1422",
+    "beforeDevCommand": "bun scripts/build-prototype-libs.ts && vite --port 1422 --strictPort"
+  }
+}
