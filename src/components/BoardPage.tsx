@@ -212,8 +212,12 @@ function BoardColumn({ column, label, count, empty, action, children }: ColumnPr
         <span className="board-count">{count}</span>
         {action}
       </h2>
-      {children}
-      {count === 0 && empty && <p className="board-column-empty">{empty}</p>}
+      {/* The cards scroll in their own box under the head, so the head is
+          never over them and nothing shows through it. */}
+      <div className="board-column-cards">
+        {children}
+        {count === 0 && empty && <p className="board-column-empty">{empty}</p>}
+      </div>
     </section>
   );
 }
