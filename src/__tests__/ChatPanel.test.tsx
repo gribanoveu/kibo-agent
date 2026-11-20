@@ -1134,3 +1134,37 @@ describe("a command's own words for itself", () => {
     expect(container.querySelector(".tool-output")?.textContent).toBe("ok\n");
   });
 });
+
+describe("the folded run's summed diff", () => {
+  test("the summary carries the group's + and - beside the line that folds it", () => {
+    const edit = (id: string, added: number, removed: number) =>
+      ({
+        kind: "tool",
+        id,
+        round: 1,
+        name: "editFile",
+        arguments: JSON.stringify({ path: "src/a.ts" }),
+        status: "done",
+        result: { diff: { linesAdded: added, linesRemoved: removed, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+      }) as Block;
+    const { container } = panel(state([edit("e1", 7, 3), edit("e2", 13, 3)]));
+    expect(container.querySelector(".tool-run-stat")?.textContent).toBe("+20 -6");
+  });
+
+  test("a run that changed no lines shows no stat", () => {
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "g1",
+          round: 1,
+          name: "grep",
+          arguments: JSON.stringify({ pattern: "x" }),
+          status: "done",
+          result: { matches: [] },
+        } as Block,
+      ]),
+    );
+    expect(container.querySelector(".tool-run-stat")).toBeNull();
+  });
+});

@@ -784,6 +784,19 @@ function ToolRun({
 }) {
   const tools = run.blocks.filter((b): b is Tool => b.kind === "tool");
   const failed = tools.filter((t) => t.status === "failed").length;
+  // The run's diff arithmetic, summed beside the summary that folds it —
+  // the "+20 -6" Claude Code shows against the group, not per row only.
+  const stat = tools.reduce(
+    (acc, tool) => {
+      const m = /\+(\d+) -(\d+)/.exec(describeTool(tool).meta ?? "");
+      if (m) {
+        acc.added += Number(m[1]);
+        acc.removed += Number(m[2]);
+      }
+      return acc;
+    },
+    { added: 0, removed: 0 },
+  );
   // Held for a moment each, so quick calls do not flicker past unread.
   const step = useSteadyValue(live ? activity(run) : null, STEP_MS);
 
@@ -802,6 +815,9 @@ function ToolRun({
           <span className="tool-run-count">
             {tools.length} {tools.length === 1 ? "call" : "calls"}
           </span>
+        )}
+        {(stat.added > 0 || stat.removed > 0) && (
+          <span className="tool-run-stat">{metaStat(`+${stat.added} -${stat.removed}`)}</span>
         )}
         {failed > 0 && <span className="tool-run-failed">{failed} failed</span>}
         <ChevronRight className="chev" size={12} />

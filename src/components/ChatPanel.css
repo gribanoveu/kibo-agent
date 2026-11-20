@@ -562,6 +562,11 @@ button.turn-processes:hover {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+/* The run's summed diff beside the summary that folds it. */
+.tool-run-stat {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
 @media (prefers-reduced-motion: reduce) {
   .tool-run-spin,
   .tool-run-step,
