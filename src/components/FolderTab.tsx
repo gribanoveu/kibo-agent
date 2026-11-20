@@ -60,6 +60,9 @@ type Props = {
     /** Turns Worktree on/off from the branch menu's own top row. Without it
         the menu only lists branches. */
     onWorktree?: (on: boolean) => void;
+    /** Makes a worktree from this branch straight away — the direct gesture,
+        no toggle and no base to pick first. */
+    onWorktreeFrom?: (name: string) => void;
   };
   /** The chat on screen has started: its folder is its own, shown and not
       chosen here, and its branch is left to Overview — a new chat is where a
@@ -148,7 +151,10 @@ export function FolderTab({
       />
       {branchShown && branchPicker && (
         <Dropdown
-          locked={!!branchPicker.locked && !branchPicker.worktree}
+          // Openable even while a turn locks switching: the worktree rows are
+          // the way round it, so they must stay reachable; the pick itself is
+          // refused upstream with the reason.
+          locked={false}
           title={
             (branchPicker.locked && !branchPicker.worktree
               ? branchPicker.locked
@@ -157,9 +163,10 @@ export function FolderTab({
           }
           heading={branchPicker.worktree ? "Start a worktree from" : "Branch"}
           note={
-            branchPicker.worktree
+            branchPicker.locked ??
+            (branchPicker.worktree
               ? "The first message creates the worktree from the base picked here, opens it and is sent there."
-              : undefined
+              : undefined)
           }
           label={
             <span className="folder-tab-name">
@@ -186,6 +193,16 @@ export function FolderTab({
               value: one.name,
               hint: one.remote ? "remote" : undefined,
               divided: i === 0 && !!branchPicker.onWorktree,
+              // The direct gesture: a worktree from this branch, made now.
+              ...(branchPicker.onWorktreeFrom
+                ? {
+                    action: {
+                      icon: <GitFork size={13} />,
+                      title: `New worktree from ${one.name}`,
+                      onRun: () => branchPicker.onWorktreeFrom!(one.name),
+                    },
+                  }
+                : {}),
             })),
           ]}
           emptyLabel="Reading branches…"

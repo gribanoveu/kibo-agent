@@ -322,6 +322,14 @@ describe("the folder tab's branch", () => {
     expect(picked).toEqual(["feature"]);
   });
 
+  test("each branch row carries a worktree-from-here action that makes it straight away", () => {
+    const from: string[] = [];
+    tab(started({ onWorktreeFrom: (name) => from.push(name) }));
+    fireEvent.click(screen.getByTitle("Switch the folder's branch"));
+    fireEvent.click(screen.getByTitle("New worktree from feature"));
+    expect(from).toEqual(["feature"]);
+  });
+
   test("once the chat has started, is left to Overview", () => {
     render(
       <FolderTab path="/work/kibo" recent={[]} branch="main" onOpenFolder={() => {}} onPickFolder={() => {}} branchPicker={started()} folderFixed />,
@@ -330,11 +338,14 @@ describe("the folder tab's branch", () => {
     expect(screen.queryByTitle("Switch the folder's branch")).toBeNull();
   });
 
-  /// Switched under a running turn, the agent's next edit would land on another branch.
-  test("is locked while a turn works on it, saying why", () => {
-    tab(started({ locked: "The agent is working on this branch" }));
+  /// Switched under a running turn, the agent's next edit would land on another
+  /// branch: the pick is refused upstream, but the menu stays open so the
+  /// worktree — the way round — is reachable, and says why.
+  test("while a turn works, the menu says why and still offers a worktree", () => {
+    tab(started({ locked: "The agent is working on this branch", onWorktreeFrom: () => {} }));
     fireEvent.click(screen.getByTitle("The agent is working on this branch"));
-    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.getByText("The agent is working on this branch")).toBeTruthy();
+    expect(screen.getByTitle("New worktree from feature")).toBeTruthy();
   });
 
   test("with Worktree on, another turn does not lock the choice of its base", () => {

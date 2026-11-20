@@ -506,6 +506,12 @@ export default function App() {
     send: agent.send,
     onSwitched: agent.saveBranch,
   });
+  // A turn working in the folder forbids switching its branch under it; the
+  // menu still opens, so a worktree — the way round — stays reachable.
+  const branchLocked =
+    workspace.path && turnsInFolder(workspace.path).length > 0
+      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
+      : undefined;
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
   const turnBusy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   // The provider turns go to now: its own switch in Settings → Models.
@@ -726,14 +732,18 @@ export default function App() {
                 branchPicker={{
                   branches: branchPicker.branches,
                   onOpen: branchPicker.load,
-                  onPick: (name) => void branchPicker.pick(name),
+                  onPick: (name) => {
+                    if (branchLocked) {
+                      toast.show(branchLocked);
+                      return;
+                    }
+                    void branchPicker.pick(name);
+                  },
                   worktree: branchPicker.worktree,
                   base: branchPicker.base,
                   onWorktree: branchPicker.setWorktree,
-                  locked:
-                    workspace.path && turnsInFolder(workspace.path).length > 0
-                      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
-                      : undefined,
+                  onWorktreeFrom: (name) => void branchPicker.startWorktree(name),
+                  locked: branchLocked,
                 }}
                 // A started chat stays in its folder, its branch shown in
                 // Overview: only a new one picks either.
