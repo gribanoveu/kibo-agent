@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-20 Board column headers (Todo / Doing / Done) stay pinned at the top while their cards scroll under them
 - 2026-11-20 A running helper's card shows its own live token speed and count (the estimate that used to sit on the Working line); the Working line keeps only the chat's own meter
 - 2026-11-20 A helper's card shows a shimmering skeleton and “writing the task…” while the model is still writing its prompt, instead of an empty title
 - 2026-11-20 Make a worktree straight from a branch row in the branch menu (a worktree-from-here action on each branch): created and opened at once, and reachable even while a turn locks branch switching

@@ -15,13 +15,19 @@
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
 }
-/* The column's name after a dot in its colour: waiting, under way, finished. */
+/* The column's name after a dot in its colour: waiting, under way, finished.
+   Pinned to the body's top while its cards scroll under it, so the column
+   stays named however far down the board is read. */
 .board-column-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0;
   padding: 2px 4px 4px;
+  background: var(--bg-panel-soft);
   font-size: var(--fs-md);
   font-weight: 500;
   color: var(--text);
