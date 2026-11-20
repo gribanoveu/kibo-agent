@@ -295,25 +295,29 @@ describe("the folder tab's branch", () => {
     expect(picked).toEqual(["origin/feature"]);
   });
 
-  test("the branch menu offers a worktree as its own top row, and turns it on", () => {
+  test("the branch menu carries the Worktree switch; toggling keeps the menu open", () => {
     const toggled: boolean[] = [];
     tab(started({ onWorktree: (on) => toggled.push(on) }));
     fireEvent.click(screen.getByTitle("Switch the folder's branch"));
-    expect(screen.getAllByRole("option")[0].textContent).toContain("New worktree");
-    fireEvent.click(screen.getByRole("option", { name: /New worktree/ }));
+    expect(screen.getAllByRole("option")[0].textContent).toContain("Worktree");
+    fireEvent.click(screen.getByRole("option", { name: /^Worktree/ }));
     expect(toggled).toEqual([true]);
+    // keepOpen: the base can be picked straight after, without reopening.
+    expect(screen.getByRole("listbox")).toBeTruthy();
   });
 
-  test("with worktree on the top row cancels it, and a branch still picks the base", () => {
+  test("with worktree on the switch is checked, the note says how it is made, and a branch picks the base", () => {
     const toggled: boolean[] = [];
     const picked: string[] = [];
     tab(started({ worktree: true, base: "main", onWorktree: (on) => toggled.push(on), onPick: (n) => picked.push(n) }));
     fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
-    fireEvent.click(screen.getByRole("option", { name: /Cancel worktree/ }));
+    expect(screen.getByText(/The first message creates the worktree/)).toBeTruthy();
+    const row = screen.getByRole("option", { name: /^Worktree/ });
+    expect(row.querySelector(".dropdown-check")).toBeTruthy();
+    fireEvent.click(row);
     expect(toggled).toEqual([false]);
 
     // Picking a branch with Worktree on chooses the base — it is not blocked.
-    fireEvent.click(screen.getByTitle("The branch a new worktree starts from"));
     fireEvent.click(screen.getByRole("option", { name: /^feature/ }));
     expect(picked).toEqual(["feature"]);
   });

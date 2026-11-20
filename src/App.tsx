@@ -742,15 +742,6 @@ export default function App() {
             }
             end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
             index={workspace.path ? index : null}
-            worktree={
-              unstarted && workspace.path && branch
-                ? {
-                    on: branchPicker.worktree,
-                    title: `The first message starts a worktree from ${branchPicker.base || branch}: its own folder on a new branch, this one left as it is`,
-                    onChange: branchPicker.setWorktree,
-                  }
-                : undefined
-            }
             onSend={(text, images) => send(text, undefined, images)}
             imagesEnabled={imagesEnabled}
             onQueue={agent.queue}

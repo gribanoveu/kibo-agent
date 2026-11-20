@@ -156,22 +156,29 @@ export function FolderTab({
             (branchPicker.worktree ? "The branch a new worktree starts from" : "Switch the folder's branch")
           }
           heading={branchPicker.worktree ? "Start a worktree from" : "Branch"}
+          note={
+            branchPicker.worktree
+              ? "The first message creates the worktree from the base picked here, opens it and is sent there."
+              : undefined
+          }
           label={
             <span className="folder-tab-name">
-              <GitBranch size={12} />
+              {branchPicker.worktree ? <GitFork size={12} /> : <GitBranch size={12} />}
               <span className="folder-tab-text">{shownBranch}</span>
             </span>
           }
           value={shownBranch}
           options={[
-            // Worktree as its own row above the branches, not only a checkbox
-            // elsewhere: creating one starts here, from a base picked below.
+            // The Worktree switch itself, moved here from the composer's panel:
+            // a toggle row above the branches, which become the base while on.
             ...(branchPicker.onWorktree
               ? [
                   {
                     value: WORKTREE,
-                    label: branchPicker.worktree ? "Cancel worktree" : "New worktree…",
-                    hint: branchPicker.worktree ? "back to switching the folder's branch" : "its own folder on a new branch",
+                    label: "Worktree",
+                    hint: branchPicker.worktree ? "on — the branch below is where it starts" : "a new folder on its own branch",
+                    checked: branchPicker.worktree,
+                    keepOpen: true,
                   },
                 ]
               : []),

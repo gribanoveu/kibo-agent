@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- 2026-11-20 Start a worktree from the branch menu's own top row (New worktree… / Cancel worktree); with Worktree on, picking a branch chooses the base it starts from
+- 2026-11-20 The Worktree switch lives in the branch menu, above the branches (which become its base while on); the menu says the first message creates the worktree and is sent there
 - 2026-11-20 Reorder the open folders in Agent mode from a section's ⋮ menu (Move up / Move down); the order is remembered across restarts
 - 2026-11-20 A chat's ⋮ menu stays open while the agent replies: only scrolling the list that holds the row closes it, not the chat log's own autoscroll
 - 2026-11-20 A folder's chat list in Agent mode shows its first four chats; the rest open with a "Show all" button, and a search still finds every chat

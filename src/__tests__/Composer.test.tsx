@@ -238,47 +238,6 @@ describe("the permission switch", () => {
   });
 });
 
-describe("the worktree switch", () => {
-  const box = (worktree?: { on: boolean; title: string; onChange: (on: boolean) => void }) =>
-    render(
-      <Composer
-        draftKey="draft"
-        onSend={() => {}}
-        onStop={() => {}}
-        running={false}
-        conversation="agent"
-        onConversation={() => {}}
-        unattended={false}
-        onUnattended={() => {}}
-        worktree={worktree}
-        models={{ choices: [], current: null }}
-        onModel={() => {}}
-        onEffort={() => {}}
-        onLoadModels={() => {}}
-        context={null}
-        usage={null}
-        onCompact={() => {}}
-      />,
-    );
-
-  test("reports the change and says where the worktree would start", () => {
-    const picked: boolean[] = [];
-    box({ on: false, title: "Starts from main", onChange: (on) => picked.push(on) });
-    openSettings();
-    const toggle = screen.getByRole("switch", { name: "Worktree" });
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(toggle.closest("label")?.title).toBe("Starts from main");
-    fireEvent.click(toggle);
-    expect(picked).toEqual([true]);
-  });
-
-  /// A worktree is a new folder and a new chat in it: nothing a started chat can become.
-  test("is not offered without being asked for", () => {
-    box();
-    openSettings();
-    expect(screen.queryByRole("switch", { name: "Worktree" })).toBeNull();
-  });
-});
 
 describe("the folder's index", () => {
   const box = (index: IndexState | null) =>
