@@ -11,7 +11,13 @@ const rest = second ? args.filter((arg) => arg !== "second") : args;
 const config = second ? ["--config", "src-tauri/tauri.dev.conf.json"] : [];
 
 const child = spawn("bunx", ["tauri", ...rest, ...config], { stdio: "inherit" });
+// A bunx that is missing or cannot start is a message, not an unhandled throw.
+child.on("error", (err) => {
+  console.error(`cannot run bunx tauri: ${err.message}`);
+  process.exit(1);
+});
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => child.kill(signal));
 }
-child.on("exit", (code) => process.exit(code ?? 0));
+// Killed by a signal there is no exit code; that is not a clean exit 0.
+child.on("exit", (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
