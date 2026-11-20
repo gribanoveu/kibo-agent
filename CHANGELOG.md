@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-20 A hairline ring just darker than the theme outlines the app window on macOS (uniform over the panels; Windows keeps its system edge)
 - 2026-11-20 Scrollbars are narrower app-wide (6px), one style for every pane
 - 2026-11-20 Done keeps the last 8 finished cards (was 5); an info hint on its header says older ones move to the Archive, and the Archive toggle's chevron sits at the row's right end
 - 2026-11-20 Board columns are fixed boxes that fill the page: each scrolls its own cards with its header pinned, so a column's top and bottom stay in view; an open archive scrolls itself under its pinned Archive button

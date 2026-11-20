@@ -798,6 +798,12 @@ textarea,
   user-select: none;
 }
 
+/* The dark end of a colour-mix: a hairline ring just darker than the theme,
+   without a literal hex in a component's own stylesheet. */
+:root {
+  --shade: #000;
+}
+
 /* One narrow scrollbar for the whole app. The thumb stays visible: WebKit
    does not reliably repaint a scrollbar thumb restyled on :hover, so a
    hide-until-hover thumb can read as no scrollbar at all. */
