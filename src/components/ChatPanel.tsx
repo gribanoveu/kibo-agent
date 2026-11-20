@@ -185,6 +185,9 @@ function ToolRow({
 }) {
   const [open, setOpen] = useState(false);
   const shown = describeTool(block);
+  // The row reads the model's intent when it said one; the command itself
+  // goes under the row, wrapped, rather than being cut off in the line.
+  const preview = shown.note ?? shown.arg;
   // A cluster call wears its role's sign, whatever its label.
   const Icon = block.name.startsWith("kube") ? ShipWheel : (TOOL_ICON[shown.name] ?? Terminal);
   // A background start has nothing to unfold here: its output is the
@@ -208,7 +211,7 @@ function ToolRow({
           <Icon size={13} />
         </span>
         <span className="name">{shown.name}</span>
-        <span className="arg">{shown.arg}</span>
+        <span className={`arg${shown.note ? " as-note" : ""}`}>{preview}</span>
         {shown.meta && <span className="meta">{shown.meta}</span>}
         {process !== undefined ? (
           <ArrowUpRight className="chev" size={12} />
@@ -216,8 +219,9 @@ function ToolRow({
           detail && <ChevronRight className="chev" size={12} />
         )}
       </button>
-      {/* The model's words for the command, under the line they explain. */}
-      {shown.note && <div className="tool-note">{shown.note}</div>}
+      {/* The command itself, under the row it explains, wrapped so a long
+          line reads instead of being clipped at the column's edge. */}
+      {shown.note && <code className="tool-command">{shown.arg}</code>}
       {/* Unfolded rather than instead of it, as a process row does: the
           answer stays readable here after the app has forgotten the run. */}
       {open && shown.agent && onOpenAgent && (

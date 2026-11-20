@@ -632,6 +632,11 @@ button.turn-processes:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The model's intent read as words, not code, when it said one. */
+.tool .arg.as-note {
+  font-family: var(--font-ui);
+  color: var(--text-dim);
+}
 .tool .meta {
   font-size: var(--fs-xs);
   color: var(--text-faint);
@@ -648,11 +653,16 @@ button.turn-processes:hover {
 .tool-item.open .tool .chev {
   transform: rotate(90deg);
 }
-/* The model's few words for a command, under the row they explain. */
-.tool-note {
+/* The command itself, under the row it explains: wrapped so a long line
+   reads instead of being clipped at the column's edge. */
+.tool-command {
+  display: block;
   margin: 0 8px 4px;
+  font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  color: var(--text-faint);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* An explore row, unfolded: its run in the Agents tab, above its answer. */
 .tool-open-agent {

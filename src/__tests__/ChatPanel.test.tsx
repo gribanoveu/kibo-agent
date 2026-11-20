@@ -1109,7 +1109,7 @@ describe("a call with no body of its own", () => {
 });
 
 describe("a command's own words for itself", () => {
-  test("stand under the row without unfolding it, and the line stays the row's text", () => {
+  test("the row reads the intent and the command wraps under it, without unfolding", () => {
     const { container } = panel(
       state([
         {
@@ -1124,7 +1124,8 @@ describe("a command's own words for itself", () => {
         } as Block,
       ]),
     );
-    expect(container.querySelector(".tool-note")?.textContent).toBe("Rewrites imports in place");
-    expect(container.querySelector(".tool .arg")?.textContent).toBe("python fix.py --apply");
+    expect(container.querySelector(".tool .arg")?.textContent).toBe("Rewrites imports in place");
+    expect(container.querySelector(".tool .arg")?.className).toContain("as-note");
+    expect(container.querySelector(".tool-command")?.textContent).toBe("python fix.py --apply");
   });
 });
