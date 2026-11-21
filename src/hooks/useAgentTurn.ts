@@ -26,7 +26,7 @@ import {
 import type { ImagePart } from "../lib/images";
 import { answerMcpQuestion, type McpAnswer } from "../lib/mcp";
 import { useChatTokens, useSubagentTokens } from "./useChatTokens";
-import { generateChatTitle, loadChat, logNextPrompt, nextPromptSent, saveChat, type ChatRecord } from "../lib/savedChats";
+import { generateChatTitle, journalBlocks, loadChat, logNextPrompt, nextPromptSent, saveChat, type ChatRecord } from "../lib/savedChats";
 import {
   acceptEvent,
   acceptOutcome,
@@ -214,9 +214,27 @@ export function useAgentTurn({
         // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
         const now = Date.now();
         setTurn(session, (state) => acceptEvent(state, event, now, modelRef.current));
+        // The transcript so far, journaled once a round: a crash keeps what
+        // the window drew, as the loop keeps what the model said. Queued
+        // with the saves, so the turn's last save folds it, never races it.
+        if (event.type === "roundCompleted") {
+          trackWrite(session, (snapshot) => {
+            const blocks = snapshot.turn.blocks.slice(snapshot.turnStart);
+            return journalBlocks(
+              snapshot.key,
+              id,
+              blocks,
+              writtenChecklist(blocks) ?? snapshot.todos,
+              writtenPlan(blocks) ?? snapshot.plan,
+              // Where the turn's slice joins the saved transcript: the
+              // blocks before it are the record's, spliced back on recovery.
+              snapshot.turnStart,
+            ).catch(() => {});
+          });
+        }
       });
     },
-    [setTurn],
+    [setTurn, trackWrite],
   );
   const stop = useCallback((session: Session) => {
     session.subscribed?.();

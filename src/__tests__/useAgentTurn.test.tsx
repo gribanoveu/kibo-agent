@@ -979,6 +979,79 @@ describe("a turn that fails to start", () => {
   });
 });
 
+describe("the turn journal", () => {
+  /// TJ-4: each round's end journals the turn's blocks — the half only the
+  /// window knows — and the write is queued before the save that folds it.
+  test("each round's end journals the turn's blocks, before the save that folds them", async () => {
+    let end: () => void = () => {};
+    results.chat_start = (args: Record<string, unknown>) => new Promise((resolve) => (end = () => resolve(done("ok")(args))));
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("go"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const started = calls.find((c) => c.command === "chat_start")!;
+    const turnId = started.args.turnId as string;
+    const chatId = started.args.chatId as string;
+
+    act(() => emit({ turnId, seq: 1, round: 1, type: "roundCompleted", payload: { text: "working" } }));
+    await waitFor(() => expect(calls.some((c) => c.command === "chat_journal_blocks")).toBe(true));
+    const journaled = calls.find((c) => c.command === "chat_journal_blocks")!;
+    expect(journaled.args.id).toBe(chatId);
+    expect(journaled.args.turnId).toBe(turnId);
+    expect(journaled.args.from).toBe(0);
+    expect((journaled.args.blocks as Block[]).map((b) => b.kind)).toEqual(["user", "message"]);
+
+    await act(async () => end());
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    const commands = calls.map((c) => c.command);
+    expect(commands.indexOf("chat_journal_blocks")).toBeLessThan(commands.lastIndexOf("chat_save"));
+  });
+
+  /// In a chat with earlier turns the journal carries only this turn's
+  /// slice, and `from` says where it joins the saved transcript — the
+  /// recovery splices the earlier turns back in front of it.
+  test("the slice joins the saved transcript where the turn began", async () => {
+    const savedBlocks: Block[] = [
+      { kind: "user", id: "user:0", text: "first" },
+      { kind: "message", id: "message:1:1", round: 1, text: "answered" },
+    ];
+    results.chat_load = { id: "kept", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: savedBlocks, todos: [], plan: null };
+    let end: () => void = () => {};
+    results.chat_start = (args: Record<string, unknown>) => new Promise((resolve) => (end = () => resolve(done("ok")(args))));
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.open("kept"));
+    act(() => void result.current.send("second"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const turnId = calls.find((c) => c.command === "chat_start")!.args.turnId as string;
+
+    act(() => emit({ turnId, seq: 1, round: 1, type: "roundCompleted", payload: { text: "working" } }));
+    await waitFor(() => expect(calls.some((c) => c.command === "chat_journal_blocks")).toBe(true));
+    const journaled = calls.find((c) => c.command === "chat_journal_blocks")!;
+    expect(journaled.args.from).toBe(savedBlocks.length);
+    expect((journaled.args.blocks as Block[])[0]).toMatchObject({ kind: "user", text: "second" });
+
+    await act(async () => end());
+    await waitFor(() => expect(result.current.turn.status).toBe("done"));
+  });
+
+  /// Best-effort: a journal write that fails costs crash protection, not
+  /// the turn — the turn ends and saves as it always did.
+  test("a journal write that fails does not fail the turn", async () => {
+    results.chat_journal_blocks = new Error("disk full");
+    let end: () => void = () => {};
+    results.chat_start = (args: Record<string, unknown>) => new Promise((resolve) => (end = () => resolve(done("ok")(args))));
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("go"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const turnId = calls.find((c) => c.command === "chat_start")!.args.turnId as string;
+
+    act(() => emit({ turnId, seq: 1, round: 1, type: "roundCompleted", payload: { text: "working" } }));
+    await act(async () => end());
+    await waitFor(() => expect(result.current.turn.status).toBe("done"));
+    expect(result.current.error).toBeNull();
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+  });
+});
+
 describe("a turn that fails after doing work", () => {
   const recovery = {
     history: [

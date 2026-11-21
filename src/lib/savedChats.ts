@@ -78,6 +78,24 @@ export async function loadChat(id: string): Promise<ChatRecord> {
   return invoke<ChatRecord>("chat_load", { id });
 }
 
+/**
+ * The turn's transcript so far — its blocks, checklist and plan — journaled
+ * at each round's end, so a crash keeps what the window drew as the loop
+ * keeps what the model said. Best-effort: a failed write costs crash
+ * protection, never the turn. The turn's normal save folds it away.
+ */
+export async function journalBlocks(
+  id: string,
+  turnId: string,
+  blocks: Block[],
+  todos: Task[],
+  plan: string | null,
+  from: number,
+): Promise<void> {
+  requireBackend();
+  await invoke("chat_journal_blocks", { id, turnId, blocks, todos, plan, from });
+}
+
 export async function saveChat(
   id: string,
   messages: LlmMessage[],
