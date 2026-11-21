@@ -59,6 +59,16 @@ export type ChatUsage = {
   cachedTokens?: number;
 };
 
+/** Why the shared prefix was paid for again, as far as the backend's
+    request marker can say — the notice's answer to "why did the cache
+    miss". Mirrors `domain::request_marker::MissCause`. `history.from` is
+    0-based; the notice shows it 1-based. */
+export type MissCause =
+  | { kind: "system" }
+  | { kind: "tools" }
+  | { kind: "history"; from: number; of: number }
+  | { kind: "unchanged" };
+
 export type TurnResult = {
   text: string;
   reasoning?: string;
@@ -121,7 +131,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "commandOutput"; payload: { id: string; stream: OutputStream; chunk: string } }
   | { type: "mcpQuestion"; payload: { id: string; call: string; server: string; question: McpQuestion } }
   | { type: "mcpQuestionClosed"; payload: { id: string; action: McpAnswer["action"] } }
-  | { type: "contextUsage"; payload: ChatUsage }
+  | { type: "contextUsage"; payload: ChatUsage & { cause?: MissCause } }
   | { type: "contextEstimate"; payload: ContextUsage }
 );
 

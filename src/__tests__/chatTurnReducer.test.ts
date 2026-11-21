@@ -13,7 +13,7 @@ import {
   type Block,
   type TurnState,
 } from "../lib/chatTurnReducer";
-import type { Checkpoint, TurnEvent } from "../lib/chat";
+import type { Checkpoint, MissCause, TurnEvent } from "../lib/chat";
 
 // The reducer is where a stream that crossed a process boundary becomes a
 // transcript. Everything that can go wrong with such a stream — a repeat, an
@@ -622,11 +622,11 @@ describe("cache misses", () => {
   // One request as a turn of its own: sent at `sentAt`, answered at `endedAt`.
   const request = (
     state: TurnState,
-    { prompt, cached, sentAt, endedAt = sentAt + 1_000, model = "a/one" }: { prompt: number; cached: number; sentAt: number; endedAt?: number; model?: string },
+    { prompt, cached, sentAt, endedAt = sentAt + 1_000, model = "a/one", cause }: { prompt: number; cached: number; sentAt: number; endedAt?: number; model?: string; cause?: MissCause },
   ) => {
     state = appendUserMessage(state, "go", sentAt);
     state = acceptEvent(state, { turnId: "t", seq: 1, round: 1, type: "roundStarted" }, sentAt, model);
-    const payload = { promptTokens: prompt, completionTokens: 10, totalTokens: prompt + 10, cachedTokens: cached };
+    const payload = { promptTokens: prompt, completionTokens: 10, totalTokens: prompt + 10, cachedTokens: cached, ...(cause ? { cause } : {}) };
     return acceptEvent(state, { turnId: "t", seq: 2, round: 1, type: "contextUsage", payload }, endedAt, model);
   };
   const notices = (state: TurnState) => text(state, "notice");
@@ -688,5 +688,35 @@ describe("cache misses", () => {
   test("a pass that gave up keeps the history, and the comparison", () => {
     const failed = compactionEnded(warm(), null);
     expect(notices(request(failed, { prompt: 95_000, cached: 0, sentAt: MIN }))).toHaveLength(1);
+  });
+
+  /// TJ-3: the backend's request marker names what changed — the notice
+  /// says it instead of the empty "Cache miss —".
+  test("the marker's cause is named: the tool set, the system part, a message", () => {
+    const miss = (cause: MissCause) => notices(request(warm(), { prompt: 95_000, cached: 6_000, sentAt: MIN, cause }));
+    expect(miss({ kind: "tools" })).toEqual([
+      "Cache miss after the tool set changed — ~84k tokens of the prompt were sent again at full price",
+    ]);
+    expect(miss({ kind: "system" })).toEqual([
+      "Cache miss after the system prompt changed — ~84k tokens of the prompt were sent again at full price",
+    ]);
+    expect(miss({ kind: "history", from: 4, of: 12 })).toEqual([
+      "Cache miss after history changed at message 5 of 12 — ~84k tokens of the prompt were sent again at full price",
+    ]);
+  });
+
+  test("nothing changed on our side is said as the provider losing the cache", () => {
+    expect(notices(request(warm(), { prompt: 95_000, cached: 6_000, sentAt: MIN, cause: { kind: "unchanged" } }))).toEqual([
+      "Cache miss (nothing changed on our side — the provider dropped the cache) — ~84k tokens of the prompt were sent again at full price",
+    ]);
+  });
+
+  test("what the window saw itself still comes first: a model switch, a pause", () => {
+    expect(notices(request(warm(), { prompt: 95_000, cached: 0, sentAt: 9 * MIN, model: "b/two", cause: { kind: "tools" } }))).toEqual([
+      "Cache miss after the model switch — ~90k tokens of the prompt were sent again at full price",
+    ]);
+    expect(notices(request(warm(), { prompt: 95_000, cached: 6_000, sentAt: 7 * MIN, cause: { kind: "tools" } }))).toEqual([
+      "Cache miss after 7 min idle — ~84k tokens of the prompt were sent again at full price",
+    ]);
   });
 });
