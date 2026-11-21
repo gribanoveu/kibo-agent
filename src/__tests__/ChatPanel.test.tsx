@@ -46,6 +46,14 @@ describe("the checklist while the agent works", () => {
     expect(ticker.compareDocumentPosition(screen.getByRole("timer")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  /// A title cut to the column's width still says where the work stands.
+  test("counts what is done out of the whole list", () => {
+    withList({ status: "running", runningSince: Date.now() });
+    const count = screen.getByTitle("1 of 3 done");
+    expect(count.textContent).toBe("1/3");
+    expect(count.closest(".task-ticker")).toBeTruthy();
+  });
+
   test("is not there once nothing on it is open", () => {
     render(
       <ChatPanel
@@ -379,17 +387,17 @@ describe("how long the agent worked", () => {
       render(<ChatPanel workspace="/tmp/p" turn={turnState} onDecide={() => {}} onOpenRepo={() => {}} runningProcesses={ids} onOpenProcess={(id) => opened.push(id)} />);
 
     const live = running(state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 }), [3]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·1 process running");
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·1 process");
     live.unmount();
 
     running(state(turn, { status: "done" }), [4, 2]);
-    fireEvent.click(screen.getByRole("button", { name: "2 processes running" }));
+    fireEvent.click(screen.getByRole("button", { name: "2 processes" }));
     expect(opened).toEqual([4]);
   });
 
   test("says nothing of processes when none runs", () => {
     panel(state(turn, { status: "done" }));
-    expect(screen.queryByText(/running/)).toBeNull();
+    expect(screen.queryByText(/process/)).toBeNull();
   });
 
   /// The subagents' own meter: their tokens are not the chat's context, and

@@ -648,13 +648,14 @@ export function formatTokens(n: number): string {
 }
 
 /**
- * "· 2 processes running" beside the clock: background processes outlive the
- * turn, and without this a server left running is out of sight. A click
- * opens the newest in the Terminal tab.
+ * "· 2 processes" beside the clock: background processes outlive the turn, and
+ * without this a server left running is out of sight. A click opens the newest
+ * in the Terminal tab. "Running" is the clock's own word — at the chat's
+ * minimum width the line has no room to say it twice.
  */
 function RunningProcesses({ ids, onOpen }: { ids: number[]; onOpen?: (id: number) => void }) {
   if (ids.length === 0) return null;
-  const label = `${ids.length} ${ids.length === 1 ? "process" : "processes"} running`;
+  const label = `${ids.length} ${ids.length === 1 ? "process" : "processes"}`;
   return (
     <>
       <span className="turn-clock-sep">·</span>
@@ -669,13 +670,15 @@ function RunningProcesses({ ids, onOpen }: { ids: number[]; onOpen?: (id: number
   );
 }
 
-/** "· 48 tok/s" beside the clock; nothing until there is a rate. */
+/** "· 48 tok/s" beside the clock; nothing until there is a rate. The separator
+    wears the same class: a narrow column drops the speed, and a lone "·" left
+    behind would read as a missing fact. */
 function Speed({ rate, prefix = "" }: { rate: number | null; prefix?: string }) {
   if (rate === null) return null;
   return (
     <>
-      <span className="turn-clock-sep">·</span>
-      <span className="turn-clock-time">
+      <span className="turn-clock-sep turn-clock-speed">·</span>
+      <span className="turn-clock-time turn-clock-speed">
         {prefix}
         {Math.round(rate)} tok/s
       </span>
@@ -1468,14 +1471,17 @@ const TASK_MARK: Record<Task["status"], { icon: typeof Circle; label: string }> 
 
 /**
  * The agent's checklist above the clock while it works — the Plan tab may be
- * closed, and this is where the eye already is. Three rows show; a longer list
- * scrolls itself so the task under way sits in the middle. Nothing once no
- * task is open: a finished or dropped list is not news.
+ * closed, and this is where the eye already is. Three rows show (two in a
+ * narrow column); a longer list scrolls itself so the task under way sits in
+ * the middle, and the count beside it says how far along the whole list is —
+ * a title cut short still reads as progress. Nothing once no task is open: a
+ * finished or dropped list is not news.
  */
 function TaskTicker({ checklist }: { checklist: Task[] }) {
   const list = useRef<HTMLUListElement>(null);
   const at = checklist.findIndex((task) => task.status === "inProgress");
   const current = at >= 0 ? at : Math.max(0, checklist.findIndex((task) => task.status === "pending"));
+  const done = checklist.filter((task) => task.status === "completed").length;
   useEffect(() => {
     const box = list.current;
     const row = box?.children[current] as HTMLElement | undefined;
@@ -1498,6 +1504,9 @@ function TaskTicker({ checklist }: { checklist: Task[] }) {
           );
         })}
       </ul>
+      <span className="task-ticker-count" title={`${done} of ${checklist.length} done`}>
+        {done}/{checklist.length}
+      </span>
     </div>
   );
 }
