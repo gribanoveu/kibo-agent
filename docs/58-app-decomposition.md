@@ -1,6 +1,6 @@
 # App.tsx: композиционный корень худеет без Context
 
-План, предложен 2026-11-21; AD-1 сделан. Рефакторинг `src/App.tsx` (1215 строк): связные кластеры
+План, предложен 2026-11-21; AD-1…AD-2 сделаны. Рефакторинг `src/App.tsx` (1215 строк): связные кластеры
 состояния и правил переезжают в хуки `src/hooks/` и render-only компоненты, App остаётся
 композиционным корнем на ~600 строк. Пользовательского изменения нет — поведение
 сохраняется дословно, включая зависимости эффектов. Context, глобальный стор и новые
@@ -45,12 +45,21 @@ App — хук с параметрами сохраняет тот же пото
 вызовов хуков диктуется данными и сохраняется: `shown` до `useAgentTurn`/`useMcp`,
 флаги editing до `useMcp`/`useHooks`, `viewerOpen` до раскладки.
 
-### 3. Цикл «раскладка ↔ viewer» разрывается двумя параметрами
+### 3. Цикл «раскладка ↔ viewer ↔ страницы» разрывается параметрами
 
-`dockFits` зависит от `viewerOpen`, а `setDocks`/`toggleSidebar` зовут `viewer.closeAll`.
-Хук раскладки берёт `{ viewerOpen, closeViewer }`, не объект viewer целиком. Отвергнуто:
-передавать `useOpenFiles`-результат — тянет в раскладку файловые зависимости, которых
-правило места не знает.
+`dockFits` зависит от `viewerOpen`, `setDocks`/`toggleSidebar` зовут `viewer.closeAll`,
+`toggleIde` — `viewer.swap`; раскладке нужны также `page` (док страницы) и
+`terminalPaste` (команда в шелл открывает терминал). Хук берёт их параметрами, не
+объекты viewer/страниц целиком. Отвергнуто: передавать `useOpenFiles`-результат —
+тянет в раскладку файловые зависимости, которых правило места не знает.
+
+Глубже есть цикл: `ide` нужен `usePages`, а `onPage` — раскладке. Поэтому флаг
+`ideLayout` (одна строка `useStoredState`) остаётся в App — общий бит между страницами
+и раскладкой; `useDocks` берёт `ideLayout`/`setIdeLayout` и выводит `ide` сам.
+Реестр панелей `PANES` передаётся параметром (`{ id, dock }[]`): хук не импортирует
+`components/panes.tsx` в рантайме. Панельные клавиши переезжают в хук своим вызовом
+`useShortcuts` (id не пересекаются с остальными — два слушателя эквивалентны одному);
+`newChat`/`focusInput`/`sidebar`/`settings`/`ideLayout` остаются в App.
 
 ### 4. Каждый извлечённый хук получает свои renderHook-тесты
 
@@ -106,14 +115,20 @@ item, очищенный item при уходе, keep-страница в IDE). 
 1 low — черновики `tmp/` в дереве не игнорируются: не тронуты (чужая работа), коммиты
 этапа — явными путями; строка `tmp/` в `.gitignore` — отдельное решение пользователя.
 
-**AD-2. useDocks.** Раскладка: `tab`, `bottomTab`, `asideHidden`, `collapsed`,
-`ideLayout`, media-запросы (`dockFits`, `sidebarFits`, `rail`), производные
-(`topHidden`, `bottomShown`, `planSheet`, `dockShown`, `shown`), `docks`/`setDocks`,
-`beforeIde`/`toggleIde`, `openTab`, эффект `terminalPaste`, `toggleSidebar`, панельные
-клавиши. Вход: `{ agentMode, pageShown, viewerOpen, closeViewer }`. Тесты: IDE-свап
-сохраняет и возвращает `beforeIde`; `setDocks` без места закрывает viewer, кроме plan;
-`openTab`/`togglePane` по правилу `lib/docks.ts`; узкое окно — rail; `planSheet` только
-в Agent без страницы.
+**AD-2. useDocks — сделано.** Раскладка переехала в `src/hooks/useDocks.ts` (157 строк):
+хранимые `tab`/`bottomTab`/`asideHidden`/`collapsed`/`beforeIde`, media-запросы и
+производные, `docks`/`setDocks`/`toggleIde`/`openTab`/`toggleSidebar`, эффект
+`terminalPaste`, панельные клавиши своим `useShortcuts`. `ideLayout` остался в App
+(общий бит с `usePages`, решение 3); `PANES` передаётся параметром. App похудел на ~80
+строк. Тесты: `src/__tests__/useDocks.test.tsx`, 10 случаев (доки, клавиша терминала и
+blur, IDE-свап и возврат «как просил», viewer без места кроме plan, rail узкого окна,
+plan-лист, Chat-режим, страница с доком и без, terminalPaste). Мутационная проверка:
+13 мутантов, все пойманы (исключение plan в setDocks, проверка места, beforeIde из
+производного вместо желаемого, снятый возврат панелей, вход в IDE без дерева, rail без
+ширины, toggleSidebar при collapsed по выбору, plan-лист над страницей, терминал в Chat,
+снятый blur, терминал на маунте, shown без нижнего дока, ключ plan без override).
+Ревью: порядок хуков, разделение клавиш и зависимости эффектов сохранены; 1 low — тот
+же `tmp/`, не тронут.
 
 **AD-3. Диалоги конфигов.** `useConfigDialogs(mcp, hooks)` — состояние и обработчики
 панелей; `McpConfigDialog`, `HooksConfigDialog` — JSX. Тесты: удаление сервера/хука

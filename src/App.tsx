@@ -10,7 +10,7 @@ import { FolderTab } from "./components/FolderTab";
 import { AsidePanel } from "./components/AsidePanel";
 import { PrototypePreview } from "./components/PrototypePreview";
 import { FileViewer } from "./components/FileViewer";
-import { PANES, type Dock, type PaneContext } from "./components/panes";
+import { PANES, type PaneContext } from "./components/panes";
 import { Modal } from "./components/Modal";
 import { Settings, type SettingsSection } from "./components/Settings";
 import { ToolLog } from "./components/ToolLog";
@@ -20,6 +20,7 @@ import { Columns } from "./components/Columns";
 import { pagesShown, type PageDef } from "./components/pages";
 import { useFeatures } from "./hooks/useFeatures";
 import { usePages } from "./hooks/usePages";
+import { useDocks } from "./hooks/useDocks";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -30,7 +31,6 @@ import { usePlainChat } from "./hooks/usePlainChat";
 import { usePrototypePreview } from "./hooks/usePrototypePreview";
 import { useChatHistory } from "./hooks/useChatHistory";
 import { useChatGroups } from "./hooks/useChatGroups";
-import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useLlmSettings } from "./hooks/useLlmSettings";
 import { useKubeconfigs } from "./hooks/useKubeconfigs";
 import { useWorkspace } from "./hooks/useWorkspace";
@@ -39,7 +39,7 @@ import { useMcp } from "./hooks/useMcp";
 import { useHooks } from "./hooks/useHooks";
 import { useSkills } from "./hooks/useSkills";
 import { useToolLog } from "./hooks/useToolLog";
-import { roomFor, usePanelSizes } from "./hooks/usePanelSizes";
+import { usePanelSizes } from "./hooks/usePanelSizes";
 import { sideOf, useTheme } from "./hooks/useTheme";
 import { useChatFontSize } from "./hooks/useChatFontSize";
 import { useGitBranch, useWorktreeOf } from "./hooks/useGitBranch";
@@ -60,7 +60,7 @@ import { HookForm } from "./components/ConfigEntryForm";
 import { McpInstall } from "./components/McpInstall";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { mergeHooks, mergeMcp } from "./lib/configSnippets";
-import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
+import { togglePane, toggleTerminal } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
 import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST } from "./lib/offer";
@@ -69,7 +69,7 @@ import { mcpPromptGet } from "./lib/mcp";
 import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedChats";
 import { DEFAULT_TURN_LIMITS, withLanguageReminder } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
-import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
+import { isAppMode, type AppMode } from "./types";
 import { turnsIn, useFolderSwitch } from "./hooks/useFolderSwitch";
 import { fileLink, useOpenFiles } from "./hooks/useOpenFiles";
 import { FolderSwitchDialog } from "./components/FolderSwitchDialog";
@@ -89,14 +89,6 @@ import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
 import type { AgentFocus } from "./lib/describeTool";
 
-/** A stored pane id, if it still opens in `dock` — a pane may have moved docks since it was stored. */
-const isPaneIn =
-  (dock: Dock) =>
-  (value: unknown): value is AsideTab =>
-    isAsideTab(value) && PANES.find((p) => p.id === value)?.dock === dock;
-// Any pane may sit under the top one: Changes goes there when the top is taken.
-const isBottomTab = (value: unknown): value is AsideTab | null => value === null || isAsideTab(value);
-
 /** A config file's dialog: the whole file, one entry of it (null for a new one), or closed. */
 type EntryDialog<K> = "json" | { entry: K | null } | null;
 
@@ -112,8 +104,6 @@ function chatName(chats: ChatSummary[], id: string | null, turn: TurnState): str
 const STAY = "Stop the running turn before leaving this chat";
 
 export default function App() {
-  // Laid out as it was left.
-  const [collapsed, setCollapsed] = useStoredState("atlas-sidebar-collapsed", false, isBoolean);
   // Agent works in the open folder; Chat only talks. Chat's conversations live
   // here rather than in its panel: the sidebar lists them, and a reply keeps
   // arriving while Agent is shown.
@@ -133,11 +123,6 @@ export default function App() {
   const model = llm.models.current?.label;
   const plain = usePlainChat(kube.active?.name ?? null, model, !agentMode && !onPage);
   const prototypePreview = usePrototypePreview(plain.chatId, plain.role === "prototype" ? plain.turn.blocks : null, plain.turn.status === "running");
-  // Hidden until the chat header's button asks for it.
-  const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
-  const [tab, setTab] = useStoredState<AsideTab>("atlas-aside-tab", "changes", isPaneIn("right"));
-  // The terminal under the message box: closed when null.
-  const [bottomTab, setBottomTab] = useStoredState<AsideTab | null>("atlas-bottom-tab", null, isBottomTab);
   // Held here, not in the Changes pane: closing the pane, or moving it to the
   // other dock, would otherwise throw away a message half written. A different
   // folder is a different repository, and starts empty.
@@ -202,33 +187,23 @@ export default function App() {
   // On unless turned off in Settings: the viewer is a column beside the chat,
   // rarely wide enough for a long line.
   const [wrapLines, setWrapLines] = useStoredState("viewer-wrap", true, isBoolean);
-  // A window too narrow for every open panel at its minimum: the sidebar
-  // falls back to its rail first, then the column right of the viewer hides.
-  // Neither is stored — wider again, both come back as they were left.
-  const frame = nativeFrame || windowsFrame ? 0 : 2;
   // Chat mode has no folder to show: the panes beside the chat stay out of
   // it, and the viewer's place holds a Prototype chat's preview — a page
   // wants the width of a file, not of a side panel.
   const previewShown = !agentMode && !onPage && prototypePreview.open && plain.chatId !== null;
   const viewerOpen = (agentMode && !onPage && viewer.active !== null) || previewShown;
-  const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame, ide })}px)`);
-  // What the column shows: what was opened, while it fits — beside an Agent
-  // chat, or beside a page that keeps it.
-  const docked = onPage ? onPage.dock : agentMode;
-  const topHidden = asideHidden || !dockFits || !docked;
-  // The terminal is not in the column: it opens under the message box, as wide
-  // as the chat, so it needs no width of the window's own.
-  const bottomShown = agentMode ? bottomTab : null;
-  // The plan is read in a sheet over the chat (PlanSheet, in the chat below)
-  // rather than in the column: it asks the window for none of the width the
-  // column needs, so it opens wherever it fits, a narrow window included.
-  const planSheet = agentMode && !onPage && !asideHidden && tab === "plan";
-  // The column, and its handle: away while the plan's sheet has the corner.
-  const dockShown = !topHidden && !planSheet;
-  const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame, ide })}px)`);
-  const rail = collapsed || !sidebarFits;
-  // On screen in either dock: what decides whether a pane's data is read.
-  const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
+  // The layout: what fits the window, what is shown, and the panes' own keys.
+  const { rail, tab, topHidden, bottomShown, planSheet, dockShown, docks, setDocks, openTab, toggleIde, toggleSidebar, shown, setCollapsed, hideAside, closeBottom } = useDocks({
+    agentMode,
+    ideLayout,
+    setIdeLayout,
+    page: onPage,
+    panes: PANES,
+    viewerOpen,
+    closeViewer: viewer.closeAll,
+    swapViewer: viewer.swap,
+    terminalPaste,
+  });
   const toolLog = useToolLog(logOpen);
   const history = useChatHistory(workspace.folders, workspace.path);
   const chatGroups = useChatGroups(agentMode ? "projects" : "chat");
@@ -305,62 +280,8 @@ export default function App() {
     },
   });
 
-  // Where each pane goes is `lib/docks.ts`'s rule; this only stores the answer.
-  // The plan's sheet asks for no room, so a narrow window is no reason for its
-  // key to think it is away: what the key toggles is the user's wish.
-  const docks: Docks = { top: tab, topHidden: planSheet ? false : topHidden, bottom: bottomShown, swap: ide };
-  const putDocks = (next: Docks) => {
-    setTab(next.top);
-    setAsideHidden(next.topHidden);
-    setBottomTab(next.bottom);
-  };
-  const setDocks = (next: Docks) => {
-    // A pane asked for where the viewer leaves the column no room: the viewer
-    // gives way, or the pane would open out of sight. The plan opens in a sheet
-    // over the chat, so it asks for none of that room.
-    if (!dockFits && !next.topHidden && next.top !== "plan") viewer.closeAll();
-    putDocks(next);
-  };
-  // The tree is what the layout is for: it opens with it, in the dock now on the
-  // left. Leaving puts back the panes the user had open — as asked for, not as
-  // the window's width last let them show.
-  const [beforeIde, setBeforeIde] = useStoredState<Docks | null>("atlas-docks-before-ide", null, isSavedDocks);
-  // Not through `setDocks` either way: there a pane with no room closes the
-  // files, and these are the layout's own, put away by the swap below.
-  const toggleIde = () => {
-    if (!ideLayout) {
-      setBeforeIde({ top: tab, topHidden: asideHidden, bottom: bottomTab });
-      putDocks(ideDocks(docks));
-    } else if (beforeIde) {
-      putDocks(beforeIde);
-    }
-    // Each layout keeps its own files open.
-    viewer.swap();
-    setIdeLayout(!ideLayout);
-  };
-  const openTab = (next: AsideTab) =>
-    setDocks(openPane(docks, next, PANES.find((p) => p.id === next)?.dock ?? "right"));
-  // A command sent to a shell shows the shell.
-  useEffect(() => {
-    if (terminalPaste) openTab("terminal");
-    // Once per ask: not again when the layout changes.
-  }, [terminalPaste]);
-
-  // Held on its rail by the viewer beside the chat: opening it closes the viewer.
-  const toggleSidebar = () => (rail && !collapsed ? viewer.closeAll() : setCollapsed((v) => !v));
-
-  // A pane's key shows it, or hides it where it already is (`lib/shortcuts.ts`).
+  // The window's own keys; a pane's key lives in `useDocks`.
   useShortcuts({
-    ...Object.fromEntries(
-      PANES.map(({ id, dock }) => [
-        id,
-        () => {
-          // Focus leaves the composer, so the shell that opens takes the typing.
-          if (id === "terminal") (document.activeElement as HTMLElement | null)?.blur();
-          setDocks(togglePane(docks, id, dock));
-        },
-      ]),
-    ),
     newChat: () => newChat(),
     focusInput: focusComposer,
     sidebar: toggleSidebar,
@@ -649,7 +570,7 @@ export default function App() {
 
   // The terminal, under the message box: the only pane that opens there.
   const bottomPane = bottomShown && (
-    <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={() => setBottomTab(null)} />
+    <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={closeBottom} />
   );
 
   const chat = (
@@ -774,7 +695,7 @@ export default function App() {
           {agentShown && agentShown.chatId === agent.chatId && (
             <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} onOpenFile={workspace.path ? openFileLink : undefined} />
           )}
-          {planSheet && <PlanSheet plan={panes.plan} onClose={() => setAsideHidden(true)} />}
+          {planSheet && <PlanSheet plan={panes.plan} onClose={hideAside} />}
         </>
       ) : (
         <PlainChat
@@ -848,7 +769,7 @@ export default function App() {
     />
   ) : null;
   const topPane = (
-    <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
+    <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={hideAside} />
   );
   const renderPage = (one: PageDef) => (
     <one.Component
