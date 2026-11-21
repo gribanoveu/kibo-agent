@@ -152,6 +152,7 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         features: chat.features.clone(),
         fork: false,
         markers: None,
+        journal: None,
     };
     run(&turn)
 }

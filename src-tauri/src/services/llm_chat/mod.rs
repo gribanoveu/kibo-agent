@@ -33,6 +33,7 @@ use crate::domain::runbooks::Runbook;
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::prompt::{self, CHECKLIST_LEGEND};
 use crate::domain::request_marker::{self, MissCause, RequestMarkers, RequestRecord};
+use crate::domain::turn_journal::TurnJournal;
 use crate::domain::tool_call_log::{self, CallStatus, ToolCallLogEntry};
 use crate::domain::project_rules::RuleFile;
 use crate::domain::skills::Skill;
@@ -131,6 +132,10 @@ pub struct Turn<'a> {
     /// memory and the row on disk. `None` for a helper's turn, a chat-mode
     /// turn and a test without one — their requests are not marked.
     pub markers: Option<&'a dyn RequestMarkers>,
+    /// Where the turn's history goes after each completed round, so a crash
+    /// does not take the turn's work (`domain::turn_journal`). `None` for a
+    /// helper, a chat-mode turn and a test without one.
+    pub journal: Option<&'a dyn TurnJournal>,
     /// The chat's plan as the window holds it — the user's edits included.
     /// Read at the start of the turn; it reaches the model through the
     /// history ([`restore_plan`]), never the prompt.
@@ -380,6 +385,12 @@ pub fn stream(
         reads: ReadFiles::default(),
         written_plan: None,
     };
+    // The journal's base: the history this turn was sent with, whole. The
+    // saved record may lag it (an existing chat's new message is not saved
+    // until the turn ends), so recovery replays from this, not from disk.
+    if let Some(journal) = turn.journal {
+        journal.snapshot(&state.history);
+    }
     run(turn, state, 0, None)
 }
 
@@ -558,7 +569,12 @@ fn run(
             };
             match next {
                 Next::Run(calls, truncated) => (calls, Vec::new(), truncated),
-                Next::Again => continue,
+                Next::Again => {
+                    // A round that ran no calls still said something: its
+                    // reply and the notes it answered are history now.
+                    journal_tail(turn, &state);
+                    continue;
+                }
                 Next::Done(result) => return Ok(ChatStreamOutcome::Done(ended(state, result))),
                 Next::Cancelled(result) => return Ok(ChatStreamOutcome::Cancelled(ended(state, result))),
                 Next::Paused(calls) => {
@@ -575,6 +591,27 @@ fn run(
             }
         };
         run_calls(turn, &events, round, &mut state, &mut pass, &calls, &decisions, round_truncated);
+        // The round is whole: every call it asked for is answered. What it
+        // added goes to the journal before the next round is asked. A stop
+        // mid-batch leaves calls unanswered — `ended` stubs those in the
+        // history it returns, and the journal keeps the last whole round
+        // instead: a dangling request in it would poison the next message.
+        if !(turn.cancelled)() {
+            journal_tail(turn, &state);
+        }
+    }
+}
+
+/// The history's tail the journal does not have yet. A rewrite that left
+/// the journal longer than the history (a fold that missed its snapshot)
+/// is healed with a whole one rather than a wrong tail.
+fn journal_tail(turn: &Turn, state: &State) {
+    let Some(journal) = turn.journal else { return };
+    let from = journal.len();
+    if from > state.history.len() {
+        journal.snapshot(&state.history);
+    } else if from < state.history.len() {
+        journal.append(&state.history[from..]);
     }
 }
 

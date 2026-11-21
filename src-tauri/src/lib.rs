@@ -313,6 +313,7 @@ pub fn run() {
             commands::chat_history::chat_list,
             commands::chat_history::chat_load,
             commands::chat_history::chat_save,
+            commands::chat_history::chat_journal_blocks,
             commands::chat_history::chat_move_to_worktree,
             commands::chat_history::chat_generate_title,
             commands::chat_history::chat_set_archived,

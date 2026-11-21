@@ -80,6 +80,9 @@ pub struct FolderHandles {
     /// The chat's request markers: its previous fingerprint in memory and
     /// the row on disk. `None` under a mock runtime, as the rest.
     pub markers: Option<Arc<dyn crate::domain::request_marker::RequestMarkers>>,
+    /// The turn's journal: history after each completed round, so a crash
+    /// does not take the turn's work. `None` under a mock runtime.
+    pub journal: Option<Arc<dyn crate::domain::turn_journal::TurnJournal>>,
 }
 
 /// What a turn in a folder is, from the window and the agent's state.
@@ -179,6 +182,7 @@ pub fn run_in_folder(
         frozen: Some(&frozen),
         log_call: &log_call,
         markers: app.markers.as_deref(),
+        journal: app.journal.as_deref(),
         plan: folder.plan,
         worktree_of: worktree_of.as_deref(),
         chat_head: chat_head.as_deref(),

@@ -279,7 +279,11 @@ pub(super) fn clear_stale_results(turn: &Turn, state: &mut State, seen_results: 
     let scope = turn.place.scope();
     let usage = request_usage(turn, &state.history);
     let kept = |name: &str| turn.mcp.keeps_results(name);
-    for cleared in result_clearing::plan(&state.history, usage.total, usage.limit, &kept) {
+    let plan = result_clearing::plan(&state.history, usage.total, usage.limit, &kept);
+    if plan.is_empty() {
+        return;
+    }
+    for cleared in plan {
         state.history[cleared.index].content = Some(cleared.stub);
         seen_results.remove(&format!("{}|{}", cleared.tool, cleared.arguments));
         if ToolName::from_wire_name(&cleared.tool) != Some(ToolName::ReadFile) {
@@ -293,6 +297,11 @@ pub(super) fn clear_stale_results(turn: &Turn, state: &mut State, seen_results: 
                 state.reads.forget_whole(&relative);
             }
         }
+    }
+    // Results were replaced in place: the journal's tail alone would replay
+    // the old ones, so it takes the whole history.
+    if let Some(journal) = turn.journal {
+        journal.snapshot(&state.history);
     }
 }
 
@@ -432,6 +441,10 @@ pub(super) fn fold(
     restore_standing(history, turn);
     restore_plan(history, folding.plan);
     restore_checklist(history, folding.todos);
+    // The history was rewritten, not grown: the journal takes it whole.
+    if let Some(journal) = turn.journal {
+        journal.snapshot(history);
+    }
     events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacted { folded: shorter.folded });
     Ok(true)
 }

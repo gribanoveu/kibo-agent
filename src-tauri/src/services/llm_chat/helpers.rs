@@ -165,6 +165,7 @@ pub(super) fn run_helper(
         features,
         fork: fork.is_some(),
         markers: None,
+        journal: None,
     };
     let outcome = stream(&helper, messages, Vec::new());
     Ok((agents, id, outcome))

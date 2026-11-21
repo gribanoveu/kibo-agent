@@ -32,14 +32,42 @@ pub async fn chat_list(
     blocking(move || chat_store::list(&workspace.display().to_string())).await
 }
 
+/// One conversation, restored. A turn that died with the app left its
+/// journal: with no turn of this chat running, the journal is replayed
+/// over the record and saved back at once (`services::chat_recovery`).
 #[tauri::command]
-pub async fn chat_load(id: String) -> Result<ChatRecord, String> {
-    blocking(move || chat_store::load(&id)).await
+pub async fn chat_load(id: String, state: State<'_, Arc<AgentState>>) -> Result<ChatRecord, String> {
+    let session = state.session(&id);
+    let busy = session.is_running() || session.paused.load(std::sync::atomic::Ordering::SeqCst);
+    blocking(move || crate::services::chat_recovery::load(&id, busy)).await
+}
+
+/// The turn's transcript so far, written by the window at each round's
+/// end: the blocks it draws, the checklist and plan as they stand. The
+/// loop journals the history; this is the half only the window knows.
+/// Best-effort — a failed write costs crash protection, never the turn.
+#[tauri::command]
+pub async fn chat_journal_blocks(
+    id: String,
+    turn_id: String,
+    blocks: Value,
+    todos: Vec<Task>,
+    plan: Option<String>,
+    from: usize,
+) -> Result<(), String> {
+    blocking(move || {
+        let body = serde_json::json!({ "blocks": blocks, "todos": todos, "plan": plan, "from": from });
+        chat_store::journal_append(&id, &turn_id, "blocks", &body, 0)
+    })
+    .await
 }
 
 /// Writes the conversation as it now stands. Called once a turn has ended —
 /// saving mid-turn would store a transcript whose last tool call has no
 /// result yet — and as a new chat's first turn starts, with its message only.
+/// A save that ends the turn folds its journal away; one that lands while
+/// the turn runs or pauses (the first save, a plan edited at the card)
+/// leaves the journal for the turn to keep writing.
 #[tauri::command]
 pub async fn chat_save(
     state: State<'_, Arc<AgentState>>,
@@ -55,10 +83,13 @@ pub async fn chat_save(
     // chat has since opened a different folder in the window; a new one under
     // the folder it was typed in (`workspace`).
     let (workspace, _) = state.chat_workspace_in(&id, workspace.as_deref())?;
+    let session = state.session(&id);
+    let mid_turn = session.is_running() || session.paused.load(std::sync::atomic::Ordering::SeqCst);
     let state = Arc::clone(&state);
     blocking(move || {
         let first = !chat_store::exists(&id).map_err(|e| e.to_string())?;
-        let summary = chat_store::save(
+        let store_save = if mid_turn { chat_store::save_keep_journal } else { chat_store::save };
+        let summary = store_save(
             &id,
             &workspace.display().to_string(),
             &messages,
@@ -293,6 +324,97 @@ mod tests {
             cleanup_worktree("clean", &state).unwrap();
             assert!(!clean.exists());
             assert_eq!(std::fs::read_to_string(dirty.join("a.rs")).unwrap(), "do not delete\n");
+        });
+    }
+
+    /// TJ-4: the window's blocks land in the journal under the chat and turn.
+    #[test]
+    fn the_windows_blocks_land_in_the_journal() {
+        use tauri::Manager;
+        crate::testing::with_app_dir("cmd-journal-blocks", || {
+            let app = tauri::test::mock_app();
+            app.manage(Arc::new(AgentState::default()));
+            tauri::async_runtime::block_on(chat_journal_blocks(
+                "c1".into(),
+                "c1/turn-1".into(),
+                serde_json::json!([{ "kind": "user", "id": "user:0", "text": "go" }]),
+                vec![],
+                None,
+                0,
+            ))
+            .unwrap();
+            let entries = chat_store::journal_entries("c1").unwrap();
+            assert_eq!(entries.len(), 1);
+            assert!(matches!(entries[0], crate::domain::turn_journal::JournalEntry::Blocks { .. }));
+        });
+    }
+
+    /// A running turn's journal is its own: the load leaves it for the turn,
+    /// and the record opens as saved.
+    #[test]
+    fn a_running_chats_journal_is_left_for_its_turn() {
+        use tauri::Manager;
+        crate::testing::with_app_dir("cmd-journal-busy", || {
+            let app = tauri::test::mock_app();
+            let state = Arc::new(AgentState::default());
+            app.manage(Arc::clone(&state));
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-journal-busy-root")).unwrap();
+            state.register_open(root.clone());
+            chat_store::save("c1", &root.display().to_string(), &[LlmMessage::user("go")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            chat_store::journal_append("c1", "c1/turn-1", "append", &serde_json::to_value(vec![LlmMessage::assistant("working")]).unwrap(), 1).unwrap();
+            let _running = state.begin_running("c1", 3, &root).unwrap();
+
+            let record = tauri::async_runtime::block_on(chat_load("c1".into(), app.state())).unwrap();
+            assert_eq!(record.messages, vec![LlmMessage::user("go")]);
+            assert_eq!(chat_store::journal_entries("c1").unwrap().len(), 1, "the journal stays");
+        });
+    }
+
+    /// TJ-4: a save while the turn pauses for approval (a plan edited at
+    /// the card) keeps the journal — the resume counts its tail from it,
+    /// and folding it here would duplicate the history on a later crash.
+    #[test]
+    fn a_save_during_a_pause_keeps_the_journal() {
+        use tauri::Manager;
+        crate::testing::with_app_dir("cmd-journal-pause-save", || {
+            let app = tauri::test::mock_app();
+            let state = Arc::new(AgentState::default());
+            app.manage(Arc::clone(&state));
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-journal-pause-save-root")).unwrap();
+            state.register_open(root.clone());
+            state.set_workspace_for_test(root.clone());
+            chat_store::save("c1", &root.display().to_string(), &[LlmMessage::user("go")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            chat_store::journal_append("c1", "c1/turn-1", "snapshot", &serde_json::to_value(vec![LlmMessage::user("go")]).unwrap(), 1).unwrap();
+            state.session("c1").paused.store(true, std::sync::atomic::Ordering::SeqCst);
+
+            tauri::async_runtime::block_on(chat_save(
+                app.state(),
+                "c1".into(),
+                vec![LlmMessage::user("go")],
+                serde_json::json!([]),
+                vec![],
+                Some("# Edited at the card".into()),
+                None,
+                None,
+            ))
+            .unwrap();
+            assert_eq!(chat_store::journal_entries("c1").unwrap().len(), 1, "the pause's journal stays");
+            assert_eq!(chat_store::load("c1").unwrap().plan.as_deref(), Some("# Edited at the card"));
+
+            // The turn ends: the next save folds it.
+            state.session("c1").paused.store(false, std::sync::atomic::Ordering::SeqCst);
+            tauri::async_runtime::block_on(chat_save(
+                app.state(),
+                "c1".into(),
+                vec![LlmMessage::user("go")],
+                serde_json::json!([]),
+                vec![],
+                None,
+                None,
+                None,
+            ))
+            .unwrap();
+            assert!(chat_store::journal_entries("c1").unwrap().is_empty());
         });
     }
 

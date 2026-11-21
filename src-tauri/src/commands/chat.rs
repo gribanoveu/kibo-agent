@@ -16,7 +16,7 @@
 //! the other's.
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, Runtime, State};
@@ -83,6 +83,53 @@ impl crate::domain::request_marker::RequestMarkers for ChatMarkers {
     fn record(&self, record: crate::domain::request_marker::RequestRecord) {
         *self.session.last_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record.fingerprint.clone());
         crate::infra::tool_call_log::append_request(&self.chat_id, &self.turn_id, &record);
+    }
+}
+
+/// The turn's journal on disk: the history's tail after each completed
+/// round, the whole of it after a rewrite. Best-effort — a row that cannot
+/// be written costs crash protection, never the turn. `len` is the count
+/// of messages already journaled, read back on a resume so the tail is
+/// counted from where the pause left it.
+struct ChatJournal {
+    chat_id: String,
+    turn_id: String,
+    len: AtomicUsize,
+}
+
+impl ChatJournal {
+    /// The count is read from the store: a resume picks the tail up from
+    /// where the pause left it, not from zero. A store that cannot be read
+    /// gives no journal at all for this turn — counting from zero would
+    /// journal the whole history as a tail and duplicate it on recovery.
+    fn new(chat_id: String, turn_id: String) -> Option<Self> {
+        let count = crate::infra::chat_store::journal_message_count(&chat_id, &turn_id).ok()?;
+        Some(Self { chat_id, turn_id, len: AtomicUsize::new(count) })
+    }
+}
+
+impl crate::domain::turn_journal::TurnJournal for ChatJournal {
+    fn len(&self) -> usize {
+        self.len.load(Ordering::SeqCst)
+    }
+
+    fn append(&self, messages: &[LlmMessage]) {
+        if messages.is_empty() {
+            return;
+        }
+        // A row that cannot be serialized is not written and not counted:
+        // a null body the replay would skip must not move the tail past it.
+        let Ok(body) = serde_json::to_value(messages) else { return };
+        if crate::infra::chat_store::journal_append(&self.chat_id, &self.turn_id, "append", &body, messages.len()).is_ok() {
+            self.len.fetch_add(messages.len(), Ordering::SeqCst);
+        }
+    }
+
+    fn snapshot(&self, history: &[LlmMessage]) {
+        let Ok(body) = serde_json::to_value(history) else { return };
+        if crate::infra::chat_store::journal_append(&self.chat_id, &self.turn_id, "snapshot", &body, history.len()).is_ok() {
+            self.len.store(history.len(), Ordering::SeqCst);
+        }
     }
 }
 
@@ -464,10 +511,15 @@ where
             chat_id: chat_id.clone(),
             turn_id: turn_id.clone(),
         })),
+        // Built on the turn's thread below: its count is read from the store.
+        journal: None,
     };
 
     tauri::async_runtime::spawn_blocking(move || {
-        let handles = FolderHandles { search: searcher_of(&app, &workspace), ..handles };
+        // Built here, off the event loop: its count is read from the store.
+        let journal: Option<Arc<dyn crate::domain::turn_journal::TurnJournal>> =
+            ChatJournal::new(chat_id.clone(), turn_id.clone()).map(|j| Arc::new(j) as Arc<dyn crate::domain::turn_journal::TurnJournal>);
+        let handles = FolderHandles { search: searcher_of(&app, &workspace), journal, ..handles };
         let emit = chat_event_sink(&app, turn_id.clone());
         let observed = Arc::clone(&session);
         let events: ChatEventSink = Arc::new(move |event: ChatTurnEvent| {
@@ -1011,6 +1063,28 @@ mod tests {
                 None,
             ));
             assert!(matches!(outcome, Ok(ChatStreamOutcome::Cancelled(_))), "{outcome:?}");
+        });
+    }
+
+    /// TJ-4: the journal adapter counts from the store — a resume appends
+    /// the tail from where the pause left it — and its writes land as rows.
+    #[test]
+    fn the_journal_adapter_counts_from_the_store_and_writes_rows() {
+        use crate::domain::turn_journal::TurnJournal;
+        crate::testing::with_app_dir("cmd-journal-adapter", || {
+            let msg = |text: &str| serde_json::to_value(vec![LlmMessage::user(text)]).unwrap();
+            crate::infra::chat_store::journal_append("c1", "t1", "snapshot", &msg("go"), 1).unwrap();
+            crate::infra::chat_store::journal_append("c1", "t1", "append", &msg("a"), 1).unwrap();
+            crate::infra::chat_store::journal_append("c1", "t1", "append", &msg("b"), 1).unwrap();
+
+            let journal = ChatJournal::new("c1".into(), "t1".into()).expect("the store reads");
+            assert_eq!(journal.len(), 3, "the pause left three messages journaled");
+            journal.append(&[LlmMessage::user("next")]);
+            assert_eq!(journal.len(), 4);
+            assert_eq!(crate::infra::chat_store::journal_message_count("c1", "t1").unwrap(), 4);
+            journal.snapshot(&[LlmMessage::user("folded")]);
+            assert_eq!(journal.len(), 1);
+            assert_eq!(crate::infra::chat_store::journal_message_count("c1", "t1").unwrap(), 1);
         });
     }
 
