@@ -70,6 +70,15 @@ pub enum BoardOp {
     Edit,
 }
 
+/// `pullRequestStatus`: the branch whose pull request is read; none is the
+/// folder's checked-out one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestStatusArgs {
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub branch: Option<String>,
+}
+
 /// `mongo`. Flat like `board`'s: which fields go with which `op` is the
 /// tool's to check. The query texts are mongosh's, read as the page reads
 /// them; an object sent instead of text is taken as its JSON.

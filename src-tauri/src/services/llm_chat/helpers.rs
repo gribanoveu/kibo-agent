@@ -135,6 +135,8 @@ pub(super) fn run_helper(
         board: None,
         // A fork reads the databases the calling turn may; a helper has no feature on, and is not offered it.
         mongo: turn.mongo.clone(),
+        // A read, like the databases: a fork asks what the calling turn may.
+        pull_requests: turn.pull_requests.clone(),
         deepseek: None,
         features,
         fork: fork.is_some(),

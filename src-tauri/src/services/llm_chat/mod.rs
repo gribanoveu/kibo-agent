@@ -157,6 +157,8 @@ pub struct Turn<'a> {
     pub board: Option<Arc<dyn crate::domain::board::TaskBoard>>,
     /// The MongoDB servers `mongo` reads; `None` while the feature is off.
     pub mongo: Option<Arc<dyn crate::domain::mongo::MongoServers>>,
+    /// The pull requests `pullRequestStatus` reads; `None` while the feature is off.
+    pub pull_requests: Option<Arc<dyn crate::domain::code_host::PullRequestReader>>,
     /// DeepSeek's search and page reader, for `deepseekSearch` and
     /// `deepseekFetch`; `None` while the feature is off or there is no key.
     pub deepseek: Option<Web>,

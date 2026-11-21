@@ -222,6 +222,8 @@ pub enum ToolError {
     #[error(transparent)]
     Mongo(#[from] crate::domain::mongo::MongoError),
     #[error(transparent)]
+    CodeHost(#[from] crate::domain::code_host::CodeHostError),
+    #[error(transparent)]
     Prototype(#[from] crate::domain::prototype::PrototypeError),
     /// A tool of a feature the user has off — called from memory of a turn
     /// when it was on.

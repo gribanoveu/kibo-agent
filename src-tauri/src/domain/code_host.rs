@@ -541,6 +541,13 @@ pub struct PullRequestChanged {
 
 pub type PullRequestEventSink = Arc<dyn Fn(PullRequestChanged) + Send + Sync>;
 
+/// What the agent's `pullRequestStatus` reads through: the strip's own read,
+/// for the folder's branch or another one, leaving the strip's state alone.
+/// A server out of reach is an `Err` here — the model is told, not shown nothing.
+pub trait PullRequestReader: Send + Sync {
+    fn status(&self, root: &std::path::Path, branch: Option<&str>) -> Result<PrStrip, CodeHostError>;
+}
+
 /// Whether the token's user has approved this pull request.
 pub fn approved_by(pr: &PullRequest, me: &str) -> bool {
     let me = me.trim();

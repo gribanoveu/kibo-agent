@@ -125,6 +125,9 @@ pub enum ToolName {
     /// The MongoDB connections the user opened to the agent, read: their
     /// collections, documents, counts, aggregations, indexes (`docs/44-mongodb.md`, M-8).
     Mongo,
+    /// The pull request of the folder's branch on the user's Bitbucket, read:
+    /// reviewers, builds, whether it can merge (`docs/56-bitbucket-prs.md`, BB-6).
+    PullRequestStatus,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -193,6 +196,7 @@ impl ToolName {
         ToolName::DeepseekFetch,
         ToolName::Board,
         ToolName::Mongo,
+        ToolName::PullRequestStatus,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -249,6 +253,7 @@ impl ToolName {
             ToolName::DeepseekFetch => "deepseekFetch",
             ToolName::Board => "board",
             ToolName::Mongo => "mongo",
+            ToolName::PullRequestStatus => "pullRequestStatus",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -400,6 +405,8 @@ impl ToolName {
             | ToolName::Board
             // Reads; a pipeline that would write is refused before the server.
             | ToolName::Mongo
+            // Reads; Approve, Merge and Create are the user's buttons.
+            | ToolName::PullRequestStatus
             // A copy of the chat's folder beside it; nothing there changes.
             | ToolName::Present
             | ToolName::ToolSearch => false,
@@ -427,7 +434,8 @@ impl ToolName {
             | ToolName::DeepseekSearch
             | ToolName::DeepseekFetch
             // A server asked, nothing left open after it.
-            | ToolName::Mongo => true,
+            | ToolName::Mongo
+            | ToolName::PullRequestStatus => true,
             ToolName::WriteFile
             | ToolName::EditFile
             | ToolName::Delete
@@ -505,6 +513,7 @@ impl ToolName {
             | ToolName::ToolSearch
             | ToolName::Board
             | ToolName::Mongo
+            | ToolName::PullRequestStatus
             // A version kept beside the folder: history, which a rewind leaves.
             | ToolName::Present
             | ToolName::Skill
@@ -635,6 +644,8 @@ impl ToolName {
             ToolName::DeepseekSearch | ToolName::DeepseekFetch => 2,
             // A request or two to a server; a search by name, one per database.
             ToolName::Mongo => 2,
+            // Three rounds of two requests to the code host.
+            ToolName::PullRequestStatus => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,

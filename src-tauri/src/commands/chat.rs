@@ -394,6 +394,9 @@ where
             .try_state::<Arc<crate::infra::board_store::Board>>()
             .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
         mongo: mongo_servers_of(&app),
+        pull_requests: app
+            .try_state::<Arc<crate::services::pull_requests::PullRequests>>()
+            .map(|prs| Arc::clone(&prs) as Arc<dyn crate::domain::code_host::PullRequestReader>),
     };
 
     tauri::async_runtime::spawn_blocking(move || {

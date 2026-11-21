@@ -206,6 +206,8 @@ struct Harness {
     /// The agent's web, as Settings would give it; `None` is off.
     web: Option<Web>,
     features: Features,
+    /// What `pullRequestStatus` reads through; `None` as with the feature off.
+    pull_requests: Option<Arc<dyn crate::domain::code_host::PullRequestReader>>,
     parallel: Vec<String>,
     parallel_calls: Arc<Mutex<usize>>,
 }
@@ -261,6 +263,7 @@ fn harness(label: &str, steps: Vec<Step>) -> Harness {
         questions: None,
         web: None,
         features: Features::default(),
+        pull_requests: None,
         parallel: Vec::new(),
         parallel_calls: Arc::new(Mutex::new(0)),
     }
@@ -329,6 +332,7 @@ impl Harness {
             questions: self.questions.clone(),
             board: None,
             mongo: None,
+            pull_requests: self.pull_requests.clone(),
             deepseek: None,
             features: self.features.clone(),
             fork: false,

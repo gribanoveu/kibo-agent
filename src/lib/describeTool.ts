@@ -87,6 +87,7 @@ export const LABELS: Record<string, string> = {
   deepseekFetch: "DeepSeek page",
   board: "Board",
   mongo: "MongoDB",
+  pullRequestStatus: "Pull request",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -318,6 +319,15 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         detail: str(result.text) ?? "",
       };
     }
+
+    // Which branch, and what the server said of it: `feature/x · #153 blocked`.
+    case "pullRequestStatus":
+      return {
+        name,
+        arg: str(args.branch)?.trim() || "current branch",
+        meta: str(result.summary),
+        detail: str(result.text) ?? "",
+      };
 
     // A page put in front of the user: its name, and the version kept.
     case "present": {

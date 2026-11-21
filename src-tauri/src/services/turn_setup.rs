@@ -15,6 +15,7 @@ use thiserror::Error;
 use crate::domain::agents::Agents;
 use crate::domain::background::BackgroundProcesses;
 use crate::domain::board::TaskBoard;
+use crate::domain::code_host::PullRequestReader;
 use crate::domain::mongo::MongoServers;
 use crate::domain::chat_role::ChatRole;
 use crate::domain::conversation_mode::{self, ConversationMode};
@@ -77,6 +78,7 @@ pub struct FolderHandles {
     pub terminals: Option<Arc<dyn UserTerminals>>,
     pub board: Option<Arc<dyn TaskBoard>>,
     pub mongo: Option<Arc<dyn MongoServers>>,
+    pub pull_requests: Option<Arc<dyn PullRequestReader>>,
 }
 
 /// What a turn in a folder is, from the window and the agent's state.
@@ -141,6 +143,7 @@ pub fn run_in_folder(
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
     let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
+    let pull_requests = app.pull_requests.filter(|_| features.is_on(Feature::PullRequests));
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
     let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
     let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), parallel });
@@ -179,6 +182,7 @@ pub fn run_in_folder(
         questions: app.questions,
         board,
         mongo,
+        pull_requests,
         deepseek,
         features,
         fork: false,
@@ -648,6 +652,7 @@ mod tests {
                 let mut settings = crate::infra::settings_store::load().unwrap();
                 settings.features.insert("board".into(), on);
                 settings.features.insert("mongodb".into(), on);
+                settings.features.insert("pull-requests".into(), on);
                 crate::infra::settings_store::save(&settings).unwrap();
                 let folder = FolderTurn {
                     chat_id: "c1",
@@ -664,13 +669,25 @@ mod tests {
                 };
                 let board: Arc<dyn TaskBoard> = Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {})));
                 let mut seen = None;
-                run_in_folder(folder, FolderHandles { board: Some(board), mongo: Some(Arc::new(crate::services::mongo::Servers(Arc::default()))), ..Default::default() }, |turn| {
+                struct NoPullRequests;
+                impl PullRequestReader for NoPullRequests {
+                    fn status(&self, _: &Path, _: Option<&str>) -> Result<crate::domain::code_host::PrStrip, crate::domain::code_host::CodeHostError> {
+                        Ok(crate::domain::code_host::PrStrip::NoRemote)
+                    }
+                }
+                let handles = FolderHandles {
+                    board: Some(board),
+                    mongo: Some(Arc::new(crate::services::mongo::Servers(Arc::default()))),
+                    pull_requests: Some(Arc::new(NoPullRequests)),
+                    ..Default::default()
+                };
+                run_in_folder(folder, handles, |turn| {
                     assert_eq!(turn.session.provider_id, "local");
                     assert_eq!(turn.approval.git_aliases.get("pf").map(String::as_str), Some("push --force"));
                     assert_eq!(turn.plan, Some("the plan"));
                     assert!(turn.frozen.is_some_and(|f| f.rules[..] == *turn.rules), "the folder's turn is frozen");
                     assert!(matches!(turn.place, Place::Folder { mode: ConversationMode::Analyst, web: None, .. }));
-                    seen = Some((turn.board.is_some(), turn.mongo.is_some()));
+                    seen = Some((turn.board.is_some(), turn.mongo.is_some(), turn.pull_requests.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
                         todos: Vec::new(),
@@ -680,8 +697,8 @@ mod tests {
                 })
                 .map(|_| seen.expect("run was called"))
             };
-            assert_eq!(turn(false).unwrap(), (false, false), "the board and MongoDB are off until their features are");
-            assert_eq!(turn(true).unwrap(), (true, true));
+            assert_eq!(turn(false).unwrap(), (false, false, false), "the board, MongoDB and pull requests are off until their features are");
+            assert_eq!(turn(true).unwrap(), (true, true, true));
 
             std::fs::write(crate::infra::hooks::path().unwrap(), "{ not json").unwrap();
             let refused = turn(true).expect_err("hooks that do not parse").to_string();

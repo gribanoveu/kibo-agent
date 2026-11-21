@@ -109,6 +109,9 @@ fn base_tools() -> HashSet<ToolName> {
         // The MongoDB connections the user opened to the agent, read, while
         // the feature is on: a question about data is asked beside the code.
         ToolName::Mongo,
+        // The pull request of the branch, read, while the feature is on:
+        // "why does it not merge" is a question about the code beside it.
+        ToolName::PullRequestStatus,
     ]
     .into_iter()
     .collect()

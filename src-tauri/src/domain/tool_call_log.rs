@@ -405,6 +405,11 @@ mod tests {
                 Some(ToolCall::Mongo(crate::domain::tools::MongoArgs { op: crate::domain::tools::MongoOp::Find, filter: Some("{ paid: true }".into()), ..Default::default() })),
                 ToolResult::Mongo { text: LEAK.into(), summary: "3 documents".into() },
             ),
+            // The branch asked about stays; the pull request read goes as `text`.
+            ToolName::PullRequestStatus => (
+                Some(ToolCall::PullRequestStatus(crate::domain::tools::PullRequestStatusArgs { branch: Some("release/1.2".into()) })),
+                ToolResult::PullRequest { text: LEAK.into(), summary: "#153 blocked".into() },
+            ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (
                 Some(ToolCall::Present(crate::domain::tools::PresentArgs { path: "index.html".into(), title: "Coffee shop".into() })),

@@ -87,14 +87,14 @@ fn reads_survive_the_trip_through_javascript() {
 #[test]
 fn what_waits_for_tool_search_is_these() {
     let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-    assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo]);
+    assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::PullRequestStatus]);
 }
 
 #[test]
 fn all_is_complete() {
     assert_eq!(
         ToolName::ALL.len(),
-        50,
+        51,
         "a variant was added or removed — update ALL and this count together"
     );
     let unique: HashSet<_> = ToolName::ALL.iter().collect();

@@ -17,7 +17,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::domain::code_host::{
     alias_to_remember, approved_by, can_approve, canonical_remote, host_of, latest_build, merge_blocked, server_for, Call, CodeHost,
-    CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, RemoteRepo,
+    CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, PullRequestReader, RemoteRepo,
     Snapshot,
 };
 use crate::infra::{code_host_store, git_head, repository_identity};
@@ -143,14 +143,14 @@ impl PullRequests {
     }
 
     fn read(&self, root: &Path) -> Read {
-        match self.ask(root) {
+        match self.ask(root, None) {
             Err(CodeHostError::Unreachable(_)) => Ok(PrStrip::Unreachable),
             read => read,
         }
     }
 
-    fn ask(&self, root: &Path) -> Read {
-        let target = match target(root)? {
+    fn ask(&self, root: &Path, branch: Option<&str>) -> Read {
+        let target = match target(root, branch)? {
             Found::Target(target) => target,
             Found::Nothing(strip) => return Ok(strip),
         };
@@ -276,7 +276,7 @@ impl PullRequests {
     /// An action, and then the signal to read again whatever came of it: a
     /// refusal is as much news as a success — the version moved, a veto came.
     fn acting<T>(&self, root: &Path, act: impl FnOnce(&Call, &Target) -> Result<T, CodeHostError>) -> Result<T, CodeHostError> {
-        let target = match target(root)? {
+        let target = match target(root, None)? {
             Found::Target(target) => target,
             Found::Nothing(PrStrip::NoBranch) => return Err(CodeHostError::NoBranch),
             Found::Nothing(PrStrip::NotConnected { remote }) => return Err(CodeHostError::NoServer(remote.host)),
@@ -449,6 +449,15 @@ fn checked(server: CodeHostServer) -> Result<CodeHostServer, CodeHostError> {
     Ok(CodeHostServer { id, base_url, ..server })
 }
 
+/// The agent's read: what the strip would show, for any branch, and none of
+/// the strip's own state touched — its last read, its watcher. A server out
+/// of reach is said, not hidden: the model asked, and the answer is that.
+impl PullRequestReader for PullRequests {
+    fn status(&self, root: &Path, branch: Option<&str>) -> Read {
+        self.ask(root, branch)
+    }
+}
+
 enum Found {
     Target(Target),
     /// The folder has nothing to ask a server about, and this is what the
@@ -456,10 +465,11 @@ enum Found {
     Nothing(PrStrip),
 }
 
-/// The server, token, repository and branch of `root`, or what the strip shows
-/// when there is none. A host no configured server answers to gets no request:
-/// the token goes to a server the user added and to no other (decision 1).
-fn target(root: &Path) -> Result<Found, CodeHostError> {
+/// The server, token, repository and branch of `root` — `branch`, or the one
+/// checked out — or what the strip shows when there is none. A host no
+/// configured server answers to gets no request: the token goes to a server
+/// the user added and to no other (decision 1).
+fn target(root: &Path, branch: Option<&str>) -> Result<Found, CodeHostError> {
     let Some(remote) = repository_identity::remote_url(root).and_then(|url| RemoteRepo::parse(&url).ok()) else {
         return Ok(Found::Nothing(PrStrip::NoRemote));
     };
@@ -467,7 +477,8 @@ fn target(root: &Path) -> Result<Found, CodeHostError> {
     let Some(server) = server_for(&servers, &remote).cloned() else {
         return Ok(Found::Nothing(PrStrip::NotConnected { remote }));
     };
-    let Some(branch) = git_head::checked_out_branch(root) else {
+    let named = branch.map(str::trim).filter(|branch| !branch.is_empty()).map(str::to_string);
+    let Some(branch) = named.or_else(|| git_head::checked_out_branch(root)) else {
         return Ok(Found::Nothing(PrStrip::NoBranch));
     };
     let token = code_host_store::token(&server.id)?;
@@ -499,6 +510,8 @@ mod tests {
         slow: Mutex<HashMap<&'static str, Duration>>,
         /// What the default branch answers instead: a server that does not.
         down: Mutex<Option<CodeHostError>>,
+        /// The branch each pull request was asked for.
+        branches: Mutex<Vec<String>>,
     }
 
     impl Double {
@@ -536,8 +549,9 @@ mod tests {
             self.ask("branch_commit");
             Ok(lock(&self.commit).clone())
         }
-        fn pull_request(&self, _: &Call, _: &str) -> Result<Option<PullRequest>, CodeHostError> {
+        fn pull_request(&self, _: &Call, branch: &str) -> Result<Option<PullRequest>, CodeHostError> {
             self.ask("pull_request");
+            lock(&self.branches).push(branch.to_string());
             Ok(lock(&self.pr).clone())
         }
         fn merge_check(&self, _: &Call, _: u64) -> Result<MergeCheck, CodeHostError> {
@@ -682,6 +696,41 @@ mod tests {
             assert!(matches!(service.strip(&repo("prs-rounds-repo", Some(REMOTE))), Ok(PrStrip::Ready { snapshot: Snapshot { pr: Some(_), .. }, .. })));
             assert!(started.elapsed() < Duration::from_millis(950), "a pair asked one after the other: {:?}", started.elapsed());
             assert_eq!((double.asked("builds"), double.asked("merge_check"), double.asked("me")), (1, 1, 1));
+        });
+    }
+
+    /// The agent's read: the branch it names, or the folder's; the strip's
+    /// own state untouched; a server out of reach said rather than hidden; and
+    /// the token nowhere in what comes back.
+    #[test]
+    fn the_agent_reads_any_branch_and_leaves_the_strip_alone() {
+        with_app_dir("prs-agent", || {
+            code_host_store::put(server("https://git.server.com", &[]), Some("t0k-secret".to_string())).unwrap();
+            let (service, double, events) = service(Duration::from_secs(60), Duration::from_secs(60));
+            *lock(&double.commit) = Some("94beed9".to_string());
+            *lock(&double.pr) = Some(pull_request(6));
+            let root = repo("prs-agent-repo", Some(REMOTE));
+            // The strip on screen: its watcher must not take the agent's read as the window's.
+            service.watch(root.clone());
+
+            let read = service.status(&root, Some(" release/1.2 ")).unwrap();
+            let PrStrip::Ready { branch, .. } = &read else { panic!("{read:?}") };
+            assert_eq!(branch, "release/1.2");
+            service.status(&root, Some("")).unwrap();
+            service.status(&root, None).unwrap();
+            let checked_out = crate::infra::git_head::checked_out_branch(&root).unwrap();
+            assert_eq!(*lock(&double.branches), ["release/1.2".to_string(), checked_out.clone(), checked_out]);
+            assert!(!serde_json::to_string(&read).unwrap().contains("t0k-secret"));
+
+            assert_eq!(service.last(&root), None, "the strip's last read is its own");
+            assert!(lock(&events).is_empty(), "nothing for the window to read again");
+            assert!(lock(&service.pushed).is_none(), "nor its sense of what was pushed");
+            let watched = lock(&service.watching).as_ref().map(|watching| lock(&watching.last).is_none());
+            assert_eq!(watched, Some(true), "nor what the watcher compares with");
+            service.unwatch(&root);
+
+            *lock(&double.down) = Some(CodeHostError::Unreachable("refused".to_string()));
+            assert!(matches!(service.status(&root, None), Err(CodeHostError::Unreachable(_))));
         });
     }
 

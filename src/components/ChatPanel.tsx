@@ -16,6 +16,7 @@ import {
   FolderTree,
   FoldVertical,
   GitBranch,
+  GitPullRequest,
   Info,
   Globe,
   ListTodo,
@@ -94,6 +95,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Explore: Telescope,
   Board: SquareKanban,
   MongoDB: Database,
+  "Pull request": GitPullRequest,
   Prototype: AppWindow,
 };
 
