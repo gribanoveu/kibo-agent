@@ -291,6 +291,19 @@ impl SteeringQueue {
 pub enum TurnError {
     #[error("{0}")]
     Provider(#[from] LlmError),
+    /// A provider failure after the turn had done work: the error, and the
+    /// history, checklist and plan as of the last completed round. Every
+    /// call in that history is answered — a round enters it only once its
+    /// calls are about to run, and a failure reaches this point only from
+    /// `ask_round`, before the failing round's own reply is added — so the
+    /// window can save it and send it on (`docs/57-turn-journal.md`, TJ-2).
+    #[error("{error}")]
+    Failed {
+        error: LlmError,
+        history: Vec<LlmMessage>,
+        todos: Vec<Task>,
+        plan: Option<String>,
+    },
     #[error("cannot resume: {0}")]
     BadResume(String),
     #[error(transparent)]
@@ -524,7 +537,21 @@ fn run(
             // note it earned is in the history.
             (calls, decisions, false)
         } else {
-            match ask_round(turn, &events, round, &mut state, &mut pass)? {
+            let next = match ask_round(turn, &events, round, &mut state, &mut pass) {
+                Ok(next) => next,
+                // The turn's work is kept, not lost with the error: the
+                // window saves this history as it saves a finished turn.
+                Err(TurnError::Provider(error)) => {
+                    return Err(TurnError::Failed {
+                        error,
+                        history: state.history,
+                        todos: state.todos,
+                        plan: state.written_plan,
+                    });
+                }
+                Err(other) => return Err(other),
+            };
+            match next {
                 Next::Run(calls, truncated) => (calls, Vec::new(), truncated),
                 Next::Again => continue,
                 Next::Done(result) => return Ok(ChatStreamOutcome::Done(ended(state, result))),

@@ -94,7 +94,7 @@ fn a_round_that_already_streamed_is_not_retried() {
         .run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]))
         .expect_err("gives up");
 
-    assert!(matches!(err, TurnError::Provider(LlmError::RateLimited { .. })), "{err}");
+    assert!(matches!(err, TurnError::Failed { error: LlmError::RateLimited { .. }, .. }), "{err}");
     assert_eq!(h.provider.requests().len(), 1, "asked once, never repeated");
     assert!(h.slept.lock().unwrap().is_empty());
 }
@@ -111,8 +111,75 @@ fn a_considered_refusal_ends_the_turn() {
         .run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]))
         .expect_err("fails");
 
-    assert!(matches!(err, TurnError::Provider(_)), "{err}");
+    assert!(matches!(err, TurnError::Failed { .. }), "{err}");
     assert_eq!(h.provider.requests().len(), 1);
+}
+
+/// TJ-2: a provider failure keeps the turn's work. Round 1 ran its calls
+/// and wrote the plan; round 2's request fails — the error carries the
+/// history as of round 1, every call answered, with the checklist and plan.
+#[test]
+fn a_failed_turn_hands_back_the_work_it_did() {
+    let h = harness(
+        "loop-fail-keeps-work",
+        vec![
+            asks(vec![
+                wants("c1", "todo", r#"{"op":"write","tasks":["read the logs"]}"#),
+                wants("c2", "writePlan", r#"{"content":"the plan"}"#),
+            ]),
+            Step::Fail(LlmError::Provider("peer closed connection".to_string())),
+        ],
+    );
+
+    let err = h
+        .run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]))
+        .expect_err("round 2 fails");
+
+    let TurnError::Failed { error, history, todos, plan } = err else {
+        panic!("expected Failed: {err}")
+    };
+    assert!(error.to_string().contains("peer closed connection"), "{error}");
+    // The user's message first, then round 1 whole: its calls and both
+    // results — a history valid to send with the next message.
+    assert_eq!(history[0].role, LlmRole::User);
+    let asked = history.iter().find(|m| m.role == LlmRole::Assistant && !m.tool_calls.is_empty()).expect("round 1 asked");
+    for call in &asked.tool_calls {
+        assert!(
+            history.iter().any(|m| m.tool_call_id.as_deref() == Some(call.id.as_str())),
+            "call {} left unanswered",
+            call.id
+        );
+    }
+    // Nothing of the failed round made it in: one assistant turn, not two.
+    assert_eq!(history.iter().filter(|m| m.role == LlmRole::Assistant).count(), 1);
+    assert_eq!(todos.len(), 1);
+    assert_eq!(todos[0].title, "read the logs");
+    assert_eq!(plan.as_deref(), Some("the plan"));
+}
+
+/// A note typed while the turn ran is in the history the failure carries:
+/// the front end has marked it read, so losing it here loses it for good.
+#[test]
+fn a_failed_turn_keeps_the_note_the_user_typed() {
+    let h = harness(
+        "loop-fail-keeps-note",
+        vec![
+            text_while_typing("working", "use the helper"),
+            Step::Fail(LlmError::Provider("peer closed connection".to_string())),
+        ],
+    );
+
+    let err = h
+        .run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]))
+        .expect_err("round 2 fails");
+
+    let TurnError::Failed { history, .. } = err else {
+        panic!("expected Failed: {err}")
+    };
+    assert!(
+        history.iter().any(|m| m.role == LlmRole::User && m.content.as_deref().is_some_and(|c| c.contains("use the helper"))),
+        "the note is gone: {history:?}"
+    );
 }
 
 #[test]

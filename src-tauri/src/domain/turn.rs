@@ -54,6 +54,33 @@ pub struct ChatDone {
     pub limit_reached: Option<u32>,
 }
 
+/// A turn that failed after doing work, as the window receives it: the
+/// message to show, and — when the failure came from the provider mid-turn —
+/// everything the turn keeps. The window saves these as it saves a finished
+/// turn, so the next message is sent with the work the model already did
+/// (`docs/57-turn-journal.md`, TJ-2). A failure with nothing to keep (a
+/// refused start, a closed folder) arrives as a plain string instead.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnFailure {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<TurnRecovery>,
+}
+
+/// What a failed turn hands back: the history as of the last completed
+/// round — every call in it answered, so it is valid to send on — with the
+/// checklist and the plan the turn reached.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnRecovery {
+    pub history: Vec<LlmMessage>,
+    pub todos: Vec<Task>,
+    /// What `writePlan` last wrote in the turn; `None` when it wrote none,
+    /// and the window's own plan stands.
+    pub plan: Option<String>,
+}
+
 /// A whole round paused, unexecuted — and the entire state needed to continue.
 ///
 /// Every field is here because leaving it out broke something specific:

@@ -28,7 +28,7 @@ use crate::domain::tools::{CodeSearchFn, Task, ToolPreview, ToolScope};
 use crate::domain::next_prompt::{self};
 use crate::domain::turn::{
     ChatEventPayload, ChatEventSink, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, SteeringNote,
-    ToolCallDecision,
+    ToolCallDecision, TurnFailure, TurnRecovery,
 };
 use crate::services::ai_tools::preview;
 use crate::services::llm_chat::{self, Turn, TurnError};
@@ -38,12 +38,32 @@ use crate::services::mcp_servers::McpServers;
 use crate::domain::mcp::McpAnswer;
 use crate::infra::background::Processes;
 use crate::services::llm_session;
-use crate::services::turn_setup::{self, FolderHandles, FolderTurn};
+use crate::services::turn_setup::{self, FolderHandles, FolderTurn, TurnSetupError};
 use crate::services::workspace_index::WorkspaceIndex;
 
 use super::chat_events::chat_event_sink;
 
 use super::agent_state::{AgentState, SessionHandle, RunningTurn};
+
+/// What a start or a resume refuses with: a plain message (admission, a
+/// closed folder), or a turn that failed with work to keep. Untagged, so
+/// the window reads a string as before and an object as [`TurnFailure`].
+#[derive(Debug, serde::Serialize)]
+#[serde(untagged)]
+pub enum ChatTurnError {
+    Message(String),
+    Failed(TurnFailure),
+}
+
+impl ChatTurnError {
+    /// The message a window shows, whichever kind this is.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Message(message) => message,
+            Self::Failed(failure) => &failure.message,
+        }
+    }
+}
 
 /// Starts a fresh turn and resolves when it ends, pauses, or is stopped.
 ///
@@ -59,14 +79,14 @@ pub async fn chat_start<R: Runtime>(
     todos: Vec<Task>,
     plan: Option<String>,
     workspace: Option<String>,
-) -> Result<ChatStreamOutcome, String> {
+) -> Result<ChatStreamOutcome, ChatTurnError> {
     let state = state.inner().clone();
-    let (workspace, worktree_base) = state.chat_workspace_in(&chat_id, workspace.as_deref())?;
+    let (workspace, worktree_base) = state.chat_workspace_in(&chat_id, workspace.as_deref()).map_err(ChatTurnError::Message)?;
     let session = state.session(&chat_id);
     // Admission before anything about the session is touched: a refused
     // start must leave the running turn's stop flag and journal alone.
-    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
-    state.still_open(&workspace)?;
+    let running = state.begin_running(&chat_id, parallel_limit(), &workspace).map_err(ChatTurnError::Message)?;
+    state.still_open(&workspace).map_err(ChatTurnError::Message)?;
     // An unsaved chat stays in this folder when the window moves to another.
     session.home.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(|| workspace.clone());
     // A stray stop from a turn that already finished must not end this one
@@ -91,18 +111,18 @@ pub async fn chat_resume<R: Runtime>(
     checkpoint: PendingApproval,
     decisions: Vec<ToolCallDecision>,
     plan: Option<String>,
-) -> Result<ChatStreamOutcome, String> {
+) -> Result<ChatStreamOutcome, ChatTurnError> {
     let state = state.inner().clone();
-    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id).map_err(ChatTurnError::Message)?;
     let session = state.session(&chat_id);
-    let running = state.begin_resume(&chat_id, parallel_limit(), &workspace)?;
+    let running = state.begin_resume(&chat_id, parallel_limit(), &workspace).map_err(ChatTurnError::Message)?;
     if let Err(closed) = state.still_open(&workspace) {
         // `begin_resume` took the card's pause: given back while the turn
         // still counts as running, so no fresh start slips in between and
         // orphans the card.
         session.paused.store(true, std::sync::atomic::Ordering::SeqCst);
         drop(running);
-        return Err(closed);
+        return Err(ChatTurnError::Message(closed));
     }
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
@@ -391,12 +411,12 @@ async fn run_off_the_event_loop<R, F>(
     worktree_base: Option<String>,
     plan: Option<String>,
     run: F,
-) -> Result<ChatStreamOutcome, String>
+) -> Result<ChatStreamOutcome, ChatTurnError>
 where
     R: Runtime,
     F: FnOnce(&Turn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
-    let approval = state.approval(&workspace)?;
+    let approval = state.approval(&workspace).map_err(ChatTurnError::Message)?;
     let mode = state.mode();
     let _running = running;
     let (processes, agents) = chats_own(
@@ -445,13 +465,23 @@ where
             parallel: &parallel,
             worktree_base: worktree_base.as_deref(),
         };
-        let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| e.to_string())?;
+        let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| match e {
+            // The one failure that keeps the turn's work: the window saves
+            // this history, checklist and plan as it saves a finished turn.
+            TurnSetupError::Turn(TurnError::Failed { error, history, todos, plan }) => {
+                ChatTurnError::Failed(TurnFailure {
+                    message: error.to_string(),
+                    recovery: Some(TurnRecovery { history, todos, plan }),
+                })
+            }
+            other => ChatTurnError::Message(other.to_string()),
+        })?;
         session.paused.store(matches!(&outcome, ChatStreamOutcome::PendingApproval(_)), Ordering::SeqCst);
         session.end_turn(turn_id, &outcome);
         Ok(outcome)
     })
     .await
-    .map_err(|e| format!("the turn thread failed: {e}"))?
+    .map_err(|e| ChatTurnError::Message(format!("the turn thread failed: {e}")))?
 }
 
 #[cfg(test)]
@@ -483,7 +513,7 @@ mod tests {
                 None,
                 None,
             ));
-            assert!(matches!(&started, Err(e) if e.contains("not an open folder")), "{started:?}");
+            assert!(matches!(&started, Err(e) if e.message().contains("not an open folder")), "{started:?}");
             let checkpoint = PendingApproval {
                 history: vec![LlmMessage::user("hi")],
                 round: 1,
@@ -502,7 +532,7 @@ mod tests {
                 Vec::new(),
                 None,
             ));
-            assert!(matches!(&resumed, Err(e) if e.contains("not an open folder")), "{resumed:?}");
+            assert!(matches!(&resumed, Err(e) if e.message().contains("not an open folder")), "{resumed:?}");
             assert!(state.root_is_idle(&closed), "the refused turn left its mark");
         });
     }
@@ -853,7 +883,7 @@ mod tests {
 
             assert!(state.unregister_if_idle(&a));
             let refused = start("n3", typed_in).expect_err("A is closed");
-            assert!(refused.contains("not an open folder"), "{refused}");
+            assert!(refused.message().contains("not an open folder"), "{refused:?}");
         });
     }
 
@@ -957,6 +987,52 @@ mod tests {
         });
     }
 
+    /// TJ-2: a failed turn's work crosses the wire as an object — the
+    /// message and the history to save — not as a bare string, which the
+    /// window would show and drop.
+    #[test]
+    fn a_failed_turns_work_crosses_the_wire() {
+        crate::testing::with_app_dir("cmd-turn-failed-wire", || {
+            crate::testing::spending_provider("unused", 10, 2);
+            let state = state();
+            let folder = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-turn-failed-wire")).unwrap();
+            state.register_open(folder.clone());
+            state.set_workspace_for_test(folder.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let running = state.begin_running("c1", 3, &folder).expect("the turn runs");
+
+            let outcome = tauri::async_runtime::block_on(run_off_the_event_loop(
+                app.handle().clone(),
+                Arc::clone(&state),
+                state.session("c1"),
+                running,
+                "t1".into(),
+                "c1".into(),
+                folder.clone(),
+                None,
+                None,
+                move |_| {
+                    Err(TurnError::Failed {
+                        error: crate::domain::llm::LlmError::Provider("peer closed connection".into()),
+                        history: vec![LlmMessage::user("go")],
+                        todos: Vec::new(),
+                        plan: Some("the plan".into()),
+                    })
+                },
+            ));
+
+            let Err(err) = outcome else { panic!("expected a failure: {outcome:?}") };
+            assert!(err.message().contains("peer closed connection"), "{err:?}");
+            let wire = serde_json::to_value(&err).expect("serializes");
+            assert_eq!(wire["recovery"]["history"][0]["content"], "go");
+            assert_eq!(wire["recovery"]["plan"], "the plan");
+            // A refusal with nothing to keep stays a plain string.
+            let plain = ChatTurnError::Message("already running".into());
+            assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!("already running"));
+        });
+    }
+
     /// F-8.5: a turn runs under the "always allow" of its own folder — not
     /// the active one's — and under the app's one Auto.
     #[test]
@@ -1056,7 +1132,7 @@ mod tests {
                 None,
             ))
             .expect_err("a closed folder resumes nothing");
-            assert!(refused.contains("not an open folder"), "{refused}");
+            assert!(refused.message().contains("not an open folder"), "{refused:?}");
             let still = state.begin_running("c1", 3, &root).expect_err("the card still waits");
             assert!(still.contains("waiting for approval"), "{still}");
             drop(state.begin_resume("c1", 3, &root).expect("the card resumes its own turn"));
@@ -1186,6 +1262,7 @@ mod tests {
             None,
             None,
         ))
+        .map_err(|e| e.message().to_string())
     }
 
     /// A start — or a resume — that is expected to refuse, waited on with a
@@ -1261,6 +1338,7 @@ mod tests {
                         None,
                         move |turn| llm_chat::resume(turn, checkpoint, vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }]),
                     ))
+                    .map_err(|e| e.message().to_string())
                 });
                 assert!(resumed.contains("already running"), "{resumed}");
 
