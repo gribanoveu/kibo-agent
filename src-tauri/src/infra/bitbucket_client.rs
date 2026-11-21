@@ -159,12 +159,15 @@ impl CodeHost for Bitbucket {
         put(call, &url, body).map(|_| ())
     }
 
-    fn create(&self, call: &Call, from: &str, to: &str, title: &str, draft: bool) -> Result<PullRequest, CodeHostError> {
+    fn create(&self, call: &Call, from: &str, to: &str, title: &str, description: &str, draft: bool) -> Result<PullRequest, CodeHostError> {
         let mut body = json!({
             "title": title,
             "fromRef": { "id": format!("refs/heads/{from}") },
             "toRef": { "id": format!("refs/heads/{to}") },
         });
+        if !description.trim().is_empty() {
+            body["description"] = json!(description);
+        }
         // Only when asked: a server older than 8.18 has no drafts to make.
         if draft {
             body["draft"] = json!(true);
@@ -984,7 +987,7 @@ mod tests {
         assert_eq!(body_of(&asked), json!({}));
 
         let (created, asked) =
-            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", false));
+            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", "", false));
         let created = created.expect("the new pull request");
         assert!(asked.starts_with("POST /rest/api/latest/projects/corp/repos/tax-api/pull-requests HTTP/1.1"), "{asked}");
         assert_eq!(
@@ -998,8 +1001,9 @@ mod tests {
         assert_eq!((created.id, created.from_branch.as_str()), (154, "docs/wowtax-8238"));
 
         let (_, asked) =
-            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", true));
+            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", "Why:\n- because", true));
         assert_eq!(body_of(&asked)["draft"], json!(true), "a draft is asked for as one");
+        assert_eq!(body_of(&asked)["description"], json!("Why:\n- because"), "the description goes as written");
     }
 
     /// The second request of a read goes down the first one's connection: the

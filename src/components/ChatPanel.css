@@ -876,6 +876,13 @@ button.turn-processes:hover {
 .approval-change-place.production {
   color: var(--red);
 }
+/* A note may be several lines — a pull request's description. */
+/* A note may be a whole pull request description: shown in full, scrolled. */
+.approval-change .approval-preview {
+  white-space: pre-line;
+  max-height: 16em;
+  overflow-y: auto;
+}
 .approval-preview.failed {
   color: var(--red);
 }

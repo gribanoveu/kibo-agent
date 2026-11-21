@@ -139,7 +139,7 @@ pub(super) fn definition() -> LlmToolDefinition {
 mod tests {
     use super::*;
     use crate::domain::code_host::{
-        Build, CodeHostError, MergeCheck, PullRequest, PullRequestReader, RemoteRepo, Reviewer,
+        Build, CodeHostError, MergeCheck, PullRequest, AgentPullRequests, RemoteRepo, Reviewer,
     };
     use std::path::Path;
     use std::sync::{Arc, Mutex};
@@ -150,10 +150,13 @@ mod tests {
         asked: Mutex<Vec<(std::path::PathBuf, Option<String>)>>,
     }
 
-    impl PullRequestReader for Fake {
+    impl AgentPullRequests for Fake {
         fn status(&self, root: &Path, branch: Option<&str>) -> Result<PrStrip, CodeHostError> {
             self.asked.lock().unwrap().push((root.to_path_buf(), branch.map(str::to_string)));
             self.answer.clone()
+        }
+        fn create(&self, _: &std::path::Path, _: &str, _: &str, _: Option<&str>, _: bool) -> Result<crate::domain::code_host::PullRequest, crate::domain::code_host::CodeHostError> {
+            Err(crate::domain::code_host::CodeHostError::NoRemote)
         }
     }
 

@@ -379,7 +379,8 @@ pub trait CodeHost: Send + Sync {
     /// `false` marks a draft ready for review; `true` takes it back to a draft.
     /// At `pr.version`, as merge is: what changes is what was seen.
     fn set_draft(&self, call: &Call, pr: &PullRequest, draft: bool) -> Result<(), CodeHostError>;
-    fn create(&self, call: &Call, from: &str, to: &str, title: &str, draft: bool) -> Result<PullRequest, CodeHostError>;
+    /// An empty `description` sends none.
+    fn create(&self, call: &Call, from: &str, to: &str, title: &str, description: &str, draft: bool) -> Result<PullRequest, CodeHostError>;
 }
 
 // ------------------------------------------------------------------ the strip
@@ -541,11 +542,17 @@ pub struct PullRequestChanged {
 
 pub type PullRequestEventSink = Arc<dyn Fn(PullRequestChanged) + Send + Sync>;
 
-/// What the agent's `pullRequestStatus` reads through: the strip's own read,
-/// for the folder's branch or another one, leaving the strip's state alone.
-/// A server out of reach is an `Err` here — the model is told, not shown nothing.
-pub trait PullRequestReader: Send + Sync {
+/// What the agent's pull request tools go through: the strip's own service.
+pub trait AgentPullRequests: Send + Sync {
+    /// `pullRequestStatus`: the strip's read, for the folder's branch or
+    /// another one, leaving the strip's state alone. A server out of reach is
+    /// an `Err` here — the model is told, not shown nothing.
     fn status(&self, root: &std::path::Path, branch: Option<&str>) -> Result<PrStrip, CodeHostError>;
+    /// `pullRequestCreate`: the strip's Create — from the checked-out branch,
+    /// into `to` or the default branch, refused while the branch is not
+    /// pushed; the strip reads again after it.
+    fn create(&self, root: &std::path::Path, title: &str, description: &str, to: Option<&str>, draft: bool)
+        -> Result<PullRequest, CodeHostError>;
 }
 
 /// Whether the token's user has approved this pull request.

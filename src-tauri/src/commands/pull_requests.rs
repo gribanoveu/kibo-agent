@@ -84,7 +84,7 @@ pub async fn pull_request_create(
 ) -> Result<PullRequest, String> {
     let root = state.workspace()?;
     let prs = prs.inner().clone();
-    blocking(move || PullRequests::create(&prs, &root, &title, to.as_deref(), draft)).await
+    blocking(move || PullRequests::create(&prs, &root, &title, "", to.as_deref(), draft)).await
 }
 
 /// Mark ready (`draft: false`) or back to a draft, of the pull request the

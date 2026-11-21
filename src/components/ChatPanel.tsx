@@ -96,6 +96,7 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Board: SquareKanban,
   MongoDB: Database,
   "Pull request": GitPullRequest,
+  "Create pull request": GitPullRequest,
   Prototype: AppWindow,
 };
 
@@ -395,7 +396,8 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
   }
 
   if (preview.kind === "change") {
-    // Where first: the cluster is what a wrong approval costs most.
+    // Where first: the cluster, or the server and repository, is what a
+    // wrong approval costs most.
     return (
       <div className="approval-change">
         <div className={`approval-change-place${preview.production ? " production" : ""}`}>

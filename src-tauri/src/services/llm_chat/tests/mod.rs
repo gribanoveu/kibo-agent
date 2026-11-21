@@ -207,7 +207,7 @@ struct Harness {
     web: Option<Web>,
     features: Features,
     /// What `pullRequestStatus` reads through; `None` as with the feature off.
-    pull_requests: Option<Arc<dyn crate::domain::code_host::PullRequestReader>>,
+    pull_requests: Option<Arc<dyn crate::domain::code_host::AgentPullRequests>>,
     parallel: Vec<String>,
     parallel_calls: Arc<Mutex<usize>>,
 }

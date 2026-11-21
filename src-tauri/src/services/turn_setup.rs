@@ -15,7 +15,7 @@ use thiserror::Error;
 use crate::domain::agents::Agents;
 use crate::domain::background::BackgroundProcesses;
 use crate::domain::board::TaskBoard;
-use crate::domain::code_host::PullRequestReader;
+use crate::domain::code_host::AgentPullRequests;
 use crate::domain::mongo::MongoServers;
 use crate::domain::chat_role::ChatRole;
 use crate::domain::conversation_mode::{self, ConversationMode};
@@ -78,7 +78,7 @@ pub struct FolderHandles {
     pub terminals: Option<Arc<dyn UserTerminals>>,
     pub board: Option<Arc<dyn TaskBoard>>,
     pub mongo: Option<Arc<dyn MongoServers>>,
-    pub pull_requests: Option<Arc<dyn PullRequestReader>>,
+    pub pull_requests: Option<Arc<dyn AgentPullRequests>>,
 }
 
 /// What a turn in a folder is, from the window and the agent's state.
@@ -665,14 +665,17 @@ mod tests {
                     take_steering: &none,
                     notes_typed: &zero,
                     parallel: &Vec::<String>::new,
-                worktree_base: None,
+                    worktree_base: None,
                 };
                 let board: Arc<dyn TaskBoard> = Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {})));
                 let mut seen = None;
                 struct NoPullRequests;
-                impl PullRequestReader for NoPullRequests {
+                impl AgentPullRequests for NoPullRequests {
                     fn status(&self, _: &Path, _: Option<&str>) -> Result<crate::domain::code_host::PrStrip, crate::domain::code_host::CodeHostError> {
                         Ok(crate::domain::code_host::PrStrip::NoRemote)
+                    }
+                    fn create(&self, _: &Path, _: &str, _: &str, _: Option<&str>, _: bool) -> Result<crate::domain::code_host::PullRequest, crate::domain::code_host::CodeHostError> {
+                        Err(crate::domain::code_host::CodeHostError::NoRemote)
                     }
                 }
                 let handles = FolderHandles {

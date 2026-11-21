@@ -88,6 +88,7 @@ export const LABELS: Record<string, string> = {
   board: "Board",
   mongo: "MongoDB",
   pullRequestStatus: "Pull request",
+  pullRequestCreate: "Create pull request",
   present: "Prototype",
   toolSearch: "Find tools",
 };
@@ -328,6 +329,17 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         meta: str(result.summary),
         detail: str(result.text) ?? "",
       };
+
+    // The title asked for; once made, its number and where it went.
+    case "pullRequestCreate": {
+      const id = num(result.id);
+      return {
+        name,
+        arg: str(result.title) ?? str(args.title) ?? "",
+        meta: id === undefined ? (args.draft === true ? "draft" : undefined) : `#${id}${result.draft === true ? " · draft" : ""}`,
+        detail: [str(result.from) && str(result.to) && `${str(result.from)} → ${str(result.to)}`, str(result.url)].filter(Boolean).join("\n"),
+      };
+    }
 
     // A page put in front of the user: its name, and the version kept.
     case "present": {

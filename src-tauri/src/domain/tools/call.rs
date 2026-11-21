@@ -61,6 +61,7 @@ pub enum ToolCall {
     Board(BoardArgs),
     Mongo(MongoArgs),
     PullRequestStatus(PullRequestStatusArgs),
+    PullRequestCreate(PullRequestCreateArgs),
     Present(PresentArgs),
     ToolSearch(ToolSearchArgs),
     Mcp(McpCallArgs),
@@ -117,6 +118,7 @@ impl ToolCall {
             ToolCall::Board(_) => ToolName::Board,
             ToolCall::Mongo(_) => ToolName::Mongo,
             ToolCall::PullRequestStatus(_) => ToolName::PullRequestStatus,
+            ToolCall::PullRequestCreate(_) => ToolName::PullRequestCreate,
             ToolCall::Present(_) => ToolName::Present,
             ToolCall::ToolSearch(_) => ToolName::ToolSearch,
             ToolCall::Mcp(_) => ToolName::Mcp,
@@ -395,6 +397,8 @@ pub enum ToolResult {
     /// `pullRequestStatus`: the pull request as the model reads it, and a few
     /// words for the row in the transcript.
     PullRequest { text: String, summary: String },
+    /// `pullRequestCreate`: the pull request the server opened.
+    PullRequestCreated { id: u64, title: String, from: String, to: String, url: String, draft: bool },
     /// `present`: the page shown, and the version its folder was kept as.
     Presented { path: String, title: String, version: u32 },
 }

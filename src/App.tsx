@@ -62,7 +62,7 @@ import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
-import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST } from "./lib/offer";
+import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, PULL_REQUEST_ON_SERVER, REVIEW_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
 import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedChats";
@@ -498,7 +498,7 @@ export default function App() {
   const pickOffer = async (kind: OfferKind) => {
     if (kind === "review") return send(REVIEW_REQUEST);
     if (kind === "commit") return send(COMMIT_REQUEST);
-    if (kind === "pullRequest") return send(PULL_REQUEST);
+    if (kind === "pullRequest") return send(features.isOn("pull-requests") ? PULL_REQUEST_ON_SERVER : PULL_REQUEST);
     // Not `send`: that would drop the checklist the plan came with.
     if (kind === "implement") return implement();
     const id = agent.chatId;

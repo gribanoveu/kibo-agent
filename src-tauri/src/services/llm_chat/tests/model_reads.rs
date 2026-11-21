@@ -124,8 +124,8 @@ fn the_agent_is_offered_the_board_only_while_the_feature_is_on() {
     assert!(offered(Features::all()));
 }
 
-/// The pull request's read waits for `toolSearch` too, and only while its
-/// feature is on: off, the model is not told it exists.
+/// The pull request's read and create wait for `toolSearch` too, and only
+/// while their feature is on: off, the model is not told they exist.
 #[test]
 fn the_agent_is_offered_the_pull_request_only_while_the_feature_is_on() {
     let offered = |features: Features| {
@@ -133,8 +133,11 @@ fn the_agent_is_offered_the_pull_request_only_while_the_feature_is_on() {
         h.features = features;
         h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
         let tools = &h.provider.requests()[0].tools;
-        assert!(tools.iter().all(|t| t.name != "pullRequestStatus"), "not in every request");
-        tools.iter().any(|t| t.name == "toolSearch" && t.description.contains("`pullRequestStatus`"))
+        let named = |tool: &str| tools.iter().any(|t| t.name == "toolSearch" && t.description.contains(&format!("`{tool}`")));
+        assert!(tools.iter().all(|t| t.name != "pullRequestStatus" && t.name != "pullRequestCreate"), "not in every request");
+        // Both or neither: the feature owns the read and the create alike.
+        assert_eq!(named("pullRequestStatus"), named("pullRequestCreate"));
+        named("pullRequestStatus")
     };
     assert!(!offered(Features::default()));
     assert!(offered(Features::all()));
@@ -145,11 +148,14 @@ fn the_agent_is_offered_the_pull_request_only_while_the_feature_is_on() {
 #[test]
 fn the_pull_request_read_goes_through_the_turn_s_reader() {
     struct NoServer;
-    impl crate::domain::code_host::PullRequestReader for NoServer {
+    impl crate::domain::code_host::AgentPullRequests for NoServer {
         fn status(&self, _: &std::path::Path, branch: Option<&str>) -> Result<crate::domain::code_host::PrStrip, crate::domain::code_host::CodeHostError> {
             assert_eq!(branch, Some("release/1.2"));
             let remote = crate::domain::code_host::RemoteRepo::parse("ssh://git@git.corp.example/corp/tax-api.git").unwrap();
             Ok(crate::domain::code_host::PrStrip::NotConnected { remote })
+        }
+        fn create(&self, _: &std::path::Path, _: &str, _: &str, _: Option<&str>, _: bool) -> Result<crate::domain::code_host::PullRequest, crate::domain::code_host::CodeHostError> {
+            Err(crate::domain::code_host::CodeHostError::NoRemote)
         }
     }
     let mut h = harness(
@@ -192,13 +198,13 @@ fn every_request_carries_the_tool_schemas() {
     let requests = h.provider.requests();
     let offered: &[LlmToolDefinition] = &requests[0].tools;
     // Every built-in one but a review's own, the features' — the board,
-    // DeepSeek's two, MongoDB's one, the pull request's — the Kubernetes role's and the
+    // DeepSeek's two, MongoDB's one, the pull request's two — the Kubernetes role's and the
     // Prototype role's `present`; MCP tools come from servers, and none
     // is connected. Those waiting for `toolSearch` are found with it.
     let waiting = waiting_tools(ConversationMode::Agent, false, &Features::default()).len();
     assert_eq!(waiting, 3, "move, gitBlame, readTerminal");
     // And `toolSearch`, which is there for them.
-    assert_eq!(offered.len(), ToolName::ALL.len() - 9 - ChatRole::Kubernetes.tools().len() - waiting + 1);
+    assert_eq!(offered.len(), ToolName::ALL.len() - 10 - ChatRole::Kubernetes.tools().len() - waiting + 1);
 }
 
 /// A write in the loop says what it did to the file, for a rewind; a

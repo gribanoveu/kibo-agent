@@ -155,6 +155,9 @@ pub fn tools(mode: ConversationMode) -> HashSet<ToolName> {
                 ToolName::Remember,
                 // While the user has the feature on (`domain::features`).
                 ToolName::Board,
+                // A pull request opened on the user's server, through the
+                // approval card, while that feature is on.
+                ToolName::PullRequestCreate,
             ]);
         }
         // Research handed off reads the same files, only somewhere else.

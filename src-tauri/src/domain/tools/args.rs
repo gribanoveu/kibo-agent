@@ -79,6 +79,21 @@ pub struct PullRequestStatusArgs {
     pub branch: Option<String>,
 }
 
+/// `pullRequestCreate`: what the new pull request says. The branch is the
+/// folder's; an empty `target` is the worktree's base, else the default branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestCreateArgs {
+    pub title: String,
+    /// The pull request's description — `body`, as `gh pr create` names it.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub body: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub target: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub draft: Option<bool>,
+}
+
 /// `mongo`. Flat like `board`'s: which fields go with which `op` is the
 /// tool's to check. The query texts are mongosh's, read as the page reads
 /// them; an object sent instead of text is taken as its JSON.

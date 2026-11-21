@@ -128,6 +128,9 @@ pub enum ToolName {
     /// The pull request of the folder's branch on the user's Bitbucket, read:
     /// reviewers, builds, whether it can merge (`docs/56-bitbucket-prs.md`, BB-6).
     PullRequestStatus,
+    /// Opens a pull request from the folder's branch on the user's Bitbucket,
+    /// through the approval card (BB-7). Never merges or approves.
+    PullRequestCreate,
     /// The Prototype role's page shown to the user, its folder kept as a
     /// version (`docs/31-prototype-role.md`, P-4).
     Present,
@@ -197,6 +200,7 @@ impl ToolName {
         ToolName::Board,
         ToolName::Mongo,
         ToolName::PullRequestStatus,
+        ToolName::PullRequestCreate,
         ToolName::Present,
         ToolName::ToolSearch,
         ToolName::Mcp,
@@ -254,6 +258,7 @@ impl ToolName {
             ToolName::Board => "board",
             ToolName::Mongo => "mongo",
             ToolName::PullRequestStatus => "pullRequestStatus",
+            ToolName::PullRequestCreate => "pullRequestCreate",
             ToolName::Present => "present",
             ToolName::ToolSearch => crate::domain::mcp::TOOL_SEARCH,
             // The prefix, not a name: no tool is called just this.
@@ -362,6 +367,8 @@ impl ToolName {
             | ToolName::KubeRolloutUndo
             | ToolName::KubeApply
             | ToolName::KubeDelete
+            // A pull request others see and are notified of: the user agrees first.
+            | ToolName::PullRequestCreate
             // Nothing is known about what a foreign tool does, and its
             // server's own hints are untrusted by the specification: it
             // goes through the approval gate, in Analyst too, the one place
@@ -461,6 +468,8 @@ impl ToolName {
             | ToolName::Remember
             | ToolName::Board
             | ToolName::Present
+            // A write to the server, after its own read of the branch.
+            | ToolName::PullRequestCreate
             // The cluster's reads wait on it and have a bench of their own to
             // show they gain; until then, one at a time.
             | ToolName::KubeList
@@ -527,6 +536,8 @@ impl ToolName {
             ToolName::RunCommand | ToolName::Mcp => false,
             // The folder's memory file, which stays.
             ToolName::Remember => false,
+            // A pull request on the server: a rewind of the folder leaves it there.
+            ToolName::PullRequestCreate => false,
             // A review worker's, never in a chat that can be rewound.
             ToolName::ReportFinding => false,
             // Its helper may run commands to prove a finding (a build writes
@@ -646,6 +657,8 @@ impl ToolName {
             ToolName::Mongo => 2,
             // Three rounds of two requests to the code host.
             ToolName::PullRequestStatus => 2,
+            // The branch, the default branch, the post.
+            ToolName::PullRequestCreate => 2,
             // The default; a server's own `weight` replaces it per call —
             // see `domain::mcp::McpTools::weight`.
             ToolName::Mcp => crate::domain::mcp::DEFAULT_WEIGHT,

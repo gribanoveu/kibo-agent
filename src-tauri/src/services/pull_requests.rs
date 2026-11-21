@@ -17,7 +17,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::domain::code_host::{
     alias_to_remember, approved_by, can_approve, canonical_remote, host_of, latest_build, merge_blocked, server_for, Call, CodeHost,
-    CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, PullRequestReader, RemoteRepo,
+    CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, AgentPullRequests, RemoteRepo,
     Snapshot,
 };
 use crate::infra::{code_host_store, git_head, repository_identity};
@@ -252,12 +252,14 @@ impl PullRequests {
 
     /// Opens a pull request from the checked-out branch into `to`, or into the
     /// repository's default branch. An empty title is the branch's name.
-    pub fn create(&self, root: &Path, title: &str, to: Option<&str>, draft: bool) -> Result<PullRequest, CodeHostError> {
+    /// `refs/heads/main` is `main`: the server prefixes the name itself.
+    pub fn create(&self, root: &Path, title: &str, description: &str, to: Option<&str>, draft: bool) -> Result<PullRequest, CodeHostError> {
         self.acting(root, |call, target| {
             if self.host.branch_commit(call, &target.branch)?.is_none() {
                 return Err(CodeHostError::NotPushed(target.branch.clone()));
             }
-            let to = match to.map(str::trim).filter(|to| !to.is_empty()) {
+            let to = to.map(|to| to.trim()).map(|to| to.strip_prefix("refs/heads/").unwrap_or(to));
+            let to = match to.filter(|to| !to.is_empty()) {
                 Some(to) => to.to_string(),
                 None => self.host.default_branch(call)?,
             };
@@ -265,7 +267,7 @@ impl PullRequests {
                 "" => target.branch.as_str(),
                 title => title,
             };
-            self.host.create(call, &target.branch, &to, title, draft)
+            self.host.create(call, &target.branch, &to, title, description, draft)
         })
     }
 
@@ -452,9 +454,13 @@ fn checked(server: CodeHostServer) -> Result<CodeHostServer, CodeHostError> {
 /// The agent's read: what the strip would show, for any branch, and none of
 /// the strip's own state touched — its last read, its watcher. A server out
 /// of reach is said, not hidden: the model asked, and the answer is that.
-impl PullRequestReader for PullRequests {
+impl AgentPullRequests for PullRequests {
     fn status(&self, root: &Path, branch: Option<&str>) -> Read {
         self.ask(root, branch)
+    }
+
+    fn create(&self, root: &Path, title: &str, description: &str, to: Option<&str>, draft: bool) -> Result<PullRequest, CodeHostError> {
+        PullRequests::create(self, root, title, description, to, draft)
     }
 }
 
@@ -574,8 +580,9 @@ mod tests {
             self.ask(&format!("draft {draft} v{}", pr.version));
             Ok(())
         }
-        fn create(&self, _: &Call, from: &str, to: &str, title: &str, draft: bool) -> Result<PullRequest, CodeHostError> {
-            self.ask(&format!("create {from} -> {to}: {title}{}", if draft { " (draft)" } else { "" }));
+        fn create(&self, _: &Call, from: &str, to: &str, title: &str, description: &str, draft: bool) -> Result<PullRequest, CodeHostError> {
+            let described = if description.is_empty() { String::new() } else { format!(" [{description}]") };
+            self.ask(&format!("create {from} -> {to}: {title}{described}{}", if draft { " (draft)" } else { "" }));
             Ok(pull_request(1))
         }
     }
@@ -996,21 +1003,28 @@ mod tests {
     #[test]
     fn create_aims_at_the_default_branch_and_needs_the_branch_pushed() {
         with_app_dir("prs-create", || {
-            let (service, double, _) = connected();
+            let (service, double, events) = connected();
             let root = repo("prs-create-repo", Some(REMOTE));
 
-            assert_eq!(service.create(&root, "t", None, false).unwrap_err(), CodeHostError::NotPushed("feature/x".to_string()));
+            assert_eq!(service.create(&root, "t", "", None, false).unwrap_err(), CodeHostError::NotPushed("feature/x".to_string()));
             assert_eq!(double.asked("create feature/x -> master: t"), 0);
+            assert_eq!(lock(&events).len(), 1, "the strip reads again after a refusal too");
 
             *lock(&double.commit) = Some("94beed9".to_string());
-            service.create(&root, "  ", None, false).unwrap();
+            service.create(&root, "  ", "", None, false).unwrap();
             assert_eq!(double.asked("create feature/x -> master: feature/x"), 1, "an empty title is the branch");
-            service.create(&root, "t", Some("  "), false).unwrap();
+            service.create(&root, "t", "", Some("  "), false).unwrap();
             assert_eq!(double.asked("create feature/x -> master: t"), 1, "an empty target is the default branch");
-            service.create(&root, "Fix it", Some("release"), false).unwrap();
+            service.create(&root, "Fix it", "", Some("release"), false).unwrap();
             assert_eq!(double.asked("create feature/x -> release: Fix it"), 1);
-            service.create(&root, "Not yet", None, true).unwrap();
+            service.create(&root, "Full", "", Some(" refs/heads/release "), false).unwrap();
+            assert_eq!(double.asked("create feature/x -> release: Full"), 1, "a full ref is its branch");
+            service.create(&root, "Not yet", "", None, true).unwrap();
             assert_eq!(double.asked("create feature/x -> master: Not yet (draft)"), 1, "a draft is asked for as one");
+            // The agent's description goes as written; the strip sends none.
+            AgentPullRequests::create(service.as_ref(), &root, "Described", "Why:\n- because", None, false).unwrap();
+            assert_eq!(double.asked("create feature/x -> master: Described [Why:\n- because]"), 1);
+            assert_eq!(lock(&events).len(), 7, "each create says the strip changed");
         });
     }
 
@@ -1027,7 +1041,7 @@ mod tests {
             let detached = repo("prs-button-detached", Some(REMOTE));
             let git = git2::Repository::open(&detached).unwrap();
             git.set_head_detached(git.head().unwrap().target().unwrap()).unwrap();
-            assert_eq!(service.create(&detached, "t", None, false), Err(CodeHostError::NoBranch));
+            assert_eq!(service.create(&detached, "t", "", None, false), Err(CodeHostError::NoBranch));
 
             assert_eq!((double.total(), lock(&events).len()), (0, 0));
         });

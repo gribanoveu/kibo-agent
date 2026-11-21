@@ -125,6 +125,9 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::Explored { text, .. } => text.clone(),
         ToolResult::Reviewed { findings, text, range, .. } => reviewed(findings, text, range),
         ToolResult::Kube { text, .. } | ToolResult::Mongo { text, .. } | ToolResult::PullRequest { text, .. } => text.clone(),
+        ToolResult::PullRequestCreated { id, title, from, to, url, draft } => {
+            crate::services::ai_tools::tools::pull_request_create::created_text(*id, title, from, to, url, *draft)
+        }
         ToolResult::WebResults { hits } => web_results(hits),
         ToolResult::WebPage { page } => web_page(page),
         ToolResult::ToolsFound { tools } => found_tools(tools),
