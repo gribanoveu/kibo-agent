@@ -390,8 +390,15 @@ pub enum ChatEventPayload {
     McpQuestionClosed { id: String, action: String },
     /// Token usage as of the round that just finished. Since every request
     /// resends the whole history, this is the authoritative context size, not
-    /// a per-round statistic.
-    ContextUsage(ChatUsage),
+    /// a per-round statistic. `cause` names what changed since the chat's
+    /// previous request when a marker was taken — the notice's answer to
+    /// "why did the cache miss"; `None` where nothing was compared.
+    ContextUsage {
+        #[serde(flatten)]
+        usage: ChatUsage,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<crate::domain::request_marker::MissCause>,
+    },
     /// What the request about to be sent will cost, estimated the way the
     /// window's meter estimates it between turns — sent before each round so
     /// the meter fills while the turn works, not only once it ends.

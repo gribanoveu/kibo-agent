@@ -32,6 +32,7 @@ use crate::domain::runbooks::Runbook;
 
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::prompt::{self, CHECKLIST_LEGEND};
+use crate::domain::request_marker::{self, MissCause, RequestMarkers, RequestRecord};
 use crate::domain::tool_call_log::{self, CallStatus, ToolCallLogEntry};
 use crate::domain::project_rules::RuleFile;
 use crate::domain::skills::Skill;
@@ -126,6 +127,10 @@ pub struct Turn<'a> {
     /// a turn under test never touches whatever app directory another test
     /// has installed.
     pub log_call: &'a (dyn Fn(ToolCallLogEntry) + Sync),
+    /// Where each request's marker goes: the chat's previous fingerprint in
+    /// memory and the row on disk. `None` for a helper's turn, a chat-mode
+    /// turn and a test without one — their requests are not marked.
+    pub markers: Option<&'a dyn RequestMarkers>,
     /// The chat's plan as the window holds it — the user's edits included.
     /// Read at the start of the turn; it reaches the model through the
     /// history ([`restore_plan`]), never the prompt.

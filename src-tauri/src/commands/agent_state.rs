@@ -43,6 +43,13 @@ pub(crate) struct SessionHandle {
     /// window has made active since — its first save, its "always allow",
     /// its context are that folder's. Set once; a saved record wins.
     pub(super) home: Mutex<Option<PathBuf>>,
+    /// The chat's last request fingerprint, for the next one to compare
+    /// with (`domain::request_marker`). Outlives a turn on purpose: the
+    /// next turn's first request is the previous turn's continuation, and
+    /// a miss between turns is the one most worth explaining. Gone with the
+    /// process — after a restart there is nothing to compare with, and the
+    /// idle cause is the true one anyway.
+    pub(super) last_request: Mutex<Option<crate::domain::request_marker::RequestFingerprint>>,
 }
 
 /// Counted while a chat's turn runs; clears itself on drop, however the turn

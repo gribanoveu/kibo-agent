@@ -77,6 +77,13 @@ pub struct ToolCallLogEntry {
     /// Unix milliseconds.
     pub ts_ms: i64,
     pub repo_root: String,
+    /// The chat and turn the call belongs to. The loop knows neither — the
+    /// adapter that wires `log_call` fills them in. Empty in a row written
+    /// before they were kept, and in a test's own entry.
+    #[serde(default)]
+    pub chat_id: String,
+    #[serde(default)]
+    pub turn_id: String,
     pub round: u32,
     pub provider_id: String,
     pub model: String,

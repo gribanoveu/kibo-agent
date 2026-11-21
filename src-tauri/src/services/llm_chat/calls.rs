@@ -543,6 +543,9 @@ pub(super) fn log_call(
         ts_ms: crate::infra::tool_call_log::now_ms(),
         // Empty for a chat, which works in no folder.
         repo_root: turn.place.scope().map(|scope| scope.root().display().to_string()).unwrap_or_default(),
+        // The adapter that wires `log_call` names the chat and turn.
+        chat_id: String::new(),
+        turn_id: String::new(),
         round,
         provider_id: turn.session.provider_id.clone(),
         model: turn.session.model.clone(),

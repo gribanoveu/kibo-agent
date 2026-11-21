@@ -65,6 +65,27 @@ impl ChatTurnError {
     }
 }
 
+/// The chat's request markers: the previous fingerprint lives in the
+/// session, across turns; the row goes to the call log's database, hashes
+/// and numbers only. The adapter is the one place that knows the chat and
+/// the turn — the loop knows neither.
+struct ChatMarkers {
+    session: Arc<SessionHandle>,
+    chat_id: String,
+    turn_id: String,
+}
+
+impl crate::domain::request_marker::RequestMarkers for ChatMarkers {
+    fn previous(&self) -> Option<crate::domain::request_marker::RequestFingerprint> {
+        self.session.last_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    fn record(&self, record: crate::domain::request_marker::RequestRecord) {
+        *self.session.last_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record.fingerprint.clone());
+        crate::infra::tool_call_log::append_request(&self.chat_id, &self.turn_id, &record);
+    }
+}
+
 /// Starts a fresh turn and resolves when it ends, pauses, or is stopped.
 ///
 /// `messages` is the whole conversation so far: the caller owns the
@@ -438,6 +459,11 @@ where
             .try_state::<Arc<crate::infra::board_store::Board>>()
             .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
         mongo: mongo_servers_of(&app),
+        markers: Some(Arc::new(ChatMarkers {
+            session: Arc::clone(&session),
+            chat_id: chat_id.clone(),
+            turn_id: turn_id.clone(),
+        })),
     };
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -454,6 +480,7 @@ where
         let parallel = || state.parallel_chats(&chat_id, &workspace);
         let folder = FolderTurn {
             chat_id: &chat_id,
+            turn_id: &turn_id,
             workspace: &workspace,
             mode,
             approval,
@@ -984,6 +1011,40 @@ mod tests {
                 None,
             ));
             assert!(matches!(outcome, Ok(ChatStreamOutcome::Cancelled(_))), "{outcome:?}");
+        });
+    }
+
+    /// TJ-3: the adapter keeps the fingerprint across turns — the next
+    /// turn's first request compares with the last turn's last — and the
+    /// row lands on disk under the chat and turn that wrote it.
+    #[test]
+    fn the_chat_markers_remember_across_turns_and_write_the_row() {
+        use crate::domain::request_marker::{RequestFingerprint, RequestRecord, RequestMarkers};
+        crate::testing::with_app_dir("cmd-markers", || {
+            let session = Arc::new(SessionHandle::default());
+            let fp = |system: &str| RequestFingerprint { system: system.into(), tools: "t".into(), messages: vec![] };
+            let record = |system: &str| RequestRecord { round: 1, provider_id: "p".into(), model: "m".into(), usage: None, fingerprint: fp(system), cause: None };
+            let first = ChatMarkers { session: Arc::clone(&session), chat_id: "c1".into(), turn_id: "c1/turn-1".into() };
+            assert!(first.previous().is_none());
+            first.record(record("s1"));
+            // A new turn of the same chat compares with the previous turn's last.
+            let second = ChatMarkers { session: Arc::clone(&session), chat_id: "c1".into(), turn_id: "c1/turn-2".into() };
+            assert_eq!(second.previous(), Some(fp("s1")));
+            second.record(record("s2"));
+            assert_eq!(second.previous(), Some(fp("s2")));
+            // Another chat's session remembers nothing of this one.
+            let other = ChatMarkers { session: Arc::new(SessionHandle::default()), chat_id: "c2".into(), turn_id: "c2/turn-1".into() };
+            assert!(other.previous().is_none());
+
+            let conn = rusqlite::Connection::open(crate::infra::app_dir::ensure().unwrap().join("tool_calls.db")).unwrap();
+            let rows: Vec<(String, String)> = conn
+                .prepare("SELECT chat_id, turn_id FROM requests ORDER BY id")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(rows, vec![("c1".to_string(), "c1/turn-1".to_string()), ("c1".to_string(), "c1/turn-2".to_string())]);
         });
     }
 
