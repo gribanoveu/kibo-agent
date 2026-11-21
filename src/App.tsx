@@ -14,13 +14,15 @@ import { PANES, type PaneContext } from "./components/panes";
 import { Modal } from "./components/Modal";
 import { Settings, type SettingsSection } from "./components/Settings";
 import { ToolLog } from "./components/ToolLog";
-import { ConfigFileEditor } from "./components/ConfigFileEditor";
+import { McpConfigDialog } from "./components/McpConfigDialog";
+import { HooksConfigDialog } from "./components/HooksConfigDialog";
 import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Columns } from "./components/Columns";
 import { pagesShown, type PageDef } from "./components/pages";
 import { useFeatures } from "./hooks/useFeatures";
 import { usePages } from "./hooks/usePages";
 import { useDocks } from "./hooks/useDocks";
+import { useConfigDialogs } from "./hooks/useConfigDialogs";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -56,10 +58,7 @@ import { useRunningProcesses } from "./hooks/useProcesses";
 import { playSound } from "./lib/sounds";
 import { DEFAULT_ALERTS, isAlertPrefs } from "./lib/attention";
 import { isBoolean, useStoredState } from "./hooks/useStoredState";
-import { HookForm } from "./components/ConfigEntryForm";
-import { McpInstall } from "./components/McpInstall";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
-import { mergeHooks, mergeMcp } from "./lib/configSnippets";
 import { togglePane, toggleTerminal } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
@@ -88,9 +87,6 @@ import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
 import type { AgentFocus } from "./lib/describeTool";
-
-/** A config file's dialog: the whole file, one entry of it (null for a new one), or closed. */
-type EntryDialog<K> = "json" | { entry: K | null } | null;
 
 /** What "Implement in Agent mode" says on the user's behalf. Shown in the transcript like anything they type. */
 const IMPLEMENT_PLAN = "Implement the plan above. Work through the checklist in order.";
@@ -161,12 +157,8 @@ export default function App() {
   const [composerFocus, setComposerFocus] = useState(0);
   const focusComposer = () => setComposerFocus((n) => n + 1);
   const [logOpen, setLogOpen] = useState(false);
-  // The MCP and hooks files open as a whole (JSON) or one entry at a time
-  // (a form): `entry` is the server's name or the hook's row, null for a new one.
-  const [mcpDialog, setMcpDialog] = useState<EntryDialog<string>>(null);
-  const [hooksDialog, setHooksDialog] = useState<EntryDialog<number>>(null);
-  const mcpEditing = mcpDialog !== null;
-  const hooksEditing = hooksDialog !== null;
+  // The MCP and hooks dialogs: a form for one entry, or the whole file as JSON.
+  const { mcpDialog, hooksDialog, mcpEditing, hooksEditing, addMcp, editMcp, editMcpFile, closeMcp, addHook, editHook, editHooksFile, closeHooks } = useConfigDialogs();
   // What the agent may do this turn, and whether anyone is asked before it
   // does it. Two chips, two questions — and both are enforced on the backend,
   // so these hold only what the chips read back.
@@ -521,8 +513,8 @@ export default function App() {
     mcp: {
       view: mcp.view,
       error: mcpEditing ? null : mcp.error,
-      onAdd: () => setMcpDialog({ entry: null }),
-      onEditServer: (name) => setMcpDialog({ entry: name }),
+      onAdd: addMcp,
+      onEditServer: editMcp,
       onRemoveServer: (name) => {
         const next = removeMcpServer(mcp.view?.text ?? "", name);
         if (next) void mcp.save(next);
@@ -530,18 +522,18 @@ export default function App() {
       onToggle: mcp.setEnabled,
       onToggleTool: mcp.setToolShown,
       onOpen: mcp.connect,
-      onEditFile: () => setMcpDialog("json"),
+      onEditFile: editMcpFile,
     },
     hooks: {
       view: hooks.view,
       error: hooksEditing ? null : hooks.error,
-      onAdd: () => setHooksDialog({ entry: null }),
-      onEditHook: (index) => setHooksDialog({ entry: index }),
+      onAdd: addHook,
+      onEditHook: editHook,
       onRemoveHook: (index) => {
         const next = removeHook(hooks.view?.text ?? "", index);
         if (next) void hooks.save(next);
       },
-      onEditFile: () => setHooksDialog("json"),
+      onEditFile: editHooksFile,
     },
     overview: {
       branch,
@@ -1035,79 +1027,9 @@ export default function App() {
         />
       </Modal>
 
-      <Modal
-        title={mcpDialog === "json" || mcpDialog === null ? "MCP servers" : mcpDialog.entry ?? "Add an MCP server"}
-        wide
-        open={mcpEditing}
-        onClose={() => setMcpDialog(null)}
-      >
-        {mcpDialog !== null && mcpDialog !== "json" ? (
-          <McpInstall
-            key={mcpDialog.entry ?? ""}
-            name={mcpDialog.entry}
-            text={mcp.view?.text}
-            path={mcp.view?.path ?? ""}
-            error={mcp.error}
-            onSave={mcp.save}
-            onClose={() => setMcpDialog(null)}
-            onEditJson={() => setMcpDialog("json")}
-          />
-        ) : (
-        <ConfigFileEditor
-          label="MCP configuration"
-          merge={mergeMcp}
-          text={mcp.view?.text}
-          error={mcp.error}
-          onSave={mcp.save}
-          onClose={() => setMcpDialog(null)}
-          note={
-            <>
-              The <code>mcpServers</code> format of Claude Desktop and Cursor: paste a server's snippet as it is.
-              Optional per server: <code>weight</code> (cost of a call in the turn's budget, 3 by default) and{" "}
-              <code>timeoutSecs</code> (120). Kept in {mcp.view?.path || "the app directory"}, readable only by you —
-              it may hold tokens.
-            </>
-          }
-        />
-        )}
-      </Modal>
+      <McpConfigDialog dialog={mcpDialog} view={mcp.view} error={mcp.error} onSave={mcp.save} onClose={closeMcp} onEditJson={editMcpFile} />
 
-      <Modal
-        title={hooksDialog === "json" || hooksDialog === null ? "Hooks" : hooksDialog.entry === null ? "Add a hook" : "Edit hook"}
-        wide={hooksDialog === "json"}
-        open={hooksEditing}
-        onClose={() => setHooksDialog(null)}
-      >
-        {hooksDialog !== null && hooksDialog !== "json" ? (
-          <HookForm
-            key={hooksDialog.entry ?? -1}
-            index={hooksDialog.entry}
-            text={hooks.view?.text}
-            error={hooks.error}
-            onSave={hooks.save}
-            onClose={() => setHooksDialog(null)}
-            onEditJson={() => setHooksDialog("json")}
-          />
-        ) : (
-        <ConfigFileEditor
-          label="Hooks configuration"
-          merge={mergeHooks}
-          text={hooks.view?.text}
-          error={hooks.error}
-          onSave={hooks.save}
-          onClose={() => setHooksDialog(null)}
-          note={
-            <>
-              Claude Code's <code>hooks</code> format: <code>PreToolUse</code>, <code>PostToolUse</code> and{" "}
-              <code>Stop</code> run here. The command gets the event as JSON on stdin; exit code 2 refuses the call,
-              or sends the agent back from Stop, with stderr as the reason. A <code>matcher</code> names this app's
-              tools — <code>runCommand</code>, <code>editFile</code> — not Claude Code's. Kept in{" "}
-              {hooks.view?.path || "the app directory"}.
-            </>
-          }
-        />
-        )}
-      </Modal>
+      <HooksConfigDialog dialog={hooksDialog} view={hooks.view} error={hooks.error} onSave={hooks.save} onClose={closeHooks} onEditJson={editHooksFile} />
 
       <Toast message={toast.message} />
     </div>
