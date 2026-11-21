@@ -12,7 +12,8 @@ import { PrototypePreview } from "./components/PrototypePreview";
 import { FileViewer } from "./components/FileViewer";
 import { PANES, type PaneContext } from "./components/panes";
 import { Modal } from "./components/Modal";
-import { Settings, type SettingsSection } from "./components/Settings";
+import { type SettingsSection } from "./components/Settings";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { ToolLog } from "./components/ToolLog";
 import { McpConfigDialog } from "./components/McpConfigDialog";
 import { HooksConfigDialog } from "./components/HooksConfigDialog";
@@ -55,7 +56,6 @@ import { useFolderConversation } from "./hooks/useFolderConversation";
 import { chatDraftKey, forgetChatDraft } from "./hooks/useChatDraft";
 import { useTurnAlerts } from "./hooks/useTurnAlerts";
 import { useRunningProcesses } from "./hooks/useProcesses";
-import { playSound } from "./lib/sounds";
 import { DEFAULT_ALERTS, isAlertPrefs } from "./lib/attention";
 import { isBoolean, useStoredState } from "./hooks/useStoredState";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
@@ -959,59 +959,54 @@ export default function App() {
         onClose={branchPicker.closeConflict}
       />
 
-      <Modal title="Settings" wide open={settingsOpen} onClose={() => setSettingsOpen(false)}>
-        <Settings
-          section={settingsAt}
-          kube={kube}
-          skills={{ view: skillSources.view, error: skillSources.error, onToggle: skillSources.setSourceEnabled }}
-          provider={{
-            settings: llm.settings,
-            busy: llm.busy,
-            error: llm.error,
-            onSave: llm.save,
-            onRemove: llm.remove,
-            onSelect: llm.select,
-            onKeyStore: llm.keyStore,
-            onProbe: llm.probe,
-            served: llm.served,
-          }}
-          remember={approval.remember}
-          onRemember={async (next) => {
-            const failed = await approval.pickRemember(next);
-            if (failed) toast.show(failed);
-          }}
-          debugLogging={llm.settings?.debugLogging ?? false}
-          onDebugLogging={llm.debugLogging}
-          replyLanguage={llm.settings?.replyLanguage ?? "auto"}
-          onReplyLanguage={llm.replyLanguage}
-          turnLimits={llm.settings?.turnLimits ?? DEFAULT_TURN_LIMITS}
-          onTurnLimits={llm.turnLimits}
-          theme={theme.choice}
-          onThemeMode={theme.setMode}
-          onThemePalette={theme.setPalette}
-          fontSize={fontSize.size}
-          onFontSize={fontSize.setSize}
-          wrapLines={wrapLines}
-          onWrapLines={setWrapLines}
-          alerts={alerts}
-          onAlerts={(next) => {
-            // A sound is heard as it is turned on, so the user knows what to listen for.
-            const turnedOn = (["done", "failed"] as const).find((kind) => next.sound[kind] && !alerts.sound[kind]);
-            if (turnedOn) playSound(turnedOn === "done" ? "done" : "attention").catch(() => {});
-            setAlerts(next);
-          }}
-          onOpenLog={() => {
-            setSettingsOpen(false);
-            setLogOpen(true);
-          }}
-          policy={{
-            provider: llm.settings?.providers.find((p) => p.id === llm.settings?.activeProviderId) ?? null,
-            debugLogging: llm.settings?.debugLogging ?? false,
-            mcpServers: mcp.view?.servers ?? null,
-            hooks: hooks.view?.hooks ?? null,
-          }}
-        />
-      </Modal>
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        section={settingsAt}
+        kube={kube}
+        skills={{ view: skillSources.view, error: skillSources.error, onToggle: skillSources.setSourceEnabled }}
+        provider={{
+          settings: llm.settings,
+          busy: llm.busy,
+          error: llm.error,
+          onSave: llm.save,
+          onRemove: llm.remove,
+          onSelect: llm.select,
+          onKeyStore: llm.keyStore,
+          onProbe: llm.probe,
+          served: llm.served,
+        }}
+        remember={approval.remember}
+        onRemember={async (next) => {
+          const failed = await approval.pickRemember(next);
+          if (failed) toast.show(failed);
+        }}
+        debugLogging={llm.settings?.debugLogging ?? false}
+        onDebugLogging={llm.debugLogging}
+        replyLanguage={llm.settings?.replyLanguage ?? "auto"}
+        onReplyLanguage={llm.replyLanguage}
+        turnLimits={llm.settings?.turnLimits ?? DEFAULT_TURN_LIMITS}
+        onTurnLimits={llm.turnLimits}
+        theme={theme.choice}
+        onThemeMode={theme.setMode}
+        onThemePalette={theme.setPalette}
+        fontSize={fontSize.size}
+        onFontSize={fontSize.setSize}
+        wrapLines={wrapLines}
+        onWrapLines={setWrapLines}
+        alerts={alerts}
+        onAlerts={setAlerts}
+        onOpenLog={() => {
+          setSettingsOpen(false);
+          setLogOpen(true);
+        }}
+        policy={{
+          provider: llm.settings?.providers.find((p) => p.id === llm.settings?.activeProviderId) ?? null,
+          debugLogging: llm.settings?.debugLogging ?? false,
+          mcpServers: mcp.view?.servers ?? null,
+          hooks: hooks.view?.hooks ?? null,
+        }}
+      />
 
       <Modal title="Tool calls" wide open={logOpen} onClose={() => setLogOpen(false)}>
         <ToolLog
