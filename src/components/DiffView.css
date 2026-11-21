@@ -167,3 +167,17 @@
   box-sizing: content-box;
   max-width: calc(var(--wrap-cols) * 1ch + 0.5px);
 }
+
+/* The lines a link pointed at, fading out over REVEAL_MS (useOpenFiles.ts).
+   A shadow, not a background: an added line keeps its own tint under it. */
+.diff-revealed {
+  animation: diff-revealed 1.6s ease-out forwards;
+}
+@keyframes diff-revealed {
+  from {
+    box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  to {
+    box-shadow: inset 0 0 0 100vmax transparent;
+  }
+}

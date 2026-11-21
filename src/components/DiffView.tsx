@@ -1,4 +1,5 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { REVEAL_MS } from "../hooks/useOpenFiles";
 import { diffRows, type DiffRow } from "../lib/diffRows";
 import "./DiffView.css";
 
@@ -9,7 +10,10 @@ const OVERSCAN = 60;
 /** A tab as the viewer draws it, for how wide the longest line is. */
 const TAB = 4;
 
-const Row = memo(function Row({ row, style }: { row: DiffRow; style?: CSSProperties }) {
+/** Lines of the new side to scroll to and light for a moment; a new `seq` asks again. */
+type Reveal = { line: number; endLine: number; seq: number };
+
+const Row = memo(function Row({ row, style, lit }: { row: DiffRow; style?: CSSProperties; lit?: boolean }) {
   if (!("parts" in row)) {
     return (
       <div className={`diff-row diff-${row.kind}`} style={style}>
@@ -18,7 +22,7 @@ const Row = memo(function Row({ row, style }: { row: DiffRow; style?: CSSPropert
     );
   }
   return (
-    <div className={`diff-row diff-${row.kind}`} style={style}>
+    <div className={`diff-row diff-${row.kind}${lit ? " diff-revealed" : ""}`} style={style}>
       <span className="diff-no">{row.oldNo ?? ""}</span>
       <span className="diff-no">{row.newNo ?? ""}</span>
       <span className="diff-sign">{SIGN[row.kind]}</span>
@@ -72,7 +76,19 @@ export function rowAt(starts: number[], line: number) {
  * each row goes is known before it is drawn, and nothing is guessed and
  * corrected while scrolling.
  */
-function VirtualRows({ rows, wrap, digits, plain }: { rows: DiffRow[]; wrap: boolean; digits: number; plain: boolean }) {
+function VirtualRows({
+  rows,
+  wrap,
+  digits,
+  plain,
+  reveal,
+}: {
+  rows: DiffRow[];
+  wrap: boolean;
+  digits: number;
+  plain: boolean;
+  reveal?: Reveal | null;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(0);
   const [view, setView] = useState({ height: 0, width: 0, row: 0, char: 0 });
@@ -118,6 +134,26 @@ function VirtualRows({ rows, wrap, digits, plain }: { rows: DiffRow[]; wrap: boo
   // reaches across however far the view is scrolled sideways.
   const longest = useMemo(() => (wrap ? 0 : rows.reduce((most, row) => Math.max(most, width(row)), 0)), [rows, wrap]);
 
+  // Once per ask, and only once rows are measured: until then there is no
+  // height to scroll by.
+  const [lit, setLit] = useState<{ from: number; to: number } | null>(null);
+  const revealed = useRef(0);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || !reveal || !view.row || revealed.current === reveal.seq) return;
+    revealed.current = reveal.seq;
+    const at = rows.findIndex((row) => "parts" in row && row.newNo !== null && row.newNo >= reveal.line);
+    if (at < 0) return;
+    el.scrollTop = Math.max(0, starts[at] * view.row - el.clientHeight / 3);
+    setTop(el.scrollTop);
+    setLit({ from: reveal.line, to: reveal.endLine });
+  }, [reveal?.seq, view.row, rows, starts]);
+  useEffect(() => {
+    if (!lit) return;
+    const off = window.setTimeout(() => setLit(null), REVEAL_MS);
+    return () => window.clearTimeout(off);
+  }, [lit]);
+
   const line = view.row ? top / view.row : 0;
   const first = view.row ? Math.max(0, rowAt(starts, line) - OVERSCAN) : 0;
   const last = view.row ? Math.min(rows.length, rowAt(starts, line + view.height / view.row) + 1 + OVERSCAN) : 0;
@@ -141,6 +177,7 @@ function VirtualRows({ rows, wrap, digits, plain }: { rows: DiffRow[]; wrap: boo
             <Row
               key={at}
               row={row}
+              lit={!!lit && "parts" in row && row.newNo !== null && row.newNo >= lit.from && row.newNo <= lit.to}
               style={{ top: starts[at] * view.row, height: (starts[at + 1] - starts[at]) * view.row }}
             />
           );
@@ -162,12 +199,15 @@ export function DiffView({
   rows: given,
   virtual,
   wrap = false,
+  reveal,
 }: {
   unified?: string;
   rows?: DiffRow[];
   virtual?: boolean;
   /** With `virtual`: long lines wrap, breaking at any character. */
   wrap?: boolean;
+  /** With `virtual`: lines of the new side to scroll to and light for a moment. */
+  reveal?: Reveal | null;
 }) {
   const parsed = useMemo(() => (given ? null : diffRows(unified ?? "")), [unified, given]);
   const rows = given ?? parsed ?? [];
@@ -186,7 +226,7 @@ export function DiffView({
       style={{ "--diff-digits": `${digits}ch` } as CSSProperties}
     >
       {virtual ? (
-        <VirtualRows rows={rows} wrap={wrap} digits={digits} plain={plain} />
+        <VirtualRows rows={rows} wrap={wrap} digits={digits} plain={plain} reveal={reveal} />
       ) : (
         rows.map((row, i) => <Row key={i} row={row} />)
       )}
