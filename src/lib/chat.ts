@@ -77,6 +77,27 @@ export type Outcome =
   | { status: "pendingApproval"; value: Checkpoint }
   | { status: "cancelled"; value: TurnResult };
 
+/** What a failed turn hands back: the history as of its last completed
+    round — every call answered, valid to send on — with its checklist and
+    plan. Mirrors `domain::turn::TurnRecovery`. */
+export type TurnRecovery = { history: LlmMessage[]; todos: Task[]; plan: string | null };
+
+/** A turn that failed with work to keep. Mirrors `domain::turn::TurnFailure`. */
+export type TurnFailure = { message: string; recovery?: TurnRecovery };
+
+/**
+ * Reads a `startChat`/`resumeChat` rejection: a plain message (a refused
+ * start, a closed folder) or a failed turn with work to keep. Anything else
+ * — a string, an Error — reads as its message with nothing to keep.
+ */
+export function asTurnFailure(e: unknown): TurnFailure {
+  if (typeof e === "string") return { message: e };
+  if (typeof e === "object" && e !== null && !(e instanceof Error) && typeof (e as TurnFailure).message === "string") {
+    return e as TurnFailure;
+  }
+  return { message: String(e) };
+}
+
 export type OutputStream = "stdout" | "stderr";
 
 /** One event from a running turn. Flat: `type` picks the branch. */

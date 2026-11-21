@@ -979,6 +979,103 @@ describe("a turn that fails to start", () => {
   });
 });
 
+describe("a turn that fails after doing work", () => {
+  const recovery = {
+    history: [
+      { role: "user", content: "fix it" },
+      { role: "assistant", content: null, toolCalls: [{ id: "r1", name: "readFile", arguments: '{"path":"a.rs"}' }] },
+      { role: "tool", content: "fn one() {}", toolCallId: "r1" },
+    ],
+    todos: [{ id: "t1", title: "read", status: "completed" }],
+    plan: "# The plan",
+  };
+
+  /// TJ-2: the failure carries the history as of the last completed round.
+  /// It is saved as a finished turn is, and the next message is sent with it
+  /// — the model knows what it read, not only what the user asked.
+  test("the work it did is saved, and the next message is sent with it", async () => {
+    results.chat_start = () => Promise.reject({ message: "peer closed connection", recovery });
+    const { result } = renderHook(() => useAgentTurn());
+
+    await act(async () => {
+      await result.current.send("fix it");
+    });
+
+    expect(result.current.turn.status).toBe("done");
+    const notice = result.current.turn.blocks.find((b) => b.kind === "notice");
+    expect(notice && "text" in notice && notice.text).toBe("The turn failed: peer closed connection");
+    expect(result.current.error).toBe("peer closed connection");
+    await waitFor(() => expect(saved().length).toBeGreaterThanOrEqual(1));
+    const last = saved().at(-1)!;
+    expect(last.args.messages).toEqual(recovery.history);
+    expect(last.args.todos).toEqual(recovery.todos);
+    expect(last.args.plan).toBe("# The plan");
+
+    results.chat_start = done("back");
+    await act(async () => {
+      await result.current.send("continue");
+    });
+    expect(calls.filter((c) => c.command === "chat_start")[1]?.args.messages).toEqual([
+      ...recovery.history,
+      { role: "user", content: "continue" },
+    ]);
+  });
+
+  /// The turn wrote no plan: the window's own plan stands, not erased by
+  /// the recovery's `null`.
+  test("a recovery without a plan keeps the window's plan", async () => {
+    results.chat_load = { id: "kept", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [], plan: "# Kept" };
+    results.chat_start = () => Promise.reject({ message: "peer closed connection", recovery: { ...recovery, plan: null } });
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.open("kept"));
+    await act(async () => result.current.send("fix it"));
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    expect(saved().at(-1)!.args.plan).toBe("# Kept");
+  });
+
+  /// A failure with nothing to keep — a refused start — leaves the history
+  /// as it was: the user's message, not a reconstruction.
+  test("a plain refusal keeps what was sent, as before", async () => {
+    results.chat_start = new Error("provider said 401");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("hello");
+    });
+    await waitFor(() => expect(saved().length).toBeGreaterThanOrEqual(1));
+    expect(saved().at(-1)!.args.messages).toEqual([{ role: "user", content: "hello" }]);
+  });
+
+  /// A resume that fails mid-turn keeps the work and drops the card: the
+  /// calls it asked about already ran, and deciding them again would run
+  /// them twice.
+  test("a resume that fails keeps the work and drops the card", async () => {
+    results.chat_start = {
+      status: "pendingApproval",
+      value: {
+        history: [],
+        round: 1,
+        budgetUsed: 1,
+        eventSeq: 3,
+        calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }],
+        todos: [],
+        reads: {},
+      },
+    };
+    results.chat_resume = () => Promise.reject({ message: "peer closed connection", recovery });
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.send("write it"));
+    expect(result.current.turn.status).toBe("awaitingApproval");
+
+    await act(async () => result.current.decide([{ id: "w1", approved: true }]));
+
+    expect(result.current.turn.status).toBe("done");
+    const notice = result.current.turn.blocks.find((b) => b.kind === "notice");
+    expect(notice && "text" in notice && notice.text).toBe("The turn failed: peer closed connection");
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    expect(saved().at(-1)!.args.messages).toEqual(recovery.history);
+  });
+});
+
 describe("what the next message is sent with", () => {
   /// The model answers a follow-up from what it read, not from what it
   /// happened to repeat in its answer.

@@ -4,6 +4,7 @@ import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom, rewoundNotice } from "../lib/rewind";
 import {
   alwaysAllow,
+  asTurnFailure,
   branchSummary,
   cancelChat,
   cancelSteer,
@@ -20,6 +21,7 @@ import {
   steer as steerCommand,
   type Task,
   type ToolCallDecision,
+  type TurnFailure,
 } from "../lib/chat";
 import type { ImagePart } from "../lib/images";
 import { answerMcpQuestion, type McpAnswer } from "../lib/mcp";
@@ -235,6 +237,23 @@ export function useAgentTurn({
     [setTurn, stop],
   );
 
+  /** A turn that failed: its work is kept when it hands any back — the
+      history as of the last completed round, the checklist and plan — and
+      saved as a finished turn is, so the next message is sent with it. */
+  const fail = useCallback(
+    (session: Session, failure: TurnFailure) => {
+      if (failure.recovery) {
+        session.history = failure.recovery.history;
+        session.todos = failure.recovery.todos;
+        if (failure.recovery.plan !== null) session.plan = failure.recovery.plan;
+      }
+      session.error = failure.message;
+      stop(session);
+      setTurn(session, (state) => appendNotice(endTurn(state), `The turn failed: ${failure.message}`));
+    },
+    [setTurn, stop],
+  );
+
   // A new chat is in the sidebar from its first message, not from the end of
   // its first turn. Only the message is written: a live call may have no result.
   // Scanning every session is what lets a chat left in the background save too.
@@ -409,12 +428,10 @@ export function useAgentTurn({
         await listen(session, id);
         finish(session, await startChat(id, session.key, session.history, session.todos, session.plan, session.folder));
       } catch (e) {
-        session.error = String(e);
-        stop(session);
-        setTurn(session, (state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
+        fail(session, asTurnFailure(e));
       }
     },
-    [setTurn, mint, listen, finish, changed, stop],
+    [setTurn, mint, listen, finish, fail, changed],
   );
 
   // A finished turn sends its queue. Text that has to come back waits while
@@ -575,13 +592,20 @@ export function useAgentTurn({
         const plan = writtenPlan(session.turn.blocks.slice(session.turnStart)) ?? session.plan;
         finish(session, await resumeChat(id, session.key, checkpoint, decisions, plan));
       } catch (e) {
-        // Admission can refuse a resume while another chat holds the last slot.
-        // Keep the checkpoint and its card so the user can answer it again.
-        session.error = String(e);
-        setTurn(session, () => before);
+        const failure = asTurnFailure(e);
+        if (failure.recovery) {
+          // The turn ran past the card and then failed: its work is kept and
+          // the card goes — deciding it again would run those calls twice.
+          fail(session, failure);
+        } else {
+          // Admission can refuse a resume while another chat holds the last slot.
+          // Keep the checkpoint and its card so the user can answer it again.
+          session.error = failure.message;
+          setTurn(session, () => before);
+        }
       }
     },
-    [setTurn, finish, stop],
+    [setTurn, finish, fail],
   );
 
   const cancel = useCallback(() => cancelChat(active.current.key), []);
