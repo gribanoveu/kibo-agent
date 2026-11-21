@@ -25,7 +25,7 @@ pub(super) const EMPTY_TRUNCATED_NOTE: &str = "[Your last reply was cut off by t
 pub(super) fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pass: &mut Pass) -> Result<Next, TurnError> {
     prepare_round(turn, events, round, state, pass);
 
-    let result = match ask_the_model(
+    let (result, cause) = match ask_the_model(
         turn,
         &events,
         round,
@@ -33,11 +33,11 @@ pub(super) fn ask_round(turn: &Turn, events: &Events, round: u32, state: &mut St
         Folding { todos: &state.todos, plan: state.written_plan.as_deref().or(turn.plan), tail_percent: RETRY_KEEP_TAIL_PERCENT },
         &mut pass.seen_results,
     )? {
-        Some(result) => result,
+        Some(pair) => pair,
         // Cancelled during a retry wait.
         None => return Ok(Next::Cancelled(ChatStreamResult::default())),
     };
-    report_reply(events, round, pass, &result);
+    report_reply(events, round, pass, &result, cause);
 
     // Checkpoint two. Before the pause check and before any call runs,
     // so a stop that landed as the round finished pre-empts the write
@@ -111,13 +111,13 @@ fn prepare_round(turn: &Turn, events: &Events, round: u32, state: &mut State, pa
 /// the deltas that streamed it, and said before the round's exits: a round
 /// that is about to be cancelled, or to pause on a confirmation, has still
 /// reported what it said.
-fn report_reply(events: &Events, round: u32, pass: &mut Pass, result: &ChatStreamResult) {
+fn report_reply(events: &Events, round: u32, pass: &mut Pass, result: &ChatStreamResult, cause: Option<MissCause>) {
     if let Some(usage) = result.usage {
         pass.spent += u64::from(usage.prompt_tokens) + u64::from(usage.completion_tokens);
         events.emit(
             round,
             Some(format!("round:{round}")),
-            ChatEventPayload::ContextUsage(usage),
+            ChatEventPayload::ContextUsage { usage, cause },
         );
     }
     events.emit(
@@ -279,7 +279,11 @@ pub(super) fn clear_stale_results(turn: &Turn, state: &mut State, seen_results: 
     let scope = turn.place.scope();
     let usage = request_usage(turn, &state.history);
     let kept = |name: &str| turn.mcp.keeps_results(name);
-    for cleared in result_clearing::plan(&state.history, usage.total, usage.limit, &kept) {
+    let plan = result_clearing::plan(&state.history, usage.total, usage.limit, &kept);
+    if plan.is_empty() {
+        return;
+    }
+    for cleared in plan {
         state.history[cleared.index].content = Some(cleared.stub);
         seen_results.remove(&format!("{}|{}", cleared.tool, cleared.arguments));
         if ToolName::from_wire_name(&cleared.tool) != Some(ToolName::ReadFile) {
@@ -293,6 +297,11 @@ pub(super) fn clear_stale_results(turn: &Turn, state: &mut State, seen_results: 
                 state.reads.forget_whole(&relative);
             }
         }
+    }
+    // Results were replaced in place: the journal's tail alone would replay
+    // the old ones, so it takes the whole history.
+    if let Some(journal) = turn.journal {
+        journal.snapshot(&state.history);
     }
 }
 
@@ -346,7 +355,7 @@ pub(super) fn ask_the_model(
     history: &mut Vec<LlmMessage>,
     folding: Folding,
     seen_results: &mut HashMap<String, u64>,
-) -> Result<Option<ChatStreamResult>, TurnError> {
+) -> Result<Option<(ChatStreamResult, Option<MissCause>)>, TurnError> {
     let mut compacted = false;
     loop {
         let request = ChatRequest {
@@ -354,8 +363,34 @@ pub(super) fn ask_the_model(
             tools: offered(turn, history),
             model: turn.session.model.clone(),
         };
-        let error = match stream_one_round(turn, events, round, request) {
-            Ok(result) => return Ok(result),
+        // The marker, taken before the request goes out: what it carries,
+        // and what changed since the chat's previous request. The system
+        // part is what `request_messages` puts ahead of the conversation.
+        let marker = turn.markers.map(|markers| {
+            let split = request.messages.len() - history.len();
+            let fingerprint = request_marker::fingerprint(&request.messages[..split], &request.tools, history);
+            let cause = markers.previous().map(|previous| request_marker::compare(&previous, &fingerprint));
+            (markers, fingerprint, cause)
+        });
+        let outcome = stream_one_round(turn, events, round, request);
+        // The row is written when the attempt ends, with what it cost — a
+        // failed request is a request too, and its refusal is worth a line.
+        let cause = match marker {
+            Some((markers, fingerprint, cause)) => {
+                markers.record(RequestRecord {
+                    round,
+                    provider_id: turn.session.provider_id.clone(),
+                    model: turn.session.model.clone(),
+                    usage: outcome.as_ref().ok().and_then(|opt| opt.as_ref()).and_then(|r| r.usage),
+                    fingerprint,
+                    cause,
+                });
+                cause
+            }
+            None => None,
+        };
+        let error = match outcome {
+            Ok(result) => return Ok(result.map(|r| (r, cause))),
             Err(TurnError::Provider(error)) if !compacted && too_long(&error) => error,
             Err(other) => return Err(other),
         };
@@ -406,6 +441,10 @@ pub(super) fn fold(
     restore_standing(history, turn);
     restore_plan(history, folding.plan);
     restore_checklist(history, folding.todos);
+    // The history was rewritten, not grown: the journal takes it whole.
+    if let Some(journal) = turn.journal {
+        journal.snapshot(history);
+    }
     events.emit(round, Some(format!("round:{round}")), ChatEventPayload::HistoryCompacted { folded: shorter.folded });
     Ok(true)
 }

@@ -59,6 +59,16 @@ export type ChatUsage = {
   cachedTokens?: number;
 };
 
+/** Why the shared prefix was paid for again, as far as the backend's
+    request marker can say — the notice's answer to "why did the cache
+    miss". Mirrors `domain::request_marker::MissCause`. `history.from` is
+    0-based; the notice shows it 1-based. */
+export type MissCause =
+  | { kind: "system" }
+  | { kind: "tools" }
+  | { kind: "history"; from: number; of: number }
+  | { kind: "unchanged" };
+
 export type TurnResult = {
   text: string;
   reasoning?: string;
@@ -76,6 +86,27 @@ export type Outcome =
   | { status: "done"; value: TurnResult }
   | { status: "pendingApproval"; value: Checkpoint }
   | { status: "cancelled"; value: TurnResult };
+
+/** What a failed turn hands back: the history as of its last completed
+    round — every call answered, valid to send on — with its checklist and
+    plan. Mirrors `domain::turn::TurnRecovery`. */
+export type TurnRecovery = { history: LlmMessage[]; todos: Task[]; plan: string | null };
+
+/** A turn that failed with work to keep. Mirrors `domain::turn::TurnFailure`. */
+export type TurnFailure = { message: string; recovery?: TurnRecovery };
+
+/**
+ * Reads a `startChat`/`resumeChat` rejection: a plain message (a refused
+ * start, a closed folder) or a failed turn with work to keep. Anything else
+ * — a string, an Error — reads as its message with nothing to keep.
+ */
+export function asTurnFailure(e: unknown): TurnFailure {
+  if (typeof e === "string") return { message: e };
+  if (typeof e === "object" && e !== null && !(e instanceof Error) && typeof (e as TurnFailure).message === "string") {
+    return e as TurnFailure;
+  }
+  return { message: String(e) };
+}
 
 export type OutputStream = "stdout" | "stderr";
 
@@ -100,7 +131,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "commandOutput"; payload: { id: string; stream: OutputStream; chunk: string } }
   | { type: "mcpQuestion"; payload: { id: string; call: string; server: string; question: McpQuestion } }
   | { type: "mcpQuestionClosed"; payload: { id: string; action: McpAnswer["action"] } }
-  | { type: "contextUsage"; payload: ChatUsage }
+  | { type: "contextUsage"; payload: ChatUsage & { cause?: MissCause } }
   | { type: "contextEstimate"; payload: ContextUsage }
 );
 

@@ -205,6 +205,10 @@ struct Harness {
     questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
     /// The agent's web, as Settings would give it; `None` is off.
     web: Option<Web>,
+    /// The chat's request markers; `None` leaves the requests unmarked.
+    markers: Option<Arc<dyn crate::domain::request_marker::RequestMarkers>>,
+    /// The turn's journal; `None` leaves the history unjournaled.
+    journal: Option<Arc<dyn crate::domain::turn_journal::TurnJournal>>,
     features: Features,
     parallel: Vec<String>,
     parallel_calls: Arc<Mutex<usize>>,
@@ -260,6 +264,8 @@ fn harness(label: &str, steps: Vec<Step>) -> Harness {
         agents: None,
         questions: None,
         web: None,
+        markers: None,
+        journal: None,
         features: Features::default(),
         parallel: Vec::new(),
         parallel_calls: Arc::new(Mutex::new(0)),
@@ -332,6 +338,8 @@ impl Harness {
             deepseek: None,
             features: self.features.clone(),
             fork: false,
+            markers: self.markers.as_deref(),
+            journal: self.journal.as_deref(),
         };
         f(&turn)
     }
@@ -349,7 +357,7 @@ fn payloads(events: &[ChatTurnEvent]) -> Vec<String> {
             ChatEventPayload::ToolCallDelta(_) => "toolCallDelta".to_string(),
             ChatEventPayload::ToolCall(c) => format!("toolCall:{}", c.id),
             ChatEventPayload::ToolResult(r) => format!("toolResult:{}", r.id),
-            ChatEventPayload::ContextUsage(_) => "contextUsage".to_string(),
+            ChatEventPayload::ContextUsage { .. } => "contextUsage".to_string(),
             ChatEventPayload::ContextEstimate(_) => "estimate".to_string(),
             ChatEventPayload::SteeringApplied { id, .. } => format!("steering:{id}"),
             ChatEventPayload::CommandOutput { id, .. } => format!("commandOutput:{id}"),
@@ -398,6 +406,8 @@ fn grep() -> ToolResult {
     ToolResult::GrepResults { matches: vec![], truncated: false, total: 0, total_files: 0, total_is_floor: false, skipped: vec![] }
 }
 
+mod journal;
+mod markers;
 mod rules;
 mod system_prompt;
 mod turn_loop;

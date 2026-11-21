@@ -80,7 +80,7 @@ pub(super) fn run_helper(
                         chunk: format!("{text}\n"),
                     });
                 }
-                ChatEventPayload::ContextUsage(usage) => {
+                ChatEventPayload::ContextUsage { usage, .. } => {
                     agents.spent(id, &usage, now());
                     // The subagents' share of the chat's session total, counted
                     // where the round reports it — the same spend `Counted` keeps
@@ -164,6 +164,8 @@ pub(super) fn run_helper(
         deepseek: None,
         features,
         fork: fork.is_some(),
+        markers: None,
+        journal: None,
     };
     let outcome = stream(&helper, messages, Vec::new());
     Ok((agents, id, outcome))

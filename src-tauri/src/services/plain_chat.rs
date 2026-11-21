@@ -151,6 +151,8 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         deepseek: chat.deepseek.clone(),
         features: chat.features.clone(),
         fork: false,
+        markers: None,
+        journal: None,
     };
     run(&turn)
 }
