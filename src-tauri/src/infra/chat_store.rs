@@ -399,7 +399,27 @@ pub fn save(
     branched_from: Option<&str>,
     git_branch: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
-    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, true)
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, true, None)
+}
+
+/// As [`save`], but the journal folds for one turn only: the turn this
+/// save ends. The next turn may already have started — the queue sends it
+/// without waiting for this save — and its base snapshot must survive a
+/// delete that is still in flight. `None` folds every turn's rows, as a
+/// recovery does.
+#[allow(clippy::too_many_arguments)]
+pub fn save_turn(
+    id: &str,
+    workspace: &str,
+    messages: &[LlmMessage],
+    blocks: &Value,
+    todos: &[Task],
+    plan: Option<&str>,
+    branched_from: Option<&str>,
+    git_branch: Option<&str>,
+    turn_id: Option<&str>,
+) -> Result<ChatSummary, ChatError> {
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, true, turn_id)
 }
 
 /// As [`save`], but the journal stays: a save that does not end the turn
@@ -416,7 +436,7 @@ pub fn save_keep_journal(
     branched_from: Option<&str>,
     git_branch: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
-    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, false)
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, false, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -430,6 +450,7 @@ fn save_impl(
     branched_from: Option<&str>,
     git_branch: Option<&str>,
     fold_journal: bool,
+    fold_turn: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
     let _write = write_lock();
     // An existing chat keeps its checkout: a save already in flight when the
@@ -478,6 +499,7 @@ fn save_impl(
         // it in the same transaction — a crash between the two would leave
         // a finished turn to be "recovered" over its own saved result.
         fold_journal,
+        fold_turn,
     )
 }
 
@@ -509,7 +531,7 @@ pub fn save_plain(
         worktree_base: None,
         git_branch: None,
         head_at_start: None,
-    }, false)
+    }, false, None)
 }
 
 /// Moves only the chat's own record; the worktree has already been made.
@@ -522,13 +544,14 @@ pub fn relocate(id: &str, workspace: &str, base: &str) -> Result<ChatSummary, Ch
     record.worktree_base = Some(base.to_string());
     record.git_branch = crate::infra::git_head::current_branch(Path::new(workspace));
     // A move is not a turn ending: a running turn's journal stays.
-    upsert(record, false)
+    upsert(record, false, None)
 }
 
 /// Writes `record`, stamped now and keeping the moment it was first saved.
 /// `fold_journal` deletes the chat's turn journal in the same transaction —
-/// true only for a save that ends a turn (or recovers one).
-fn upsert(mut record: ChatRecord, fold_journal: bool) -> Result<ChatSummary, ChatError> {
+/// true only for a save that ends a turn (or recovers one); `fold_turn`
+/// scopes the delete to one turn, `None` taking every turn's rows.
+fn upsert(mut record: ChatRecord, fold_journal: bool, fold_turn: Option<&str>) -> Result<ChatSummary, ChatError> {
     chat_record::check_id(&record.id)?;
     let mut conn = open()?;
     let stored: Option<(i64, bool, Option<String>, bool, Option<String>)> = conn
@@ -583,7 +606,12 @@ fn upsert(mut record: ChatRecord, fold_journal: bool) -> Result<ChatSummary, Cha
     )
     .map_err(store)?;
     if fold_journal {
-        tx.execute("DELETE FROM turn_journal WHERE chat_id = ?1", [&record.id]).map_err(store)?;
+        match fold_turn {
+            Some(turn) => tx
+                .execute("DELETE FROM turn_journal WHERE chat_id = ?1 AND turn_id = ?2", params![record.id, turn])
+                .map_err(store)?,
+            None => tx.execute("DELETE FROM turn_journal WHERE chat_id = ?1", [&record.id]).map_err(store)?,
+        };
     }
     tx.commit().map_err(store)?;
     let mut summary = ChatSummary { archived, pinned, group, ..ChatSummary::from(&record) };
@@ -1694,6 +1722,24 @@ mod tests {
             journal_append("one", "t2", "snapshot", &msg, 1).unwrap();
             delete("one").unwrap();
             assert!(journal_entries("one").unwrap().is_empty(), "a deleted chat's journal goes with it");
+        });
+    }
+
+    /// A turn's save folds only its own rows: the next turn's base, already
+    /// written, is not this turn's to delete.
+    #[test]
+    fn a_turns_save_folds_only_its_own_journal() {
+        with_app_dir("chat-journal-turn-fold", || {
+            save_one("one", "/repo", "go");
+            let msg = serde_json::to_value(vec![LlmMessage::user("go")]).unwrap();
+            journal_append("one", "t1", "snapshot", &msg, 1).unwrap();
+            journal_append("one", "t2", "snapshot", &msg, 1).unwrap();
+            save_turn("one", "/repo", &[LlmMessage::user("done")], &serde_json::json!([]), &[], None, None, None, Some("t1")).unwrap();
+            assert_eq!(journal_message_count("one", "t1").unwrap(), 0);
+            assert_eq!(journal_message_count("one", "t2").unwrap(), 1, "the next turn's base survives");
+            // Without a turn, every row goes — as a recovery folds them.
+            save_turn("one", "/repo", &[LlmMessage::user("done")], &serde_json::json!([]), &[], None, None, None, None).unwrap();
+            assert!(journal_entries("one").unwrap().is_empty());
         });
     }
 

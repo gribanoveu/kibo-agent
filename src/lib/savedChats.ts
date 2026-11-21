@@ -105,9 +105,12 @@ export async function saveChat(
   branchedFrom: string | null = null,
   /** The folder a new chat was typed in; ignored once the chat is saved or its turn has started. */
   workspace: string | null = null,
+  /** The turn this save ends: its journal folds, and only its — the next
+      turn may already be writing its own. `null` folds every turn's rows. */
+  turnId: string | null = null,
 ): Promise<ChatSummary> {
   requireBackend();
-  return invoke<ChatSummary>("chat_save", { id, messages, blocks, todos, plan, branchedFrom, workspace });
+  return invoke<ChatSummary>("chat_save", { id, messages, blocks, todos, plan, branchedFrom, workspace, turnId });
 }
 
 /**

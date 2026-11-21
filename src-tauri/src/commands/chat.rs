@@ -703,6 +703,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             ))
             .unwrap();
             assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, own.display().to_string());
@@ -908,6 +909,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             ))
             .unwrap();
             assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, a.display().to_string(), "filed under A");
@@ -939,6 +941,7 @@ mod tests {
                 None,
                 None,
                 typed_in.clone(),
+                None,
             ))
             .unwrap();
             assert_eq!(crate::infra::chat_store::load("n1").unwrap().workspace, a.display().to_string(), "saved under A");
@@ -1532,6 +1535,7 @@ mod tests {
                 vec![LlmMessage::user("hi")],
                 serde_json::json!([]),
                 Vec::new(),
+                None,
                 None,
                 None,
                 None,

@@ -1004,6 +1004,9 @@ describe("the turn journal", () => {
     await waitFor(() => expect(saved().length).toBeGreaterThan(0));
     const commands = calls.map((c) => c.command);
     expect(commands.indexOf("chat_journal_blocks")).toBeLessThan(commands.lastIndexOf("chat_save"));
+    // The save names the turn it ends: only that turn's journal folds, and
+    // the next turn's base — already written — survives the delete.
+    expect(saved().at(-1)!.args.turnId).toBe(turnId);
   });
 
   /// In a chat with earlier turns the journal carries only this turn's

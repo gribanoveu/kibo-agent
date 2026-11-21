@@ -37,9 +37,15 @@ pub async fn chat_list(
 /// over the record and saved back at once (`services::chat_recovery`).
 #[tauri::command]
 pub async fn chat_load(id: String, state: State<'_, Arc<AgentState>>) -> Result<ChatRecord, String> {
-    let session = state.session(&id);
-    let busy = session.is_running() || session.paused.load(std::sync::atomic::Ordering::SeqCst);
-    blocking(move || crate::services::chat_recovery::load(&id, busy)).await
+    let state = Arc::clone(&state);
+    blocking(move || {
+        // Read here, beside the replay, not before the queue: a turn that
+        // starts while this load waits must not be taken for a crash.
+        let session = state.session(&id);
+        let busy = session.is_running() || session.paused.load(std::sync::atomic::Ordering::SeqCst);
+        crate::services::chat_recovery::load(&id, busy)
+    })
+    .await
 }
 
 /// The turn's transcript so far, written by the window at each round's
@@ -78,30 +84,49 @@ pub async fn chat_save(
     plan: Option<String>,
     branched_from: Option<String>,
     workspace: Option<String>,
+    turn_id: Option<String>,
 ) -> Result<ChatSummary, String> {
     // A background chat still saves under its own checkout, even if another
     // chat has since opened a different folder in the window; a new one under
     // the folder it was typed in (`workspace`).
     let (workspace, _) = state.chat_workspace_in(&id, workspace.as_deref())?;
     let session = state.session(&id);
-    let mid_turn = session.is_running() || session.paused.load(std::sync::atomic::Ordering::SeqCst);
     let state = Arc::clone(&state);
     blocking(move || {
+        // Read here, beside the write, not before the queue: the next turn
+        // may start while this save waits, and its journal must survive.
+        let mid_turn = session.is_running() || session.paused.load(std::sync::atomic::Ordering::SeqCst);
         let first = !chat_store::exists(&id).map_err(|e| e.to_string())?;
-        let store_save = if mid_turn { chat_store::save_keep_journal } else { chat_store::save };
-        let summary = store_save(
-            &id,
-            &workspace.display().to_string(),
-            &messages,
-            &blocks,
-            &todos,
-            plan.as_deref(),
-            branched_from.as_deref(),
-            // Read here, at the save, rather than sent: the window's copy of
-            // HEAD lags a switch the agent made in the turn just ended.
-            crate::infra::git_head::current_branch(&workspace).as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
+        let branch = crate::infra::git_head::current_branch(&workspace);
+        let saved = if mid_turn {
+            chat_store::save_keep_journal(
+                &id,
+                &workspace.display().to_string(),
+                &messages,
+                &blocks,
+                &todos,
+                plan.as_deref(),
+                branched_from.as_deref(),
+                // Read here, at the save, rather than sent: the window's copy of
+                // HEAD lags a switch the agent made in the turn just ended.
+                branch.as_deref(),
+            )
+        } else {
+            // Fold only the turn this save ends: the next turn's base
+            // snapshot, already written, is not this turn's to delete.
+            chat_store::save_turn(
+                &id,
+                &workspace.display().to_string(),
+                &messages,
+                &blocks,
+                &todos,
+                plan.as_deref(),
+                branched_from.as_deref(),
+                branch.as_deref(),
+                turn_id.as_deref(),
+            )
+        };
+        let summary = saved.map_err(|e| e.to_string())?;
         if first {
             super::approval::remember_new_chat(&state, &id);
         }
@@ -396,6 +421,7 @@ mod tests {
                 Some("# Edited at the card".into()),
                 None,
                 None,
+                None,
             ))
             .unwrap();
             assert_eq!(chat_store::journal_entries("c1").unwrap().len(), 1, "the pause's journal stays");
@@ -412,9 +438,48 @@ mod tests {
                 None,
                 None,
                 None,
+                Some("c1/turn-1".into()),
             ))
             .unwrap();
             assert!(chat_store::journal_entries("c1").unwrap().is_empty());
+        });
+    }
+
+    /// The race the whole-feature review found: the queue sends the next
+    /// turn without waiting for the previous turn's save, so the next
+    /// turn's base snapshot may already be on disk when that save's delete
+    /// runs. The save folds only the turn it ends — the live one's journal
+    /// survives it.
+    #[test]
+    fn a_save_does_not_fold_the_next_turns_journal() {
+        use tauri::Manager;
+        crate::testing::with_app_dir("cmd-journal-next-turn", || {
+            let app = tauri::test::mock_app();
+            let state = Arc::new(AgentState::default());
+            app.manage(Arc::clone(&state));
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-journal-next-turn-root")).unwrap();
+            state.register_open(root.clone());
+            state.set_workspace_for_test(root.clone());
+            chat_store::save("c1", &root.display().to_string(), &[LlmMessage::user("go")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            let msg = serde_json::to_value(vec![LlmMessage::user("go")]).unwrap();
+            chat_store::journal_append("c1", "c1/turn-1", "snapshot", &msg, 1).unwrap();
+            // The next turn has already started and written its base.
+            chat_store::journal_append("c1", "c1/turn-2", "snapshot", &msg, 1).unwrap();
+
+            tauri::async_runtime::block_on(chat_save(
+                app.state(),
+                "c1".into(),
+                vec![LlmMessage::user("go")],
+                serde_json::json!([]),
+                vec![],
+                None,
+                None,
+                None,
+                Some("c1/turn-1".into()),
+            ))
+            .unwrap();
+            assert_eq!(chat_store::journal_message_count("c1", "c1/turn-1").unwrap(), 0, "the ended turn folded");
+            assert_eq!(chat_store::journal_message_count("c1", "c1/turn-2").unwrap(), 1, "the live turn's base survives");
         });
     }
 

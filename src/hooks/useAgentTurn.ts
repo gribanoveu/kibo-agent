@@ -321,7 +321,7 @@ export function useAgentTurn({
       }
       trackWrite(
         session,
-        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom, snapshot.folder)
+        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom, snapshot.folder, `${snapshot.key}/turn-${snapshot.turnId}`)
           .then(() => savedRef.current?.())
           .catch((e) => {
             session.error = String(e);
