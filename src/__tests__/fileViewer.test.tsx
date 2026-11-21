@@ -56,6 +56,7 @@ async function open(
   onCloseAll = () => {},
   wrap = true,
   compact = false,
+  reveal: { path: string; line: number; endLine: number; seq: number } | null = null,
 ) {
   const shown = render(
     <FileViewer
@@ -69,6 +70,7 @@ async function open(
       onCloseAll={onCloseAll}
       wrap={wrap}
       compact={compact}
+      reveal={reveal}
     />,
   );
   await settle();
@@ -77,6 +79,19 @@ async function open(
 const rows = () => [...document.querySelectorAll(".diff-row")].map((row) => row.textContent);
 
 describe("FileViewer", () => {
+  test("a link with lines shows the whole file, scrolled to them and lit", async () => {
+    const long = Array.from({ length: 2000 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+    view = { old: long, new: long.replace("line 3\n", "three\n"), unviewable: null };
+    const target: FileTarget = { path: "src/main.rs", side: "worktree" };
+    await open(target, undefined, false, false, { path: "src/main.rs", line: 1500, endLine: 1501, seq: 1 });
+    await settle();
+    expect(screen.getByRole("tab", { name: "File" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.querySelector<HTMLElement>(".diff-scroll")!.scrollTop).toBeGreaterThan(0);
+    const lit = [...document.querySelectorAll(".diff-revealed")].map((row) => row.textContent);
+    // Both numbers, then the text: the change above put no line out of step.
+    expect(lit).toEqual(["15001500 line 1500", "15011501 line 1501"]);
+  });
+
   test("asks for the file on its side and shows what changed, named and counted", async () => {
     await open();
     expect(asked).toEqual([{ path: "src/main.rs", side: "unstaged", workspace: "/repo" }]);

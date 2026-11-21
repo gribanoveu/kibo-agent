@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-11-21 A file link with lines in an answer (`a.ts:42`, `a.ts:42-50`, `#L42-L50`) opens the file scrolled to those lines and lights them for a moment, in the tab the file already has
+
 ## v0.14.0 — 2026-11-20
 
 - 2026-11-20 A hairline ring just darker than the theme outlines the app window on macOS (uniform over the panels; Windows keeps its system edge)

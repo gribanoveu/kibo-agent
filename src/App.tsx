@@ -70,7 +70,7 @@ import { DEFAULT_TURN_LIMITS, withLanguageReminder } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
 import { turnsIn, useFolderSwitch } from "./hooks/useFolderSwitch";
-import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
+import { fileLink, useOpenFiles } from "./hooks/useOpenFiles";
 import { FolderSwitchDialog } from "./components/FolderSwitchDialog";
 import { FolderTrustDialog } from "./components/FolderTrustDialog";
 import { useFolderTrust } from "./hooks/useFolderTrust";
@@ -209,10 +209,10 @@ export default function App() {
   const viewer = useOpenFiles(workspace.path);
   const openFileLink = useCallback(
     (link: string) => {
-      const path = workspace.path && fileLinkPath(link, workspace.path);
-      if (path) viewer.open({ path, side: "worktree" });
+      const place = workspace.path && fileLink(link, workspace.path);
+      if (place) viewer.openAt(place);
     },
-    [workspace.path, viewer.open],
+    [workspace.path, viewer.openAt],
   );
   // On unless turned off in Settings: the viewer is a column beside the chat,
   // rarely wide enough for a long line.
@@ -842,6 +842,7 @@ export default function App() {
       wrap={wrapLines}
       compact={ide}
       edits={viewer.edits}
+      reveal={viewer.reveal}
     />
   ) : previewShown && plain.chatId !== null ? (
     <PrototypePreview

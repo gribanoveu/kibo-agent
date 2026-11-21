@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Compartment, EditorState, Transaction, type Extension } from "@codemirror/state";
-import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type KeyBinding } from "@codemirror/view";
+import { Decoration, drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, type KeyBinding } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { HighlightStyle, LanguageDescription, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
@@ -10,7 +10,7 @@ import { unifiedMergeView } from "@codemirror/merge";
 import { tags as t } from "@lezer/highlight";
 import { asciidoc } from "codemirror-asciidoc";
 import { languageOf } from "../lib/highlight";
-import { sameText } from "../hooks/useOpenFiles";
+import { REVEAL_MS, sameText } from "../hooks/useOpenFiles";
 import { matches } from "../lib/shortcuts";
 import "./FileEditor.css";
 
@@ -41,6 +41,8 @@ type Props = {
    * that puts it back — an edit like any other, saved as one.
    */
   original?: string | null;
+  /** Lines to scroll to and light for a moment; a new `seq` asks again. */
+  reveal?: { line: number; endLine: number; seq: number } | null;
 };
 
 /** How long typing pauses before the edit is passed up: every keystroke would redraw the window. */
@@ -132,8 +134,18 @@ const undoOnly = (type: "accept" | "reject", action: (e: MouseEvent) => void): H
 const changesFrom = (original: string | null | undefined) =>
   original == null ? [] : unifiedMergeView({ original, mergeControls: undoOnly, syntaxHighlightDeletions: true });
 
+// The lines a link pointed at, lit until REVEAL_MS clears them. Only the
+// cursor moves there, not a selection: the next key typed would replace it.
+const lit = new Compartment();
+const lineMark = Decoration.line({ class: "cm-revealed" });
+function litLines(state: EditorState, from: number, to: number): Extension {
+  const marks = [];
+  for (let n = from; n <= Math.min(to, state.doc.lines); n++) marks.push(lineMark.range(state.doc.line(n).from));
+  return EditorView.decorations.of(Decoration.set(marks));
+}
+
 /** A file of the open folder, editable: CodeMirror, with the language of the documents it is for. */
-export function FileEditor({ path, text, wrap, onChange, onSave, original }: Props) {
+export function FileEditor({ path, text, wrap, onChange, onSave, original, reveal }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   // Set while an edit waits for typing to pause.
@@ -180,6 +192,7 @@ export function FileEditor({ path, text, wrap, onChange, onSave, original }: Pro
           theme,
           wrapping.of(lines(wrap)),
           changes.of(changesFrom(original)),
+          lit.of([]),
           EditorView.updateListener.of((update) => {
             // Only what the user typed; a text put in from outside is not an edit.
             if (!update.docChanged || update.transactions.every((tr) => tr.annotation(Transaction.remote))) return;
@@ -208,6 +221,21 @@ export function FileEditor({ path, text, wrap, onChange, onSave, original }: Pro
   useEffect(() => {
     view.current?.dispatch({ effects: wrapping.reconfigure(lines(wrap)) });
   }, [wrap]);
+
+  // After the editor is made, so a file opened at a line goes there at once.
+  useEffect(() => {
+    const editor = view.current;
+    if (!editor || !reveal) return;
+    const { doc } = editor.state;
+    const from = Math.min(reveal.line, doc.lines);
+    const at = doc.line(from).from;
+    editor.dispatch({
+      selection: { anchor: at },
+      effects: [EditorView.scrollIntoView(at, { y: "center" }), lit.reconfigure(litLines(editor.state, from, reveal.endLine))],
+    });
+    const off = window.setTimeout(() => view.current === editor && editor.dispatch({ effects: lit.reconfigure([]) }), REVEAL_MS);
+    return () => window.clearTimeout(off);
+  }, [reveal?.seq]);
 
   // A commit, a stage or a checkout moves what git has; the changes follow.
   useEffect(() => {

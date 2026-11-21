@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { draftKey, fileLinkPath, openFilesReducer, stepThrough, viewerReducer, type OpenFiles } from "../hooks/useOpenFiles";
+import { draftKey, fileLink, openFilesReducer, stepThrough, viewerReducer, type FileLink, type OpenFiles } from "../hooks/useOpenFiles";
 import type { FileTarget } from "../lib/git";
 
 // The viewer's tabs: one per file and side, a single preview tab that the
@@ -139,21 +139,29 @@ describe("stepping through changed files", () => {
   });
 });
 
-describe("fileLinkPath", () => {
+describe("fileLink", () => {
   const root = "/Users/me/repo";
-  const cases: Array<[link: string, path: string | null]> = [
-    ["src/a.ts", "src/a.ts"],
-    ["./src/a.ts", "src/a.ts"],
-    ["src/a.ts:42", "src/a.ts"],
-    ["README.md:42:7", "README.md"],
-    ["src/a.ts#L42", "src/a.ts"],
-    ["/Users/me/repo/src/a.ts", "src/a.ts"],
-    ["file:///Users/me/repo/src/a.ts", "src/a.ts"],
-    ["my%20notes.md", "my notes.md"],
-    ["/etc/passwd", null],
+  const cases: Array<[link: string, place: FileLink | null]> = [
+    ["src/a.ts", { path: "src/a.ts" }],
+    ["./src/a.ts", { path: "src/a.ts" }],
+    ["src/a.ts:42", { path: "src/a.ts", line: 42 }],
+    ["README.md:42:7", { path: "README.md", line: 42 }],
+    ["src/a.ts:42-50", { path: "src/a.ts", line: 42, endLine: 50 }],
+    ["src/a.ts:50-42", { path: "src/a.ts", line: 50 }],
+    ["src/a.ts:0", { path: "src/a.ts" }],
+    ["src/a.ts#L42", { path: "src/a.ts", line: 42 }],
+    ["src/a.ts#L42-L50", { path: "src/a.ts", line: 42, endLine: 50 }],
+    ["src/a.ts#L42C3-L50C1", { path: "src/a.ts", line: 42, endLine: 50 }],
+    ["README.md#install", { path: "README.md" }],
+    ["/Users/me/repo/src/a.ts:7", { path: "src/a.ts", line: 7 }],
+    ["file:///Users/me/repo/src/a.ts", { path: "src/a.ts" }],
+    ["my%20notes.md", { path: "my notes.md" }],
+    ["/etc/passwd:3", null],
     ["../other/a.ts", null],
     ["src/../../a.ts", null],
     ["./", null],
+    [":42", null],
   ];
-  for (const [link, path] of cases) test(`${link} → ${path}`, () => expect(fileLinkPath(link, root)).toBe(path));
+  for (const [link, place] of cases)
+    test(`${link} → ${JSON.stringify(place)}`, () => expect(fileLink(link, root)).toEqual(place));
 });

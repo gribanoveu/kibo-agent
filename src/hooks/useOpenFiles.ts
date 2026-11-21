@@ -133,15 +133,38 @@ export function viewerReducer(state: Viewer, action: Action | DraftAction | { ki
 /** A draft's key: the same path in another folder is another file. */
 export const draftKey = (workspace: string | null, path: string) => `${workspace ?? ""}\0${path}`;
 
+/**
+ * The lines a link asked the viewer to show. Not part of the tab — `a.ts:12`
+ * and `a.ts:40` are one tab — and `seq` makes the same place asked again a
+ * new ask, so a second click scrolls back to it.
+ */
+export type Reveal = { path: string; line: number; endLine: number; seq: number };
+/** How long the lines shown stay lit; the CSS fades them over the same time. */
+export const REVEAL_MS = 1600;
+
 /** The files open in the viewer beside the chat; a folder opened elsewhere closes them all. */
 export function useOpenFiles(workspace: string | null) {
   const [state, dispatch] = useReducer(viewerReducer, { shown: none, other: none, drafts: {} });
-  useEffect(() => dispatch({ kind: "reset" }), [workspace]);
+  const [reveal, setReveal] = useState<Reveal | null>(null);
+  const asked = useRef(0);
+  useEffect(() => {
+    dispatch({ kind: "reset" });
+    setReveal(null);
+  }, [workspace]);
+  // Another file showing is done with the place: coming back to this one
+  // later does not jump to it again.
+  const activePath = state.shown.active?.path;
+  useEffect(() => setReveal((r) => (r && r.path !== activePath ? null : r)), [activePath]);
   // Stable, so a callback built on them does not re-render every answer.
   const actions = useMemo(
     () => ({
       /** A single click previews; `pin`, from a double click, keeps the tab. */
       open: (target: FileTarget, pin = false) => dispatch({ kind: "open", target, pin }),
+      /** A file a link names, scrolled to its lines if the link has them. */
+      openAt: ({ path, line, endLine }: FileLink) => {
+        dispatch({ kind: "open", target: { path, side: "worktree" }, pin: false });
+        setReveal(line ? { path, line, endLine: endLine ?? line, seq: ++asked.current } : null);
+      },
       pin: (target: FileTarget) => dispatch({ kind: "pin", target }),
       close: (target: FileTarget) => dispatch({ kind: "close", target }),
       closeAll: () => dispatch({ kind: "closeAll" }),
@@ -212,18 +235,44 @@ export function useOpenFiles(workspace: string | null) {
       ...closing,
     };
   }, [state.drafts, workspace, leaving, closing]);
-  return { ...state.shown, ...actions, edits };
+  return { ...state.shown, ...actions, edits, reveal };
 }
 
 export type Edits = ReturnType<typeof useOpenFiles>["edits"];
 
+/** A file of the open folder and, if the link named one, the lines in it. */
+export type FileLink = { path: string; line?: number; endLine?: number };
+
 /**
- * The path in the open folder a link in an answer names — `src/a.ts`,
- * `./src/a.ts`, the absolute path, `file://` — or `null` for one outside it.
- * A line reference (`:42`, `:42:7`, `#L42`) is dropped: the viewer opens the file.
+ * The file a link in an answer names — `src/a.ts`, `./src/a.ts`, the absolute
+ * path, `file://` — or `null` for one outside the open folder. Its lines come
+ * apart from it: `:42`, `:42-50`, `:42:7` (the column is dropped), `#L42`,
+ * `#L42-L50`. Any other `#…` is dropped.
  */
-export function fileLinkPath(link: string, workspace: string): string | null {
-  let path = link.replace(/^file:\/\//, "").replace(/#.*$/, "").replace(/(:\d+)+$/, "");
+export function fileLink(link: string, workspace: string): FileLink | null {
+  let rest = link.replace(/^file:\/\//, "");
+  let lines: [string, string | undefined] | null = null;
+  const hash = rest.indexOf("#");
+  if (hash >= 0) {
+    const m = /^L(\d+)(?:C\d+)?(?:-L?(\d+))?/.exec(rest.slice(hash + 1));
+    if (m) lines = [m[1], m[2]];
+    rest = rest.slice(0, hash);
+  }
+  const colon = /:(\d+)(?:-(\d+))?(?::\d+)*$/.exec(rest);
+  if (colon) {
+    lines ??= [colon[1], colon[2]];
+    rest = rest.slice(0, colon.index);
+  }
+  const path = filePath(rest, workspace);
+  if (path === null) return null;
+  const line = lines ? Number(lines[0]) : 0;
+  if (line < 1) return { path };
+  const end = Number(lines![1] ?? 0);
+  return end > line ? { path, line, endLine: end } : { path, line };
+}
+
+function filePath(link: string, workspace: string): string | null {
+  let path = link;
   try {
     path = decodeURIComponent(path);
   } catch {
