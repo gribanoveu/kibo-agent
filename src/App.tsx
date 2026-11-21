@@ -24,6 +24,7 @@ import { useFeatures } from "./hooks/useFeatures";
 import { usePages } from "./hooks/usePages";
 import { useDocks } from "./hooks/useDocks";
 import { useConfigDialogs } from "./hooks/useConfigDialogs";
+import { STAY, useSidebarActions } from "./hooks/useSidebarActions";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -95,9 +96,6 @@ const IMPLEMENT_PLAN = "Implement the plan above. Work through the checklist in 
 function chatName(chats: ChatSummary[], id: string | null, turn: TurnState): string | null {
   return chats.find((one) => one.id === id)?.title ?? turn.blocks.find((block) => block.kind === "user")?.text ?? null;
 }
-
-/** Why the open chat cannot be left: its turn would land in the next one. */
-const STAY = "Stop the running turn before leaving this chat";
 
 export default function App() {
   // Agent works in the open folder; Chat only talks. Chat's conversations live
@@ -302,6 +300,7 @@ export default function App() {
   // and the Artifacts page's prototype, which deletes its chat through the same
   // `plain.remove`.
   const dropDraft = (mode: "agent" | "chat", id: string) => forgetChatDraft(chatDraftKey(mode, id));
+  const sidebarActions = useSidebarActions({ agentMode, agent, plain, history, groups: chatGroups, notify: toast.show, dropDraft });
 
   // The conversation just left is already on disk and stays in the sidebar;
   // this only stops pointing at it.
@@ -850,51 +849,7 @@ export default function App() {
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
-          onArchiveChat={(id, archived) =>
-            agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
-          }
-          onPinChat={(id, pinned) =>
-            agentMode ? history.pin(id, pinned).catch((e) => toast.show(String(e))) : void plain.pin(id, pinned)
-          }
-          onMoveChat={(id, group) =>
-            agentMode ? history.move(id, group).catch((e) => toast.show(String(e))) : void plain.move(id, group)
-          }
-          onCreateGroup={async (name) => {
-            try {
-              return { id: (await chatGroups.create(name)).id };
-            } catch (e) {
-              return { error: String(e) };
-            }
-          }}
-          onRenameGroup={async (id, name) => {
-            try {
-              await chatGroups.rename(id, name);
-              return {};
-            } catch (e) {
-              return { error: String(e) };
-            }
-          }}
-          onDeleteGroup={(id) =>
-            void chatGroups.remove(id).then(
-              () => (agentMode ? history.refresh() : plain.refresh()),
-              (e) => toast.show(String(e)),
-            )
-          }
-          onDeleteChat={(id) => {
-            if (!agentMode)
-              return void plain.remove(id).then(
-                (removed) => (removed ? dropDraft("chat", id) : toast.show(STAY)),
-                (e) => toast.show(String(e)),
-              );
-            // Deleting first would let a save already in flight recreate the row.
-            void agent.discard(id).then((discarded) => {
-              if (!discarded) return toast.show("Stop the running turn before deleting this chat");
-              history.remove(id).then(
-                () => dropDraft("agent", id),
-                (e) => toast.show(String(e)),
-              );
-            });
-          }}
+          {...sidebarActions}
           onOpenSettings={() => openSettings()}
           onOnboardingAction={openTab}
           themeSide={sideOf(theme.choice)}
