@@ -17,8 +17,9 @@ import { ToolLog } from "./components/ToolLog";
 import { ConfigFileEditor } from "./components/ConfigFileEditor";
 import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Columns } from "./components/Columns";
-import { pagesShown, type PageId } from "./components/pages";
+import { pagesShown, type PageDef } from "./components/pages";
 import { useFeatures } from "./hooks/useFeatures";
+import { usePages } from "./hooks/usePages";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -122,25 +123,9 @@ export default function App() {
   const [ideLayout, setIdeLayout] = useStoredState("atlas-ide-layout", false, isBoolean);
   const ide = agentMode && ideLayout;
   // A sidebar page in the chat's place; picking a mode or a chat leaves it.
-  // The IDE layout has no sidebar to pick one from.
-  const [page, setPage] = useState<PageId | null>(null);
-  // What the page was opened on by another page — a meeting from Artifacts; none from the sidebar.
-  const [pageItem, setPageItem] = useState<string | undefined>(undefined);
-  // A feature's page only while it is on: turned off, an open one closes.
   const features = useFeatures();
   const pages = pagesShown(features.isOn);
-  const onPage = ide ? null : (pages.find((one) => one.id === page) ?? null);
-  // The `keep` pages opened so far, mounted from then on; a feature turned off drops its page.
-  const [kept, setKept] = useState<PageId[]>([]);
-  const keptPages = pages.filter((one) => kept.includes(one.id) || (one === onPage && "keep" in one && one.keep));
-  useEffect(() => {
-    if (onPage && keptPages.includes(onPage) && !kept.includes(onPage.id)) setKept([...kept, onPage.id]);
-  }, [onPage]);
-  // A page gone with its feature is not kept: turned on again, it waits to be opened before it mounts.
-  useEffect(() => {
-    const listed = kept.filter((id) => pages.some((one) => one.id === id));
-    if (listed.length !== kept.length) setKept(listed);
-  }, [pages]);
+  const { onPage, pageItem, keptPages, openPage, leavePage } = usePages(ide, pages);
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
@@ -386,7 +371,7 @@ export default function App() {
   // A chat of another folder makes that folder the active one first (F-8.6):
   // the right panel and the next new chat follow the chat on screen.
   const selectChat = (id: string, folder: string | null = agentMode ? history.folderOf(id) : null) => {
-    setPage(null);
+    leavePage();
     if (agentMode && folder && folder !== workspace.path) {
       return void folderSwitch.guard(() => {
         setPendingChat({ id, path: folder });
@@ -408,7 +393,7 @@ export default function App() {
   // The conversation just left is already on disk and stays in the sidebar;
   // this only stops pointing at it.
   const newChat = () => {
-    setPage(null);
+    leavePage();
     if (!agentMode) {
       if (!plain.newChat()) return toast.show(STAY);
       return focusComposer();
@@ -422,7 +407,7 @@ export default function App() {
   const newChatIn = (folder: string) => {
     setPendingChat(null);
     if (folder === workspace.path) return newChat();
-    setPage(null);
+    leavePage();
     void folderSwitch.guard(() => void workspace.open(folder));
   };
 
@@ -865,16 +850,13 @@ export default function App() {
   const topPane = (
     <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
   );
-  const renderPage = (one: (typeof pages)[number]) => (
+  const renderPage = (one: PageDef) => (
     <one.Component
       openPane={openTab}
       item={one === onPage ? pageItem : undefined}
-      openPage={(next, item) => {
-        setPageItem(item);
-        setPage(next);
-      }}
+      openPage={openPage}
       openChat={(id) => {
-        setPage(null);
+        leavePage();
         setMode("chat");
         void plain.open(id).then((opened) => opened || toast.show(STAY));
       }}
@@ -932,15 +914,12 @@ export default function App() {
         <Sidebar
           mode={mode}
           onMode={(next) => {
-            setPage(null);
+            leavePage();
             setMode(next);
           }}
           pages={pages}
           page={onPage?.id ?? null}
-          onPage={(next) => {
-            setPageItem(undefined);
-            setPage(next);
-          }}
+          onPage={openPage}
           sections={
             agentMode
               ? workspace.folders.map((path) => ({
