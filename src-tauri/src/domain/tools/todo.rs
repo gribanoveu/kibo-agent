@@ -51,8 +51,11 @@ struct LooseTodo {
     tasks: Option<serde_json::Value>,
     #[serde(default)]
     id: Option<String>,
-    #[serde(default)]
-    ids: Vec<String>,
+    /// Through the list coercion: Qwen sent `"ids": "[\"t7\", \"t8\"]"`
+    /// twice in a row, was refused both times, and closed six tasks one call
+    /// each, sure the runtime had turned its array into a string.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_string_list")]
+    ids: Option<Vec<String>>,
     #[serde(default)]
     status: Option<TodoUpdateStatus>,
     #[serde(default)]
@@ -64,7 +67,7 @@ impl TryFrom<LooseTodo> for TodoArgs {
 
     fn try_from(call: LooseTodo) -> Result<Self, String> {
         let op = call.op.as_ref().and_then(serde_json::Value::as_str).map(|op| op.trim().to_ascii_lowercase());
-        let update = || TodoArgs::Update { id: call.id.clone(), ids: call.ids.clone(), status: call.status, note: call.note.clone() };
+        let update = || TodoArgs::Update { id: call.id.clone(), ids: call.ids.clone().unwrap_or_default(), status: call.status, note: call.note.clone() };
         match op.as_deref() {
             Some("write") => {
                 let tasks = call.tasks.as_ref().ok_or("op \"write\" needs tasks: a list of task titles")?;
@@ -79,7 +82,7 @@ impl TryFrom<LooseTodo> for TodoArgs {
                 if let Some(Ok(tasks)) = call.op.as_ref().map(|op| task_titles(op, false)) {
                     return Ok(TodoArgs::Write { tasks });
                 }
-                if call.id.is_some() || !call.ids.is_empty() || call.status.is_some() || call.note.is_some() {
+                if call.id.is_some() || call.ids.is_some() || call.status.is_some() || call.note.is_some() {
                     return Ok(update());
                 }
                 Err(format!(

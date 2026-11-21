@@ -116,12 +116,25 @@ where
 /// `Option<Vec<String>>` that also accepts one string for a one-item list —
 /// `"fts": "read_source"` is a list of one term, not a type error. An empty
 /// list, a nullish string and `null` all mean "not set".
+///
+/// A string that is a whole JSON array is that array: Qwen sends a field
+/// typed `["array", "null"]` as `"[\"t7\", \"t8\"]"` now and then (in
+/// November, 6 of 45 `todo` calls with `ids`, 12 of 116 `readFile` calls with
+/// `paths`). Taken as one item, `fts` searched for the brackets and `paths`
+/// read a file that does not exist, with no error to say so.
 pub fn opt_string_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let Some(value) = Option::<Value>::deserialize(deserializer)? else {
         return Ok(None);
+    };
+    let value = match value {
+        Value::String(s) => match serde_json::from_str::<Value>(&s) {
+            Ok(list @ Value::Array(_)) => list,
+            _ => Value::String(s),
+        },
+        other => other,
     };
     let list = match value {
         Value::Null => return Ok(None),
@@ -371,5 +384,18 @@ mod tests {
         }
         assert!(terms(r#"{"fts":[1]}"#).unwrap_err().contains("list of strings"));
         assert!(terms(r#"{"fts":3}"#).is_err());
+    }
+
+    /// A list written out as a JSON string is that list, as Qwen sends a
+    /// nullable array now and then. A string that only looks like one — not
+    /// JSON, or JSON but not an array — is still one item.
+    #[test]
+    fn a_string_list_takes_a_list_written_as_a_string() {
+        assert_eq!(terms(r#"{"fts":"[\"tokens\", \"tok/s\"]"}"#), Ok(Some(vec!["tokens".into(), "tok/s".into()])));
+        assert_eq!(terms(r#"{"fts":" [\"a\"] "}"#), Ok(Some(vec!["a".into()])));
+        assert_eq!(terms(r#"{"fts":"[]"}"#), Ok(None));
+        assert_eq!(terms(r#"{"fts":"[a, b]"}"#), Ok(Some(vec!["[a, b]".into()])));
+        assert_eq!(terms(r#"{"fts":"\"quoted\""}"#), Ok(Some(vec!["\"quoted\"".into()])));
+        assert!(terms(r#"{"fts":"[1, 2]"}"#).unwrap_err().contains("list of strings"));
     }
 }
