@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-21 A narrow chat column (the IDE layout's, or one dragged thin): the message box takes the whole width with its buttons on a row under it and grows taller instead of scrolling inside itself, the Working line keeps time, tokens and processes on one line, and the checklist shows two rows with a done/total count beside them
 - 2026-11-21 A file link with lines in an answer (`a.ts:42`, `a.ts:42-50`, `#L42-L50`) opens the file scrolled to those lines and lights them for a moment, in the tab the file already has
 
 ## v0.14.0 — 2026-11-20

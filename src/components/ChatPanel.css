@@ -357,6 +357,8 @@
 .turn-clock {
   display: flex;
   align-items: center;
+  /* The facts wrap rather than run past the column when it is narrow. */
+  flex-wrap: wrap;
   gap: 7px;
   margin-top: 10px;
   font-size: var(--fs-xs);
@@ -390,6 +392,9 @@
    itself to keep the task under way in the middle. */
 .task-ticker {
   --task-row: 26px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 14px 0 0;
   padding: 6px 14px;
   border: 1px solid var(--border);
@@ -401,6 +406,8 @@
    scroll to the current task is counted from. */
 .task-ticker-list {
   position: relative;
+  flex: 1;
+  min-width: 0;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -440,6 +447,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* How far along the list is, beside the rows: a title cut to the column's
+   width still says where the work stands. */
+.task-ticker-count {
+  flex: none;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 .turn-processes {
   padding: 0;
@@ -980,4 +994,23 @@ button.turn-processes:hover {
    when the round resumes, so it is shown — quietly. */
 .approval-cmd.passive {
   color: var(--text-faint);
+}
+
+/* A narrow column (the chat's minimum is 400, `.main` in App.css is the
+   container): the Working line keeps the facts that are acted on — the time,
+   the tokens, the processes — and gives up the speed, which the paw already
+   says is alive. The checklist shows two rows instead of three and sits
+   tighter, the count beside it doing the work the cut titles cannot. */
+@container (max-width: 500px) {
+  .turn-clock-speed {
+    display: none;
+  }
+  .task-ticker {
+    --task-row: 22px;
+    margin-top: 10px;
+    padding: 6px 10px;
+  }
+  .task-ticker-list {
+    max-height: calc(2 * var(--task-row));
+  }
 }

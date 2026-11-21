@@ -193,10 +193,13 @@ export function PlainChat({
   const fit = useCallback(() => {
     const el = input.current;
     if (!el) return;
+    // The cap is the stylesheet's — a narrow column gets a taller box — not a
+    // number kept in step with it here.
+    const cap = parseFloat(getComputedStyle(el).maxHeight) || 160;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
-    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
+    el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
   }, []);
 
   useEffect(() => {
