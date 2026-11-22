@@ -158,7 +158,7 @@ describe("making room before a turn", () => {
     };
     const { result } = renderHook(() => useAgentTurn());
 
-    let pass: Promise<boolean> = Promise.resolve(false);
+    let pass: Promise<true | string | null> = Promise.resolve(null);
     act(() => {
       pass = result.current.compact(true);
     });
@@ -183,7 +183,7 @@ describe("making room before a turn", () => {
     const { result } = renderHook(() => useAgentTurn());
 
     await act(async () => {
-      expect(await result.current.compact(true)).toBe(false);
+      expect(await result.current.compact(true)).toContain("provider said no");
     });
     expect(result.current.turn.blocks).toEqual([{ kind: "compaction", id: "compaction:0", status: "failed" }]);
     expect(result.current.error).toContain("provider said no");
@@ -216,11 +216,11 @@ describe("making room before a turn", () => {
       await result.current.send("write it");
     });
 
-    let folded: boolean | undefined;
+    let folded: true | string | null | undefined;
     await act(async () => {
       folded = await result.current.compact(true);
     });
-    expect(folded).toBe(false);
+    expect(folded).toBeNull();
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([]);
   });
 
@@ -230,12 +230,12 @@ describe("making room before a turn", () => {
     results.chat_compact = null;
     const { result } = renderHook(() => useAgentTurn());
 
-    let folded: boolean | undefined;
+    let folded: true | string | null | undefined;
     await act(async () => {
       folded = await result.current.compact(true);
     });
 
-    expect(folded).toBe(false);
+    expect(folded).toBeNull();
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([
       { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/\/compact-1$/), chatId: expect.any(String) } },
     ]);
@@ -1792,7 +1792,7 @@ describe("parallel sessions", () => {
     };
     const { result } = renderHook(() => useAgentTurn());
     await act(async () => result.current.open("a"));
-    let compacting = Promise.resolve(false);
+    let compacting: Promise<true | string | null> = Promise.resolve(null);
     act(() => {
       compacting = result.current.compact(true);
     });

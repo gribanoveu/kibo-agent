@@ -45,7 +45,7 @@ type Over = Partial<{
   pickAnswer: string | null;
   resetAnswer: boolean;
   newChatAnswer: boolean;
-  compactAnswer: boolean;
+  compactResult: true | string | null;
   modeFail: string | null;
   replyLanguage: "auto" | "english" | "russian";
   holdOpens: boolean;
@@ -63,7 +63,6 @@ function setup(over: Over = {}) {
   const agent = {
     chatId: over.chatId === undefined ? "c1" : over.chatId,
     turn: { status: over.status ?? "idle", blocks: [] },
-    error: null as string | null,
     open: async (id: string) => {
       calls.push(`agent.open:${id}`);
       return over.openAnswer ?? true;
@@ -77,7 +76,7 @@ function setup(over: Over = {}) {
     },
     compact: async (force: boolean) => {
       calls.push(`compact:${force}`);
-      return over.compactAnswer ?? true;
+      return over.compactResult === undefined ? true : over.compactResult;
     },
   };
   const plain = {
@@ -225,14 +224,17 @@ describe("sending", () => {
     expect(auto.sent[0][1]).toBe("Write AGENTS.md.");
   });
 
-  test("folding is refused while a turn runs, and a failed fold says why", async () => {
+  test("folding is refused while a turn runs; a failure says its reason, nothing to fold says so", async () => {
     const busy = setup({ status: "running" });
     await act(async () => busy.result.current.compactNow());
     expect(busy.said).toEqual(["Not while a turn is running"]);
     expect(busy.calls).toEqual([]);
-    const failed = setup({ compactAnswer: false });
+    const failed = setup({ compactResult: "Error: provider said no" });
     await act(async () => failed.result.current.compactNow());
-    expect(failed.said).toEqual(["Nothing worth folding away yet"]);
+    expect(failed.said).toEqual(["Error: provider said no"]);
+    const nothing = setup({ compactResult: null });
+    await act(async () => nothing.result.current.compactNow());
+    expect(nothing.said).toEqual(["Nothing worth folding away yet"]);
     const ok = setup();
     await act(async () => ok.result.current.compactNow());
     expect(ok.calls).toEqual(["compact:true"]);

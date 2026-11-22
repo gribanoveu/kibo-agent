@@ -367,11 +367,13 @@ export function useAgentTurn({
     return `${session.key}/${prefix}-${n}`;
   }, []);
 
-  /** Folds the older part of a conversation into a summary. */
+  /** Folds the older part of a conversation into a summary. `true` when it
+      folded; the reason it failed, when the caller forced it; `null` when
+      there was nothing worth folding, or a pass is already under way. */
   const compactSession = useCallback(
-    async (session: Session, force: boolean) => {
-      if (session.turn.status === "running" || session.turn.status === "awaitingApproval") return false;
-      if (session.compacting) return false;
+    async (session: Session, force: boolean): Promise<true | string | null> => {
+      if (session.turn.status === "running" || session.turn.status === "awaitingApproval") return null;
+      if (session.compacting) return null;
       session.compacting = true;
       const id = mint(session, "compact");
       let ended = false;
@@ -386,7 +388,7 @@ export function useAgentTurn({
       try {
         const shorter = await compactHistory(session.history, force, id, session.key);
         end(shorter && { folded: shorter.folded });
-        if (!shorter) return false;
+        if (!shorter) return null;
         session.history = shorter.history;
         session.unsaved = true;
         refreshContext(session);
@@ -396,8 +398,11 @@ export function useAgentTurn({
         if (force) {
           session.error = String(e);
           changed(session);
+          // The reason goes back to the caller: the error on the hook is a
+          // render behind by the time this promise lands.
+          return String(e);
         }
-        return false;
+        return null;
       } finally {
         session.compacting = false;
         spentChanged();

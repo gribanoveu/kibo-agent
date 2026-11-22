@@ -35,7 +35,7 @@ export function useChatRouting({
   giveBack,
 }: {
   agentMode: boolean;
-  agent: Pick<ReturnType<typeof useAgentTurn>, "chatId" | "turn" | "open" | "reset" | "send" | "compact" | "error">;
+  agent: Pick<ReturnType<typeof useAgentTurn>, "chatId" | "turn" | "open" | "reset" | "send" | "compact">;
   plain: Pick<ReturnType<typeof usePlainChat>, "open" | "newChat">;
   history: Pick<ReturnType<typeof useChatHistory>, "chats" | "folderOf">;
   workspace: Pick<ReturnType<typeof useWorkspace>, "path" | "open" | "pick">;
@@ -95,9 +95,9 @@ export function useChatRouting({
   const busy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   const compactNow = async () => {
     if (busy) return notify("Not while a turn is running");
-    if (!(await agent.compact(true))) {
-      notify(agent.error ?? "Nothing worth folding away yet");
-    }
+    const folded = await agent.compact(true);
+    // The reason comes back from the call: the hook's error is a render behind.
+    if (folded !== true) notify(typeof folded === "string" ? folded : "Nothing worth folding away yet");
   };
 
   // Asking before the first message rather than refusing it — and then sending
