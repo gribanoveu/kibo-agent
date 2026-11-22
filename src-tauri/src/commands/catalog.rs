@@ -11,7 +11,7 @@ use crate::services::catalog::{self, Preview, SourceView, UpdatePreview};
 use crate::services::mcp_servers::McpServers;
 
 use super::blocking;
-use super::chat::AgentState;
+use super::agent_state::AgentState;
 
 /// Every catalog asked for its index — a conditional GET, so asking again
 /// with nothing new costs a `304`. Off the IPC loop: it is the network.

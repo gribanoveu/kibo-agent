@@ -293,7 +293,8 @@ describe("the catalog page", () => {
 
     fireEvent.click(within(panel).getByRole("button", { name: "Install" }));
     const dialog = screen.getByRole("dialog", { name: "Install Kibana?" });
-    expect(within(dialog).getByText(".kibo/kibana-sources.json")).toBeTruthy();
+    // The dialog reads the entry again on open, as the hooks dialog does.
+    expect(await within(dialog).findByText(".kibo/kibana-sources.json")).toBeTruthy();
     expect(within(dialog).getByText(/left as it is/)).toBeTruthy();
   });
 
