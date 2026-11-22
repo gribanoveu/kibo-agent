@@ -16,13 +16,6 @@
   color: var(--text);
 }
 
-.chat-empty-text {
-  max-width: 380px;
-  font-size: var(--fs-sm);
-  line-height: 1.6;
-  color: var(--text-faint);
-}
-
 .chat-empty-actions {
   display: flex;
   align-items: center;
