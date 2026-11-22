@@ -729,7 +729,10 @@ const ACTIVE_VERBS: Record<string, string> = {
 };
 
 export function describeActive(block: Extract<Block, { kind: "tool" }>): string {
-  const { name, arg } = describeTool(block);
+  const { name, arg, note } = describeTool(block);
+  // A command's own description, when the model gave one, says what it is
+  // doing better than the line itself; without it, the line as before.
+  if (block.name === "runCommand" && note) return note;
   return [ACTIVE_VERBS[name] ?? name, arg].filter(Boolean).join(" ");
 }
 

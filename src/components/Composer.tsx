@@ -338,6 +338,7 @@ export function Composer({
           {queued.map((item) => queueRow(item))}
         </ul>
       )}
+      {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
       <section className={`composer${attachments.dragging ? " dropping" : ""}`} ref={box}>
         {attachments.dragging && (
           <div className="composer-drop" aria-hidden="true">
@@ -454,7 +455,6 @@ export function Composer({
         </div>
         {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
       </section>
-      {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
       <div className="composer-strip">
         {tab}
         <ComposerSettings

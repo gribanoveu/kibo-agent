@@ -795,6 +795,16 @@ describe("a call under way, in words", () => {
     expect(describeActive(tool({ name: "readFile", arguments: '{"path":"a.rs"}' }))).toBe("Reading a.rs");
     expect(describeActive(tool({ name: "runCommand", arguments: '{"command":"cargo test"}' }))).toMatch(/^Running cargo test/);
   });
+
+  test("a command described by the line's own words shows them, not the command", () => {
+    const described = tool({ name: "runCommand", arguments: '{"command":"bun test","description":"Run the frontend tests"}' });
+    expect(describeActive(described)).toBe("Run the frontend tests");
+    // Background and moved-to-background are the same call, said the same way.
+    const background = tool({ name: "runCommand", arguments: '{"command":"bun run tauri dev","description":"Start the dev server","background":true}' });
+    expect(describeActive(background)).toBe("Start the dev server");
+    // An empty description is none: the command line stays.
+    expect(describeActive(tool({ name: "runCommand", arguments: '{"command":"cargo test","description":""}' }))).toMatch(/^Running cargo test/);
+  });
 });
 
 describe("collapseRedraws", () => {

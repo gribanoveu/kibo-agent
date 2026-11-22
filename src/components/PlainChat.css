@@ -32,11 +32,6 @@
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-.plain-welcome p {
-  font-size: var(--fs-sm);
-  line-height: 1.6;
-  color: var(--text-faint);
-}
 /* One per row, whatever their length: the block's height is what keeps the
    empty chat's parts in place. */
 .plain-suggest {

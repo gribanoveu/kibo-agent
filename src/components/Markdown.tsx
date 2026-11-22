@@ -231,7 +231,7 @@ function Image({ src, alt }: { src?: string; alt?: string }) {
 const FILE_HREF = "#file:";
 const EXTERNAL = /^(https?:|mailto:|tel:|#)/i;
 
-type MdNode = { type: string; url?: string; children?: MdNode[] };
+type MdNode = { type: string; url?: string; value?: string; children?: MdNode[] };
 function fileLinks() {
   const walk = (node: MdNode) => {
     if ((node.type === "link" || node.type === "definition") && node.url && !EXTERNAL.test(node.url)) {
@@ -242,6 +242,26 @@ function fileLinks() {
   return walk;
 }
 const remarkPlugins = [...Object.values(defaultRemarkPlugins), fileLinks];
+
+/** Single newlines as hard breaks (`breaks`): a note typed in a box reads line
+ * by line, where Markdown would flow it into one paragraph. Only text nodes
+ * are split — a fence or inline code keeps its own lines. */
+function hardBreaks() {
+  const walk = (node: MdNode) => {
+    if (!node.children) return;
+    node.children = node.children.flatMap((child) => {
+      walk(child);
+      if (child.type !== "text" || !child.value?.includes("\n")) return [child];
+      const out: MdNode[] = [];
+      child.value.split("\n").forEach((part, i) => {
+        if (i > 0) out.push({ type: "break" });
+        if (part) out.push({ type: "text", value: part });
+      });
+      return out;
+    });
+  };
+  return walk;
+}
 
 /**
  * The model's answer as Markdown.
@@ -262,16 +282,20 @@ const remarkPlugins = [...Object.values(defaultRemarkPlugins), fileLinks];
 export const Markdown = memo(function Markdown({
   text,
   streaming,
+  breaks,
   onPaste,
   onOpenFile,
 }: {
   text: string;
   streaming: boolean;
+  /** A single newline is a line break, as typed — for text written in a box, not a model's answer. */
+  breaks?: boolean;
   /** A shell block's terminal button hands its command here; without it there is no button. */
   onPaste?: (command: string) => void;
   /** A link to a file hands its target here, as written; without it the link is plain text. */
   onOpenFile?: (link: string) => void;
 }) {
+  const plugins = useMemo(() => (breaks ? [...remarkPlugins, hardBreaks] : remarkPlugins), [breaks]);
   const bound = useMemo<Components>(
     () => ({
       ...components,
@@ -311,7 +335,7 @@ export const Markdown = memo(function Markdown({
       isAnimating={streaming}
       parseIncompleteMarkdown={streaming}
       linkSafety={{ enabled: false }}
-      remarkPlugins={remarkPlugins}
+      remarkPlugins={plugins}
       components={bound}
     >
       {wrapAsciiTrees(text)}
