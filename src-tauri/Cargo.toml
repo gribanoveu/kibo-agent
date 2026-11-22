@@ -81,7 +81,11 @@ kube = { version = "4.2.0", default-features = false, features = ["client", "rus
 k8s-openapi = { version = "0.28.0", features = ["latest"] }
 tokio = { version = "1", default-features = false, features = ["time", "io-util", "process", "macros", "sync"] }
 futures-util = { version = "0.3", default-features = false }
-rmcp = { version = "3.5", default-features = false, features = ["client", "reqwest-tls-no-provider", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3.11", default-features = false, features = ["client", "reqwest-tls-no-provider", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
+# Named directly only to build the MCP transport's HTTP client
+# (`infra::mcp_http`): the entry's token must reach its URL only, so redirects
+# are off. TLS is the app's ring provider, as rmcp's reqwest feature leaves it.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 dunce = "1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 base64 = "0.22"
@@ -93,7 +97,7 @@ percent-encoding = "2.3"
 # model run through sherpa-onnx, in a second process of this exe
 # (`meeting_sidecar`) — a native crash there costs one recording, not the window.
 # The crate's build.rs downloads sherpa's prebuilt static library.
-sherpa-onnx = "1.13.8"
+sherpa-onnx = "2.0.2"
 symphonia = { version = "0.6.1", features = ["all"] }
 # The eigen-decomposition of spectral clustering (`domain::meeting::spectral`).
 nalgebra = { version = "0.35", default-features = false, features = ["std"] }
