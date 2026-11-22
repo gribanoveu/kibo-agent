@@ -140,12 +140,12 @@ describe("the catalog page", () => {
     expect(screen.getByText("Nothing matches “nothing like it”.")).toBeTruthy();
   });
 
-  test("a kind shows 8 cards at first, and Show all opens its tab with the rest", async () => {
+  test("a kind shows 7 cards and Show all in the eighth's place, which opens its tab with the rest", async () => {
     answer = [{ ...own, items: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"].map(skill) }];
     render(<CatalogPage openPane={() => {}} />);
     await screen.findByText("Skill a");
-    expect(screen.getByText("Skill h")).toBeTruthy();
-    expect(screen.queryByText("Skill i")).toBeNull();
+    expect(screen.getByText("Skill g")).toBeTruthy();
+    expect(screen.queryByText("Skill h")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Show all 10/ }));
     expect(screen.getByText("Skill j")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Skills" }).getAttribute("aria-selected")).toBe("true");

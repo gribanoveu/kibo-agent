@@ -120,21 +120,6 @@
   text-transform: uppercase;
   color: var(--text-box-hint);
 }
-.catalog-more {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  font-family: inherit;
-  font-size: var(--fs-md);
-  cursor: pointer;
-}
-.catalog-more:hover {
-  color: var(--text);
-}
-
 /* As many cards a row as fit at their narrowest: one in a narrow window, four on a wide one. */
 .catalog-grid {
   display: grid;
@@ -160,6 +145,20 @@
 }
 .catalog-card.selected {
   border-color: var(--accent);
+}
+/* The rest of a kind's long list: a dashed card in the grid's last cell, not a link in the head. */
+.catalog-card-all {
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--border);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-md);
+}
+.catalog-card-all:hover {
+  color: var(--text);
 }
 .catalog-card-ico {
   position: relative;

@@ -69,7 +69,7 @@ const featureMatches = (feature: FeatureView, query: string) => {
   return !q || [feature.id, feature.name, feature.description].some((text) => text.toLowerCase().includes(q));
 };
 
-/** How many cards a kind shows under All before "Show all": a row is one to four wide, so eight is two rows of four. */
+/** How many cells a kind fills under All: a row is one to four wide, so eight is two rows of four — seven cards and "Show all" in the eighth's place. */
 const PREVIEW = 8;
 
 /** `raw.githubusercontent.com/<owner>/<repo>/<branch>/` as the repository it is; any other address as it is. */
@@ -840,14 +840,9 @@ export function CatalogPage() {
           <section key={kind} className="catalog-section" aria-label={label}>
             <div className="catalog-section-head">
               <h2>{label}</h2>
-              {cut && (
-                <button type="button" className="catalog-more" onClick={() => setTab(kind)}>
-                  Show all {entries.length} <ArrowRight size={14} />
-                </button>
-              )}
             </div>
             <div className="catalog-grid">
-              {(cut ? entries.slice(0, PREVIEW) : entries).map((entry) => (
+              {(cut ? entries.slice(0, PREVIEW - 1) : entries).map((entry) => (
                 <Card
                   key={`${entry.source}/${kind}/${entry.item.id}`}
                   entry={entry}
@@ -858,6 +853,12 @@ export function CatalogPage() {
                   onInstall={onInstall}
                 />
               ))}
+              {/* The rest of the list, as the grid's last card: the cut is visible where the cards are. */}
+              {cut && (
+                <button type="button" className="catalog-card catalog-card-all" onClick={() => setTab(kind)}>
+                  Show all {entries.length} <ArrowRight size={14} />
+                </button>
+              )}
             </div>
           </section>
         );
