@@ -6,7 +6,10 @@
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { afterEach } from "bun:test";
 
-GlobalRegistrator.register();
+// happy-dom 21 keeps an iframe's `contentWindow` null unless page loading is
+// on; the preview tests read it to pose as the page. Navigation itself fails
+// quietly on the app's `artifact://` scheme — the window is what matters.
+GlobalRegistrator.register({ settings: { enableIframePageLoading: true } });
 
 // Unmount whatever the finished test rendered. Registered here rather than
 // repeated in every file because forgetting it is silent until it isn't: a

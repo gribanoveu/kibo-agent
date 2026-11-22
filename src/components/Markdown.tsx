@@ -229,6 +229,10 @@ function Image({ src, alt }: { src?: string; alt?: string }) {
  * link hardening drops an href it cannot read as a URL — a bare `docs/x.md`
  * is not one — and a fragment is the one relative form it keeps as written. */
 const FILE_HREF = "#file:";
+/** Streamdown prefixes every fragment href with this (its own
+ * `undoubleClobberPrefix` step, matching rehype-sanitize's clobbered ids);
+ * the file marker sits behind it. */
+const CLOBBERED = "#user-content-";
 const EXTERNAL = /^(https?:|mailto:|tel:|#)/i;
 
 type MdNode = { type: string; url?: string; value?: string; children?: MdNode[] };
@@ -303,7 +307,16 @@ export const Markdown = memo(function Markdown({
       // address is the tooltip: a link the model wrote can carry anything in
       // its query string, and the user should see where a click sends it.
       a: ({ href, children }) => {
-        const file = href?.startsWith(FILE_HREF) ? decodeURIComponent(href.slice(FILE_HREF.length)) : null;
+        const plain = href?.startsWith(CLOBBERED) ? "#" + href.slice(CLOBBERED.length) : href;
+        let file: string | null = null;
+        if (plain?.startsWith(FILE_HREF)) {
+          try {
+            file = decodeURIComponent(plain.slice(FILE_HREF.length));
+          } catch {
+            // A broken %-escape the model wrote by hand: not a file link, and
+            // not a reason to throw out of the render — there is no boundary.
+          }
+        }
         if (file !== null && !onOpenFile) return <span>{children}</span>;
         return (
           <a

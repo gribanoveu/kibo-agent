@@ -161,7 +161,7 @@ impl<In: Transport> Connector<In> for PinnedTls {
         let host = details.uri.host().unwrap_or_default().trim_start_matches('[').trim_end_matches(']');
         let name = ServerName::try_from(host.to_string()).map_err(|_| ureq::Error::Tls("invalid server name"))?;
         let mut conn = ClientConnection::new(self.0.clone(), name)?;
-        let mut sock = TransportAdapter::new(transport.boxed());
+        let mut sock = TransportAdapter::new(transport.boxed(), details.current_time.clone());
         sock.set_timeout(details.timeout);
         conn.complete_io(&mut sock)?;
         let buffers = LazyBuffers::new(details.config.input_buffer_size(), details.config.output_buffer_size());

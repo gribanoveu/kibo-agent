@@ -83,7 +83,10 @@
 каталоге данных приложения ОС), ширины панелей и тема (хранилище окна).
 
 Телеметрии нет. Зависимостей, существующих ради отправки данных (HTTP-клиенты кроме `ureq` у провайдера и
-`reqwest` под SDK MCP, Sentry, PostHog и подобные), нет — `data_policy::no_dependency_exists_to_send_data_elsewhere`.
+`reqwest` для клиента MCP-транспорта, Sentry, PostHog и подобные), нет — `data_policy::no_dependency_exists_to_send_data_elsewhere`.
+`reqwest` объявлен в манифесте напрямую только ради клиента MCP-транспорта (`infra/mcp_http.rs`):
+переадресации выключены, чтобы заголовки записи не ушли на другой хост. Где он смеет использоваться,
+держит `only_the_provider_opens_connections` — `reqwest::` вне разрешённых модулей не пройдёт.
 
 ## Чего политика не обещает
 
