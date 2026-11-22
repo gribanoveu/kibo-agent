@@ -25,6 +25,7 @@ import { usePages } from "./hooks/usePages";
 import { useDocks } from "./hooks/useDocks";
 import { useConfigDialogs } from "./hooks/useConfigDialogs";
 import { STAY, useSidebarActions } from "./hooks/useSidebarActions";
+import { useChatRouting } from "./hooks/useChatRouting";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -50,7 +51,6 @@ import { useGitBranch, useWorktreeOf } from "./hooks/useGitBranch";
 import { useChangeTotals } from "./hooks/useChangeTotals";
 import { useToast } from "./hooks/useToast";
 import { nativeFrame, windowsFrame } from "./lib/window";
-import { pickSavePath } from "./lib/dialog";
 import { useBackendSetting } from "./hooks/useBackendSetting";
 import { useApprovalMemory } from "./hooks/useApprovalMemory";
 import { useFolderConversation } from "./hooks/useFolderConversation";
@@ -63,11 +63,10 @@ import { removeHook, removeMcpServer } from "./lib/configEntries";
 import { togglePane, toggleTerminal } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
-import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
 import { mcpPromptGet } from "./lib/mcp";
-import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedChats";
-import { DEFAULT_TURN_LIMITS, withLanguageReminder } from "./lib/settings";
+import { type ChatSummary } from "./lib/savedChats";
+import { DEFAULT_TURN_LIMITS } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, type AppMode } from "./types";
 import { turnsIn, useFolderSwitch } from "./hooks/useFolderSwitch";
@@ -88,9 +87,6 @@ import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
 import type { AgentFocus } from "./lib/describeTool";
-
-/** What "Implement in Agent mode" says on the user's behalf. Shown in the transcript like anything they type. */
-const IMPLEMENT_PLAN = "Implement the plan above. Work through the checklist in order.";
 
 /** The open chat's name. A chat's first turn ends before it is saved and named: its first message is its name. */
 function chatName(chats: ChatSummary[], id: string | null, turn: TurnState): string | null {
@@ -197,11 +193,6 @@ export default function App() {
   const toolLog = useToolLog(logOpen);
   const history = useChatHistory(workspace.folders, workspace.path);
   const chatGroups = useChatGroups(agentMode ? "projects" : "chat");
-  // A chat to open once its folder is the active one: one moved to its
-  // worktree, or one of another folder picked in the sidebar. Opened only
-  // then, or the folder change's reset of the thread would close it again.
-  const [pendingChat, setPendingChat] = useState<{ id: string; path: string } | null>(null);
-  const pendingChatOpened = useCallback(() => setPendingChat(null), []);
   // The list is redrawn from disk after every save rather than guessed at
   // here: what belongs in it, and in what order, is the store's rule.
   // Queued messages that will not be sent after all go back to the box.
@@ -220,6 +211,25 @@ export default function App() {
   const branch = useGitBranch(workspace.path, agent.turn.status);
   const worktreeOf = useWorktreeOf(workspace.path);
   const changeTotals = useChangeTotals(workspace.path);
+  // A turn keeps its own folder while the window moves (F-8.7): only closing
+  // that folder, or switching its branch, waits for it.
+  const turnsInFolder = turnsIn(agent.chatActivity, history.folderOf);
+  const folderSwitch = useFolderSwitch(turnsInFolder);
+  // Getting a chat on screen and a message out of the box.
+  const { pendingChat, pendingChatOpened, selectChat, newChat, newChatIn, send, pickOffer, implement, exportOpenChat, compactNow } = useChatRouting({
+    agentMode,
+    agent,
+    plain,
+    history,
+    workspace,
+    folderSwitch,
+    conversation,
+    replyLanguage: llm.settings?.replyLanguage ?? "auto",
+    notify: toast.show,
+    focusComposer,
+    leavePage,
+    giveBack,
+  });
   // An archived chat is not where the user left off, even when it was touched last.
   useFolderConversation(
     workspace.path,
@@ -279,58 +289,14 @@ export default function App() {
     ideLayout: agentMode ? toggleIde : undefined,
   });
 
-  // A chat of another folder makes that folder the active one first (F-8.6):
-  // the right panel and the next new chat follow the chat on screen.
-  const selectChat = (id: string, folder: string | null = agentMode ? history.folderOf(id) : null) => {
-    leavePage();
-    if (agentMode && folder && folder !== workspace.path) {
-      return void folderSwitch.guard(() => {
-        setPendingChat({ id, path: folder });
-        // A failed open drops only its own chat, not one picked since.
-        void workspace.open(folder).then((opened) => opened || setPendingChat((pending) => (pending?.id === id ? null : pending)));
-      });
-    }
-    // A chat of another folder still on its way is not opened over this one,
-    // picked since.
-    setPendingChat(null);
-    void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
-  };
-
   // A deleted chat takes its unsent message with it — the sidebar's own path
   // and the Artifacts page's prototype, which deletes its chat through the same
   // `plain.remove`.
   const dropDraft = (mode: "agent" | "chat", id: string) => forgetChatDraft(chatDraftKey(mode, id));
   const sidebarActions = useSidebarActions({ agentMode, agent, plain, history, groups: chatGroups, notify: toast.show, dropDraft });
 
-  // The conversation just left is already on disk and stays in the sidebar;
-  // this only stops pointing at it.
-  const newChat = () => {
-    leavePage();
-    if (!agentMode) {
-      if (!plain.newChat()) return toast.show(STAY);
-      return focusComposer();
-    }
-    if (!agent.reset()) return toast.show(STAY);
-    focusComposer();
-  };
-
-  // The section's "+": in the active folder an ordinary new chat; in another
-  // one the folder becomes active, and its change starts the thread afresh.
-  const newChatIn = (folder: string) => {
-    setPendingChat(null);
-    if (folder === workspace.path) return newChat();
-    leavePage();
-    void folderSwitch.guard(() => void workspace.open(folder));
-  };
-
   // The window the meter is drawn against, and the provider a turn talks to.
   const busy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
-  const compactNow = async () => {
-    if (busy) return toast.show("Not while a turn is running");
-    if (!(await agent.compact(true))) {
-      toast.show(agent.error ?? "Nothing worth folding away yet");
-    }
-  };
 
   // What `/name` in the composer runs: the app's own, then the user's files
   // in `.kibo/commands`. The composer takes whatever is in the list.
@@ -345,12 +311,10 @@ export default function App() {
       compact: () => void compactNow(),
       fork: () => agent.branch(),
       review: (args) => void send(typedCommand("review", args), expandTemplate(reviewPrompt, args)),
-      // `send` is declared further down; the arrow reaches it when a command runs.
       init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
       trust: trust.ask,
     },
   );
-  // `send` is declared further down; the arrow reaches it when a command runs.
   const ownCommands = [...builtIn, ...fileCommands(commandFiles.files, builtIn, (text, sent) => void send(text, sent))];
   const commands = [
     ...ownCommands,
@@ -383,10 +347,6 @@ export default function App() {
     if (workspace.error) toast.show(workspace.error);
   }, [workspace.error]);
 
-  // A turn keeps its own folder while the window moves (F-8.7): only closing
-  // that folder, or switching its branch, waits for it.
-  const turnsInFolder = turnsIn(agent.chatActivity, history.folderOf);
-  const folderSwitch = useFolderSwitch(turnsInFolder);
   // Opening a folder closes none (F-8.6); closing one stops what runs in it, and says so first.
   const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
@@ -419,68 +379,7 @@ export default function App() {
       : { preview: plain.previewRewind, rewind: plain.rewind, notify: toast.show },
   );
 
-  // Asking before the first message rather than refusing it — and then sending
-  // it: the composer has already cleared the box, so anything not sent here is
-  // typed twice.
-  // `command`, when given, is what the model gets in place of `text` — a `/`
-  // command's prompt — with the reply language said at its end.
-  const send = async (text: string, command?: string, images: ImagePart[] = []) => {
-    const sent = command === undefined ? undefined : withLanguageReminder(command, llm.settings?.replyLanguage ?? "auto");
-    // The composer has already cleared the box: a picker closed without a
-    // folder gives the message back rather than losing it.
-    if (!workspace.path && !(await workspace.pick())) return giveBack(text, images);
-    agent.send(text, sent, images);
-  };
-
-  const pickOffer = async (kind: OfferKind) => {
-    if (kind === "review") return send(REVIEW_REQUEST);
-    if (kind === "commit") return send(COMMIT_REQUEST);
-    if (kind === "pullRequest") return send(PULL_REQUEST);
-    // Not `send`: that would drop the checklist the plan came with.
-    if (kind === "implement") return implement();
-    const id = agent.chatId;
-    if (!id) return;
-    try {
-      const path = await moveChatToWorktree(id);
-      setPendingChat({ id, path });
-      // The worktree opens beside the folder: the neighbouring chat keeps its
-      // running processes, terminals and checkout.
-      if (!(await workspace.open(path))) {
-        setPendingChat(null);
-      }
-      // The lists re-read as the worktree joins the open folders.
-    } catch (e) {
-      setPendingChat(null);
-      toast.show(String(e));
-    }
-  };
-
   const openChat = history.chats.find((one) => one.id === agent.chatId);
-
-  // The conversation as a file, for reading it somewhere else. Only what is
-  // on disk can be written out — a turn saves when it comes to rest, so this
-  // exports everything up to the one still running.
-  const exportOpenChat = async () => {
-    const chat = openChat;
-    if (!chat) return toast.show("Nothing saved to export yet");
-    const path = await pickSavePath(chat.title, "md");
-    if (!path) return;
-    try {
-      await exportChat(chat.id, path);
-      toast.show(`Exported to ${path.split("/").pop()}`);
-    } catch (e) {
-      toast.show(String(e));
-    }
-  };
-
-  // The mode first, and only then the message: the backend reads the mode
-  // when the turn starts, and a turn sent a moment early would still be a
-  // plan that cannot write.
-  const implement = async () => {
-    const failed = await conversation.pick("agent");
-    if (failed) return toast.show(failed);
-    agent.send(IMPLEMENT_PLAN, undefined, [], true);
-  };
 
   // A chat row or Overview asking to see one: Terminal shows it.
   const openProcess = (id: number | null) => {
