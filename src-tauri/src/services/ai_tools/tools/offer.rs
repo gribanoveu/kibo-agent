@@ -56,6 +56,14 @@ pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<Too
             })?;
             git_branches::pr_ready(scope.root(), base).map_err(|e| ToolError::Command(e.to_string()))?;
         }
+        OfferKind::SyncBase => {
+            let base = deps.worktree_base.ok_or_else(|| {
+                ToolError::Command("a base sync is offered only from a chat moved to its own worktree".into())
+            })?;
+            if git_branches::base_behind(scope.root(), base).map_err(|e| ToolError::Command(e.to_string()))? == 0 {
+                return Err(ToolError::Command("the worktree is up to date with its base — nothing to sync".into()));
+            }
+        }
         OfferKind::Implement => {
             if !deps.has_plan {
                 return Err(ToolError::Command("no plan to implement: write it with writePlan first".into()));
@@ -73,13 +81,14 @@ review: once, at the end of a task whose change is not trivial — several files
 commit: when the task is done and checked, and the user has not said they commit themselves. \
 worktree: while another chat is running in this checkout and this task needs file changes; pressing it moves only this chat to a clean worktree from the current branch. \
 pullRequest: after committing this chat's worktree changes, when the branch is ahead of and not behind its recorded base; pressing it asks you to push and create the PR with confirmed commands. \
+syncBase: when this chat's worktree is behind its recorded base — the step a refused pullRequest names; pressing it asks you to bring the branch up to date from the base with confirmed commands. \
 implement: after writePlan, when the user asked for a plan rather than the work; pressing it asks you to carry the plan out, so end your turn there. \
 Do not also ask about it in your answer: the button is the question. Calling a kind again replaces its reason."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
-                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "implement"] },
+                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "syncBase", "implement"] },
                 "reason": { "type": "string", "description": "Why, in a few words the user reads on the button: what the change touched." }
             },
             "required": ["kind", "reason"]
@@ -245,6 +254,32 @@ mod tests {
     }
 
     #[test]
+    fn a_base_sync_needs_a_recorded_base_and_commits_behind_it() {
+        let (dir, scope) = folder("offer-sync-base");
+        let refused = offer(&scope, &args(OfferKind::SyncBase, "the base moved"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("moved"), "{refused}");
+
+        let base = crate::infra::git_head::current_branch(&dir).unwrap();
+        let path = git_branches::add_agent_worktree(&dir, &base, "chat-1", &temp_dir("offer-sync-base-home")).unwrap();
+        let scope = ToolScope::new(&path).unwrap();
+        let deps = ToolDeps { worktree_base: Some(&base), ..ToolDeps::default() };
+        let refused = offer(&scope, &args(OfferKind::SyncBase, "x"), &deps).unwrap_err();
+        assert!(refused.to_string().contains("up to date"), "{refused}");
+
+        // The base moves; the worktree's own commit does not cancel the sync.
+        fs::write(dir.join("b.rs"), "base\n").unwrap();
+        git_changes::stage(&dir, &["b.rs".into()]).unwrap();
+        git_changes::commit(&dir, "base moved").unwrap();
+        fs::write(path.join("a.rs"), "two\n").unwrap();
+        git_changes::stage(&path, &["a.rs".into()]).unwrap();
+        git_changes::commit(&path, "own work").unwrap();
+        assert_eq!(
+            offer(&scope, &args(OfferKind::SyncBase, "the base moved"), &deps).unwrap(),
+            ToolResult::Offered { kind: OfferKind::SyncBase }
+        );
+    }
+
+    #[test]
     fn a_plan_is_offered_only_once_there_is_one() {
         let (_dir, scope) = folder("offer-implement");
         let refused = offer(&scope, &args(OfferKind::Implement, "the parser"), &ToolDeps::default()).unwrap_err();
@@ -261,7 +296,7 @@ mod tests {
     fn the_schema_lists_every_kind() {
         let schema = definition().parameters;
         let listed = schema["properties"]["kind"]["enum"].as_array().unwrap();
-        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::Implement] {
+        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::SyncBase, OfferKind::Implement] {
             assert!(listed.contains(&serde_json::to_value(kind).unwrap()), "{kind:?}");
         }
     }

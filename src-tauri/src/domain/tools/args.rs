@@ -220,6 +220,7 @@ pub enum OfferKind {
     Commit,
     Worktree,
     PullRequest,
+    SyncBase,
     Implement,
 }
 

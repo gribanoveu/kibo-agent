@@ -175,6 +175,25 @@ pub fn pr_ready(root: &Path, base: &str) -> Result<(), GitBranchError> {
     Ok(())
 }
 
+/// How far this chat's worktree is behind its recorded base. The sync offer
+/// reads it: `pr_ready` refuses a branch that is behind, and this is the step
+/// that unblocks it. Nothing is merged here.
+pub fn base_behind(root: &Path, base: &str) -> Result<usize, GitBranchError> {
+    let repo = open(root)?;
+    if !repo.is_worktree() {
+        return Err(GitBranchError::NotAWorktree);
+    }
+    ready(&repo)?;
+    let changed = dirty(&repo)?;
+    if !changed.is_empty() {
+        return Err(GitBranchError::Git(format!("commit the worktree changes first: {}", changed.join(", "))));
+    }
+    let head = repo.head().map_err(git)?.target().ok_or_else(|| GitBranchError::Git("the worktree has no commit".into()))?;
+    let base = resolve(&repo, base)?.commit.id();
+    let (_, behind) = repo.graph_ahead_behind(head, base).map_err(git)?;
+    Ok(behind)
+}
+
 /// Removes the linked worktree at `path`, with its folder. Its branch goes
 /// too when the app made it and nothing is on it that is not also elsewhere;
 /// otherwise it stays, and is returned.
@@ -504,6 +523,28 @@ mod tests {
         let base = repo.refname_to_id("refs/heads/main").unwrap();
         commit(&repo, "refs/heads/main", Some(base), &[("a.txt", "base moved\n"), ("b.txt", "b\n")]);
         assert!(pr_ready(&path, "main").unwrap_err().to_string().contains("behind"));
+    }
+
+    #[test]
+    fn base_behind_counts_the_bases_new_commits_and_wants_a_clean_worktree() {
+        let (dir, repo) = two_branches("branches-base-behind");
+        let path = add_agent_worktree(&dir, "main", "chat-1", &temp_dir("branches-base-behind-home")).unwrap();
+        assert!(matches!(base_behind(&dir, "main"), Err(GitBranchError::NotAWorktree)));
+        assert!(matches!(base_behind(&path, "nope"), Err(GitBranchError::NoSuchBranch(_))));
+        assert_eq!(base_behind(&path, "main").unwrap(), 0);
+
+        let base = repo.refname_to_id("refs/heads/main").unwrap();
+        commit(&repo, "refs/heads/main", Some(base), &[("a.txt", "base moved\n")]);
+        assert_eq!(base_behind(&path, "main").unwrap(), 1);
+
+        // The worktree's own commit does not cancel the sync: ahead is not behind.
+        fs::write(path.join("b.txt"), "own\n").unwrap();
+        crate::infra::git_changes::stage(&path, &["b.txt".into()]).unwrap();
+        crate::infra::git_changes::commit(&path, "own work").unwrap();
+        assert_eq!(base_behind(&path, "main").unwrap(), 1);
+
+        fs::write(path.join("c.txt"), "dirty\n").unwrap();
+        assert!(base_behind(&path, "main").unwrap_err().to_string().contains("commit"));
     }
 
     #[test]

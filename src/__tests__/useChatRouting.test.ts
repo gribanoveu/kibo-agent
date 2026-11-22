@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test, mock } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
-import { COMMIT_REQUEST, PULL_REQUEST, REVIEW_REQUEST } from "../lib/offer";
+import { COMMIT_REQUEST, PULL_REQUEST, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
 import { withLanguageReminder } from "../lib/settings";
 import { STAY } from "../hooks/useSidebarActions";
 
@@ -243,12 +243,13 @@ describe("sending", () => {
 });
 
 describe("the offers after an answer", () => {
-  test("review, commit and pull request send their own request", async () => {
+  test("review, commit, pull request and base sync send their own request", async () => {
     const { result, sent } = setup();
     await act(async () => result.current.pickOffer("review"));
     await act(async () => result.current.pickOffer("commit"));
     await act(async () => result.current.pickOffer("pullRequest"));
-    expect(sent.map(([text]) => text)).toEqual([REVIEW_REQUEST, COMMIT_REQUEST, PULL_REQUEST]);
+    await act(async () => result.current.pickOffer("syncBase"));
+    expect(sent.map(([text]) => text)).toEqual([REVIEW_REQUEST, COMMIT_REQUEST, PULL_REQUEST, SYNC_BASE]);
   });
 
   test("implement picks the writing mode first, and a refusal sends nothing", async () => {

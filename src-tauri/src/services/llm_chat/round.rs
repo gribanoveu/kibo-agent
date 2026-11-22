@@ -494,6 +494,10 @@ pub(super) fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: Conve
         skills: turn.skills,
         rules,
         worktree_of: turn.worktree_of,
+        worktree_base: match turn.place {
+            Place::Folder { worktree_base, .. } => worktree_base,
+            Place::Chat { .. } => None,
+        },
         parallel: turn.frozen.and_then(|frozen| frozen.parallel.as_deref()),
         language: turn.session.reply_language,
         mcp_servers: turn.mcp.notes(),

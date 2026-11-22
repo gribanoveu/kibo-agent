@@ -228,6 +228,8 @@ pub struct TurnContext<'a> {
     pub rules: &'a [RuleFile],
     /// The main working tree, when the open folder is a linked worktree of it.
     pub worktree_of: Option<&'a Path>,
+    /// The branch this chat's worktree started from, when the move recorded one.
+    pub worktree_base: Option<&'a str>,
     /// The parallel-session warning as this chat's first turn froze it.
     pub parallel: Option<&'a str>,
     /// The language the user asked replies in; `None` asks nothing.
@@ -261,8 +263,9 @@ pub fn context_block(ctx: &TurnContext) -> String {
         );
     }
     if let Some(main) = ctx.worktree_of {
+        let from = ctx.worktree_base.map(|base| format!(" started from {base}")).unwrap_or_default();
         text.push_str(&format!(
-            "\n- The open folder is a git worktree of {}, on a branch of its own. That folder is the \
+            "\n- The open folder is a git worktree of {}, on a branch of its own{from}. That folder is the \
              user's own checkout and may hold work in progress: do not edit files there, run commands \
              in it, or point git at it. Commits made here land on this worktree's branch.",
             main.display(),
@@ -550,6 +553,7 @@ mod tests {
             skills: &[],
             rules: &[],
             worktree_of: None,
+            worktree_base: None,
             parallel: None,
             language: None,
             mcp_servers: &[],
@@ -797,6 +801,10 @@ mod tests {
         let text = context_block(&TurnContext { worktree_of: Some(&main), ..ctx(&workspace) });
         assert!(text.contains("git worktree of /work/project"), "{text}");
         assert!(text.contains("do not edit files there"), "{text}");
+        assert!(!text.contains("started from"), "{text}");
+
+        let text = context_block(&TurnContext { worktree_of: Some(&main), worktree_base: Some("main"), ..ctx(&workspace) });
+        assert!(text.contains("on a branch of its own started from main"), "{text}");
     }
 
     /// A mode's paragraph may only name tools that mode offers: telling a mode

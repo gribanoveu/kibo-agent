@@ -1,4 +1,4 @@
-import { CornerDownLeft, GitCommitHorizontal, GitFork, GitPullRequest, ListChecks, SearchCheck } from "lucide-react";
+import { CornerDownLeft, GitCommitHorizontal, GitFork, GitPullRequest, ListChecks, RefreshCw, SearchCheck } from "lucide-react";
 import type { Offer, OfferKind } from "../lib/offer";
 import "./OfferCards.css";
 
@@ -7,6 +7,7 @@ const LOOK: Record<OfferKind, { label: string; icon: typeof SearchCheck }> = {
   commit: { label: "Commit", icon: GitCommitHorizontal },
   worktree: { label: "Move this chat to a worktree", icon: GitFork },
   pullRequest: { label: "Create a pull request", icon: GitPullRequest },
+  syncBase: { label: "Update from the base branch", icon: RefreshCw },
   implement: { label: "Implement the plan", icon: ListChecks },
 };
 

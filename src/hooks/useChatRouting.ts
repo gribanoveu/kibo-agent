@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { ImagePart } from "../lib/images";
-import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST } from "../lib/offer";
+import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
 import { exportChat, moveChatToWorktree } from "../lib/savedChats";
 import { pickSavePath } from "../lib/dialog";
 import { withLanguageReminder, type ReplyLanguage } from "../lib/settings";
@@ -126,6 +126,7 @@ export function useChatRouting({
     if (kind === "review") return send(REVIEW_REQUEST);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
+    if (kind === "syncBase") return send(SYNC_BASE);
     // Not `send`: that would drop the checklist the plan came with.
     if (kind === "implement") return implement();
     const id = agent.chatId;

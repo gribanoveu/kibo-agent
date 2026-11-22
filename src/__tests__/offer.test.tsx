@@ -80,6 +80,15 @@ describe("offers in the transcript", () => {
     expect(picked).toEqual(["implement"]);
   });
 
+  test("a base sync offer draws its label and a press sends its kind", () => {
+    const picked: OfferKind[] = [];
+    const blocks: Block[] = [turn[0], offer("syncBase", "the base moved"), turn[2]];
+    render(<Transcript turn={state(blocks)} onDecide={() => {}} onOffer={(kind) => picked.push(kind)} />);
+    expect(screen.getByText("the base moved")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Update from the base branch/ }));
+    expect(picked).toEqual(["syncBase"]);
+  });
+
   /// A notice after the answer — a hook, a cache miss — is not the end of the turn's offers.
   test("still there after a notice that follows the answer", () => {
     render(<Transcript turn={state([...turn, { kind: "notice", id: "n1", text: "Cache missed" }])} onDecide={() => {}} onOffer={() => {}} />);

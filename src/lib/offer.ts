@@ -4,7 +4,7 @@ import type { Block } from "./chatTurnReducer";
 // accepted — its arguments say what and why. It is drawn after the answer,
 // not where the call was made.
 
-export type OfferKind = "review" | "commit" | "worktree" | "pullRequest" | "implement";
+export type OfferKind = "review" | "commit" | "worktree" | "pullRequest" | "syncBase" | "implement";
 
 export type Offer = { kind: OfferKind; reason: string };
 
@@ -15,6 +15,9 @@ export const REVIEW_REQUEST =
   "Review the change with the `review` tool and show the findings, then fix what you recognize as real and say what you dismissed and why. Do not change files beyond those fixes.";
 /** A PR is requested, never pushed by the offer button itself. */
 export const PULL_REQUEST = "Create a pull request from this worktree branch into its recorded base. Push and create it with confirmed commands.";
+/** What pressing a syncBase offer sends: the worktree branch is behind its recorded base. */
+export const SYNC_BASE =
+  "This worktree branch is behind its recorded base. Bring it up to date from that base with confirmed commands, resolve any conflicts, and re-run the checks.";
 
 /** The offer a settled `offer` call made; `null` for any other block, or one refused. */
 export function offerOf(block: Block): Offer | null {
@@ -27,6 +30,7 @@ export function offerOf(block: Block): Offer | null {
       result.kind !== "commit" &&
       result.kind !== "worktree" &&
       result.kind !== "pullRequest" &&
+      result.kind !== "syncBase" &&
       result.kind !== "implement")
   ) {
     return null;
