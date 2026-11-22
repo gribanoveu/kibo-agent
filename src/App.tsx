@@ -26,6 +26,7 @@ import { useDocks } from "./hooks/useDocks";
 import { useConfigDialogs } from "./hooks/useConfigDialogs";
 import { STAY, useSidebarActions } from "./hooks/useSidebarActions";
 import { useChatRouting } from "./hooks/useChatRouting";
+import { useComposerCommands } from "./hooks/useComposerCommands";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -64,7 +65,6 @@ import { togglePane, toggleTerminal } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
 import type { ImagePart } from "./lib/images";
-import { mcpPromptGet } from "./lib/mcp";
 import { type ChatSummary } from "./lib/savedChats";
 import { DEFAULT_TURN_LIMITS } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
@@ -80,9 +80,6 @@ import { useWorktreeRemoval } from "./hooks/useWorktreeRemoval";
 import { WorktreeRemoveDialog } from "./components/WorktreeRemoveDialog";
 import { RewindDialog } from "./components/RewindDialog";
 import { useRewind } from "./hooks/useRewind";
-import { builtInCommands, expandTemplate, fileCommands, mcpPromptCommands, typedCommand } from "./lib/slashCommands";
-import initPrompt from "./prompts/init.md?raw";
-import reviewPrompt from "./prompts/review.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
@@ -295,37 +292,18 @@ export default function App() {
   const dropDraft = (mode: "agent" | "chat", id: string) => forgetChatDraft(chatDraftKey(mode, id));
   const sidebarActions = useSidebarActions({ agentMode, agent, plain, history, groups: chatGroups, notify: toast.show, dropDraft });
 
-  // The window the meter is drawn against, and the provider a turn talks to.
-  const busy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
-
-  // What `/name` in the composer runs: the app's own, then the user's files
-  // in `.kibo/commands`. The composer takes whatever is in the list.
-  const builtIn = builtInCommands(
-    {
-      busy,
-      started: agent.turn.blocks.length > 0,
-      folder: !!workspace.path,
-      agentMode: conversation.value === "agent",
-    },
-    {
-      compact: () => void compactNow(),
-      fork: () => agent.branch(),
-      review: (args) => void send(typedCommand("review", args), expandTemplate(reviewPrompt, args)),
-      init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
-      trust: trust.ask,
-    },
-  );
-  const ownCommands = [...builtIn, ...fileCommands(commandFiles.files, builtIn, (text, sent) => void send(text, sent))];
-  const commands = [
-    ...ownCommands,
-    ...mcpPromptCommands(
-      serverPrompts.prompts,
-      ownCommands,
-      (server, name, typed) => mcpPromptGet(server, name, typed, workspace.path),
-      (text, sent) => void send(text, sent),
-      toast.show,
-    ),
-  ];
+  // What `/name` in the composer runs: the app's own, the user's files, the servers' prompts.
+  const commands = useComposerCommands({
+    agent,
+    folder: workspace.path,
+    agentMode: conversation.value === "agent",
+    compact: () => void compactNow(),
+    send,
+    trust: trust.ask,
+    commandFiles,
+    serverPrompts,
+    notify: toast.show,
+  });
 
   const pickConversation = async (mode: ConversationMode) => {
     const failed = await conversation.pick(mode);
