@@ -33,12 +33,14 @@ export function useChatRouting({
   focusComposer,
   leavePage,
   giveBack,
+  worktreeMain,
+  askWorktreeRemoval,
 }: {
   agentMode: boolean;
   agent: Pick<ReturnType<typeof useAgentTurn>, "chatId" | "turn" | "open" | "reset" | "send" | "compact">;
   plain: Pick<ReturnType<typeof usePlainChat>, "open" | "newChat">;
   history: Pick<ReturnType<typeof useChatHistory>, "chats" | "folderOf">;
-  workspace: Pick<ReturnType<typeof useWorkspace>, "path" | "open" | "pick">;
+  workspace: Pick<ReturnType<typeof useWorkspace>, "path" | "open" | "pick" | "close">;
   folderSwitch: Pick<ReturnType<typeof useFolderSwitch>, "guard">;
   conversation: { value: ConversationMode; pick: (mode: ConversationMode) => Promise<string | null> };
   replyLanguage: ReplyLanguage;
@@ -46,6 +48,10 @@ export function useChatRouting({
   focusComposer: () => void;
   leavePage: () => void;
   giveBack: (text: string, images?: ImagePart[]) => void;
+  /** The main checkout when the open folder is a worktree of it (`useWorktreeOf`). */
+  worktreeMain: string | null;
+  /** Opens the removal dialog for a worktree the chat has already left. */
+  askWorktreeRemoval: (path: string) => void;
 }) {
   // A chat to open once its folder is the active one: one moved to its
   // worktree, or one of another folder picked in the sidebar. Opened only
@@ -127,6 +133,16 @@ export function useChatRouting({
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
     if (kind === "syncBase") return send(SYNC_BASE);
+    if (kind === "cleanup") {
+      const path = workspace.path;
+      if (!path || !worktreeMain) return;
+      // An open folder is never removable: open the main checkout, close this
+      // one, and only then let the dialog read what removal would take.
+      if (!(await workspace.open(worktreeMain))) return;
+      if (!(await workspace.close(path))) return;
+      askWorktreeRemoval(path);
+      return;
+    }
     // Not `send`: that would drop the checklist the plan came with.
     if (kind === "implement") return implement();
     const id = agent.chatId;

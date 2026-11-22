@@ -47,6 +47,8 @@ type Over = Partial<{
   newChatAnswer: boolean;
   compactResult: true | string | null;
   modeFail: string | null;
+  worktreeMain: string | null;
+  closeAnswer: boolean;
   replyLanguage: "auto" | "english" | "russian";
   holdOpens: boolean;
 }>;
@@ -55,6 +57,7 @@ type Over = Partial<{
 function setup(over: Over = {}) {
   const calls: string[] = [];
   const said: string[] = [];
+  const asked: string[] = [];
   const sent: [string, string | undefined, unknown[], boolean | undefined][] = [];
   const back: [string, unknown[]][] = [];
   let focused = 0;
@@ -105,6 +108,10 @@ function setup(over: Over = {}) {
       calls.push("workspace.pick");
       return over.pickAnswer ?? null;
     },
+    close: (folder: string) => {
+      calls.push(`workspace.close:${folder}`);
+      return Promise.resolve(over.closeAnswer ?? true);
+    },
   };
   const folderSwitch = {
     guard: (go: () => void) => {
@@ -133,6 +140,8 @@ function setup(over: Over = {}) {
       focusComposer: () => focused++,
       leavePage: () => left++,
       giveBack: (text, images = []) => back.push([text, images]),
+      worktreeMain: over.worktreeMain === undefined ? "/repo-main" : over.worktreeMain,
+      askWorktreeRemoval: (path) => asked.push(path),
     }),
   );
   const landOpens = async (opened: boolean, count = opens.length) => {
@@ -140,7 +149,7 @@ function setup(over: Over = {}) {
       for (const land of opens.splice(0, count)) land(opened);
     });
   };
-  return { ...view, calls, said, sent, back, focused: () => focused, left: () => left, landOpens };
+  return { ...view, calls, said, sent, back, asked, focused: () => focused, left: () => left, landOpens };
 }
 
 describe("picking a chat", () => {
@@ -279,6 +288,30 @@ describe("the offers after an answer", () => {
     const noChat = setup({ chatId: null });
     await act(async () => noChat.result.current.pickOffer("worktree"));
     expect(noChat.calls).toEqual([]);
+  });
+
+  test("cleanup opens the main checkout, closes the worktree, then asks the removal dialog", async () => {
+    const { result, calls, asked } = setup();
+    await act(async () => result.current.pickOffer("cleanup"));
+    expect(calls).toEqual(["workspace.open:/repo-main", "workspace.close:/repo"]);
+    expect(asked).toEqual(["/repo"]);
+    // A failed open or close stops before the dialog: an open folder is never removable.
+    const refused = setup({ openAnswer: false });
+    await act(async () => refused.result.current.pickOffer("cleanup"));
+    expect(refused.calls).toEqual(["workspace.open:/repo-main"]);
+    expect(refused.asked).toEqual([]);
+    const closeFail = setup({ closeAnswer: false });
+    await act(async () => closeFail.result.current.pickOffer("cleanup"));
+    expect(closeFail.calls).toEqual(["workspace.open:/repo-main", "workspace.close:/repo"]);
+    expect(closeFail.asked).toEqual([]);
+    const noMain = setup({ worktreeMain: null });
+    await act(async () => noMain.result.current.pickOffer("cleanup"));
+    expect(noMain.calls).toEqual([]);
+    expect(noMain.asked).toEqual([]);
+    const noFolder = setup({ path: null });
+    await act(async () => noFolder.result.current.pickOffer("cleanup"));
+    expect(noFolder.calls).toEqual([]);
+    expect(noFolder.asked).toEqual([]);
   });
 });
 

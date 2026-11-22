@@ -226,6 +226,9 @@ export default function App() {
     focusComposer,
     leavePage,
     giveBack,
+    worktreeMain: worktreeOf,
+    // Declared below; the closure runs on a press, long after this render.
+    askWorktreeRemoval: (path) => worktreeRemoval.ask(path),
   });
   // An archived chat is not where the user left off, even when it was touched last.
   useFolderConversation(

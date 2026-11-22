@@ -64,6 +64,18 @@ pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<Too
                 return Err(ToolError::Command("the worktree is up to date with its base — nothing to sync".into()));
             }
         }
+        OfferKind::Cleanup => {
+            let state = git_branches::worktree_state(scope.root()).map_err(|e| ToolError::Command(e.to_string()))?;
+            if !state.dirty.is_empty() {
+                return Err(ToolError::Command(format!("commit the worktree changes first: {}", state.dirty.join(", "))));
+            }
+            if state.own_commits > 0 {
+                return Err(ToolError::Command(format!(
+                    "the branch has {} commit(s) on no other branch — publish or merge them first",
+                    state.own_commits
+                )));
+            }
+        }
         OfferKind::Implement => {
             if !deps.has_plan {
                 return Err(ToolError::Command("no plan to implement: write it with writePlan first".into()));
@@ -82,13 +94,14 @@ commit: when the task is done and checked, and the user has not said they commit
 worktree: while another chat is running in this checkout and this task needs file changes; pressing it moves only this chat to a clean worktree from the current branch. \
 pullRequest: after committing this chat's worktree changes, when the branch is ahead of and not behind its recorded base; pressing it asks you to push and create the PR with confirmed commands. \
 syncBase: when this chat's worktree is behind its recorded base — the step a refused pullRequest names; pressing it asks you to bring the branch up to date from the base with confirmed commands. \
+cleanup: when this chat's worktree is no longer needed — its PR merged or the attempt abandoned — and nothing would be lost: a clean tree, every commit on another branch. Pressing it steps into the main checkout and opens the removal dialog, which removes the worktree with its chats. \
 implement: after writePlan, when the user asked for a plan rather than the work; pressing it asks you to carry the plan out, so end your turn there. \
 Do not also ask about it in your answer: the button is the question. Calling a kind again replaces its reason."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
-                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "syncBase", "implement"] },
+                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "syncBase", "cleanup", "implement"] },
                 "reason": { "type": "string", "description": "Why, in a few words the user reads on the button: what the change touched." }
             },
             "required": ["kind", "reason"]
@@ -280,6 +293,43 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_needs_a_worktree_with_nothing_left_to_lose() {
+        let (dir, scope) = folder("offer-cleanup");
+        let refused = offer(&scope, &args(OfferKind::Cleanup, "done"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("worktree"), "{refused}");
+
+        let base = crate::infra::git_head::current_branch(&dir).unwrap();
+        let path = git_branches::add_agent_worktree(&dir, &base, "chat-1", &temp_dir("offer-cleanup-home")).unwrap();
+        let scope = ToolScope::new(&path).unwrap();
+        // A fresh worktree has nothing of its own: an abandoned attempt goes.
+        assert_eq!(
+            offer(&scope, &args(OfferKind::Cleanup, "abandoned"), &ToolDeps::default()).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Cleanup }
+        );
+
+        // Its own commit is not lost until it lives on another branch too.
+        fs::write(path.join("a.rs"), "two\n").unwrap();
+        git_changes::stage(&path, &["a.rs".into()]).unwrap();
+        git_changes::commit(&path, "work").unwrap();
+        let refused = offer(&scope, &args(OfferKind::Cleanup, "x"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("publish or merge"), "{refused}");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let head = crate::infra::git_head::current_commit(&path).unwrap();
+        let branch = crate::infra::git_head::current_branch(&path).unwrap();
+        repo.remote("origin", "https://example.invalid/r.git").unwrap();
+        repo.reference(&format!("refs/remotes/origin/{branch}"), head.parse().unwrap(), false, "").unwrap();
+        assert_eq!(
+            offer(&scope, &args(OfferKind::Cleanup, "merged"), &ToolDeps::default()).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Cleanup }
+        );
+
+        fs::write(path.join("b.rs"), "dirty\n").unwrap();
+        let refused = offer(&scope, &args(OfferKind::Cleanup, "x"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("commit the worktree changes first"), "{refused}");
+    }
+
+    #[test]
     fn a_plan_is_offered_only_once_there_is_one() {
         let (_dir, scope) = folder("offer-implement");
         let refused = offer(&scope, &args(OfferKind::Implement, "the parser"), &ToolDeps::default()).unwrap_err();
@@ -296,7 +346,7 @@ mod tests {
     fn the_schema_lists_every_kind() {
         let schema = definition().parameters;
         let listed = schema["properties"]["kind"]["enum"].as_array().unwrap();
-        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::SyncBase, OfferKind::Implement] {
+        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::SyncBase, OfferKind::Cleanup, OfferKind::Implement] {
             assert!(listed.contains(&serde_json::to_value(kind).unwrap()), "{kind:?}");
         }
     }

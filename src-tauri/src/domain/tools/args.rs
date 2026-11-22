@@ -221,6 +221,7 @@ pub enum OfferKind {
     Worktree,
     PullRequest,
     SyncBase,
+    Cleanup,
     Implement,
 }
 
