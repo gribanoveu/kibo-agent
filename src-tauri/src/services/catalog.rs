@@ -158,8 +158,13 @@ fn install_into(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<Strin
         if catalog::mcp_state(&item, base.as_str(), ours, &servers) != ItemState::Available {
             return Err(CatalogError::Present(item.name));
         }
-        let server = catalog::fill_secrets(&catalog::parse_mcp(&fetch(&base, &item.path)?)?, secrets)?;
-        write_project_files(&base, &item, &catalog::project_files(&server, &item.project_files)?, folder, fetch)?;
+        let template = catalog::parse_mcp(&fetch(&base, &item.path)?)?;
+        // The destination is read from the template, before any secret is
+        // filled: it must be a literal path — the same rule the preview
+        // checks, which has no secrets to fill.
+        let project = catalog::project_files(&template, &item.project_files)?;
+        let server = catalog::fill_secrets(&template, secrets)?;
+        write_project_files(&base, &item, &project, folder, fetch)?;
         let hash = catalog::mcp_hash(&server);
         mcp_config::add(id, server).map_err(|e| disk(&e))?;
         (Vec::new(), hash, BTreeMap::new())
@@ -202,12 +207,19 @@ fn write_project_files(base: &Url, item: &CatalogItem, files: &[ServerFile], fol
         return Ok(());
     }
     let root = folder.ok_or_else(|| CatalogError::NoFolder(item.name.clone()))?;
+    let targets: Vec<PathBuf> = files.iter().map(|file| root.join(&file.to)).collect();
+    // A symlinked parent would carry the write out of the folder; checked
+    // for every file before anything is fetched or written.
+    for target in &targets {
+        if let Some(link) = catalog_store::linked_parent(root, target) {
+            return Err(CatalogError::SymlinkParent(link.display().to_string()));
+        }
+    }
     let read = files.iter().map(|file| Ok((file, fetch(base, &file.from)?))).collect::<Result<Vec<_>, CatalogError>>()?;
-    for (file, bytes) in read {
-        let target = root.join(&file.to);
-        // [`catalog_store::hash_at`] answers whether something is there, a
-        // dangling symlink included.
-        if catalog_store::hash_at(&target, false, &[]).is_some() {
+    for ((_, bytes), target) in read.into_iter().zip(targets) {
+        // Only whether something is there, a dangling symlink included —
+        // not its content: a config filled in since stays the user's.
+        if catalog_store::occupied(&target) {
             continue;
         }
         catalog_store::place(&target, false, &[(String::new(), bytes)]).map_err(CatalogError::Disk)?;
@@ -370,9 +382,11 @@ fn update_into(source: &str, kind: ItemKind, id: &str, secrets: &BTreeMap<String
             (if folder { item.files.clone() } else { Vec::new() }, hash, BTreeMap::new())
         }
         Next::Server { template, mut known } => {
+            // The template's literal path, as install and the preview read it.
+            let project = catalog::project_files(&template, &item.project_files)?;
             known.extend(secrets.iter().filter(|(_, value)| !value.trim().is_empty()).map(|(name, value)| (name.clone(), value.clone())));
             let server = catalog::fill_secrets(&template, &known)?;
-            write_project_files(&base, &item, &catalog::project_files(&server, &item.project_files)?, folder, fetch)?;
+            write_project_files(&base, &item, &project, folder, fetch)?;
             let hash = catalog::mcp_hash(&server);
             mcp_config::add(id, server).map_err(|e| disk(&e))?;
             (Vec::new(), hash, BTreeMap::new())
@@ -1097,6 +1111,53 @@ mod tests {
             assert!(mcp_config::load().unwrap().mcp_servers.is_empty());
             assert!(!folder.join(".kibo").exists());
             assert_eq!(catalog_store::load_installed().unwrap(), Vec::new());
+        });
+    }
+
+    #[test]
+    fn a_placeholder_destination_is_refused_as_the_preview_refuses_it() {
+        use crate::testing::temp_dir;
+        with_app_dir("catalog-mcp-project-placeholder", || {
+            let folder = temp_dir("catalog-mcp-project-placeholder-ws");
+            listed_once(CAT);
+            let templated = |url: &Url, path: &str| {
+                if path == "mcp/kibana.json" {
+                    Ok(br#"{"command": "npx", "env": {"KIBANA_SOURCE_CATALOG_PATH": "${CONFIG_PATH}"}}"#.to_vec())
+                } else {
+                    files(url, path)
+                }
+            };
+            // The preview has no secrets to fill, so the destination must be
+            // a literal path — and install keeps the same rule, secret given.
+            assert!(matches!(preview_with(BASE, ItemKind::Mcp, "kibana", &templated), Err(CatalogError::BadEntry(_))));
+            let secrets = BTreeMap::from([("CONFIG_PATH".to_string(), ".kibo/kibana-sources.json".to_string())]);
+            assert!(matches!(install_into(BASE, ItemKind::Mcp, "kibana", &secrets, Some(&folder), &templated), Err(CatalogError::BadEntry(_))));
+            assert!(mcp_config::load().unwrap().mcp_servers.is_empty());
+            assert!(!folder.join(".kibo").exists());
+
+            // Installed with a literal destination first; the catalog's next
+            // rev moves it to a placeholder — the update refuses it too.
+            install_into(BASE, ItemKind::Mcp, "kibana", &none(), Some(&folder), &files).unwrap();
+            listed_once(&CAT.replace(r#""name": "Kibana", "rev": "1""#, r#""name": "Kibana", "rev": "2""#));
+            assert!(matches!(update_preview_with(BASE, ItemKind::Mcp, "kibana", &templated), Err(CatalogError::BadEntry(_))));
+            assert!(matches!(update_into(BASE, ItemKind::Mcp, "kibana", &secrets, Some(&folder), &templated), Err(CatalogError::BadEntry(_))));
+            assert_eq!(std::fs::read_to_string(folder.join(".kibo/kibana-sources.json")).unwrap(), r#"{"sources": []}"#);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_parent_in_the_open_folder_writes_nothing() {
+        use crate::testing::temp_dir;
+        with_app_dir("catalog-mcp-project-link", || {
+            let folder = temp_dir("catalog-mcp-project-link-ws");
+            let outside = temp_dir("catalog-mcp-project-link-out");
+            std::os::unix::fs::symlink(&outside, folder.join(".kibo")).unwrap();
+            listed_once(CAT);
+            let err = install_into(BASE, ItemKind::Mcp, "kibana", &none(), Some(&folder), &files).unwrap_err();
+            assert!(matches!(err, CatalogError::SymlinkParent(_)), "{err}");
+            assert!(mcp_config::load().unwrap().mcp_servers.is_empty());
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "nothing is written through the link");
         });
     }
 

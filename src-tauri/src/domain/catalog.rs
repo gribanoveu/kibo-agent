@@ -145,6 +145,8 @@ pub enum CatalogError {
     BadSecret(String),
     #[error("{0} writes a file into the open folder, and none is open")]
     NoFolder(String),
+    #[error("{0} in the open folder is a symlink — the file would be written through it, out of the folder")]
+    SymlinkParent(String),
 }
 
 /// A source's address as the base its paths are joined to: `https`, or
@@ -801,7 +803,7 @@ mod tests {
         assert_eq!(project_files(&server, &listed), Ok(vec![ServerFile { to: PathBuf::from(".kibo/kibana-sources.json"), from: "mcp/kibana-exact.sources.example.json".to_string() }]));
         assert!(project_files(&parse_mcp(br#"{"command": "npx"}"#).unwrap(), &listed).unwrap_err().to_string().contains("sets no KIBANA_SOURCE_CATALOG_PATH"));
         // The value is a path the server reads from the folder it starts in, and nothing else.
-        for bad in ["../x.json", "/etc/x.json", "~/x.json", "C:/x.json", ".kibo//x.json", ""] {
+        for bad in ["../x.json", "/etc/x.json", "~/x.json", "C:/x.json", ".kibo//x.json", "", ".kibo/${X}.json"] {
             let server = parse_mcp(format!(r#"{{"command": "npx", "env": {{"KIBANA_SOURCE_CATALOG_PATH": "{bad}"}}}}"#).as_bytes()).unwrap();
             assert!(matches!(project_files(&server, &listed), Err(CatalogError::BadEntry(_))), "{bad}");
         }
