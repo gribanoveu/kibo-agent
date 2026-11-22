@@ -120,17 +120,10 @@ pub fn for_model(result: &ToolResult) -> String {
         ToolResult::PlanWritten { lines } => format!("Plan saved ({lines} lines). The user sees it in the Plan tab."),
         ToolResult::Remembered { already: false } => "Saved. It is under \"Memory\" in every later conversation in this folder.".to_string(),
         ToolResult::Remembered { already: true } => "Already in memory, word for word; nothing changed.".to_string(),
-        ToolResult::KnowledgeWritten { repo, written, deleted, new_domains } => knowledge_written(repo, written, deleted, new_domains),
-        ToolResult::KnowledgeFound { hits, weak } => knowledge_found(hits, *weak),
-        ToolResult::KnowledgeRelations { asked, relations } => knowledge_relations(asked, relations),
-        ToolResult::KnowledgeDocument { id, domain, text, stale, .. } => {
-            let stale = if *stale { format!("\n{}", crate::domain::knowledge::STALE_NOTE) } else { String::new() };
-            format!("{id} (domain {domain}):{stale}\n\n{text}\n\n{}", crate::domain::knowledge::DATA_NOTE)
-        }
         // Already the text the server meant for a model.
         ToolResult::Mcp { text } => text.clone(),
         ToolResult::Explored { text, .. } => text.clone(),
-        ToolResult::Reviewed { findings, text, .. } => reviewed(findings, text),
+        ToolResult::Reviewed { findings, text, range, .. } => reviewed(findings, text, range),
         ToolResult::Kube { text, .. } | ToolResult::Mongo { text, .. } => text.clone(),
         ToolResult::WebResults { hits } => web_results(hits),
         ToolResult::WebPage { page } => web_page(page),
@@ -142,83 +135,8 @@ pub fn for_model(result: &ToolResult) -> String {
     }
 }
 
-/// By column, a line a card: `c3 file the memory request (due 2026-11-01) — wlbuh`. The
+/// By column, a line a card: `T3 file the memory request (due 2026-11-01) — wlbuh`. The
 /// archive only as a count: it is the past, and up to a hundred lines of it.
-/// Each section under its document's id and what the document is, then the
-/// reminder that this is data.
-fn knowledge_found(hits: &[crate::domain::knowledge::KnowledgeHit], weak: bool) -> String {
-    if hits.is_empty() {
-        return "Nothing in the knowledge base matches. Reword with the names the code uses, or try the other language; \
-if it is not there, nobody has written it down yet."
-            .to_string();
-    }
-    let mut text = String::new();
-    if weak {
-        text.push_str("These may not be what was asked for — reword if they do not answer it.\n\n");
-    }
-    for (n, hit) in hits.iter().enumerate() {
-        let kind = serde_json::to_value(hit.kind).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-        let confidence = serde_json::to_value(hit.confidence).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-        text.push_str(&format!("[{}] {} — {} ({kind}, {confidence}, domain {})\n", n + 1, hit.id, hit.title, hit.domain));
-        if hit.stale {
-            text.push_str(&format!("{}\n", crate::domain::knowledge::STALE_NOTE));
-        }
-        if let Some(section) = &hit.section {
-            text.push_str(&format!("§ {section}\n"));
-        }
-        text.push_str(&hit.text);
-        if !hit.evidence.is_empty() {
-            text.push_str(&format!("\nevidence: {}", hit.evidence.join(", ")));
-        }
-        text.push_str("\n\n");
-    }
-    text.push_str(crate::domain::knowledge::DATA_NOTE);
-    text
-}
-
-/// The documents on each contract, under the contract's name.
-fn knowledge_relations(asked: &str, relations: &[crate::domain::knowledge::Relation]) -> String {
-    if relations.is_empty() {
-        return format!(
-            "No document in the knowledge base provides or consumes {asked}. Names are compared exactly, as documents write them: \
-find how they spell it with knowledgeSearch, or nobody has written it down yet."
-        );
-    }
-    let mut text = String::new();
-    let mut contract = None;
-    for relation in relations {
-        let key = relation.key();
-        if contract.as_ref() != Some(&key) {
-            text.push_str(&format!("{}{}: {}\n", if contract.is_some() { "\n" } else { "" }, key.0.key(), key.1));
-            contract = Some(key);
-        }
-        let side = match relation.side {
-            crate::domain::knowledge::Side::Provides => "provides",
-            crate::domain::knowledge::Side::Consumes => "consumes",
-        };
-        text.push_str(&format!("- {side}: {} — {} (domain {})\n", relation.id, relation.title, relation.domain));
-    }
-    text.push_str(&format!("\nRead a document with knowledgeRead.\n\n{}", crate::domain::knowledge::DATA_NOTE));
-    text
-}
-
-/// What changed, and the name the repository goes by — the model needs it
-/// for `related` and for ids it writes next.
-fn knowledge_written(repo: &str, written: &[String], deleted: &[String], new_domains: &[String]) -> String {
-    let mut parts = Vec::new();
-    if !new_domains.is_empty() {
-        parts.push(format!("New domains: {}.", new_domains.join(", ")));
-    }
-    if !written.is_empty() {
-        parts.push(format!("Saved to the knowledge base: {}.", written.join(", ")));
-    }
-    if !deleted.is_empty() {
-        parts.push(format!("Deleted: {}.", deleted.join(", ")));
-    }
-    parts.push(format!("This repository is `{repo}` in the base: its ids are `{repo}/<slug>`."));
-    parts.join(" ")
-}
-
 fn board(cards: &[crate::domain::board::Card]) -> String {
     use crate::domain::board::Column;
     let archived = cards.iter().filter(|c| c.column == Column::Archived).count();
@@ -239,6 +157,11 @@ fn board(cards: &[crate::domain::board::Card]) -> String {
             let note = card.note.as_deref().map(|n| format!(" — {}", n.replace('\n', " "))).unwrap_or_default();
             let due = card.due.as_deref().map(|d| format!(" (due {d})")).unwrap_or_default();
             out.push_str(&format!("\n- {} {}{due}{note}", card.id, card.title));
+            // The user's remarks, each on a line under the card, with its day.
+            for comment in &card.comments {
+                let day = comment.at.get(..10).unwrap_or(&comment.at);
+                out.push_str(&format!("\n  - comment {day}: {}", comment.text.replace('\n', " ")));
+            }
         }
     }
     if archived > 0 {
@@ -643,14 +566,15 @@ fn skill(name: &str, instructions: &str, files: &[String], from: &str) -> String
     out
 }
 
-/// A review's report as the conversation keeps it: each finding where it
-/// is, then what the reviewer said.
-fn reviewed(findings: &[crate::domain::review::Finding], answer: &str) -> String {
-    let mut out = match findings.len() {
+/// A review's report as the conversation keeps it: what it read, each finding
+/// where it is, then what the reviewer said.
+fn reviewed(findings: &[crate::domain::review::Finding], answer: &str, range: &str) -> String {
+    let mut out = if range.is_empty() { String::new() } else { format!("Reviewed {range}.\n") };
+    out.push_str(&match findings.len() {
         0 => "The review reported no findings.\n".to_string(),
         1 => "The review reported 1 finding:\n".to_string(),
         n => format!("The review reported {n} findings:\n"),
-    };
+    });
     for (at, f) in findings.iter().enumerate() {
         let lines = if f.start_line == f.end_line { f.start_line.to_string() } else { format!("{}-{}", f.start_line, f.end_line) };
         let severity = serde_json::to_value(f.severity).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default();
@@ -675,21 +599,34 @@ mod tests {
     #[test]
     fn the_board_reads_by_column_with_ids_and_notes_on_one_line() {
         use crate::domain::board::{Card, Column};
-        let card = |id: &str, title: &str, note: Option<&str>, column| Card { id: id.into(), title: title.into(), note: note.map(Into::into), due: None, column };
+        let card = |id: &str, title: &str, note: Option<&str>, column| Card { id: id.into(), title: title.into(), note: note.map(Into::into), due: None, column, comments: vec![], tags: vec![] };
         let cards = [
-            card("c1", "file the request", Some("wlbuh\n16 GB"), Column::Todo),
-            card("c2", "renew cert", None, Column::Done),
-            Card { due: Some("2026-11-01".into()), ..card("c3", "call the bank", None, Column::Todo) },
+            card("T1", "file the request", Some("wlbuh\n16 GB"), Column::Todo),
+            card("T2", "renew cert", None, Column::Done),
+            Card { due: Some("2026-11-01".into()), ..card("T3", "call the bank", None, Column::Todo) },
         ];
         assert_eq!(
             for_model(&ToolResult::Board { cards: cards.to_vec() }),
-            "The board, as the user sees it on the Board page:\n\nTo do:\n- c1 file the request — wlbuh 16 GB\n- c3 call the bank (due 2026-11-01)\n\nDone:\n- c2 renew cert"
+            "The board, as the user sees it on the Board page:\n\nTo do:\n- T1 file the request — wlbuh 16 GB\n- T3 call the bank (due 2026-11-01)\n\nDone:\n- T2 renew cert"
         );
         assert_eq!(for_model(&ToolResult::Board { cards: vec![] }), "The board is empty.");
+        // The user's remarks, under their card, with the day.
+        use crate::domain::board::Comment;
+        let commented = Card {
+            comments: vec![Comment { id: 1, text: "asked\nthe bank".into(), at: "2026-11-19T10:00:00Z".into() }],
+            ..card("T5", "call the bank", None, Column::Doing)
+        };
+        assert_eq!(
+            for_model(&ToolResult::Board { cards: vec![commented] }),
+            "The board, as the user sees it on the Board page:\n\nDoing:\n- T5 call the bank\n  - comment 2026-11-19: asked the bank"
+        );
+        // Tags are the user's own sorting, not shown to the model.
+        let tagged = Card { tags: vec!["bank".into()], ..card("T6", "renew card", None, Column::Todo) };
+        assert_eq!(for_model(&ToolResult::Board { cards: vec![tagged] }), "The board, as the user sees it on the Board page:\n\nTo do:\n- T6 renew card");
 
-        let old = card("c4", "renewed last year", None, Column::Archived);
+        let old = card("T4", "renewed last year", None, Column::Archived);
         let with_archive: Vec<Card> = cards.iter().cloned().chain([old.clone()]).collect();
-        assert!(for_model(&ToolResult::Board { cards: with_archive }).ends_with("- c2 renew cert\n\nArchived: 1 older finished cards, not listed."));
+        assert!(for_model(&ToolResult::Board { cards: with_archive }).ends_with("- T2 renew cert\n\nArchived: 1 older finished cards, not listed."));
         assert_eq!(for_model(&ToolResult::Board { cards: vec![old] }), "The board is empty; 1 finished cards are in its archive.");
     }
 
@@ -701,58 +638,6 @@ mod tests {
             before: before.iter().map(|s| s.to_string()).collect(),
             after: after.iter().map(|s| s.to_string()).collect(),
         }
-    }
-
-    #[test]
-    fn knowledge_hits_and_documents_say_which_are_stale_and_that_they_are_data() {
-        use crate::domain::knowledge::{Confidence, Kind, KnowledgeHit, DATA_NOTE, STALE_NOTE};
-        let hit = |id: &str, stale| KnowledgeHit {
-            id: id.into(),
-            domain: "usn".into(),
-            title: "API".into(),
-            kind: Kind::Api,
-            confidence: Confidence::Inferred,
-            section: Some("API > POST".into()),
-            text: "## POST".into(),
-            evidence: vec!["src/Api.java#L2".into()],
-            stale,
-        };
-        let found = for_model(&ToolResult::KnowledgeFound { hits: vec![hit("tax-api/api", false), hit("tax-api/old", true)], weak: true });
-        assert!(found.starts_with("These may not be what was asked for"), "{found}");
-        assert!(found.contains("[1] tax-api/api — API (api, inferred, domain usn)\n§ API > POST\n## POST\nevidence: src/Api.java#L2\n\n"), "{found}");
-        assert!(found.contains(&format!("[2] tax-api/old — API (api, inferred, domain usn)\n{STALE_NOTE}\n§ API > POST")), "{found}");
-        assert_eq!(found.matches(STALE_NOTE).count(), 1);
-        assert!(found.ends_with(DATA_NOTE));
-        assert!(for_model(&ToolResult::KnowledgeFound { hits: vec![], weak: false }).starts_with("Nothing in the knowledge base matches"));
-
-        let relation = |kind, name: &str, side, id: &str| crate::domain::knowledge::Relation {
-            kind,
-            name: name.into(),
-            side,
-            domain: "usn".into(),
-            id: id.into(),
-            title: "T".into(),
-        };
-        use crate::domain::knowledge::{ContractKind, Side};
-        let relations = vec![
-            relation(ContractKind::Topic, "tax.events.v1", Side::Provides, "tax-api/events"),
-            relation(ContractKind::Topic, "tax.events.v1", Side::Consumes, "ledger/listener"),
-            relation(ContractKind::Api, "tax-api  POST /x", Side::Consumes, "ledger/listener"),
-        ];
-        let linked = for_model(&ToolResult::KnowledgeRelations { asked: "`x`".into(), relations });
-        assert_eq!(
-            linked,
-            format!(
-                "topic: tax.events.v1\n- provides: tax-api/events — T (domain usn)\n- consumes: ledger/listener — T (domain usn)\n\n\
-api: tax-api POST /x\n- consumes: ledger/listener — T (domain usn)\n\nRead a document with knowledgeRead.\n\n{DATA_NOTE}"
-            )
-        );
-        let none = for_model(&ToolResult::KnowledgeRelations { asked: "`topic: y`".into(), relations: vec![] });
-        assert!(none.starts_with("No document in the knowledge base provides or consumes `topic: y`."), "{none}");
-
-        let document = |stale| ToolResult::KnowledgeDocument { id: "tax-api/api".into(), domain: "usn".into(), section: None, text: "# API".into(), stale };
-        assert_eq!(for_model(&document(false)), format!("tax-api/api (domain usn):\n\n# API\n\n{DATA_NOTE}"));
-        assert_eq!(for_model(&document(true)), format!("tax-api/api (domain usn):\n{STALE_NOTE}\n\n# API\n\n{DATA_NOTE}"));
     }
 
     #[test]
@@ -1002,7 +887,7 @@ api: tax-api POST /x\n- consumes: ledger/listener — T (domain usn)\n\nRead a d
 
     #[test]
     fn a_moved_command_says_it_runs_on_and_is_not_to_be_run_again() {
-        let process = ProcessInfo { id: 2, command: "cargo test".into(), cwd: ".".into(), state: ProcessState::Running };
+        let process = ProcessInfo { id: 2, command: "cargo test".into(), description: None, cwd: ".".into(), state: ProcessState::Running };
         let text = for_model(&ToolResult::CommandMoved { process, after_ms: 120_000 });
         assert!(text.starts_with("Still running after 120.0 s — not killed: it goes on as background process #2. Do not run it again."), "{text}");
         assert!(text.contains("readOutput #2"), "{text}");
@@ -1011,7 +896,7 @@ api: tax-api POST /x\n- consumes: ledger/listener — T (domain usn)\n\nRead a d
     /// What the chat reads: the process's fields at the top, as a start has them.
     #[test]
     fn a_moved_command_is_sent_to_the_window_with_its_number() {
-        let process = ProcessInfo { id: 2, command: "cargo test".into(), cwd: ".".into(), state: ProcessState::Running };
+        let process = ProcessInfo { id: 2, command: "cargo test".into(), description: None, cwd: ".".into(), state: ProcessState::Running };
         let json = serde_json::to_value(ToolResult::CommandMoved { process, after_ms: 5 }).unwrap();
         assert_eq!(json["result"], "commandMoved");
         assert_eq!((json["id"].as_u64(), json["afterMs"].as_u64()), (Some(2), Some(5)));
@@ -1021,7 +906,7 @@ api: tax-api POST /x\n- consumes: ledger/listener — T (domain usn)\n\nRead a d
     /// `is running in ..` read as a typo: the folder is not last any more.
     #[test]
     fn a_background_start_reads_as_a_sentence() {
-        let process = ProcessInfo { id: 1, command: "npm run dev".into(), cwd: ".".into(), state: ProcessState::Running };
+        let process = ProcessInfo { id: 1, command: "npm run dev".into(), description: None, cwd: ".".into(), state: ProcessState::Running };
         assert_eq!(
             for_model(&ToolResult::ProcessStarted(process)),
             "Started background process #1 in `.`: `npm run dev`. Read what it writes with readOutput."
@@ -1031,7 +916,7 @@ api: tax-api POST /x\n- consumes: ledger/listener — T (domain usn)\n\nRead a d
     /// Stopped now, or already over: the answer has to tell them apart.
     #[test]
     fn a_stop_says_whether_it_stopped_anything() {
-        let stopped = |state| for_model(&ToolResult::ProcessStopped(ProcessInfo { id: 1, command: "sleep 4".into(), cwd: ".".into(), state }));
+        let stopped = |state| for_model(&ToolResult::ProcessStopped(ProcessInfo { id: 1, command: "sleep 4".into(), description: None, cwd: ".".into(), state }));
         assert_eq!(stopped(ProcessState::Stopped), "#1 `sleep 4` was stopped, with everything it started.");
         assert_eq!(
             stopped(ProcessState::Exited { code: Some(0) }),
@@ -1185,7 +1070,7 @@ api: tax-api POST /x\n- consumes: ledger/listener — T (domain usn)\n\nRead a d
 
     #[test]
     fn a_process_read_says_how_it_stands_and_what_was_lost() {
-        let process = ProcessInfo { id: 3, command: "npm run dev".into(), cwd: ".".into(), state: ProcessState::Running };
+        let process = ProcessInfo { id: 3, command: "npm run dev".into(), description: None, cwd: ".".into(), state: ProcessState::Running };
         let shown = for_model(&ToolResult::ProcessOutput(ProcessOutput {
             process: process.clone(),
             output: "ready\n".into(),

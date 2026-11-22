@@ -290,3 +290,29 @@
   font-size: var(--fs-md);
   pointer-events: none;
 }
+
+/* The agent's box, and for the same reason (Composer.css): a narrow column
+   gives the text a row of its own and the buttons a row under it. */
+@container (max-width: 500px) {
+  .plain-composer {
+    margin: 0 8px;
+    padding: 6px;
+  }
+  .plain-composer-bar {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .plain-composer-bar > textarea {
+    flex: 1 1 100%;
+    order: -1;
+    max-height: min(240px, 34vh);
+    /* Off the box's edge, as the wide box keeps it (Composer.css). */
+    margin-left: 6px;
+  }
+  .plain-composer-bar > .plain-send {
+    margin-left: auto;
+  }
+  .plain-tab {
+    margin: 6px 8px 10px;
+  }
+}

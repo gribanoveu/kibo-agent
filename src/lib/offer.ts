@@ -10,6 +10,9 @@ export type Offer = { kind: OfferKind; reason: string };
 
 /** What pressing a commit offer sends. */
 export const COMMIT_REQUEST = "Commit the changes.";
+/** What pressing a review offer sends: the review, then the agent goes through the findings. */
+export const REVIEW_REQUEST =
+  "Review the change with the `review` tool and show the findings, then fix what you recognize as real and say what you dismissed and why. Do not change files beyond those fixes.";
 /** A PR is requested, never pushed by the offer button itself. */
 export const PULL_REQUEST = "Create a pull request from this worktree branch into its recorded base. Push and create it with confirmed commands.";
 

@@ -7,7 +7,7 @@ import { audioUrl, onMeetingEvent } from "./meeting";
 import { pageUrl } from "./prototype";
 import { windowsFrame } from "./window";
 
-// The Artifacts page (docs/38-artifacts.md): what the app made, as folders —
+// The Artifacts page: what the app made, as folders —
 // a kind, its collections (a meeting, a prototype), their files. Mirrors
 // `domain::artifacts`.
 

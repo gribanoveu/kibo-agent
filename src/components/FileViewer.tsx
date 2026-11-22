@@ -8,7 +8,7 @@ import type { FileSide, FileTarget } from "../lib/git";
 import { DiffView } from "./DiffView";
 import { Markdown } from "./Markdown";
 import { AsciiDocPreview, PlantumlPreview } from "./AsciiDocPreview";
-import { sameFile, stepThrough, type Edits } from "../hooks/useOpenFiles";
+import { sameFile, stepThrough, type Edits, type Reveal } from "../hooks/useOpenFiles";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { useStaging } from "../hooks/useStaging";
 import { matches } from "../lib/shortcuts";
@@ -126,6 +126,7 @@ export function FileViewer({
   wrap,
   compact = false,
   edits,
+  reveal,
 }: {
   files: FileTarget[];
   active: FileTarget;
@@ -148,6 +149,8 @@ export function FileViewer({
   compact?: boolean;
   /** The edits not saved yet, by file. A tab with one is saved before it closes. */
   edits?: Edits;
+  /** Lines a link asked for; the file is shown whole, scrolled to them. */
+  reveal?: Reveal | null;
 }) {
   const { view, error, reload } = useFileView(target, workspace);
   // The changed files, in the order the Changes panel lists them, to step
@@ -166,6 +169,11 @@ export function FileViewer({
   // layout, to be read — as it renders when it is Markdown, AsciiDoc or a
   // diagram, whole otherwise.
   const [mode, setMode] = useState<Mode>(compact ? "preview" : "diff");
+  // A line is in the whole file, not always in the diff, and never in a preview.
+  const place = reveal && reveal.path === target.path ? reveal : null;
+  useEffect(() => {
+    if (place) setMode("file");
+  }, [place?.seq]);
   const text = view && !view.unviewable ? view : null;
   const changed = !!text && text.old !== text.new;
   const language = languageOf(target.path);
@@ -371,6 +379,7 @@ export function FileViewer({
               text={draft?.text ?? onDisk ?? ""}
               original={view?.unviewable ? null : view?.old}
               wrap={wrap}
+              reveal={place}
               onChange={(text, base) => {
                 setLeaving(false);
                 edits!.edit(target.path, base, text);
@@ -394,7 +403,7 @@ export function FileViewer({
               {diagram ? (
                 <PlantumlPreview text={draft?.text ?? view.new} />
               ) : language === "asciidoc" ? (
-                <AsciiDocPreview text={draft?.text ?? view.new} path={target.path} />
+                <AsciiDocPreview text={draft?.text ?? view.new} path={target.path} workspace={workspace} />
               ) : (
                 <Markdown text={draft?.text ?? view.new} streaming={false} />
               )}
@@ -403,7 +412,7 @@ export function FileViewer({
         ) : rows.length === 0 ? (
           <div className="file-viewer-note">Empty file.</div>
         ) : (
-          <DiffView rows={rows} virtual wrap={wrap} />
+          <DiffView rows={rows} virtual wrap={wrap} reveal={shown === "file" ? place : null} />
         )}
       </div>
     </section>

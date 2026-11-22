@@ -29,7 +29,7 @@ export function useFileTree(visible: boolean, workspace: string | null) {
    */
   const load = useCallback((dir: string, chain = false) => {
     const asked = current.current;
-    workspaceList(dir).then(
+    workspaceList(dir, asked).then(
       (listing) => {
         if (current.current !== asked) return;
         setListings((known) => ({ ...known, [dir]: listing }));

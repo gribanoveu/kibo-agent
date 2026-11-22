@@ -166,17 +166,16 @@ where
     R: Runtime,
     F: FnOnce(&plain_chat::ChatTurn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
-    let events = chat_event_sink(&app, turn_id);
+    let events = chat_event_sink(&app, turn_id.clone());
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
     let board: Arc<dyn crate::domain::board::TaskBoard> = app.state::<Arc<crate::infra::board_store::Board>>().inner().clone();
     let embeddings = app.state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().embeddings();
-    let knowledge = super::chat::knowledge_searcher_of(&app);
     let mongo = super::chat::mongo_servers_of(&app);
     let approval = state.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _running = running;
         let cancelled = || session.cancel.load(Ordering::SeqCst);
-        let chat = ChatTurnInput { chat_id, role, kube, clusters, board, mongo, embeddings, knowledge, approval, events: &events, cancelled: &cancelled };
+        let chat = ChatTurnInput { chat_id, turn_id, role, kube, clusters, board, mongo, embeddings, approval, events: &events, cancelled: &cancelled };
         let outcome = turn_setup::run_in_chat(chat, run).map_err(|e| e.to_string())?;
         session.paused.store(matches!(&outcome, ChatStreamOutcome::PendingApproval(_)), Ordering::SeqCst);
         Ok(outcome)

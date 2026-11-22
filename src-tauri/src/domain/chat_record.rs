@@ -30,6 +30,32 @@ pub const CHAT_SCHEMA_VERSION: u32 = 1;
 /// no open folder's listing reaches them — a folder's path is never empty.
 pub const NO_FOLDER: &str = "";
 
+/// Which set of chat folders a list draws from. Chat mode keeps its own; every
+/// project shares one, so a folder can hold chats of several projects — a
+/// folder is a view of chats, and a chat still lives in its own project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupList {
+    Chat,
+    Projects,
+}
+
+impl GroupList {
+    /// The key the folders of this set are filed under. A project's path is
+    /// never `*`, nor empty.
+    pub fn key(self) -> &'static str {
+        match self {
+            GroupList::Chat => NO_FOLDER,
+            GroupList::Projects => "*",
+        }
+    }
+
+    /// The set a chat filed under `workspace` takes its folder from.
+    pub fn of_workspace(workspace: &str) -> Self {
+        if workspace == NO_FOLDER { GroupList::Chat } else { GroupList::Projects }
+    }
+}
+
 /// Longest title derived from a first message. Past this the sidebar elides it
 /// anyway, and the rest is only weight in every listing.
 const TITLE_CHARS: usize = 60;
@@ -50,6 +76,10 @@ pub enum ChatError {
     BadId(String),
     #[error("no such chat: {0}")]
     NotFound(String),
+    #[error("a folder named \"{0}\" already exists")]
+    AlreadyExists(String),
+    #[error("a folder's name cannot be empty")]
+    EmptyName,
     #[error("could not name the chat: {0}")]
     Naming(#[from] LlmError),
 }
@@ -100,6 +130,12 @@ pub struct ChatRecord {
     /// another chat's switch moves the folder, never this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
+    /// The commit `HEAD` pointed at when the chat was first saved — what
+    /// "this chat's work" is measured from. Set once and never rewritten,
+    /// like `created_at`; absent in chats saved before the marker existed
+    /// and in those begun before their folder's first commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_at_start: Option<String>,
 }
 
 /// A row in the sidebar. Deliberately not the whole record: listing a folder
@@ -116,6 +152,16 @@ pub struct ChatSummary {
     /// than in it, so a record alone says `false`.
     #[serde(default)]
     pub archived: bool,
+    /// Held above the list, ahead of every day group. Kept beside the record
+    /// for the same reason as `archived`: pinning is not something said in
+    /// the chat, so a record alone says `false`.
+    #[serde(default)]
+    pub pinned: bool,
+    /// The folder the chat was moved to — the id of a `chat_groups` row of
+    /// the same workspace, `None` for unfiled chats and for rows saved
+    /// before folders existed.
+    #[serde(default)]
+    pub group: Option<String>,
     /// Who the model is in a Chat mode conversation, for the row's sign.
     /// `None` for the agent's, and for a chat last saved before rows kept it.
     #[serde(default)]
@@ -134,10 +180,22 @@ impl From<&ChatRecord> for ChatSummary {
             updated_at: record.updated_at,
             branched_from: record.branched_from.clone(),
             archived: false,
+            pinned: false,
+            group: None,
             role: record.role,
             git_branch: record.git_branch.clone(),
         }
     }
+}
+
+/// A folder the sidebar files chats under — a theme of work, not a date.
+/// Rows carry the id only; the name and order are the folder's own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatGroup {
+    pub id: String,
+    pub name: String,
+    pub position: i64,
 }
 
 /// Reads one stored chat, reporting a version it does not understand as
@@ -247,6 +305,19 @@ pub fn check_id(id: &str) -> Result<(), ChatError> {
 mod tests {
     use super::*;
 
+    /// The window names a set as `"chat"` or `"projects"`; a project's chat
+    /// takes the projects' folders, Chat mode's its own, and the two sets are
+    /// filed apart — and never under a path a project could have.
+    #[test]
+    fn a_folder_set_is_chat_modes_or_the_projects() {
+        let read = |name: &str| serde_json::from_value::<GroupList>(serde_json::json!(name)).unwrap();
+        assert_eq!((read("chat"), read("projects")), (GroupList::Chat, GroupList::Projects));
+        assert_eq!(GroupList::of_workspace(NO_FOLDER), GroupList::Chat);
+        assert_eq!(GroupList::of_workspace("/work/api"), GroupList::Projects);
+        assert_ne!(GroupList::Chat.key(), GroupList::Projects.key());
+        assert!(!std::path::Path::new(GroupList::Projects.key()).is_absolute());
+    }
+
     fn record() -> ChatRecord {
         ChatRecord {
             schema_version: CHAT_SCHEMA_VERSION,
@@ -264,6 +335,7 @@ mod tests {
             kube: None,
             worktree_base: None,
             git_branch: None,
+            head_at_start: None,
         }
     }
 

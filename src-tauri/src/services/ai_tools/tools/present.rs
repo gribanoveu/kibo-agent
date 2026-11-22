@@ -1,7 +1,7 @@
 //! `present` — the Prototype role's page put in front of the user
 //! (`docs/31-prototype-role.md`, P-4): the call names the page, the chat's
 //! folder is kept as a version beside it, and the transcript shows a card.
-//! `prototype.json` takes the title and page (`docs/38-artifacts.md`).
+//! `prototype.json` takes the title and page.
 
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::prototype::Manifest;

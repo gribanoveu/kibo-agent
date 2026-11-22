@@ -144,7 +144,8 @@
 }
 /* Not a part of the bar, so not one of its colours: the same dot, hollow. */
 .ctx-dot--cache,
-.ctx-dot--spent {
+.ctx-dot--spent,
+.ctx-dot--subagents {
   box-sizing: border-box;
   border: 1.5px solid var(--text-faint);
 }
@@ -159,4 +160,29 @@
   width: 100%;
   justify-content: center;
   margin-top: 6px;
+}
+
+/* A number still being read: a bar where it will stand, about its width, so
+   the rows keep their height. */
+.ctx-skeleton {
+  display: inline-block;
+  width: 3.5em;
+  height: 0.9em;
+  vertical-align: middle;
+  border-radius: var(--radius-xs);
+  background: var(--bg-active);
+  animation: ctx-skeleton-pulse 1.2s ease-in-out infinite;
+}
+.ctx-total .ctx-skeleton {
+  width: 10em;
+}
+@keyframes ctx-skeleton-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ctx-skeleton {
+    animation: none;
+  }
 }

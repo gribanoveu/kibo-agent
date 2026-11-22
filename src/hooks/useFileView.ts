@@ -18,7 +18,7 @@ export function useFileView(target: FileTarget | null, workspace: string | null)
     if (!path || !side) return;
     let live = true;
     const load = () =>
-      fileView({ path, side }).then(
+      fileView({ path, side }, workspace).then(
         (next) => {
           if (!live) return null;
           setView(next);

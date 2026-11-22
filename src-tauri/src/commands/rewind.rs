@@ -14,7 +14,7 @@ use crate::infra::prototype_store;
 use crate::services::rewind;
 
 use super::blocking;
-use super::chat::AgentState;
+use super::agent_state::AgentState;
 
 /// The folder a rewind works in: the Prototype chat's when `chat_id` names
 /// one, else the agent's open folder — asked only then, as a chat has none.
@@ -91,7 +91,7 @@ mod prototype_tests {
             let own = crate::testing::temp_dir("rewind-agent-own");
             let other = crate::testing::temp_dir("rewind-agent-other");
             crate::infra::chat_store::save("c1", &own.display().to_string(), &[crate::domain::llm::LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
-            let state = crate::commands::chat::AgentState::default();
+            let state = crate::commands::agent_state::AgentState::default();
             state.set_workspace_for_test(other);
 
             let scope = scope(&state, None, Some("c1")).unwrap();

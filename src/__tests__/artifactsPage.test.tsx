@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ArtifactFile, Collection } from "../lib/artifacts";
 
-// The Artifacts page (docs/38-artifacts.md): kinds, then collections, then
+// The Artifacts page: kinds, then collections, then
 // files, as a file manager lists them; read on opening and again on the
 // signals that say something changed, never on a timer; a file opens in the
 // panel as its `view` says.

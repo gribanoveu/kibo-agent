@@ -19,6 +19,11 @@ use crate::domain::runs::{self, NoLog, RunKind, RunLog};
 /// Finished runs kept for the tab, oldest dropped first.
 pub const MAX_FINISHED: usize = 20;
 
+/// A run's streamed characters are signalled at most this often: deltas
+/// arrive every few milliseconds, and each signal is the window re-reading
+/// the list. Throttled where it changes, as `infra::background` does.
+pub const STREAM_SIGNAL_MS: u64 = 100;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInfo {
@@ -30,6 +35,14 @@ pub struct AgentInfo {
     pub tokens: AgentTokens,
     /// Its closing answer, once it has one.
     pub answer: Option<String>,
+    /// The stream under way, for the live meter; absent in runs saved
+    /// before it existed.
+    #[serde(default)]
+    pub progress: AgentProgress,
+    /// The tool call that started it, so the calling card pairs with its own
+    /// run while it is still running; absent in runs saved before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +73,64 @@ impl AgentTokens {
     }
 }
 
+/// What a run's live speed estimate needs, accumulated as its rounds
+/// stream — the same quantities the chat's own meter keeps (`liveSpeed`
+/// in `src/lib/chatTurnReducer.ts`), which turns characters into tokens
+/// at the ratio the finished rounds had. Time is a parameter, so the
+/// rule stays pure and testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentProgress {
+    /// Epoch ms of the round under way's first streamed token; `None`
+    /// before it has one.
+    pub stream_since: Option<u64>,
+    /// Characters the round under way has streamed: text, reasoning, call
+    /// arguments.
+    pub stream_chars: u64,
+    /// The finished rounds' totals the chars-per-token ratio comes from.
+    pub timed: AgentTimed,
+}
+
+/// Tokens, streaming time and characters of the rounds that were timed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentTimed {
+    pub tokens: u64,
+    pub ms: u64,
+    pub chars: u64,
+}
+
+impl AgentProgress {
+    /// A fresh round: the last one's characters are not this one's.
+    pub fn round_started(&mut self) {
+        self.stream_since = None;
+        self.stream_chars = 0;
+    }
+
+    /// Characters arrived; the first of a round starts its clock.
+    pub fn streamed(&mut self, chars: u64, now: u64) {
+        self.stream_since = Some(self.stream_since.unwrap_or(now));
+        self.stream_chars += chars;
+    }
+
+    /// The round ended with the provider's count. The wait for the first
+    /// token is the provider reading the prompt, not sending — only the
+    /// streaming time counts. An answer that arrived in one piece has no
+    /// streaming time to divide by, and a provider that reports nothing
+    /// has no tokens to weigh; either way the round still closes.
+    pub fn round_timed(&mut self, completion_tokens: u64, now: u64) {
+        let ms = self.stream_since.map_or(0, |since| now.saturating_sub(since));
+        let chars = self.stream_chars;
+        self.round_started();
+        if ms < 250 || completion_tokens == 0 {
+            return;
+        }
+        self.timed.tokens += completion_tokens;
+        self.timed.ms += ms;
+        self.timed.chars += chars;
+    }
+}
+
 /// A run started, took a step, spent tokens or ended. A signal to read the
 /// list again, like `ProcessChanged`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -82,6 +153,8 @@ struct Run {
     stop_asked: bool,
     /// The chat whose turn started it; `None` outside one.
     chat: Option<String>,
+    /// When streamed characters last signalled, for [`STREAM_SIGNAL_MS`].
+    last_stream_signal: u64,
 }
 
 /// The record of every run. [`Agents::for_chat`] gives a turn its own handle
@@ -110,6 +183,11 @@ impl Agents {
         Self { runs, sink, chat: None, log }
     }
 
+    /// The chat this handle starts runs under; `None` outside one.
+    pub fn chat(&self) -> Option<&str> {
+        self.chat.as_deref()
+    }
+
     /// The same record, for a turn of `chat`: what it starts is that chat's.
     pub fn for_chat(&self, chat: &str) -> Agents {
         Agents {
@@ -133,9 +211,12 @@ impl Agents {
                     steps: Vec::new(),
                     tokens: AgentTokens::default(),
                     answer: None,
+                    progress: AgentProgress::default(),
+                    call: None,
                 },
                 stop_asked: false,
                 chat: self.chat.clone(),
+                last_stream_signal: 0,
             });
             id
         };
@@ -148,8 +229,54 @@ impl Agents {
         self.update(id, |run| run.info.steps.push(line));
     }
 
-    pub fn spent(&self, id: u32, usage: &ChatUsage) {
-        self.update(id, |run| run.info.tokens.add(usage));
+    /// Names the call that started a run, so the calling card pairs with its
+    /// own helper while it runs instead of guessing by the brief's words.
+    pub fn link_call(&self, id: u32, call: &str) {
+        self.update(id, |run| run.info.call = Some(call.to_string()));
+    }
+
+    /// The round's cost, and its streaming time for the live meter.
+    pub fn spent(&self, id: u32, usage: &ChatUsage, now: u64) {
+        self.update(id, |run| {
+            run.info.tokens.add(usage);
+            run.info.progress.round_timed(u64::from(usage.completion_tokens), now);
+        });
+    }
+
+    /// A fresh round of the run's stream: the meter starts over, and the
+    /// round's first token signals at once — the throttle is for the burst
+    /// within a round, not for the round's start.
+    pub fn round_started(&self, id: u32) {
+        self.update(id, |run| {
+            run.info.progress.round_started();
+            run.last_stream_signal = 0;
+        });
+    }
+
+    /// Characters of the run's stream, signalled at most once per
+    /// [`STREAM_SIGNAL_MS`] — the round's end and its steps signal on their
+    /// own, so nothing is left unsaid past the throttle.
+    // ponytail: each signal is the window re-reading agents_list — a
+    // progress channel of its own if ten reads a second per running
+    // subagent ever shows.
+    pub fn streamed(&self, id: u32, chars: u64, now: u64) {
+        let signal = {
+            let mut runs = self.lock();
+            match runs.1.iter_mut().find(|run| run.info.id == id) {
+                Some(run) => {
+                    run.info.progress.streamed(chars, now);
+                    let due = now.saturating_sub(run.last_stream_signal) >= STREAM_SIGNAL_MS;
+                    if due {
+                        run.last_stream_signal = now;
+                    }
+                    due
+                }
+                None => false,
+            }
+        };
+        if signal {
+            (self.sink)(AgentChanged { id });
+        }
     }
 
     /// Ends a run, and lets the oldest finished ones go past [`MAX_FINISHED`].
@@ -265,8 +392,8 @@ mod tests {
         let agents = Agents::new(Arc::new(move |event: AgentChanged| seen.lock().unwrap().push(event.id)));
         let id = agents.start("where is X");
         agents.step(id, "grep X".into());
-        agents.spent(id, &usage(1000, 800, 50));
-        agents.spent(id, &usage(1200, 1000, 70));
+        agents.spent(id, &usage(1000, 800, 50), 1000);
+        agents.spent(id, &usage(1200, 1000, 70), 2000);
         agents.finish(id, AgentState::Done, Some("a.rs:1".into()));
 
         let run = agents.get(id).unwrap();
@@ -274,6 +401,85 @@ mod tests {
         assert_eq!(run.steps, ["grep X"]);
         assert_eq!(run.tokens, AgentTokens { prompt: 2200, cached: 1800, completion: 120 });
         assert_eq!(*signals.lock().unwrap(), [id; 5]);
+    }
+
+    /// The meter's rule, the chat's own (`liveSpeed`): characters count from
+    /// the round's first token, and only a round that streamed long enough
+    /// with tokens reported weighs into the chars-per-token ratio.
+    #[test]
+    fn progress_counts_the_rounds_stream_and_the_ratio() {
+        let mut p = AgentProgress::default();
+        p.streamed(10, 1000);
+        p.streamed(5, 1200);
+        assert_eq!((p.stream_since, p.stream_chars), (Some(1000), 15));
+        p.round_timed(50, 2000);
+        assert_eq!(p.timed, AgentTimed { tokens: 50, ms: 1000, chars: 15 });
+        assert_eq!((p.stream_since, p.stream_chars), (None, 0), "the round closes");
+
+        // A provider that reports no tokens adds nothing to the ratio.
+        p.streamed(7, 3000);
+        p.round_timed(0, 4000);
+        assert_eq!(p.timed, AgentTimed { tokens: 50, ms: 1000, chars: 15 });
+        // An answer that arrived in one piece has no streaming time to divide by.
+        p.streamed(3, 5000);
+        p.round_timed(10, 5100);
+        assert_eq!(p.timed, AgentTimed { tokens: 50, ms: 1000, chars: 15 });
+        // A round that never streamed is not timed either.
+        p.round_timed(10, 7000);
+        assert_eq!(p.timed, AgentTimed { tokens: 50, ms: 1000, chars: 15 });
+
+        // A fresh round starts over, and the next timed one adds to the ratio.
+        p.streamed(9, 8000);
+        p.round_started();
+        assert_eq!((p.stream_since, p.stream_chars), (None, 0));
+        p.streamed(20, 9000);
+        p.round_timed(100, 9500);
+        assert_eq!(p.timed, AgentTimed { tokens: 150, ms: 1500, chars: 35 });
+    }
+
+    #[test]
+    fn stream_signals_are_throttled_but_steps_and_the_rounds_end_are_not() {
+        let signals = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&signals);
+        let agents = Agents::new(Arc::new(move |event: AgentChanged| seen.lock().unwrap().push(event.id)));
+        let id = agents.start("t");
+        agents.streamed(id, 4, 1000); // the first of the run signals at once
+        agents.streamed(id, 4, 1000 + STREAM_SIGNAL_MS - 1); // within the window: kept, not signalled
+        assert_eq!(*signals.lock().unwrap(), [id; 2]);
+        assert_eq!(agents.get(id).unwrap().progress.stream_chars, 8);
+        agents.streamed(id, 4, 1000 + STREAM_SIGNAL_MS); // the window is up
+        assert_eq!(*signals.lock().unwrap(), [id; 3]);
+        agents.step(id, "grep X".into()); // a step is rare and says so at once
+        agents.spent(id, &usage(100, 0, 10), 1150); // so is the round's end
+        assert_eq!(*signals.lock().unwrap(), [id; 5]);
+        agents.streamed(id, 4, 1160); // still within the last stream signal's window
+        assert_eq!(signals.lock().unwrap().len(), 5);
+        agents.round_started(id); // a new round says so at once...
+        agents.streamed(id, 4, 1170); // ...and so does its first token
+        assert_eq!(*signals.lock().unwrap(), [id; 7]);
+        agents.streamed(99, 4, 2000); // a run that is not there is not signalled
+        assert_eq!(signals.lock().unwrap().len(), 7);
+    }
+
+    /// Runs saved before the meter existed still read: the field defaults.
+    #[test]
+    fn a_saved_run_without_progress_reads_with_none() {
+        let old = serde_json::json!({
+            "id": 1, "task": "t", "state": { "state": "done" }, "steps": [],
+            "tokens": { "prompt": 10, "cached": 4, "completion": 2 }, "answer": "a.rs:1"
+        });
+        let run: AgentInfo = serde_json::from_value(old).unwrap();
+        assert_eq!(run.progress, AgentProgress::default());
+        assert_eq!(run.tokens, AgentTokens { prompt: 10, cached: 4, completion: 2 });
+    }
+
+    #[test]
+    fn a_run_can_be_named_by_the_call_that_started_it() {
+        let agents = Agents::default();
+        let id = agents.start("t");
+        assert_eq!(agents.get(id).unwrap().call, None);
+        agents.link_call(id, "c1");
+        assert_eq!(agents.get(id).unwrap().call.as_deref(), Some("c1"));
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
-use super::chat::AgentState;
+use super::agent_state::AgentState;
 use crate::domain::git_branches::{BranchRef, CheckoutOutcome, WorktreeState};
 use crate::domain::git_changes::{ChangeTotals, FileSide, FileView, GitChangesError, GitHistory, WorkingChanges};
 use crate::infra::file_watcher::FileWatcher;
@@ -22,7 +22,7 @@ use crate::services::{commit_message, llm_session};
 /// The open folder's repository changed its index, HEAD or refs.
 pub const GIT_EVENT: &str = "workspace-git:changed";
 
-/// The folder it is about, the string `workspace_open` returned: an event from
+/// The folder it is about, the string `workspace_add` returned: an event from
 /// the folder just left must not refresh the one opened after it.
 #[derive(Clone, Serialize)]
 struct GitChanged {
@@ -32,6 +32,18 @@ struct GitChanged {
 /// The watch on the open folder's `.git`. Replaced when another folder opens.
 #[derive(Default)]
 pub struct GitWatch(Mutex<Option<FileWatcher>>);
+
+impl GitWatch {
+    /// Watches nothing: the last open folder closed.
+    pub fn stop(&self) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    #[cfg(test)]
+    pub fn is_watching(&self) -> bool {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+    }
+}
 
 /// Watches the repository `root` is in, in place of the previous folder's.
 /// Outside a repository, or where it cannot be watched, nothing is reported —
@@ -52,22 +64,23 @@ pub fn watch_git<R: Runtime>(app: &AppHandle<R>, watch: &GitWatch, root: &Path, 
 
 async fn in_repo<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
     state: &AgentState,
+    workspace: &Option<String>,
     op: impl FnOnce(PathBuf) -> Result<T, E> + Send + 'static,
 ) -> Result<T, String> {
-    let root = state.workspace()?;
+    let root = state.ui_workspace(workspace)?.ok_or_else(|| "no folder is open".to_string())?;
     super::blocking(move || op(root)).await
 }
 
 #[tauri::command]
-pub async fn git_changes(state: State<'_, Arc<AgentState>>) -> Result<WorkingChanges, String> {
-    in_repo(&state, |root| git_changes::changes(&root)).await
+pub async fn git_changes(workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<WorkingChanges, String> {
+    in_repo(&state, &workspace, |root| git_changes::changes(&root)).await
 }
 
 /// `None` outside a repository: an ordinary folder has nothing to count, and
 /// the header shows nothing rather than an error.
 #[tauri::command]
-pub async fn git_totals(state: State<'_, Arc<AgentState>>) -> Result<Option<ChangeTotals>, String> {
-    in_repo(&state, |root| match git_changes::totals(&root) {
+pub async fn git_totals(workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<Option<ChangeTotals>, String> {
+    in_repo(&state, &workspace, |root| match git_changes::totals(&root) {
         Err(GitChangesError::NotARepository) => Ok(None),
         other => other.map(Some),
     })
@@ -75,26 +88,26 @@ pub async fn git_totals(state: State<'_, Arc<AgentState>>) -> Result<Option<Chan
 }
 
 #[tauri::command]
-pub async fn git_stage(paths: Vec<String>, state: State<'_, Arc<AgentState>>) -> Result<(), String> {
-    in_repo(&state, move |root| git_changes::stage(&root, &paths)).await
+pub async fn git_stage(paths: Vec<String>, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<(), String> {
+    in_repo(&state, &workspace, move |root| git_changes::stage(&root, &paths)).await
 }
 
 #[tauri::command]
-pub async fn git_unstage(paths: Vec<String>, state: State<'_, Arc<AgentState>>) -> Result<(), String> {
-    in_repo(&state, move |root| git_changes::unstage(&root, &paths)).await
+pub async fn git_unstage(paths: Vec<String>, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<(), String> {
+    in_repo(&state, &workspace, move |root| git_changes::unstage(&root, &paths)).await
 }
 
 /// The new commit's short id.
 #[tauri::command]
-pub async fn git_commit(message: String, state: State<'_, Arc<AgentState>>) -> Result<String, String> {
-    in_repo(&state, move |root| git_changes::commit(&root, &message)).await
+pub async fn git_commit(message: String, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<String, String> {
+    in_repo(&state, &workspace, move |root| git_changes::commit(&root, &message)).await
 }
 
 /// A commit message for what is staged, written by the active provider's
 /// model; `draft` is what the box already holds.
 #[tauri::command]
-pub async fn git_commit_message(draft: String, state: State<'_, Arc<AgentState>>) -> Result<String, String> {
-    let root = state.workspace()?;
+pub async fn git_commit_message(draft: String, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<String, String> {
+    let root = state.ui_workspace(&workspace)?.ok_or_else(|| "no folder is open".to_string())?;
     // A request to the provider, which would freeze the IPC loop for its duration.
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
@@ -106,39 +119,41 @@ pub async fn git_commit_message(draft: String, state: State<'_, Arc<AgentState>>
 
 /// Where HEAD is and the newest `limit` commits, for the History tab.
 #[tauri::command]
-pub async fn git_history(limit: usize, state: State<'_, Arc<AgentState>>) -> Result<GitHistory, String> {
-    in_repo(&state, move |root| git_changes::history(&root, limit)).await
+pub async fn git_history(limit: usize, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<GitHistory, String> {
+    in_repo(&state, &workspace, move |root| git_changes::history(&root, limit)).await
 }
 
 /// The two versions of a file the viewer diffs; see [`FileSide`] for which
 /// and what `path` is relative to.
 #[tauri::command]
-pub async fn file_view(path: String, side: FileSide, state: State<'_, Arc<AgentState>>) -> Result<FileView, String> {
-    in_repo(&state, move |root| git_changes::file_view(&root, &path, side)).await
+pub async fn file_view(path: String, side: FileSide, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<FileView, String> {
+    in_repo(&state, &workspace, move |root| git_changes::file_view(&root, &path, side)).await
 }
 
 /// The branches a new chat can start on: local ones, then remote ones with
 /// no local branch of that name.
 #[tauri::command]
-pub async fn git_branches(state: State<'_, Arc<AgentState>>) -> Result<Vec<BranchRef>, String> {
-    in_repo(&state, |root| git_branches::list(&root)).await
+pub async fn git_branches(workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<Vec<BranchRef>, String> {
+    in_repo(&state, &workspace, |root| git_branches::list(&root)).await
 }
 
-/// Switches the open folder to `branch`, or says which files stand in the
-/// way — it never overwrites them.
+/// Switches the folder `workspace` names to `branch`, or says which files
+/// stand in the way — it never overwrites them. A turn in that folder, or in
+/// one around or inside it, holds it (F-8); one in an unrelated folder does not.
 #[tauri::command]
-pub async fn git_checkout(branch: String, state: State<'_, Arc<AgentState>>) -> Result<CheckoutOutcome, String> {
-    state.ensure_tree_is_idle()?;
-    in_repo(&state, move |root| git_branches::checkout(&root, &branch)).await
+pub async fn git_checkout(branch: String, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<CheckoutOutcome, String> {
+    let root = state.ui_workspace(&workspace)?.ok_or_else(|| "no folder is open".to_string())?;
+    state.ensure_folder_idle(&root)?;
+    super::blocking(move || git_branches::checkout(&root, &branch)).await
 }
 
 /// Starts a worktree on a new branch from `base`, in the app's directory, and
 /// returns its folder for the window to open. The open folder is left as it is.
 #[tauri::command]
-pub async fn git_worktree_add(base: String, state: State<'_, Arc<AgentState>>) -> Result<String, String> {
+pub async fn git_worktree_add(base: String, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<String, String> {
     let worktrees = crate::infra::app_dir::ensure()?.join("worktrees");
     let stamp = chrono::Local::now().format("%m%d-%H%M").to_string();
-    let path = in_repo(&state, move |root| git_branches::add_worktree(&root, &base, &stamp, &worktrees)).await?;
+    let path = in_repo(&state, &workspace, move |root| git_branches::add_worktree(&root, &base, &stamp, &worktrees)).await?;
     Ok(path.display().to_string())
 }
 
@@ -153,13 +168,16 @@ pub struct WorktreeCheck {
 }
 
 /// `path` as a worktree the window may remove: a folder the app has opened,
-/// and not the one open now — its processes, terminals and watchers run in
-/// it until another folder is opened.
-fn removable(path: &str, open: Option<&Path>, recent: &[String]) -> Result<PathBuf, String> {
-    let target = Path::new(path).canonicalize().map_err(|e| format!("{path}: {e}"))?;
-    let same = |folder: &Path| folder.canonicalize().is_ok_and(|folder| folder == target);
-    if open.is_some_and(same) {
-        return Err("this worktree is the open folder — switch to another one to remove it".into());
+/// and not one still open (F-8) — its processes, terminals and watchers run
+/// in it until it is closed.
+fn removable(path: &str, open: &[PathBuf], recent: &[String]) -> Result<PathBuf, String> {
+    // Plain (no `\\?\` on Windows): the target's chats are found and deleted
+    // by the spelling they were saved under.
+    let plain = crate::infra::paths::canonicalize_plain;
+    let target = plain(Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+    let same = |folder: &Path| plain(folder).is_ok_and(|folder| folder == target);
+    if open.iter().any(|folder| same(folder)) {
+        return Err("this worktree is an open folder — close it to remove it".into());
     }
     if !recent.iter().any(|folder| same(Path::new(folder))) {
         return Err(format!("{path} is not a folder Kibo has opened"));
@@ -168,7 +186,7 @@ fn removable(path: &str, open: Option<&Path>, recent: &[String]) -> Result<PathB
 }
 
 fn removable_now(path: &str, state: &AgentState) -> Result<PathBuf, String> {
-    removable(path, state.workspace().ok().as_deref(), &crate::infra::recent_workspaces::load())
+    removable(path, &state.open_folders(), &crate::infra::recent_workspaces::load())
 }
 
 #[tauri::command]
@@ -202,7 +220,7 @@ pub async fn git_worktree_remove(path: String, state: State<'_, Arc<AgentState>>
 }
 
 /// The folder first: chats deleted for a worktree that then stayed would be
-/// lost for nothing. Keyed by the same canonical spelling `workspace_open`
+/// lost for nothing. Keyed by the same canonical spelling `workspace_add`
 /// saved them under — `target` is already canonical.
 fn remove_with_chats(target: &Path) -> Result<WorktreeRemoved, String> {
     let saved_under = target.display().to_string();
@@ -218,7 +236,7 @@ mod tests {
     use crate::testing::temp_dir;
     use std::sync::mpsc;
     use std::time::Duration;
-    use tauri::Listener;
+    use tauri::{Listener, Manager};
 
     #[test]
     fn staging_outside_the_tab_is_reported_with_the_folder() {
@@ -283,24 +301,74 @@ mod tests {
         });
     }
 
-    /// The path is the window's: only a folder from the list, and never the
-    /// one open, whatever spelling it arrives in.
+    /// The path is the window's: only a folder from the list, and never one
+    /// still open — active or not (F-8) — whatever spelling it arrives in.
     #[test]
     fn a_worktree_is_removable_only_from_the_list_and_not_while_open() {
         let listed = temp_dir("cmd-removable-listed");
         let recent = vec![listed.display().to_string()];
         let spelled = listed.join(".").display().to_string();
 
-        assert_eq!(removable(&spelled, None, &recent).unwrap(), listed.canonicalize().unwrap());
-        assert!(removable(&spelled, Some(&listed), &recent).unwrap_err().contains("switch to another"));
+        assert_eq!(removable(&spelled, &[], &recent).unwrap(), crate::infra::paths::canonicalize_plain(&listed).unwrap());
+        assert!(removable(&spelled, &[listed.clone()], &recent).unwrap_err().contains("close it"));
+        // Open beside another folder, not the active one: still not removable.
+        let other = temp_dir("cmd-removable-other");
+        assert!(removable(&spelled, &[other, listed.clone()], &recent).unwrap_err().contains("close it"));
         let elsewhere = temp_dir("cmd-removable-elsewhere");
-        assert!(removable(&elsewhere.display().to_string(), None, &recent).unwrap_err().contains("not a folder Kibo has opened"));
-        assert!(removable("/no/such/folder", None, &recent).is_err());
+        assert!(removable(&elsewhere.display().to_string(), &[], &recent).unwrap_err().contains("not a folder Kibo has opened"));
+        assert!(removable("/no/such/folder", &[], &recent).is_err());
     }
 
     /// `src/lib/chat.ts` listens on this name.
     #[test]
     fn the_channel_name_is_pinned() {
         assert_eq!(GIT_EVENT, "workspace-git:changed");
+    }
+
+    /// The folder a git command names goes through the registry (F-8,
+    /// invariant 1): only an open folder — not whichever is active — and no
+    /// folder is an error, not a silent fallback.
+    #[test]
+    fn a_git_command_acts_only_on_an_open_folder() {
+        let state = AgentState::default();
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("git-in-repo")).unwrap();
+        state.register_open(root.clone());
+        // Active is another folder: the answer must be the one named, not it.
+        state.set_workspace_for_test(temp_dir("git-in-repo-active"));
+
+        let seen = tauri::async_runtime::block_on(in_repo(&state, &Some(root.display().to_string()), |p| Ok::<_, String>(p))).unwrap();
+        assert_eq!(seen, root);
+        let elsewhere = temp_dir("git-in-repo-elsewhere");
+        let err = tauri::async_runtime::block_on(in_repo(&state, &Some(elsewhere.display().to_string()), |p| Ok::<_, String>(p))).unwrap_err();
+        assert!(err.contains("not an open folder"), "{err}");
+        let err = tauri::async_runtime::block_on(in_repo(&state, &None, |p| Ok::<_, String>(p))).unwrap_err();
+        assert!(err.contains("no folder is open"), "{err}");
+    }
+
+    /// A checkout is held only by a turn in its own folder (F-8), and a
+    /// folder not open is refused before anything else.
+    #[test]
+    fn a_checkout_is_held_only_by_a_turn_in_its_folder() {
+        let app = tauri::test::mock_app();
+        let state = Arc::new(AgentState::default());
+        let root = crate::infra::paths::canonicalize_plain(&temp_dir("git-checkout-root")).unwrap();
+        state.register_open(root.clone());
+        app.manage(Arc::clone(&state));
+        let asked = Some(root.display().to_string());
+
+        let other = crate::infra::paths::canonicalize_plain(&temp_dir("git-checkout-other")).unwrap();
+        let guard = state.begin_running("c1", 3, &other).unwrap();
+        // Reaches git (and fails there — not a repository), not the idle guard.
+        let err = tauri::async_runtime::block_on(git_checkout("main".into(), asked.clone(), app.state())).unwrap_err();
+        assert!(!err.contains("turn is running"), "{err}");
+        drop(guard);
+
+        let guard = state.begin_running("c2", 3, &root).unwrap();
+        let err = tauri::async_runtime::block_on(git_checkout("main".into(), asked, app.state())).unwrap_err();
+        assert!(err.contains("worktree"), "{err}");
+        drop(guard);
+
+        let err = tauri::async_runtime::block_on(git_checkout("main".into(), Some(other.display().to_string()), app.state())).unwrap_err();
+        assert!(err.contains("not an open folder"), "{err}");
     }
 }

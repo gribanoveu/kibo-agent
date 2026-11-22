@@ -20,19 +20,24 @@ pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<Too
         });
     }
     match args.kind {
-        OfferKind::Review | OfferKind::Commit => {
-            let files = git_changes::review_diffs(scope.root()).map_err(|e| ToolError::Git(e.to_string()))?;
-            match args.kind {
-                OfferKind::Review => {
-                    let (kept, excluded) = review::select(files);
-                    if kept.is_empty() {
-                        return Err(ToolError::Command(review::nothing_to_review(excluded.len())));
-                    }
-                }
-                OfferKind::Commit if files.is_empty() => {
-                    return Err(ToolError::Command("nothing to commit: the working tree matches HEAD".into()));
-                }
-                _ => {}
+        OfferKind::Review => {
+            // The button and the review read one check: the default range a
+            // review would pick, on this chat's facts — the marker included,
+            // so a pushed commit does not kill the button while the tool
+            // itself would still find the chat's work.
+            let facts = git_changes::review_facts(scope.root(), None, deps.chat_head).map_err(|e| ToolError::Git(e.to_string()))?;
+            let planned = review::plan(None, None, &facts).map_err(|e| ToolError::Command(e.to_string()))?;
+            let files = git_changes::review_diffs(scope.root(), planned.from.as_deref(), planned.to.as_deref())
+                .map_err(|e| ToolError::Git(e.to_string()))?;
+            let (kept, excluded) = review::select(files);
+            if kept.is_empty() {
+                return Err(ToolError::Command(review::nothing_to_review(excluded.len())));
+            }
+        }
+        OfferKind::Commit => {
+            let files = git_changes::review_diffs(scope.root(), None, None).map_err(|e| ToolError::Git(e.to_string()))?;
+            if files.is_empty() {
+                return Err(ToolError::Command("nothing to commit: the working tree matches HEAD".into()));
             }
         }
         OfferKind::Worktree => {
@@ -121,6 +126,73 @@ mod tests {
         assert!(review.to_string().contains("nothing to review"), "{review}");
         let commit = offer(&scope, &args(OfferKind::Commit, "x"), &ToolDeps::default()).unwrap_err();
         assert!(commit.to_string().contains("nothing to commit"), "{commit}");
+    }
+
+    /// The fix for "the model committed — and review stopped": a committed
+    /// change on a branch ahead of its upstream is still something to
+    /// review, so the button does not die with the commit.
+    #[test]
+    fn committed_work_is_still_something_to_review() {
+        let dir = temp_dir("offer-committed-review");
+        let repo = git2::Repository::init(&dir).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+        fs::write(dir.join("a.rs"), "one\n").unwrap();
+        git_changes::stage(&dir, &["a.rs".into()]).unwrap();
+        git_changes::commit(&dir, "first").unwrap();
+        let first = crate::infra::git_head::current_commit(&dir).unwrap();
+        let branch = crate::infra::git_head::current_branch(&dir).unwrap();
+        // An upstream one commit behind: HEAD is ahead, nothing is uncommitted.
+        repo.remote("origin", "https://example.invalid/upstream.git").unwrap();
+        config.set_str(&format!("branch.{branch}.remote"), "origin").unwrap();
+        config.set_str(&format!("branch.{branch}.merge"), &format!("refs/heads/{branch}")).unwrap();
+        repo.reference(&format!("refs/remotes/origin/{branch}"), first.parse().unwrap(), false, "").unwrap();
+        fs::write(dir.join("a.rs"), "two\n").unwrap();
+        git_changes::stage(&dir, &["a.rs".into()]).unwrap();
+        git_changes::commit(&dir, "second").unwrap();
+
+        let scope = ToolScope::new(&dir).unwrap();
+        assert_eq!(
+            offer(&scope, &args(OfferKind::Review, "the counter"), &ToolDeps::default()).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Review }
+        );
+    }
+
+    /// The button plans on the chat's facts, not the folder's alone: with
+    /// the chat's start marker, work that is committed AND pushed is still
+    /// this chat's work — the tool would find it, so the button must too.
+    #[test]
+    fn the_review_offer_reads_the_chats_marker() {
+        let dir = temp_dir("offer-committed-pushed");
+        let repo = git2::Repository::init(&dir).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@example.com").unwrap();
+        fs::write(dir.join("a.rs"), "one\n").unwrap();
+        git_changes::stage(&dir, &["a.rs".into()]).unwrap();
+        git_changes::commit(&dir, "first").unwrap();
+        let first = crate::infra::git_head::current_commit(&dir).unwrap();
+        let branch = crate::infra::git_head::current_branch(&dir).unwrap();
+        // Pushed as well: nothing uncommitted, HEAD not ahead — only the
+        // marker says the second commit is this chat's.
+        repo.remote("origin", "https://example.invalid/upstream.git").unwrap();
+        config.set_str(&format!("branch.{branch}.remote"), "origin").unwrap();
+        config.set_str(&format!("branch.{branch}.merge"), &format!("refs/heads/{branch}")).unwrap();
+        fs::write(dir.join("a.rs"), "two\n").unwrap();
+        git_changes::stage(&dir, &["a.rs".into()]).unwrap();
+        git_changes::commit(&dir, "second").unwrap();
+        let head = crate::infra::git_head::current_commit(&dir).unwrap();
+        repo.reference(&format!("refs/remotes/origin/{branch}"), head.parse().unwrap(), false, "").unwrap();
+
+        let scope = ToolScope::new(&dir).unwrap();
+        let refused = offer(&scope, &args(OfferKind::Review, "x"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("nothing to review"), "{refused}");
+        let with_marker = ToolDeps { chat_head: Some(first.as_str()), ..ToolDeps::default() };
+        assert_eq!(
+            offer(&scope, &args(OfferKind::Review, "the counter"), &with_marker).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Review }
+        );
     }
 
     /// Only documentation changed: worth a commit, not a review — the same

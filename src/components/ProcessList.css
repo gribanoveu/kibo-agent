@@ -139,6 +139,3 @@
   color: var(--text-faint);
   font-family: var(--font-ui);
 }
-.process-tail::-webkit-scrollbar {
-  width: 6px;
-}

@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPanel } from "./components/ChatPanel";
 import { AgentSheet } from "./components/AgentSheet";
+import { PlanSheet } from "./components/PlanSheet";
 import { Composer } from "./components/Composer";
 import { ProviderBalance } from "./components/ProviderBalance";
 import { PlainChat } from "./components/PlainChat";
@@ -9,15 +10,23 @@ import { FolderTab } from "./components/FolderTab";
 import { AsidePanel } from "./components/AsidePanel";
 import { PrototypePreview } from "./components/PrototypePreview";
 import { FileViewer } from "./components/FileViewer";
-import { PANES, type Dock, type PaneContext } from "./components/panes";
+import { PANES, type PaneContext } from "./components/panes";
 import { Modal } from "./components/Modal";
-import { Settings, type SettingsSection } from "./components/Settings";
+import { type SettingsSection } from "./components/Settings";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { ToolLog } from "./components/ToolLog";
-import { ConfigFileEditor } from "./components/ConfigFileEditor";
+import { McpConfigDialog } from "./components/McpConfigDialog";
+import { HooksConfigDialog } from "./components/HooksConfigDialog";
 import { PanelResizeHandle } from "./components/PanelResizeHandle";
 import { Columns } from "./components/Columns";
-import { pagesShown, type PageId } from "./components/pages";
+import { pagesShown, type PageDef } from "./components/pages";
 import { useFeatures } from "./hooks/useFeatures";
+import { usePages } from "./hooks/usePages";
+import { useDocks } from "./hooks/useDocks";
+import { useConfigDialogs } from "./hooks/useConfigDialogs";
+import { STAY, useSidebarActions } from "./hooks/useSidebarActions";
+import { useChatRouting } from "./hooks/useChatRouting";
+import { useComposerCommands } from "./hooks/useComposerCommands";
 import { ChatSwitcher } from "./components/ChatSwitcher";
 import { Toast } from "./components/Toast";
 import { PanelLeft, SquarePen } from "lucide-react";
@@ -27,7 +36,7 @@ import { useAgentTurn } from "./hooks/useAgentTurn";
 import { usePlainChat } from "./hooks/usePlainChat";
 import { usePrototypePreview } from "./hooks/usePrototypePreview";
 import { useChatHistory } from "./hooks/useChatHistory";
-import { useMediaQuery } from "./hooks/useMediaQuery";
+import { useChatGroups } from "./hooks/useChatGroups";
 import { useLlmSettings } from "./hooks/useLlmSettings";
 import { useKubeconfigs } from "./hooks/useKubeconfigs";
 import { useWorkspace } from "./hooks/useWorkspace";
@@ -36,39 +45,32 @@ import { useMcp } from "./hooks/useMcp";
 import { useHooks } from "./hooks/useHooks";
 import { useSkills } from "./hooks/useSkills";
 import { useToolLog } from "./hooks/useToolLog";
-import { roomFor, usePanelSizes } from "./hooks/usePanelSizes";
+import { usePanelSizes } from "./hooks/usePanelSizes";
 import { sideOf, useTheme } from "./hooks/useTheme";
 import { useChatFontSize } from "./hooks/useChatFontSize";
 import { useGitBranch, useWorktreeOf } from "./hooks/useGitBranch";
 import { useChangeTotals } from "./hooks/useChangeTotals";
 import { useToast } from "./hooks/useToast";
 import { nativeFrame, windowsFrame } from "./lib/window";
-import { pickSavePath } from "./lib/dialog";
 import { useBackendSetting } from "./hooks/useBackendSetting";
 import { useApprovalMemory } from "./hooks/useApprovalMemory";
 import { useFolderConversation } from "./hooks/useFolderConversation";
 import { chatDraftKey, forgetChatDraft } from "./hooks/useChatDraft";
 import { useTurnAlerts } from "./hooks/useTurnAlerts";
 import { useRunningProcesses } from "./hooks/useProcesses";
-import { playSound } from "./lib/sounds";
 import { DEFAULT_ALERTS, isAlertPrefs } from "./lib/attention";
 import { isBoolean, useStoredState } from "./hooks/useStoredState";
-import { HookForm } from "./components/ConfigEntryForm";
-import { McpInstall } from "./components/McpInstall";
 import { removeHook, removeMcpServer } from "./lib/configEntries";
-import { mergeHooks, mergeMcp } from "./lib/configSnippets";
-import { ideDocks, isSavedDocks, openPane, togglePane, toggleTerminal, type Docks } from "./lib/docks";
+import { togglePane, toggleTerminal } from "./lib/docks";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
-import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST } from "./lib/offer";
 import type { ImagePart } from "./lib/images";
-import { mcpPromptGet } from "./lib/mcp";
-import { type ChatSummary, exportChat, moveChatToWorktree } from "./lib/savedChats";
-import { DEFAULT_TURN_LIMITS, withLanguageReminder } from "./lib/settings";
+import { type ChatSummary } from "./lib/savedChats";
+import { DEFAULT_TURN_LIMITS } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
-import { isAppMode, isAsideTab, type AppMode, type AsideTab } from "./types";
-import { useFolderSwitch } from "./hooks/useFolderSwitch";
-import { fileLinkPath, useOpenFiles } from "./hooks/useOpenFiles";
+import { isAppMode, type AppMode } from "./types";
+import { turnsIn, useFolderSwitch } from "./hooks/useFolderSwitch";
+import { fileLink, useOpenFiles } from "./hooks/useOpenFiles";
 import { FolderSwitchDialog } from "./components/FolderSwitchDialog";
 import { FolderTrustDialog } from "./components/FolderTrustDialog";
 import { useFolderTrust } from "./hooks/useFolderTrust";
@@ -78,39 +80,17 @@ import { useWorktreeRemoval } from "./hooks/useWorktreeRemoval";
 import { WorktreeRemoveDialog } from "./components/WorktreeRemoveDialog";
 import { RewindDialog } from "./components/RewindDialog";
 import { useRewind } from "./hooks/useRewind";
-import { builtInCommands, expandTemplate, fileCommands, mcpPromptCommands, typedCommand } from "./lib/slashCommands";
-import initPrompt from "./prompts/init.md?raw";
-import analyzePrompt from "./prompts/analyze.md?raw";
 import { useCommandFiles } from "./hooks/useCommandFiles";
 import { useMcpPrompts } from "./hooks/useMcpPrompts";
 import "./App.css";
 import type { AgentFocus } from "./lib/describeTool";
-
-/** A stored pane id, if it still opens in `dock` — a pane may have moved docks since it was stored. */
-const isPaneIn =
-  (dock: Dock) =>
-  (value: unknown): value is AsideTab =>
-    isAsideTab(value) && PANES.find((p) => p.id === value)?.dock === dock;
-// Any pane may sit under the top one: Changes goes there when the top is taken.
-const isBottomTab = (value: unknown): value is AsideTab | null => value === null || isAsideTab(value);
-
-/** A config file's dialog: the whole file, one entry of it (null for a new one), or closed. */
-type EntryDialog<K> = "json" | { entry: K | null } | null;
-
-/** What "Implement in Agent mode" says on the user's behalf. Shown in the transcript like anything they type. */
-const IMPLEMENT_PLAN = "Implement the plan above. Work through the checklist in order.";
 
 /** The open chat's name. A chat's first turn ends before it is saved and named: its first message is its name. */
 function chatName(chats: ChatSummary[], id: string | null, turn: TurnState): string | null {
   return chats.find((one) => one.id === id)?.title ?? turn.blocks.find((block) => block.kind === "user")?.text ?? null;
 }
 
-/** Why the open chat cannot be left: its turn would land in the next one. */
-const STAY = "Stop the running turn before leaving this chat";
-
 export default function App() {
-  // Laid out as it was left.
-  const [collapsed, setCollapsed] = useStoredState("atlas-sidebar-collapsed", false, isBoolean);
   // Agent works in the open folder; Chat only talks. Chat's conversations live
   // here rather than in its panel: the sidebar lists them, and a reply keeps
   // arriving while Agent is shown.
@@ -120,25 +100,9 @@ export default function App() {
   const [ideLayout, setIdeLayout] = useStoredState("atlas-ide-layout", false, isBoolean);
   const ide = agentMode && ideLayout;
   // A sidebar page in the chat's place; picking a mode or a chat leaves it.
-  // The IDE layout has no sidebar to pick one from.
-  const [page, setPage] = useState<PageId | null>(null);
-  // What the page was opened on by another page — a meeting from Artifacts; none from the sidebar.
-  const [pageItem, setPageItem] = useState<string | undefined>(undefined);
-  // A feature's page only while it is on: turned off, an open one closes.
   const features = useFeatures();
   const pages = pagesShown(features.isOn);
-  const onPage = ide ? null : (pages.find((one) => one.id === page) ?? null);
-  // The `keep` pages opened so far, mounted from then on; a feature turned off drops its page.
-  const [kept, setKept] = useState<PageId[]>([]);
-  const keptPages = pages.filter((one) => kept.includes(one.id) || (one === onPage && "keep" in one && one.keep));
-  useEffect(() => {
-    if (onPage && keptPages.includes(onPage) && !kept.includes(onPage.id)) setKept([...kept, onPage.id]);
-  }, [onPage]);
-  // A page gone with its feature is not kept: turned on again, it waits to be opened before it mounts.
-  useEffect(() => {
-    const listed = kept.filter((id) => pages.some((one) => one.id === id));
-    if (listed.length !== kept.length) setKept(listed);
-  }, [pages]);
+  const { onPage, pageItem, keptPages, openPage, leavePage } = usePages(ide, pages);
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
@@ -146,11 +110,6 @@ export default function App() {
   const model = llm.models.current?.label;
   const plain = usePlainChat(kube.active?.name ?? null, model, !agentMode && !onPage);
   const prototypePreview = usePrototypePreview(plain.chatId, plain.role === "prototype" ? plain.turn.blocks : null, plain.turn.status === "running");
-  // Hidden until the chat header's button asks for it.
-  const [asideHidden, setAsideHidden] = useStoredState("atlas-aside-hidden", true, isBoolean);
-  const [tab, setTab] = useStoredState<AsideTab>("atlas-aside-tab", "changes", isPaneIn("right"));
-  // The terminal under the message box: closed when null.
-  const [bottomTab, setBottomTab] = useStoredState<AsideTab | null>("atlas-bottom-tab", null, isBottomTab);
   // Held here, not in the Changes pane: closing the pane, or moving it to the
   // other dock, would otherwise throw away a message half written. A different
   // folder is a different repository, and starts empty.
@@ -189,12 +148,8 @@ export default function App() {
   const [composerFocus, setComposerFocus] = useState(0);
   const focusComposer = () => setComposerFocus((n) => n + 1);
   const [logOpen, setLogOpen] = useState(false);
-  // The MCP and hooks files open as a whole (JSON) or one entry at a time
-  // (a form): `entry` is the server's name or the hook's row, null for a new one.
-  const [mcpDialog, setMcpDialog] = useState<EntryDialog<string>>(null);
-  const [hooksDialog, setHooksDialog] = useState<EntryDialog<number>>(null);
-  const mcpEditing = mcpDialog !== null;
-  const hooksEditing = hooksDialog !== null;
+  // The MCP and hooks dialogs: a form for one entry, or the whole file as JSON.
+  const { mcpDialog, hooksDialog, mcpEditing, hooksEditing, addMcp, editMcp, editMcpFile, closeMcp, addHook, editHook, editHooksFile, closeHooks } = useConfigDialogs();
   // What the agent may do this turn, and whether anyone is asked before it
   // does it. Two chips, two questions — and both are enforced on the backend,
   // so these hold only what the chips read back.
@@ -207,45 +162,40 @@ export default function App() {
   const viewer = useOpenFiles(workspace.path);
   const openFileLink = useCallback(
     (link: string) => {
-      const path = workspace.path && fileLinkPath(link, workspace.path);
-      if (path) viewer.open({ path, side: "worktree" });
+      const place = workspace.path && fileLink(link, workspace.path);
+      if (place) viewer.openAt(place);
     },
-    [workspace.path, viewer.open],
+    [workspace.path, viewer.openAt],
   );
   // On unless turned off in Settings: the viewer is a column beside the chat,
   // rarely wide enough for a long line.
   const [wrapLines, setWrapLines] = useStoredState("viewer-wrap", true, isBoolean);
-  // A window too narrow for every open panel at its minimum: the sidebar
-  // falls back to its rail first, then the column right of the viewer hides.
-  // Neither is stored — wider again, both come back as they were left.
-  const frame = nativeFrame || windowsFrame ? 0 : 2;
   // Chat mode has no folder to show: the panes beside the chat stay out of
   // it, and the viewer's place holds a Prototype chat's preview — a page
   // wants the width of a file, not of a side panel.
   const previewShown = !agentMode && !onPage && prototypePreview.open && plain.chatId !== null;
   const viewerOpen = (agentMode && !onPage && viewer.active !== null) || previewShown;
-  const dockFits = useMediaQuery(`(min-width: ${roomFor({ rail: true, viewer: viewerOpen, dock: true, frame, ide })}px)`);
-  // What the column shows: what was opened, while it fits — beside an Agent
-  // chat, or beside a page that keeps it.
-  const docked = onPage ? onPage.dock : agentMode;
-  const topHidden = asideHidden || !dockFits || !docked;
-  // The terminal is not in the column: it opens under the message box, as wide
-  // as the chat, so it needs no width of the window's own.
-  const bottomShown = agentMode ? bottomTab : null;
-  const dockShown = !topHidden;
-  const sidebarFits = useMediaQuery(`(min-width: ${roomFor({ rail: false, viewer: viewerOpen, dock: dockShown, frame, ide })}px)`);
-  const rail = collapsed || !sidebarFits;
-  // On screen in either dock: what decides whether a pane's data is read.
-  const shown = (pane: AsideTab) => (tab === pane && !topHidden) || bottomShown === pane;
+  // The layout: what fits the window, what is shown, and the panes' own keys.
+  const { rail, tab, topHidden, bottomShown, planSheet, dockShown, docks, setDocks, openTab, toggleIde, toggleSidebar, shown, setCollapsed, hideAside, closeBottom } = useDocks({
+    agentMode,
+    ideLayout,
+    setIdeLayout,
+    page: onPage,
+    panes: PANES,
+    viewerOpen,
+    closeViewer: viewer.closeAll,
+    swapViewer: viewer.swap,
+    terminalPaste,
+  });
   const toolLog = useToolLog(logOpen);
-  const history = useChatHistory(workspace.path);
-  const [movedChat, setMovedChat] = useState<{ id: string; path: string } | null>(null);
-  const movedChatOpened = useCallback(() => setMovedChat(null), []);
+  const history = useChatHistory(workspace.folders, workspace.path);
+  const chatGroups = useChatGroups(agentMode ? "projects" : "chat");
   // The list is redrawn from disk after every save rather than guessed at
   // here: what belongs in it, and in what order, is the store's rule.
   // Queued messages that will not be sent after all go back to the box.
   const agent = useAgentTurn({
     model,
+    folder: workspace.path,
     onSaved: history.refresh,
     onGiveBack: giveBack,
     spentShown: agentMode && shown("overview"),
@@ -258,28 +208,57 @@ export default function App() {
   const branch = useGitBranch(workspace.path, agent.turn.status);
   const worktreeOf = useWorktreeOf(workspace.path);
   const changeTotals = useChangeTotals(workspace.path);
+  // A turn keeps its own folder while the window moves (F-8.7): only closing
+  // that folder, or switching its branch, waits for it.
+  const turnsInFolder = turnsIn(agent.chatActivity, history.folderOf);
+  const folderSwitch = useFolderSwitch(turnsInFolder);
+  // Getting a chat on screen and a message out of the box.
+  const { pendingChat, pendingChatOpened, selectChat, newChat, newChatIn, send, pickOffer, implement, exportOpenChat, compactNow } = useChatRouting({
+    agentMode,
+    agent,
+    plain,
+    history,
+    workspace,
+    folderSwitch,
+    conversation,
+    replyLanguage: llm.settings?.replyLanguage ?? "auto",
+    notify: toast.show,
+    focusComposer,
+    leavePage,
+    giveBack,
+  });
   // An archived chat is not where the user left off, even when it was touched last.
   useFolderConversation(
     workspace.path,
     workspace.resumed,
     history.chats.find((one) => !one.archived)?.id,
     agent,
-    movedChat,
-    movedChatOpened,
+    pendingChat,
+    pendingChatOpened,
   );
   // Sounds and notifications when the agent finishes or asks, each switched in Settings.
   const [alerts, setAlerts] = useStoredState("turn-alerts", DEFAULT_ALERTS, isAlertPrefs);
+  // Every chat's, the ones left working in another chat or folder too.
+  const everyChat = Object.values(history.byFolder).flat();
   useTurnAlerts({
-    sessionKey: agent.sessionKey,
-    status: agent.turn.status,
-    failed: agent.error !== null,
-    queued: agent.queued.length,
-    chatTitle: chatName(history.chats, agent.chatId, agent.turn),
+    turns: Object.fromEntries(
+      Object.entries(agent.turns).map(([key, one]) => [
+        key,
+        { status: one.turn.status, failed: one.failed, queued: one.queued, chatTitle: chatName(everyChat, key, one.turn) },
+      ]),
+    ),
     prefs: alerts,
   });
+  // A turn with no model pinned pins the provider's first one
+  // (llm_session::effective_model). The settings are read again as a turn
+  // starts or ends, as the branch is, so the line names the model that went
+  // out rather than the auto guess.
+  useEffect(() => {
+    void llm.reload();
+  }, [agent.turn.status, plain.turn.status, llm.reload]);
   // Servers start with an Agent or Analyst turn and may stop during one.
   // Settings shows both in "Where your data goes".
-  const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, agent.turn.status);
+  const mcp = useMcp(shown("mcp") || shown("overview") || mcpEditing || settingsOpen, workspace.path, agent.turn.status);
   const hooks = useHooks(shown("hooks") || hooksEditing || settingsOpen);
   // Settings has its own copy: which skills folders are read. The Skills
   // pane reads the same list for itself while it is open.
@@ -298,59 +277,8 @@ export default function App() {
     },
   });
 
-  // Where each pane goes is `lib/docks.ts`'s rule; this only stores the answer.
-  const docks: Docks = { top: tab, topHidden, bottom: bottomShown, swap: ide };
-  const putDocks = (next: Docks) => {
-    setTab(next.top);
-    setAsideHidden(next.topHidden);
-    setBottomTab(next.bottom);
-  };
-  const setDocks = (next: Docks) => {
-    // A pane asked for where the viewer leaves the column no room: the viewer
-    // gives way, or the pane would open out of sight.
-    if (!dockFits && !next.topHidden) viewer.closeAll();
-    putDocks(next);
-  };
-  // The tree is what the layout is for: it opens with it, in the dock now on the
-  // left. Leaving puts back the panes the user had open — as asked for, not as
-  // the window's width last let them show.
-  const [beforeIde, setBeforeIde] = useStoredState<Docks | null>("atlas-docks-before-ide", null, isSavedDocks);
-  // Not through `setDocks` either way: there a pane with no room closes the
-  // files, and these are the layout's own, put away by the swap below.
-  const toggleIde = () => {
-    if (!ideLayout) {
-      setBeforeIde({ top: tab, topHidden: asideHidden, bottom: bottomTab });
-      putDocks(ideDocks(docks));
-    } else if (beforeIde) {
-      putDocks(beforeIde);
-    }
-    // Each layout keeps its own files open.
-    viewer.swap();
-    setIdeLayout(!ideLayout);
-  };
-  const openTab = (next: AsideTab) =>
-    setDocks(openPane(docks, next, PANES.find((p) => p.id === next)?.dock ?? "right"));
-  // A command sent to a shell shows the shell.
-  useEffect(() => {
-    if (terminalPaste) openTab("terminal");
-    // Once per ask: not again when the layout changes.
-  }, [terminalPaste]);
-
-  // Held on its rail by the viewer beside the chat: opening it closes the viewer.
-  const toggleSidebar = () => (rail && !collapsed ? viewer.closeAll() : setCollapsed((v) => !v));
-
-  // A pane's key shows it, or hides it where it already is (`lib/shortcuts.ts`).
+  // The window's own keys; a pane's key lives in `useDocks`.
   useShortcuts({
-    ...Object.fromEntries(
-      PANES.map(({ id, dock }) => [
-        id,
-        () => {
-          // Focus leaves the composer, so the shell that opens takes the typing.
-          if (id === "terminal") (document.activeElement as HTMLElement | null)?.blur();
-          setDocks(togglePane(docks, id, dock));
-        },
-      ]),
-    ),
     newChat: () => newChat(),
     focusInput: focusComposer,
     sidebar: toggleSidebar,
@@ -358,63 +286,24 @@ export default function App() {
     ideLayout: agentMode ? toggleIde : undefined,
   });
 
-  const selectChat = (id: string) => {
-    setPage(null);
-    void (agentMode ? agent.open(id) : plain.open(id)).then((opened) => opened || toast.show(STAY));
-  };
-
   // A deleted chat takes its unsent message with it — the sidebar's own path
   // and the Artifacts page's prototype, which deletes its chat through the same
   // `plain.remove`.
   const dropDraft = (mode: "agent" | "chat", id: string) => forgetChatDraft(chatDraftKey(mode, id));
+  const sidebarActions = useSidebarActions({ agentMode, agent, plain, history, groups: chatGroups, notify: toast.show, dropDraft });
 
-  // The conversation just left is already on disk and stays in the sidebar;
-  // this only stops pointing at it.
-  const newChat = () => {
-    setPage(null);
-    if (!agentMode) {
-      if (!plain.newChat()) return toast.show(STAY);
-      return focusComposer();
-    }
-    if (!agent.reset()) return toast.show(STAY);
-    focusComposer();
-  };
-
-  // The window the meter is drawn against, and the provider a turn talks to.
-  const busy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
-  const compactNow = async () => {
-    if (busy) return toast.show("Not while a turn is running");
-    if (!(await agent.compact(true))) {
-      toast.show(agent.error ?? "Nothing worth folding away yet");
-    }
-  };
-
-  // What `/name` in the composer runs: the app's own, then the user's files
-  // in `.kibo/commands`. The composer takes whatever is in the list.
-  const builtIn = builtInCommands(
-    {
-      busy,
-      started: agent.turn.blocks.length > 0,
-      folder: !!workspace.path,
-      agentMode: conversation.value === "agent",
-      knowledge: features.isOn("knowledge"),
-    },
-    {
-      compact: () => void compactNow(),
-      fork: () => agent.branch(),
-      review: (handed) => void agent.review(handed),
-      // `send` is declared further down; the arrow reaches it when a command runs.
-      init: (args) => void send(typedCommand("init", args), expandTemplate(initPrompt, args)),
-      analyze: (args) => void send(typedCommand("analyze", args), expandTemplate(analyzePrompt, args)),
-      trust: trust.ask,
-    },
-  );
-  // `send` is declared further down; the arrow reaches it when a command runs.
-  const ownCommands = [...builtIn, ...fileCommands(commandFiles.files, builtIn, (text, sent) => void send(text, sent))];
-  const commands = [
-    ...ownCommands,
-    ...mcpPromptCommands(serverPrompts.prompts, ownCommands, mcpPromptGet, (text, sent) => void send(text, sent), toast.show),
-  ];
+  // What `/name` in the composer runs: the app's own, the user's files, the servers' prompts.
+  const commands = useComposerCommands({
+    agent,
+    folder: workspace.path,
+    agentMode: conversation.value === "agent",
+    compact: () => void compactNow(),
+    send,
+    trust: trust.ask,
+    commandFiles,
+    serverPrompts,
+    notify: toast.show,
+  });
 
   const pickConversation = async (mode: ConversationMode) => {
     const failed = await conversation.pick(mode);
@@ -436,25 +325,26 @@ export default function App() {
     if (workspace.error) toast.show(workspace.error);
   }, [workspace.error]);
 
-  // Leaving the folder ends every turn in it, including one in a background chat.
-  const activities = Object.values(agent.chatActivity);
-  const anyTurnBusy = activities.includes("running") || activities.includes("awaitingApproval");
-  const folderSwitch = useFolderSwitch(
-    activities.includes("running") ? "running" : activities.includes("awaitingApproval") ? "waiting" : null,
-  );
+  // Opening a folder closes none (F-8.6); closing one stops what runs in it, and says so first.
   const openFolder = (path: string) => folderSwitch.guard(() => void workspace.open(path));
   const chooseFolder = () => folderSwitch.guard(() => void workspace.pick());
+  const closeFolder = (path: string) => void folderSwitch.guard(() => void workspace.close(path), undefined, [path]);
   // Before the first message the branch is where the chat starts; after it,
   // the chat's own branch — switched only between turns, never under one.
   const branchPicker = useBranchPicker({
-    chatId: agent.chatId,
+    workspace: workspace.path,
     current: branch,
     guard: folderSwitch.guard,
     open: workspace.open,
     notify: toast.show,
-    send: agent.send,
     onSwitched: agent.saveBranch,
   });
+  // A turn working in the folder forbids switching its branch under it; the
+  // menu still opens, so a worktree — the way round — stays reachable.
+  const branchLocked =
+    workspace.path && turnsInFolder(workspace.path).length > 0
+      ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
+      : undefined;
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
   const turnBusy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   // The provider turns go to now: its own switch in Settings → Models.
@@ -467,75 +357,7 @@ export default function App() {
       : { preview: plain.previewRewind, rewind: plain.rewind, notify: toast.show },
   );
 
-  // Asking before the first message rather than refusing it — and then sending
-  // it: the composer has already cleared the box, so anything not sent here is
-  // typed twice.
-  // `command`, when given, is what the model gets in place of `text` — a `/`
-  // command's prompt — with the reply language said at its end.
-  const send = async (text: string, command?: string, images: ImagePart[] = []) => {
-    const sent = command === undefined ? undefined : withLanguageReminder(command, llm.settings?.replyLanguage ?? "auto");
-    // The composer has already cleared the box: a picker closed without a
-    // folder gives the message back rather than losing it.
-    if (!workspace.path && !(await workspace.pick())) return giveBack(text, images);
-    // With Worktree ticked the first message is where the worktree is made:
-    // sent here, it would be worked on in the folder the user meant to keep out of.
-    if (unstarted && branchPicker.worktree && branchPicker.base) {
-      if (!(await branchPicker.startWorktree(branchPicker.base, text, sent, images))) giveBack(text, images);
-      return;
-    }
-    agent.send(text, sent, images);
-  };
-
-  const pickOffer = async (kind: OfferKind) => {
-    if (kind === "review") return agent.review(true);
-    if (kind === "commit") return send(COMMIT_REQUEST);
-    if (kind === "pullRequest") return send(PULL_REQUEST);
-    // Not `send`: that would drop the checklist the plan came with.
-    if (kind === "implement") return implement();
-    const id = agent.chatId;
-    if (!id) return;
-    try {
-      const path = await moveChatToWorktree(id);
-      setMovedChat({ id, path });
-      // This is not an ordinary folder switch: the neighbouring chat keeps
-      // its running processes, terminals and checkout.
-      if (!(await workspace.open(path, true))) {
-        setMovedChat(null);
-        return;
-      }
-      history.refresh();
-    } catch (e) {
-      setMovedChat(null);
-      toast.show(String(e));
-    }
-  };
-
   const openChat = history.chats.find((one) => one.id === agent.chatId);
-
-  // The conversation as a file, for reading it somewhere else. Only what is
-  // on disk can be written out — a turn saves when it comes to rest, so this
-  // exports everything up to the one still running.
-  const exportOpenChat = async () => {
-    const chat = openChat;
-    if (!chat) return toast.show("Nothing saved to export yet");
-    const path = await pickSavePath(chat.title, "md");
-    if (!path) return;
-    try {
-      await exportChat(chat.id, path);
-      toast.show(`Exported to ${path.split("/").pop()}`);
-    } catch (e) {
-      toast.show(String(e));
-    }
-  };
-
-  // The mode first, and only then the message: the backend reads the mode
-  // when the turn starts, and a turn sent a moment early would still be a
-  // plan that cannot write.
-  const implement = async () => {
-    const failed = await conversation.pick("agent");
-    if (failed) return toast.show(failed);
-    agent.send(IMPLEMENT_PLAN, undefined, [], true);
-  };
 
   // A chat row or Overview asking to see one: Terminal shows it.
   const openProcess = (id: number | null) => {
@@ -567,8 +389,8 @@ export default function App() {
     mcp: {
       view: mcp.view,
       error: mcpEditing ? null : mcp.error,
-      onAdd: () => setMcpDialog({ entry: null }),
-      onEditServer: (name) => setMcpDialog({ entry: name }),
+      onAdd: addMcp,
+      onEditServer: editMcp,
       onRemoveServer: (name) => {
         const next = removeMcpServer(mcp.view?.text ?? "", name);
         if (next) void mcp.save(next);
@@ -576,25 +398,27 @@ export default function App() {
       onToggle: mcp.setEnabled,
       onToggleTool: mcp.setToolShown,
       onOpen: mcp.connect,
-      onEditFile: () => setMcpDialog("json"),
+      onEditFile: editMcpFile,
     },
     hooks: {
       view: hooks.view,
       error: hooksEditing ? null : hooks.error,
-      onAdd: () => setHooksDialog({ entry: null }),
-      onEditHook: (index) => setHooksDialog({ entry: index }),
+      onAdd: addHook,
+      onEditHook: editHook,
       onRemoveHook: (index) => {
         const next = removeHook(hooks.view?.text ?? "", index);
         if (next) void hooks.save(next);
       },
-      onEditFile: () => setHooksDialog("json"),
+      onEditFile: editHooksFile,
     },
     overview: {
       branch,
       changes: changeTotals,
       context: agent.context,
+      contextPending: agent.contextPending,
       usage: agent.turn.usage,
       spent: agent.spent,
+      subagents: agent.subagents,
       onOpenProcess: openProcess,
       // Not `openTab`: Terminal would show whichever of its tabs was last picked.
       onOpenProcesses: () => openProcess(null),
@@ -614,7 +438,7 @@ export default function App() {
 
   // The terminal, under the message box: the only pane that opens there.
   const bottomPane = bottomShown && (
-    <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={() => setBottomTab(null)} />
+    <AsidePanel key="bottom" tab={bottomShown} dock="bottom" ctx={{ ...panes, active: true }} onClose={closeBottom} />
   );
 
   const chat = (
@@ -631,6 +455,7 @@ export default function App() {
             }
             onOpenSettings={ide ? () => openSettings() : undefined}
             workspace={workspace.path}
+            chatId={agent.chatId}
             turn={agent.turn}
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}
@@ -673,28 +498,23 @@ export default function App() {
                 branchPicker={{
                   branches: branchPicker.branches,
                   onOpen: branchPicker.load,
-                  onPick: (name) => void branchPicker.pick(name),
-                  worktree: branchPicker.worktree,
-                  base: branchPicker.base,
-                  locked: anyTurnBusy
-                    ? "An agent is working in this folder — wait for every turn to finish, or use Worktree for a new chat"
-                    : undefined,
+                  onPick: (name) => {
+                    if (branchLocked) {
+                      toast.show(branchLocked);
+                      return;
+                    }
+                    void branchPicker.pick(name);
+                  },
+                  onWorktreeFrom: (name) => void branchPicker.startWorktree(name),
+                  locked: branchLocked,
                 }}
-                // Saved at each turn's end, so mid-turn it is the agent's own switch that differs.
-                chatBranch={unstarted || turnBusy ? null : openChat?.gitBranch}
+                // A started chat stays in its folder, its branch shown in
+                // Overview: only a new one picks either.
+                folderFixed={!unstarted}
               />
             }
             end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
             index={workspace.path ? index : null}
-            worktree={
-              unstarted && workspace.path && branch
-                ? {
-                    on: branchPicker.worktree,
-                    title: `The first message starts a worktree from ${branchPicker.base || branch}: its own folder on a new branch, this one left as it is`,
-                    onChange: branchPicker.setWorktree,
-                  }
-                : undefined
-            }
             onSend={(text, images) => send(text, undefined, images)}
             imagesEnabled={imagesEnabled}
             onQueue={agent.queue}
@@ -703,6 +523,9 @@ export default function App() {
             focus={composerFocus}
             // Not behind a page: the box is hidden there and the key would dictate into nothing to see.
             dictate={features.isOn("voice-input") && !onPage}
+            layoutCorrection={features.isOn("layout-correction") && !onPage}
+            switchLayoutAfterFix={features.layoutSwitch}
+            onLayoutCorrectionError={toast.show}
             // The box is this chat's: what was typed in another one waits there.
             draftKey={chatDraftKey("agent", agent.chatId)}
             onStop={agent.cancel}
@@ -740,11 +563,15 @@ export default function App() {
           {agentShown && agentShown.chatId === agent.chatId && (
             <AgentSheet chatId={agent.chatId} run={agentShown.run} onClose={closeAgent} onOpenFile={workspace.path ? openFileLink : undefined} />
           )}
+          {planSheet && <PlanSheet plan={panes.plan} onClose={hideAside} />}
         </>
       ) : (
         <PlainChat
           chat={plain}
           dictate={features.isOn("voice-input") && !onPage}
+          layoutCorrection={features.isOn("layout-correction") && !onPage}
+          switchLayoutAfterFix={features.layoutSwitch}
+          onLayoutCorrectionError={toast.show}
           focus={composerFocus}
           models={llm.models}
           imagesEnabled={imagesEnabled}
@@ -754,7 +581,9 @@ export default function App() {
           kube={kube}
           onSetUpKube={() => openSettings("kubernetes")}
           onCompact={async () => {
-            if (!(await plain.compact())) toast.show(plain.error ?? "Nothing worth folding away yet");
+            const folded = await plain.compact();
+            // The reason comes back from the call: the hook's error is a render behind.
+            if (folded !== true) toast.show(typeof folded === "string" ? folded : "Nothing worth folding away yet");
           }}
           onRewind={rewinding.ask}
           pages={
@@ -789,6 +618,7 @@ export default function App() {
       wrap={wrapLines}
       compact={ide}
       edits={viewer.edits}
+      reveal={viewer.reveal}
     />
   ) : previewShown && plain.chatId !== null ? (
     <PrototypePreview
@@ -809,18 +639,15 @@ export default function App() {
     />
   ) : null;
   const topPane = (
-    <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={() => setAsideHidden(true)} />
+    <AsidePanel key="top" tab={tab} dock="right" ctx={{ ...panes, active: !topHidden }} onClose={hideAside} />
   );
-  const renderPage = (one: (typeof pages)[number]) => (
+  const renderPage = (one: PageDef) => (
     <one.Component
       openPane={openTab}
       item={one === onPage ? pageItem : undefined}
-      openPage={(next, item) => {
-        setPageItem(item);
-        setPage(next);
-      }}
+      openPage={openPage}
       openChat={(id) => {
-        setPage(null);
+        leavePage();
         setMode("chat");
         void plain.open(id).then((opened) => opened || toast.show(STAY));
       }}
@@ -835,7 +662,7 @@ export default function App() {
 
   return (
     <div
-      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${topHidden ? " aside-hidden" : ""}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
+      className={`window${nativeFrame ? " native-frame" : ""}${windowsFrame ? " windows-frame" : ""}${rail ? " collapsed" : ""}${dockShown ? "" : " aside-hidden"}${ide ? " ide" : ""}${onPage ? " on-page" : ""}${previewShown && prototypePreview.expanded ? " preview-expanded" : ""}`}
       style={
         {
           "--sidebar-width": `${panels.widths.sidebar}px`,
@@ -878,37 +705,30 @@ export default function App() {
         <Sidebar
           mode={mode}
           onMode={(next) => {
-            setPage(null);
+            leavePage();
             setMode(next);
           }}
           pages={pages}
           page={onPage?.id ?? null}
-          onPage={(next) => {
-            setPageItem(undefined);
-            setPage(next);
-          }}
-          chats={agentMode ? history.chats : plain.chats}
+          onPage={openPage}
+          sections={
+            agentMode
+              ? workspace.folders.map((path) => ({
+                  path,
+                  worktreeOf: workspace.worktrees[path] ?? null,
+                  chats: history.byFolder[path] ?? [],
+                }))
+              : [{ path: null, chats: plain.chats }]
+          }
+          groups={chatGroups.groups}
+          activeFolder={agentMode ? workspace.path : null}
+          onNewChatIn={agentMode ? newChatIn : undefined}
+          onCloseFolder={agentMode ? closeFolder : undefined}
+          onMoveFolder={agentMode ? workspace.move : undefined}
           activeChat={agentMode ? agent.chatId : plain.chatId}
           chatActivity={agentMode ? agent.chatActivity : plain.chatActivity}
           onSelectChat={selectChat}
-          onArchiveChat={(id, archived) =>
-            agentMode ? history.archive(id, archived).catch((e) => toast.show(String(e))) : void plain.archive(id, archived)
-          }
-          onDeleteChat={(id) => {
-            if (!agentMode)
-              return void plain.remove(id).then(
-                (removed) => (removed ? dropDraft("chat", id) : toast.show(STAY)),
-                (e) => toast.show(String(e)),
-              );
-            // Deleting first would let a save already in flight recreate the row.
-            void agent.discard(id).then((discarded) => {
-              if (!discarded) return toast.show("Stop the running turn before deleting this chat");
-              history.remove(id).then(
-                () => dropDraft("agent", id),
-                (e) => toast.show(String(e)),
-              );
-            });
-          }}
+          {...sidebarActions}
           onOpenSettings={() => openSettings()}
           onOnboardingAction={openTab}
           themeSide={sideOf(theme.choice)}
@@ -939,15 +759,14 @@ export default function App() {
           }
           viewer={fileViewer}
           top={topPane}
-          topShown={!topHidden}
+          topShown={dockShown}
           panels={panels}
         />
       </div>
 
       <FolderSwitchDialog
         blocked={folderSwitch.blocked}
-        folder={workspace.path}
-        onStopAgent={agent.cancelAll}
+        onStopAgent={(chats) => void agent.cancelAll(chats)}
         onClose={folderSwitch.close}
       />
       <FolderTrustDialog
@@ -974,59 +793,54 @@ export default function App() {
         onClose={branchPicker.closeConflict}
       />
 
-      <Modal title="Settings" wide open={settingsOpen} onClose={() => setSettingsOpen(false)}>
-        <Settings
-          section={settingsAt}
-          kube={kube}
-          skills={{ view: skillSources.view, error: skillSources.error, onToggle: skillSources.setSourceEnabled }}
-          provider={{
-            settings: llm.settings,
-            busy: llm.busy,
-            error: llm.error,
-            onSave: llm.save,
-            onRemove: llm.remove,
-            onSelect: llm.select,
-            onKeyStore: llm.keyStore,
-            onProbe: llm.probe,
-            served: llm.served,
-          }}
-          remember={approval.remember}
-          onRemember={async (next) => {
-            const failed = await approval.pickRemember(next);
-            if (failed) toast.show(failed);
-          }}
-          debugLogging={llm.settings?.debugLogging ?? false}
-          onDebugLogging={llm.debugLogging}
-          replyLanguage={llm.settings?.replyLanguage ?? "auto"}
-          onReplyLanguage={llm.replyLanguage}
-          turnLimits={llm.settings?.turnLimits ?? DEFAULT_TURN_LIMITS}
-          onTurnLimits={llm.turnLimits}
-          theme={theme.choice}
-          onThemeMode={theme.setMode}
-          onThemePalette={theme.setPalette}
-          fontSize={fontSize.size}
-          onFontSize={fontSize.setSize}
-          wrapLines={wrapLines}
-          onWrapLines={setWrapLines}
-          alerts={alerts}
-          onAlerts={(next) => {
-            // A sound is heard as it is turned on, so the user knows what to listen for.
-            const turnedOn = (["done", "failed"] as const).find((kind) => next.sound[kind] && !alerts.sound[kind]);
-            if (turnedOn) playSound(turnedOn === "done" ? "done" : "attention").catch(() => {});
-            setAlerts(next);
-          }}
-          onOpenLog={() => {
-            setSettingsOpen(false);
-            setLogOpen(true);
-          }}
-          policy={{
-            provider: llm.settings?.providers.find((p) => p.id === llm.settings?.activeProviderId) ?? null,
-            debugLogging: llm.settings?.debugLogging ?? false,
-            mcpServers: mcp.view?.servers ?? null,
-            hooks: hooks.view?.hooks ?? null,
-          }}
-        />
-      </Modal>
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        section={settingsAt}
+        kube={kube}
+        skills={{ view: skillSources.view, error: skillSources.error, onToggle: skillSources.setSourceEnabled }}
+        provider={{
+          settings: llm.settings,
+          busy: llm.busy,
+          error: llm.error,
+          onSave: llm.save,
+          onRemove: llm.remove,
+          onSelect: llm.select,
+          onKeyStore: llm.keyStore,
+          onProbe: llm.probe,
+          served: llm.served,
+        }}
+        remember={approval.remember}
+        onRemember={async (next) => {
+          const failed = await approval.pickRemember(next);
+          if (failed) toast.show(failed);
+        }}
+        debugLogging={llm.settings?.debugLogging ?? false}
+        onDebugLogging={llm.debugLogging}
+        replyLanguage={llm.settings?.replyLanguage ?? "auto"}
+        onReplyLanguage={llm.replyLanguage}
+        turnLimits={llm.settings?.turnLimits ?? DEFAULT_TURN_LIMITS}
+        onTurnLimits={llm.turnLimits}
+        theme={theme.choice}
+        onThemeMode={theme.setMode}
+        onThemePalette={theme.setPalette}
+        fontSize={fontSize.size}
+        onFontSize={fontSize.setSize}
+        wrapLines={wrapLines}
+        onWrapLines={setWrapLines}
+        alerts={alerts}
+        onAlerts={setAlerts}
+        onOpenLog={() => {
+          setSettingsOpen(false);
+          setLogOpen(true);
+        }}
+        policy={{
+          provider: llm.settings?.providers.find((p) => p.id === llm.settings?.activeProviderId) ?? null,
+          debugLogging: llm.settings?.debugLogging ?? false,
+          mcpServers: mcp.view?.servers ?? null,
+          hooks: hooks.view?.hooks ?? null,
+        }}
+      />
 
       <Modal title="Tool calls" wide open={logOpen} onClose={() => setLogOpen(false)}>
         <ToolLog
@@ -1042,79 +856,9 @@ export default function App() {
         />
       </Modal>
 
-      <Modal
-        title={mcpDialog === "json" || mcpDialog === null ? "MCP servers" : mcpDialog.entry ?? "Add an MCP server"}
-        wide
-        open={mcpEditing}
-        onClose={() => setMcpDialog(null)}
-      >
-        {mcpDialog !== null && mcpDialog !== "json" ? (
-          <McpInstall
-            key={mcpDialog.entry ?? ""}
-            name={mcpDialog.entry}
-            text={mcp.view?.text}
-            path={mcp.view?.path ?? ""}
-            error={mcp.error}
-            onSave={mcp.save}
-            onClose={() => setMcpDialog(null)}
-            onEditJson={() => setMcpDialog("json")}
-          />
-        ) : (
-        <ConfigFileEditor
-          label="MCP configuration"
-          merge={mergeMcp}
-          text={mcp.view?.text}
-          error={mcp.error}
-          onSave={mcp.save}
-          onClose={() => setMcpDialog(null)}
-          note={
-            <>
-              The <code>mcpServers</code> format of Claude Desktop and Cursor: paste a server's snippet as it is.
-              Optional per server: <code>weight</code> (cost of a call in the turn's budget, 3 by default) and{" "}
-              <code>timeoutSecs</code> (120). Kept in {mcp.view?.path || "the app directory"}, readable only by you —
-              it may hold tokens.
-            </>
-          }
-        />
-        )}
-      </Modal>
+      <McpConfigDialog dialog={mcpDialog} view={mcp.view} error={mcp.error} onSave={mcp.save} onClose={closeMcp} onEditJson={editMcpFile} />
 
-      <Modal
-        title={hooksDialog === "json" || hooksDialog === null ? "Hooks" : hooksDialog.entry === null ? "Add a hook" : "Edit hook"}
-        wide={hooksDialog === "json"}
-        open={hooksEditing}
-        onClose={() => setHooksDialog(null)}
-      >
-        {hooksDialog !== null && hooksDialog !== "json" ? (
-          <HookForm
-            key={hooksDialog.entry ?? -1}
-            index={hooksDialog.entry}
-            text={hooks.view?.text}
-            error={hooks.error}
-            onSave={hooks.save}
-            onClose={() => setHooksDialog(null)}
-            onEditJson={() => setHooksDialog("json")}
-          />
-        ) : (
-        <ConfigFileEditor
-          label="Hooks configuration"
-          merge={mergeHooks}
-          text={hooks.view?.text}
-          error={hooks.error}
-          onSave={hooks.save}
-          onClose={() => setHooksDialog(null)}
-          note={
-            <>
-              Claude Code's <code>hooks</code> format: <code>PreToolUse</code>, <code>PostToolUse</code> and{" "}
-              <code>Stop</code> run here. The command gets the event as JSON on stdin; exit code 2 refuses the call,
-              or sends the agent back from Stop, with stderr as the reason. A <code>matcher</code> names this app's
-              tools — <code>runCommand</code>, <code>editFile</code> — not Claude Code's. Kept in{" "}
-              {hooks.view?.path || "the app directory"}.
-            </>
-          }
-        />
-        )}
-      </Modal>
+      <HooksConfigDialog dialog={hooksDialog} view={hooks.view} error={hooks.error} onSave={hooks.save} onClose={closeHooks} onEditJson={editHooksFile} />
 
       <Toast message={toast.message} />
     </div>

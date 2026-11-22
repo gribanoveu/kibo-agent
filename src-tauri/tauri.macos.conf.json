@@ -5,6 +5,7 @@
         "title": "Kibo Agent",
         "create": false,
         "titleBarStyle": "Overlay",
+        "transparent": true,
         "hiddenTitle": true,
         "trafficLightPosition": { "x": 14, "y": 17 },
         "width": 1340,

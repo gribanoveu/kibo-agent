@@ -114,17 +114,12 @@ impl ChatRole {
     /// is off (`llm_chat::tool_definitions_for_role`): that changes once, in Settings.
     pub fn tools(self) -> &'static [ToolName] {
         match self {
-            // The knowledge base read, never written: a chat has no repository
-            // for a document to be about, nor code to check it against.
             ChatRole::Assistant => &[
                 ToolName::WebSearch,
                 ToolName::WebFetch,
                 ToolName::DeepseekSearch,
                 ToolName::DeepseekFetch,
                 ToolName::Board,
-                ToolName::KnowledgeSearch,
-                ToolName::KnowledgeRead,
-                ToolName::KnowledgeRelations,
                 // Reads, while the user has MongoDB on.
                 ToolName::Mongo,
             ],
@@ -373,7 +368,7 @@ Your tools read the user's cluster — the one this chat is pinned to, below: ku
 
 ## Changing
 - What will put a change back on its own — an HPA, GitOps self-heal, an operator or Ansible owning the object, the next `helm upgrade` — is said in one sentence before you make it.
-- After a change that starts a rollout — a restart, a rollback, an apply, a scale — and whenever the user wants to know it came up, call kubeWaitRollout once instead of reading the object again and again.
+- After a change that starts a rollout — a restart, a rollback, an apply, a scale — and whenever the user wants to know it came up, call kubeWaitRollout once instead of reading the object again and again — and say in a line before it that you are waiting for the rollout, since it can take minutes.
 - Report each change in a line: what it was, what it is now, its change id.
 - Asked to stop everything: scale what has replicas, suspend the CronJobs and Jobs, and name what neither stops — a DaemonSet — rather than passing over it.
 - A change your tools can make is made with them, not handed over as commands as well. While "Allow changes" is off, say in a line what you would change and that turning it on lets you do it.
@@ -394,8 +389,8 @@ A Secret's values are never shown to you; do not try to get them another way. Wh
 mod tests {
     use super::*;
 
-    /// The assistant talks, searches the web, keeps the board and reads the
-    /// knowledge base and MongoDB — nothing it has writes there. The Kubernetes role's tools
+    /// The assistant talks, searches the web, keeps the board and reads
+    /// MongoDB — nothing it has writes there. The Kubernetes role's tools
     /// are the cluster's and the web's — none reaches a file — and the ones
     /// that change it are listed here by name: a new one is a decision, not a
     /// side effect.
@@ -409,9 +404,6 @@ mod tests {
                 ToolName::DeepseekSearch,
                 ToolName::DeepseekFetch,
                 ToolName::Board,
-                ToolName::KnowledgeSearch,
-                ToolName::KnowledgeRead,
-                ToolName::KnowledgeRelations,
                 ToolName::Mongo
             ]
         );

@@ -11,6 +11,7 @@ type Over = {
   branch?: string | null;
   onOpenFolder?: (path: string) => void;
   onPickFolder?: () => void;
+  folderFixed?: boolean;
 };
 
 const tab = (over: Over = {}) =>
@@ -21,6 +22,7 @@ const tab = (over: Over = {}) =>
       branch={over.branch}
       onOpenFolder={over.onOpenFolder ?? (() => {})}
       onPickFolder={over.onPickFolder ?? (() => {})}
+      folderFixed={over.folderFixed}
     />,
   );
 
@@ -56,6 +58,23 @@ describe("the folder", () => {
     fireEvent.click(trigger());
     fireEvent.click(screen.getByRole("option", { name: /^atlas/ }));
     expect(opened).toEqual(["/work/atlas"]);
+  });
+
+  /// A started chat keeps its folder: it is named, and no menu opens.
+  test("in a started chat it is only named, not chosen", () => {
+    tab({ recent: ["/work/kibo", "/work/atlas"], folderFixed: true });
+    const shown = screen.getByTitle(/This chat works in \/work\/kibo/);
+    expect(shown.textContent).toContain("kibo");
+    expect(shown.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(shown);
+    expect(screen.queryAllByRole("option")).toEqual([]);
+  });
+
+  /// With no folder open there is nothing to keep: the picker stays.
+  test("with no folder open, a started chat may still pick one", () => {
+    tab({ path: null, folderFixed: true });
+    fireEvent.click(trigger());
+    expect(screen.getByRole("option", { name: /Open folder/ })).toBeTruthy();
   });
 });
 

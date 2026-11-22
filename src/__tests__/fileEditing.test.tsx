@@ -120,6 +120,9 @@ function Ide({ open }: { open: FileTarget[] }) {
     <>
       {/* As the window does it when narrowed, or another layout is switched to. */}
       <button type="button" data-testid="close-all" onClick={viewer.closeAll} />
+      {/* A link in an answer, as App hands it over. */}
+      <button type="button" data-testid="link-20" onClick={() => viewer.openAt({ path: doc.path, line: 20, endLine: 22 })} />
+      <button type="button" data-testid="link-25" onClick={() => viewer.openAt({ path: doc.path, line: 25 })} />
       <FileViewer
         files={viewer.files}
         active={viewer.active}
@@ -132,6 +135,7 @@ function Ide({ open }: { open: FileTarget[] }) {
         wrap
         compact
         edits={viewer.edits}
+        reveal={viewer.reveal}
       />
     </>
   );
@@ -179,6 +183,33 @@ beforeEach(() => {
 });
 
 describe("editing in the IDE layout", () => {
+  test("a link with lines opens the file there, lit, in the tab it already has; coming back does not jump again", async () => {
+    disk["docs/a.adoc"] = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+    await ide([doc, other]);
+    const line = () => editor().state.doc.lineAt(editor().state.selection.main.head).number;
+    fireEvent.click(screen.getByTestId("link-20"));
+    await toEdit();
+    expect(line()).toBe(20);
+    expect(editor().state.selection.main.empty).toBe(true);
+    expect([...document.querySelectorAll(".cm-revealed")].map((el) => el.textContent)).toEqual(["line 20", "line 21", "line 22"]);
+    expect(screen.getAllByRole("tab", { name: /a\.adoc/ })).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("link-25"));
+    await settle(5);
+    expect(line()).toBe(25);
+    expect(screen.getAllByRole("tab", { name: /a\.adoc/ })).toHaveLength(1);
+    // The light goes out.
+    await settle(1700);
+    expect(document.querySelector(".cm-revealed")).toBeNull();
+
+    fireEvent.click(tab("b.adoc"));
+    await showing("= B\n");
+    fireEvent.click(tab("a.adoc"));
+    await toEdit();
+    await showing(disk["docs/a.adoc"]!);
+    expect(line()).toBe(1);
+  });
+
   test("a file opens in the editor; an edit marks its tab and saving writes it over what was opened", async () => {
     await ide();
     expect(shown()).toBe("= Title\n");

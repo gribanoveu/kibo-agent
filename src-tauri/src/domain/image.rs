@@ -40,7 +40,7 @@ pub struct ImagePart {
 }
 
 /// What a picture is estimated to cost, at least and at most. Measured on
-/// DeepSeek (`docs/30-vision.md`, V-0): ~200 tokens for 64×32, ~940 for
+/// DeepSeek: ~200 tokens for 64×32, ~940 for
 /// 1568×1000. Anthropic charges about `w·h/750` and scales to 1.15 MP, about
 /// 1600. The formula is Anthropic's and the floor DeepSeek's: an estimate
 /// that errs high only compacts a little early.

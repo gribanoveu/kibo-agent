@@ -2,7 +2,7 @@
 
 The index embeds with Model2Vec `potion-multilingual-128M`, quantized to int8 and **cut
 down to Russian and English**. It is the only embedding model: nothing is sent to a
-remote service to be indexed (`docs/06-port-plan.md`, stage 5). Files live in
+remote service to be indexed. Files live in
 `src-tauri/models/potion-multilingual-128M-int8-ru-en/`, are packaged with the app through
 `bundle.resources` in `tauri.conf.json`, and are loaded by
 `src-tauri/src/infra/local_embeddings.rs`.
@@ -81,4 +81,4 @@ the 271 538 tokens. A vocabulary of the ~100k most frequent tokens on a large Ru
 English + code corpus would shrink the tokenizer and the table proportionally — an estimated
 ~120 MB resident in all. Unlike the script cut, this one is **lossy**: a rare word loses the
 piece it was cut into and is segmented differently. It needs a corpus and a search-quality
-measurement to decide, which is why it waits for F-5.13 (`docs/06-port-plan.md`).
+measurement to decide, which is why it waits for F-5.13.

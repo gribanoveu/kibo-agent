@@ -162,12 +162,23 @@
   border-color: var(--accent);
 }
 .catalog-card-ico {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
   width: 20px;
   height: 20px;
   color: var(--text-faint);
+}
+/* An update waiting: a dot on the icon, amber like the card's state for it. */
+.catalog-card-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
 }
 .catalog-card-body {
   flex: 1;

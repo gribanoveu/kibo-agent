@@ -7,7 +7,7 @@
 //! `/embeddings` endpoint with its base URL, model name, dimensions, a pinned
 //! CA certificate, extra request headers, a TLS-verification switch, presets,
 //! a merged config and an API key in the keychain. The owner's decision for
-//! this port (`docs/06-port-plan.md`, stage 5) is **the bundled model only**:
+//! this port is **the bundled model only**:
 //! code and questions about it never leave the machine to be indexed. Every
 //! type that existed to configure or resolve that choice has nothing to
 //! choose between, and is gone with it.

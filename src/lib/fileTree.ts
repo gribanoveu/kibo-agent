@@ -8,8 +8,8 @@ export type FileStatus = "modified" | "added" | "untracked" | "conflicted";
 export type TreeEntry = { name: string; path: string; isDir: boolean; status: FileStatus | null; changed: boolean };
 export type FolderListing = { entries: TreeEntry[]; more: number };
 
-/** One folder of the open one; `""` is the open folder itself. */
-export async function workspaceList(dir: string): Promise<FolderListing> {
+/** One folder of the one `workspace` names; `""` is that folder itself. */
+export async function workspaceList(dir: string, workspace: string | null): Promise<FolderListing> {
   requireBackend();
-  return invoke<FolderListing>("workspace_list", { dir });
+  return invoke<FolderListing>("workspace_list", { dir, workspace });
 }

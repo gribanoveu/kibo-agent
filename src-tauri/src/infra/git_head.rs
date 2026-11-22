@@ -27,15 +27,30 @@ pub fn current_branch(root: &Path) -> Option<String> {
     branch
 }
 
+/// The commit `HEAD` points at in the repository `root` is in — the full
+/// sha, so the answer survives branch switches and worktrees, unlike the
+/// branch name. `None` outside a repository and before the first commit,
+/// where HEAD names a branch that has nothing on it.
+pub fn current_commit(root: &Path) -> Option<String> {
+    let repo = Repository::discover(root).ok()?;
+    // Bound before returning: the `?` temporaries borrow `repo` and would
+    // outlive it, as in `current_branch`.
+    let commit = repo.head().ok()?.target().map(|id| id.to_string());
+    commit
+}
+
 /// The main working tree of the repository `root` is a linked worktree of;
-/// `None` for the main one itself, and outside a repository.
+/// `None` for the main one itself, and outside a repository. Spelled as the
+/// app spells a folder: git2 answers `C:/…` on Windows, which matches no
+/// open or recent folder (`C:\…`).
 pub fn worktree_of(root: &Path) -> Option<PathBuf> {
     let repo = Repository::discover(root).ok()?;
     if !repo.is_worktree() {
         return None;
     }
     // The shared `.git` sits in the main working tree.
-    repo.commondir().parent().map(Path::to_path_buf)
+    let main = repo.commondir().parent()?;
+    Some(crate::infra::paths::canonicalize_plain(main).unwrap_or_else(|_| main.to_path_buf()))
 }
 
 #[cfg(test)]
@@ -60,6 +75,18 @@ mod tests {
         commit(&repo);
         std::fs::create_dir(dir.join("sub")).unwrap();
         assert_eq!(current_branch(&dir.join("sub")).as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn the_current_commit_is_the_heads_sha_and_nothing_before_it() {
+        let dir = temp_dir("git-head-commit");
+        let repo = Repository::init(&dir).unwrap();
+        assert_eq!(current_commit(&dir), None, "no commits yet");
+
+        let id = commit(&repo);
+        assert_eq!(current_commit(&dir).as_deref(), Some(id.to_string().as_str()));
+
+        assert_eq!(current_commit(&temp_dir("git-head-commit-plain")), None);
     }
 
     #[test]

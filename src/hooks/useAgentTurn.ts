@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { dropOpen, writtenChecklist, writtenPlan } from "../lib/plan";
-import { HAND_TO_AGENT, typedCommand } from "../lib/slashCommands";
 import { branchAt, branchPoints } from "../lib/branch";
 import { changesFrom, rewoundNotice } from "../lib/rewind";
 import {
   alwaysAllow,
+  asTurnFailure,
   branchSummary,
   cancelChat,
   cancelSteer,
@@ -15,18 +15,18 @@ import {
   type LlmMessage,
   onTurnEvent,
   resumeChat,
-  reviewStart,
   rewindApply,
   rewindPreview,
   startChat,
   steer as steerCommand,
   type Task,
   type ToolCallDecision,
+  type TurnFailure,
 } from "../lib/chat";
 import type { ImagePart } from "../lib/images";
 import { answerMcpQuestion, type McpAnswer } from "../lib/mcp";
-import { useChatTokens } from "./useChatTokens";
-import { generateChatTitle, loadChat, logNextPrompt, nextPromptSent, saveChat, type ChatRecord } from "../lib/savedChats";
+import { useChatTokens, useSubagentTokens } from "./useChatTokens";
+import { generateChatTitle, journalBlocks, loadChat, logNextPrompt, nextPromptSent, saveChat, type ChatRecord } from "../lib/savedChats";
 import {
   acceptEvent,
   acceptOutcome,
@@ -59,6 +59,8 @@ type Session = {
   turn: TurnState;
   error: string | null;
   context: ContextUsage | null;
+  /** Whether `context` has been read for this session at all — until then the Overview draws a placeholder. */
+  contextRead: boolean;
   history: LlmMessage[];
   todos: Task[];
   plan: string | null;
@@ -79,6 +81,12 @@ type Session = {
   writeTail: Promise<unknown>;
   /** Finished while another chat was on screen; cleared when this one opens. */
   finished: boolean;
+  /**
+   * The folder a new chat's first message was typed in, sent with its first
+   * start and saves: the backend's active folder may already be the next one
+   * while a folder opens. Unused once the chat is saved — its record says.
+   */
+  folder: string | null;
 };
 
 const fresh = (key: string = crypto.randomUUID()): Session => ({
@@ -87,6 +95,7 @@ const fresh = (key: string = crypto.randomUUID()): Session => ({
   turn: emptyTurn(),
   error: null,
   context: null,
+  contextRead: false,
   history: [],
   todos: [],
   plan: null,
@@ -105,6 +114,7 @@ const fresh = (key: string = crypto.randomUUID()): Session => ({
   writes: new Set(),
   writeTail: Promise.resolve(),
   finished: false,
+  folder: null,
 });
 
 const restored = (record: ChatRecord): Session => ({
@@ -124,10 +134,13 @@ const turnCounts = new Map<string, number>();
 
 export function useAgentTurn({
   model,
+  folder = null,
   onSaved,
   onGiveBack,
   spentShown = false,
 }: {
+  /** The folder the window shows — where a new chat's message is typed. */
+  folder?: string | null;
   /** The model turns run on — `acceptEvent` says when a cache miss came with a switch. */
   model?: string;
   onSaved?: () => void;
@@ -151,6 +164,8 @@ export function useAgentTurn({
   giveBackRef.current = onGiveBack;
   const modelRef = useRef(model);
   modelRef.current = model;
+  const folderRef = useRef(folder);
+  folderRef.current = folder;
 
   // Background deltas need no render of the chat on screen. A status change
   // does: it is what the sidebar's per-chat indicator is derived from.
@@ -199,9 +214,27 @@ export function useAgentTurn({
         // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
         const now = Date.now();
         setTurn(session, (state) => acceptEvent(state, event, now, modelRef.current));
+        // The transcript so far, journaled once a round: a crash keeps what
+        // the window drew, as the loop keeps what the model said. Queued
+        // with the saves, so the turn's last save folds it, never races it.
+        if (event.type === "roundCompleted") {
+          trackWrite(session, (snapshot) => {
+            const blocks = snapshot.turn.blocks.slice(snapshot.turnStart);
+            return journalBlocks(
+              snapshot.key,
+              id,
+              blocks,
+              writtenChecklist(blocks) ?? snapshot.todos,
+              writtenPlan(blocks) ?? snapshot.plan,
+              // Where the turn's slice joins the saved transcript: the
+              // blocks before it are the record's, spliced back on recovery.
+              snapshot.turnStart,
+            ).catch(() => {});
+          });
+        }
       });
     },
-    [setTurn],
+    [setTurn, trackWrite],
   );
   const stop = useCallback((session: Session) => {
     session.subscribed?.();
@@ -218,6 +251,23 @@ export function useAgentTurn({
         session.history = outcome.value.history;
         stop(session);
       }
+    },
+    [setTurn, stop],
+  );
+
+  /** A turn that failed: its work is kept when it hands any back — the
+      history as of the last completed round, the checklist and plan — and
+      saved as a finished turn is, so the next message is sent with it. */
+  const fail = useCallback(
+    (session: Session, failure: TurnFailure) => {
+      if (failure.recovery) {
+        session.history = failure.recovery.history;
+        session.todos = failure.recovery.todos;
+        if (failure.recovery.plan !== null) session.plan = failure.recovery.plan;
+      }
+      session.error = failure.message;
+      stop(session);
+      setTurn(session, (state) => appendNotice(endTurn(state), `The turn failed: ${failure.message}`));
     },
     [setTurn, stop],
   );
@@ -239,6 +289,7 @@ export function useAgentTurn({
           snapshot.todos,
           snapshot.plan,
           snapshot.branchedFrom,
+          snapshot.folder,
         )
           .then(() => {
             savedRef.current?.();
@@ -270,7 +321,7 @@ export function useAgentTurn({
       }
       trackWrite(
         session,
-        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom)
+        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom, snapshot.folder, `${snapshot.key}/turn-${snapshot.turnId}`)
           .then(() => savedRef.current?.())
           .catch((e) => {
             session.error = String(e);
@@ -286,11 +337,13 @@ export function useAgentTurn({
       contextUsage(session.key, session.history).then(
         (context) => {
           session.context = context;
+          session.contextRead = true;
           changed(session);
         },
         () => {
           // A meter that cannot be drawn is not worth an error banner.
           session.context = null;
+          session.contextRead = true;
           changed(session);
         },
       );
@@ -305,6 +358,7 @@ export function useAgentTurn({
     [current, current.chatId, current.turn.status, refreshContext],
   );
   const spent = useChatTokens(current.chatId ?? current.key, spentShown, current.turn.usage, current.turn.status, spentTick);
+  const subagents = useSubagentTokens(current.chatId ?? current.key, spentShown, current.turn.usage, current.turn.status, spentTick);
 
   const mint = useCallback((session: Session, prefix: string) => {
     const n = (turnCounts.get(session.key) ?? 0) + 1;
@@ -313,11 +367,13 @@ export function useAgentTurn({
     return `${session.key}/${prefix}-${n}`;
   }, []);
 
-  /** Folds the older part of a conversation into a summary. */
+  /** Folds the older part of a conversation into a summary. `true` when it
+      folded; the reason it failed, when the caller forced it; `null` when
+      there was nothing worth folding, or a pass is already under way. */
   const compactSession = useCallback(
-    async (session: Session, force: boolean) => {
-      if (session.turn.status === "running" || session.turn.status === "awaitingApproval") return false;
-      if (session.compacting) return false;
+    async (session: Session, force: boolean): Promise<true | string | null> => {
+      if (session.turn.status === "running" || session.turn.status === "awaitingApproval") return null;
+      if (session.compacting) return null;
       session.compacting = true;
       const id = mint(session, "compact");
       let ended = false;
@@ -332,7 +388,7 @@ export function useAgentTurn({
       try {
         const shorter = await compactHistory(session.history, force, id, session.key);
         end(shorter && { folded: shorter.folded });
-        if (!shorter) return false;
+        if (!shorter) return null;
         session.history = shorter.history;
         session.unsaved = true;
         refreshContext(session);
@@ -342,8 +398,11 @@ export function useAgentTurn({
         if (force) {
           session.error = String(e);
           changed(session);
+          // The reason goes back to the caller: the error on the hook is a
+          // render behind by the time this promise lands.
+          return String(e);
         }
-        return false;
+        return null;
       } finally {
         session.compacting = false;
         spentChanged();
@@ -385,48 +444,17 @@ export function useAgentTurn({
 
       const id = mint(session, "turn");
       session.lastTurn = { id, user: trimmed };
+      // Where a new chat is typed is where it lives (F-8): taken now, with the
+      // window still on that folder.
+      if (session.chatId === null) session.folder ??= folderRef.current;
       try {
         await listen(session, id);
-        finish(session, await startChat(id, session.key, session.history, session.todos, session.plan));
+        finish(session, await startChat(id, session.key, session.history, session.todos, session.plan, session.folder));
       } catch (e) {
-        session.error = String(e);
-        stop(session);
-        setTurn(session, (state) => appendNotice(endTurn(state), `The turn failed: ${e}`));
+        fail(session, asTurnFailure(e));
       }
     },
-    [setTurn, mint, listen, finish, changed, stop],
-  );
-
-  const reviewSession = useCallback(
-    async (session: Session, handed = false) => {
-      const typed = handed ? typedCommand("review", HAND_TO_AGENT) : "/review";
-      if (session.turn.status === "running" || session.turn.status === "awaitingApproval") return;
-      session.error = null;
-      const answered = session.journaled;
-      session.journaled = null;
-      void answered?.then((row) => (row ? nextPromptSent(row, typed) : undefined)).catch(() => {});
-      session.unsaved = true;
-      session.turnStart = session.turn.blocks.length;
-      setTurn(session, (state) => appendUserMessage(state, typed, Date.now(), "/review"));
-      session.todos = dropOpen(session.todos);
-
-      const id = mint(session, "turn");
-      session.lastTurn = { id, user: typed };
-      try {
-        await listen(session, id);
-        finish(session, await reviewStart(id, session.key, session.history, session.todos, session.plan, handed));
-      } catch (e) {
-        session.error = String(e);
-        stop(session);
-        session.history = [
-          ...session.history,
-          { role: "user", content: "/review" },
-          { role: "assistant", content: `[The review failed: ${e}]` },
-        ];
-        setTurn(session, (state) => appendNotice(endTurn(state), `The review failed: ${e}`));
-      }
-    },
-    [setTurn, mint, listen, finish, stop],
+    [setTurn, mint, listen, finish, fail, changed],
   );
 
   // A finished turn sends its queue. Text that has to come back waits while
@@ -583,23 +611,33 @@ export function useAgentTurn({
       setTurn(session, clearApproval);
       const id = `${session.key}/turn-${session.turnId}`;
       try {
-        for (const tool of always) await alwaysAllow(tool);
+        for (const tool of always) await alwaysAllow(tool, session.key);
         const plan = writtenPlan(session.turn.blocks.slice(session.turnStart)) ?? session.plan;
         finish(session, await resumeChat(id, session.key, checkpoint, decisions, plan));
       } catch (e) {
-        // Admission can refuse a resume while another chat holds the last slot.
-        // Keep the checkpoint and its card so the user can answer it again.
-        session.error = String(e);
-        setTurn(session, () => before);
+        const failure = asTurnFailure(e);
+        if (failure.recovery) {
+          // The turn ran past the card and then failed: its work is kept and
+          // the card goes — deciding it again would run those calls twice.
+          fail(session, failure);
+        } else {
+          // Admission can refuse a resume while another chat holds the last slot.
+          // Keep the checkpoint and its card so the user can answer it again.
+          session.error = failure.message;
+          setTurn(session, () => before);
+        }
       }
     },
-    [setTurn, finish, stop],
+    [setTurn, finish, fail],
   );
 
   const cancel = useCallback(() => cancelChat(active.current.key), []);
-  const cancelAll = useCallback(async () => {
+  /** Stops every running turn, or only those of the chats in `only`. */
+  const cancelAll = useCallback(async (only?: readonly string[]) => {
     const running = [...sessions.current.values()].filter(
-      (session) => session.turn.status === "running" || session.turn.status === "awaitingApproval",
+      (session) =>
+        (session.turn.status === "running" || session.turn.status === "awaitingApproval") &&
+        (!only || only.includes(session.key)),
     );
     await Promise.all(running.map((session) => cancelChat(session.key)));
   }, []);
@@ -636,6 +674,9 @@ export function useAgentTurn({
       from.journaled = null;
       const session = fresh();
       session.branchedFrom = from.chatId;
+      // Saved at once when whole: in the folder on screen, not the backend's
+      // active one, which an open on its way may have moved already.
+      session.folder = folderRef.current;
       session.history = cut.history;
       session.todos = whole ? from.todos : [];
       session.plan = whole ? from.plan : writtenPlan(cut.blocks);
@@ -720,7 +761,7 @@ export function useAgentTurn({
       if (!session.chatId || session.turn.status === "running") return;
       trackWrite(
         session,
-        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, value, snapshot.branchedFrom).catch((e) => {
+        (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, value, snapshot.branchedFrom, snapshot.folder).catch((e) => {
           session.error = String(e);
           changed(session);
         }),
@@ -734,7 +775,7 @@ export function useAgentTurn({
     if (!session.chatId || session.turn.status === "running") return;
     trackWrite(
       session,
-      (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom)
+      (snapshot) => saveChat(snapshot.key, snapshot.history, snapshot.turn.blocks, snapshot.todos, snapshot.plan, snapshot.branchedFrom, snapshot.folder)
         .then(() => savedRef.current?.())
         .catch((e) => {
           session.error = String(e);
@@ -751,7 +792,14 @@ export function useAgentTurn({
     !current.turn.blocks.some((block) => block.kind === "steer" && block.id === `steer:${note.id}`),
   );
   const chatActivity: Record<string, ChatActivity> = {};
+  // Every chat's turn, the ones off screen too, by session key: what the
+  // alerts follow — a turn ending in another chat or folder is told as well.
+  const turns: Record<string, { turn: TurnState; failed: boolean; queued: number }> = {};
   for (const session of sessions.current.values()) {
+    // Only the chat on screen sends its queue when its turn ends; one off
+    // screen waits for the user, so its end is told even with messages queued.
+    const queued = session === active.current ? session.queued.length : 0;
+    turns[session.key] = { turn: session.turn, failed: session.error !== null, queued };
     if (!session.chatId) continue;
     if (session.turn.status === "running" || session.turn.status === "awaitingApproval") {
       chatActivity[session.chatId] = session.turn.status;
@@ -764,12 +812,15 @@ export function useAgentTurn({
     /** The session's identity: `chatId` is null until a fresh chat is first saved. */
     sessionKey: current.key,
     chatActivity,
+    turns,
     spent,
+    subagents,
     error: current.error,
     context: busy ? (current.turn.estimate ?? current.context) : current.context,
+    /** The open chat's estimate not read yet — a chat just opened. */
+    contextPending: !current.contextRead && !(busy && current.turn.estimate),
     send: (text: string, sent?: string, images: ImagePart[] = [], keepChecklist = false) =>
       sendSession(active.current, text, sent, images, keepChecklist),
-    review: (handed = false) => reviewSession(active.current, handed),
     queued: current.queued,
     queue,
     unqueue,

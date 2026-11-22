@@ -145,7 +145,7 @@
           "q": "refuse to overwrite a file that changed on disk after the agent read it",
           "expect": [
             {
-              "path": "src-tauri/src/domain/tools.rs",
+              "path": "src-tauri/src/domain/tools/read_files.rs",
               "name": "ReadFiles"
             }
           ]
@@ -155,7 +155,7 @@
           "q": "запретить запись в файл, изменившийся после чтения",
           "expect": [
             {
-              "path": "src-tauri/src/domain/tools.rs",
+              "path": "src-tauri/src/domain/tools/read_files.rs",
               "name": "ReadFiles"
             }
           ],
@@ -326,7 +326,7 @@
           "q": "dedupe_repeat_result",
           "expect": [
             {
-              "path": "src-tauri/src/services/llm_chat.rs",
+              "path": "src-tauri/src/services/llm_chat/calls.rs",
               "name": "dedupe_repeat_result"
             }
           ]
@@ -399,33 +399,30 @@
         },
         {
           "lang": "ru",
-          "q": "почему в продукте нет CLI",
+          "q": "какие данные уходят провайдеру модели",
           "expect": [
             {
-              "path": "docs/01-vision.md"
+              "path": "docs/08-data-policy.md"
             }
           ],
           "answer": "docs"
         },
         {
           "lang": "en",
-          "q": "known bugs found in the upstream app",
+          "q": "how tests are checked by breaking the code on purpose",
           "expect": [
             {
-              "path": "docs/07-upstream-findings.md"
+              "path": "docs/11-mutation-testing.md"
             }
           ],
           "answer": "docs"
         },
         {
           "lang": "ru",
-          "q": "что нельзя потерять при переносе индексного слоя",
+          "q": "чем продукт отличается от других агентов",
           "expect": [
             {
-              "path": "docs/06-port-plan.md"
-            },
-            {
-              "path": "docs/05-gaps.md"
+              "path": "docs/09-product.md"
             }
           ],
           "answer": "docs"
@@ -445,8 +442,8 @@
           "q": "where is dedupe_repeat_result called in the turn loop",
           "expect": [
             {
-              "path": "src-tauri/src/services/llm_chat.rs",
-              "name": "run"
+              "path": "src-tauri/src/services/llm_chat/calls.rs",
+              "name": "run_calls"
             }
           ],
           "answer": "caller"
@@ -467,7 +464,7 @@
           "q": "who calls is_context_length_error",
           "expect": [
             {
-              "path": "src-tauri/src/services/llm_chat.rs",
+              "path": "src-tauri/src/services/llm_chat/round.rs",
               "name": "too_long"
             }
           ],

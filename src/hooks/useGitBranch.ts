@@ -15,7 +15,7 @@ export function useGitBranch(workspace: string | null, turnStatus: string) {
     if (!workspace) return;
     let live = true;
     const load = () =>
-      currentBranch()
+      currentBranch(workspace)
         .then((name) => live && setBranch(name))
         // A branch that cannot be read shows the folder instead; not worth a message.
         .catch(() => live && setBranch(null));
@@ -42,7 +42,7 @@ export function useWorktreeOf(workspace: string | null) {
     setMain(null);
     if (!workspace) return;
     let live = true;
-    worktreeOf()
+    worktreeOf(workspace)
       .then((path) => live && setMain(path))
       .catch(() => live && setMain(null));
     return () => {

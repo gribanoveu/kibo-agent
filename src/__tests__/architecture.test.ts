@@ -7,8 +7,7 @@ import { join } from "node:path";
 // backend's half is `src-tauri/src/architecture.rs`.
 //
 // What breaks a rule today is listed in `known`, and the list only shrinks: an
-// entry that no longer matches fails too, so fixing one means deleting its line
-// (`docs/34-architecture-audit.md`).
+// entry that no longer matches fails too, so fixing one means deleting its line.
 
 const SRC = join(import.meta.dir, "..");
 
@@ -57,6 +56,8 @@ const RULES: Rule[] = [
     known: [
       // The clock that redraws elapsed time — AGENTS.md says it is not polling.
       "components/ChatPanel.tsx",
+      // The same clock for a run's live speed estimate; the data is event-read.
+      "components/AgentSheet.tsx",
     ],
     why: "the frontend does not poll the backend: it listens for an event and reads again",
   },

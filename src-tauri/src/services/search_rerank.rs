@@ -3,7 +3,7 @@
 //! history, as a chat's title is asked for. The index finds the right file
 //! within 30 far more often than it puts it first (search bench: 84 of 93
 //! against 37), and the model reading question and code together closes most
-//! of that gap — MRR 0.546 → 0.786, `docs/13-reranker-research.md`. A failed or
+//! of that gap — MRR 0.546 → 0.786. A failed or
 //! empty reply leaves the index's order: the pass only ever reorders.
 
 use std::sync::Arc;

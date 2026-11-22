@@ -1,19 +1,43 @@
-/* Three columns side by side, as tall as the longest: an empty one is still
-   somewhere to drop a card. */
+/* Three columns side by side, filling the body's height: each is a fixed box
+   whose cards scroll inside it, so a column's top and bottom stay in view
+   however long its list is. */
+.page-body:has(.board-columns) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .board-columns {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 4px;
 }
 .board-column {
-  min-height: 120px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px 10px 12px;
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
+}
+/* The cards' own scroll box under the head: the head stays put above it,
+   outside the scroll, so nothing scrolls under or shows through it. */
+.board-column-cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* A narrow scrollbar, as the app wears it everywhere. */
+.board-column-cards,
+.board-archive-list {
+  scrollbar-width: thin;
 }
 /* The column's name after a dot in its colour: waiting, under way, finished. */
 .board-column-head {
@@ -45,6 +69,11 @@
   color: var(--text-faint);
   font-size: var(--fs-xs);
   font-weight: 500;
+}
+/* The Done column's archive hint, at the head's right end. */
+.board-column-tip {
+  margin-left: auto;
+  display: inline-flex;
 }
 /* An empty column says what it is for, inside the place a card drops into. */
 .board-column-empty {
@@ -168,6 +197,29 @@
   background: color-mix(in srgb, var(--red) 14%, transparent);
   color: var(--red);
 }
+/* The card's tags, set in its sheet. */
+.board-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.board-card-tag {
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+/* How many remarks the card has, read in its sheet. */
+.board-card-comments {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
 /* Shown on the card under the pointer or holding the focus, so a column of
    cards is not a column of buttons; laid over the foot rather than beside it,
    so the id and the due day keep the card's width. */
@@ -207,24 +259,26 @@
   background: var(--bg-hover);
   color: var(--text);
 }
-/* Under To do's cards, until it opens into an editor. */
+/* At the right end of To do's heading. */
 .board-add {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: var(--control);
-  padding: 0 8px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-faint);
-  font-family: inherit;
-  font-size: var(--fs-sm);
   cursor: pointer;
 }
-.board-add:hover {
+.board-add:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
+}
+.board-add:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 /* A card being written: the title, the note, Cancel and Save. */
 .board-editor {
@@ -293,14 +347,22 @@
   color: var(--red);
   font-size: var(--fs-md);
 }
-/* Under the columns, folded until asked for. */
+/* Under the columns, folded until asked for; kept to its own share of the
+   body so an open archive scrolls itself instead of eating the columns. */
 .board-archive {
-  margin-top: 20px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  max-height: 40%;
+  overflow: hidden;
+  margin-top: 12px;
 }
 .board-archive-toggle {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   height: var(--control);
   padding: 0 10px;
   border: none;
@@ -315,7 +377,14 @@
   background: var(--bg-hover);
   color: var(--text);
 }
+/* The open/close sign at the row's right end, away from the count. */
+.board-archive-chev {
+  margin-left: auto;
+}
 .board-archive-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -323,4 +392,39 @@
 }
 .board-archive-list .board-card {
   opacity: 0.75;
+}
+/* The card whose sheet is open. */
+.board-card.selected {
+  border-color: var(--accent);
+}
+/* The board's tags over the columns, square as the Catalog's tabs; the
+   picked ones filled. */
+.board-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.board-filter button {
+  height: var(--control);
+  padding: 0 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+.board-filter button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.board-filter button[aria-pressed="true"] {
+  border-color: var(--border);
+  background: var(--bg-active);
+  color: var(--text);
+}
+.board-filter button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }

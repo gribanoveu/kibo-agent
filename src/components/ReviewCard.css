@@ -130,6 +130,39 @@
   color: var(--text-faint);
   font-size: var(--fs-xs);
 }
+/* The reviewer's words, folded: the findings are what to act on. */
+.review-notes > summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.review-notes > summary::-webkit-details-marker {
+  display: none;
+}
+.review-notes > summary:hover {
+  color: var(--text);
+}
+.review-notes > summary .chev {
+  flex: none;
+  transition: transform 0.15s;
+}
+.review-notes[open] > summary {
+  margin-bottom: 2px;
+}
+.review-notes[open] > summary .chev {
+  transform: rotate(90deg);
+}
+.review-report-range {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
 .review-report-summary {
   margin: 2px 0 2px;
   color: var(--text-dim);

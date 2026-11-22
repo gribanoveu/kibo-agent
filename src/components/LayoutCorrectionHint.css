@@ -1,0 +1,55 @@
+.layout-correction {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 18px 0;
+  padding: 6px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.layout-correction-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-correction-text b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.layout-correction button {
+  flex: none;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--bg-active);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.layout-correction button:hover {
+  background: var(--bg-hover);
+}
+
+.layout-correction kbd {
+  flex: none;
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 560px) {
+  .layout-correction kbd {
+    display: none;
+  }
+}

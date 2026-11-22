@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ChatPanel, Preview, Transcript, formatDuration, formatTokens } from "../components/ChatPanel";
 import { emptyTurn, type Block, type TurnState } from "../lib/chatTurnReducer";
+import type { AgentInfo } from "../lib/agents";
 
 // The transcript's own rules: who a block belongs to, and what the approval
 // card sends back. Both are decided here rather than by the backend, so both
@@ -43,6 +44,14 @@ describe("the checklist while the agent works", () => {
     expect(ticker.querySelectorAll("li")).toHaveLength(3);
     expect(ticker.querySelector("[aria-current]")?.textContent).toBe("fix the parser");
     expect(ticker.compareDocumentPosition(screen.getByRole("timer")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /// A title cut to the column's width still says where the work stands.
+  test("counts what is done out of the whole list", () => {
+    withList({ status: "running", runningSince: Date.now() });
+    const count = screen.getByTitle("1 of 3 done");
+    expect(count.textContent).toBe("1/3");
+    expect(count.closest(".task-ticker")).toBeTruthy();
   });
 
   test("is not there once nothing on it is open", () => {
@@ -378,17 +387,95 @@ describe("how long the agent worked", () => {
       render(<ChatPanel workspace="/tmp/p" turn={turnState} onDecide={() => {}} onOpenRepo={() => {}} runningProcesses={ids} onOpenProcess={(id) => opened.push(id)} />);
 
     const live = running(state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 }), [3]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·1 process running");
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·1 process");
     live.unmount();
 
     running(state(turn, { status: "done" }), [4, 2]);
-    fireEvent.click(screen.getByRole("button", { name: "2 processes running" }));
+    fireEvent.click(screen.getByRole("button", { name: "2 processes" }));
     expect(opened).toEqual([4]);
   });
 
   test("says nothing of processes when none runs", () => {
     panel(state(turn, { status: "done" }));
-    expect(screen.queryByText(/running/)).toBeNull();
+    expect(screen.queryByText(/process/)).toBeNull();
+  });
+
+  /// The subagents' own meter: their tokens are not the chat's context, and
+  /// while they stream their speed and tokens are the chat's own estimate —
+  /// read on each helper's card, not on the chat's Working line.
+  const sub = (id: number, over: Partial<AgentInfo> = {}): AgentInfo => ({
+    id,
+    task: "t",
+    state: { state: "running" },
+    steps: [],
+    tokens: { prompt: 1000, cached: 0, completion: 100 },
+    answer: null,
+    progress: { streamSince: Date.now() - 2000, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } },
+    ...over,
+  });
+  const exploring = (id: string, task = "t") =>
+    ({ kind: "tool", id, round: 1, name: "explore", arguments: JSON.stringify({ task }), status: "running", output: "" }) as Block;
+  const liveTurn = (blocks: Block[] = [exploring("e1")]) =>
+    state([{ kind: "user", id: "u0", text: "fix it" }, ...blocks], { status: "running", runningSince: Date.now() - 5_000 });
+  const transcript = (subagents: AgentInfo[], blocks?: Block[]) =>
+    render(<Transcript turn={liveTurn(blocks)} onDecide={() => {}} subagents={subagents} />);
+  const facts = () => [...document.querySelectorAll(".subagent-card .subagent-facts")].map((e) => e.textContent);
+
+  test("a running subagent's speed and tokens on its card, and not on the Working line", () => {
+    transcript([sub(1)]);
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
+  });
+
+  test("several run at once: each card carries its own meter", () => {
+    transcript(
+      [sub(1, { task: "t1" }), sub(2, { task: "t2", tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } })],
+      [exploring("e1", "t1"), exploring("e2", "t2")],
+    );
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s", "~570 tokens · ~10 tok/s"]);
+  });
+
+  test("an explore whose brief opens with a context line still matches its run", () => {
+    const brief = "Repository: /work/kibo\nQuestion: where is X?";
+    const block = { ...exploring("e1"), arguments: JSON.stringify({ task: brief }) } as Block;
+    transcript([sub(1, { task: brief })], [block]);
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
+  });
+
+  test("two running reviews each carry their own meter, in run order however the list is ordered", () => {
+    const review = (id: string) => ({ kind: "tool", id, round: 1, name: "review", arguments: "{}", status: "running", output: "" }) as Block;
+    transcript(
+      [
+        // newest-first, as agents_list returns it: order must not swap the meters.
+        sub(2, { task: "Review the change in this repository.\nRange: b.", tokens: { prompt: 500, cached: 0, completion: 50 }, progress: { streamSince: Date.now() - 2000, streamChars: 70, timed: { tokens: 0, ms: 0, chars: 0 } } }),
+        sub(1, { task: "Review the change in this repository.\nRange: a." }),
+      ],
+      [review("r1"), review("r2")],
+    );
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s", "~570 tokens · ~10 tok/s"]);
+  });
+
+  test("a run named by its call matches even when the brief's words differ", () => {
+    transcript([sub(1, { task: "something else entirely", call: "e1" })], [exploring("e1")]);
+    expect(facts()).toEqual(["~1k tokens · ~20 tok/s"]);
+  });
+
+  test("a subagent too young to estimate shows its tokens, no speed", () => {
+    transcript([sub(1, { progress: { streamSince: Date.now() - 500, streamChars: 140, timed: { tokens: 0, ms: 0, chars: 0 } } })]);
+    expect(facts()).toEqual(["~1k tokens"]);
+  });
+
+  test("a settled card shows what the provider reported, and the clock never carries a subagent line", () => {
+    const done = { ...exploring("e1"), status: "done", result: { text: "ok", agent: 1, tokens: { prompt: 1000, cached: 0, completion: 100 } }, output: "grep t\n" } as Block;
+    render(
+      <Transcript
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }, done], { status: "done" })}
+        onDecide={() => {}}
+        subagents={[sub(1, { state: { state: "done" } })]}
+      />,
+    );
+    expect(facts()[0]).toContain("1k tokens");
+    expect(screen.queryByRole("timer")).toBeNull();
   });
 });
 
@@ -728,7 +815,7 @@ describe("a background process started from the chat", () => {
   });
 });
 
-describe("a helper's explore row", () => {
+describe("a helper's explore card", () => {
   const explored = {
     kind: "tool",
     id: "e1",
@@ -740,14 +827,31 @@ describe("a helper's explore row", () => {
     output: "grep X\n",
   } as Block;
 
-  test("unfolds to its answer, with its run a click away in the sheet over the chat", () => {
+  test("stands as a card — the brief, what it did, a done badge — and unfolds to its answer", () => {
+    panel(state([explored]));
+    const card = document.querySelector(".subagent-card.done");
+    expect(card).toBeTruthy();
+    expect(screen.getByText("Where is X?")).toBeTruthy();
+    expect(screen.getByText(/1 step/)).toBeTruthy();
+    expect(screen.getByText("done")).toBeTruthy();
+    expect(screen.queryByText("X is in a.rs:1")).toBeNull();
+    fireEvent.click(screen.getByText("Where is X?"));
+    expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
+  });
+
+  test("before the model writes the task, the card shows a skeleton and says it is writing", () => {
+    panel(state([{ ...explored, arguments: "", status: "running", result: undefined, output: "" } as Block]));
+    expect(document.querySelector(".subagent-card.running .subagent-title.skeleton")).toBeTruthy();
+    expect(screen.getByText("writing the task…")).toBeTruthy();
+  });
+
+  test("its run is a click away in the sheet over the chat", () => {
     const opened: unknown[] = [];
     render(
       <ChatPanel workspace="/tmp/project" turn={state([explored])} onDecide={() => {}} onOpenRepo={() => {}} onOpenAgent={(agent) => opened.push(agent)} />,
     );
     expect(screen.queryByText("Show run")).toBeNull();
     fireEvent.click(screen.getByText("Where is X?"));
-    expect(screen.getByText("X is in a.rs:1")).toBeTruthy();
     fireEvent.click(screen.getByText("Show run"));
     expect(opened).toEqual([{ id: 4, task: "Where is X?" }]);
     // Another run's opener: a click on it does not close the sheet it opens.
@@ -762,15 +866,48 @@ describe("a helper's explore row", () => {
   });
 });
 
+describe("a review while it runs", () => {
+  const running = {
+    kind: "tool",
+    id: "r1",
+    round: 1,
+    name: "review",
+    arguments: "{}",
+    status: "running",
+    output: "runCommand bun test 2>&1 | tail -40\nreadFile src/a.rs\n",
+  } as Block;
+
+  test("is a card like a background process: the step under way, the count, a running badge", () => {
+    panel(state([running]));
+    expect(document.querySelector(".subagent-card.running")).toBeTruthy();
+    expect(screen.getByText("Review")).toBeTruthy();
+    expect(screen.getByText("Reading src/a.rs")).toBeTruthy();
+    expect(screen.getByText("2 steps")).toBeTruthy();
+    expect(screen.getByText("running")).toBeTruthy();
+    // A click unfolds the steps it has taken so far.
+    fireEvent.click(screen.getByText("Review"));
+    expect(screen.getByText(/Running bun test/)).toBeTruthy();
+  });
+
+  test("a failed one wears the amber badge and unfolds to the reason", () => {
+    const failed = { ...running, status: "failed", error: "review: stopped before it answered" } as Block;
+    panel(state([failed]));
+    expect(document.querySelector(".subagent-card.failed")).toBeTruthy();
+    expect(screen.getByText("failed")).toBeTruthy();
+    fireEvent.click(screen.getByText("Review"));
+    expect(screen.getByText("review: stopped before it answered")).toBeTruthy();
+  });
+});
+
 describe("a background process that ended", () => {
-  const ended = (code: number) =>
+  const ended = (code: number, description?: string) =>
     ({
       kind: "processEnded",
       id: "ended:0",
-      process: { id: 4, command: "cargo build", cwd: "src-tauri", state: { state: "exited", code } },
+      process: { id: 4, command: "cargo build", description, cwd: "src-tauri", state: { state: "exited", code } },
     }) as Block;
 
-  test("is a card with the command, the folder and how it ended, that opens the Terminal tab", () => {
+  test("is a two-line row — the command, the folder and how it ended — that opens the Terminal tab", () => {
     const opened: number[] = [];
     const { container } = render(
       <ChatPanel
@@ -782,8 +919,10 @@ describe("a background process that ended", () => {
       />,
     );
     const card = screen.getByTitle("Show in Terminal");
+    expect(card.className).toContain("process-ended");
     expect(card.className).toContain("failed");
-    expect(screen.getByText("Background process #4 ended")).toBeTruthy();
+    expect(screen.getByText("Background process")).toBeTruthy();
+    expect(screen.getByText("#4")).toBeTruthy();
     expect(screen.getByText("cargo build")).toBeTruthy();
     expect(screen.getByText("src-tauri")).toBeTruthy();
     expect(screen.getByText("exit 101")).toBeTruthy();
@@ -791,6 +930,23 @@ describe("a background process that ended", () => {
     expect(container.querySelector(".role")).toBeNull();
     fireEvent.click(card);
     expect(opened).toEqual([4]);
+  });
+
+  test("with a description, the description leads and the command sits under it", () => {
+    const { container } = render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([ended(0, "build the crate")])}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        onOpenProcess={() => {}}
+      />,
+    );
+    const name = container.querySelector(".process-ended-name");
+    expect(name?.textContent).toBe("build the crate");
+    const command = container.querySelector(".process-ended-command");
+    expect(command?.textContent).toBe("cargo build");
+    expect(command?.className).not.toContain("solo");
   });
 
   test("a clean exit is not drawn as a failure", () => {
@@ -1002,5 +1158,92 @@ describe("a call with no body of its own", () => {
     expect(row.disabled).toBe(false);
     fireEvent.click(row);
     expect(container.querySelector(".tool-detail")?.textContent).toBe(fact);
+  });
+});
+
+describe("a command's own words for itself", () => {
+  test("the row reads the intent; opening reveals the command panel and its output", () => {
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "rc1",
+          round: 1,
+          name: "runCommand",
+          arguments: JSON.stringify({ command: "python fix.py --apply", description: "Rewrites imports in place" }),
+          status: "done",
+          result: { stdout: "ok\n", stderr: "", exitCode: 0, timedOut: false },
+          output: "",
+        } as Block,
+      ]),
+    );
+    expect(container.querySelector(".tool .arg")?.textContent).toBe("Rewrites imports in place");
+    expect(container.querySelector(".tool .arg")?.className).toContain("as-note");
+    // Collapsed, the command itself is not shown — only the intent.
+    expect(container.querySelector(".tool-cmd")).toBeNull();
+
+    fireEvent.click(container.querySelector(".tool-item button.tool")!);
+    expect(container.querySelector(".tool-cmd-text")?.textContent).toContain("python fix.py --apply");
+    expect(container.querySelector(".tool-output")?.textContent).toBe("ok\n");
+  });
+});
+
+describe("the folded run's summed diff", () => {
+  test("the summary carries the group's + and - beside the line that folds it", () => {
+    const edit = (id: string, added: number, removed: number) =>
+      ({
+        kind: "tool",
+        id,
+        round: 1,
+        name: "editFile",
+        arguments: JSON.stringify({ path: "src/a.ts" }),
+        status: "done",
+        result: { diff: { linesAdded: added, linesRemoved: removed, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+      }) as Block;
+    const { container } = panel(state([edit("e1", 7, 3), edit("e2", 13, 3)]));
+    expect(container.querySelector(".tool-run-stat")?.textContent).toBe("+20 -6");
+  });
+
+  test("a run that changed no lines shows no stat", () => {
+    const { container } = panel(
+      state([
+        {
+          kind: "tool",
+          id: "g1",
+          round: 1,
+          name: "grep",
+          arguments: JSON.stringify({ pattern: "x" }),
+          status: "done",
+          result: { matches: [] },
+        } as Block,
+      ]),
+    );
+    expect(container.querySelector(".tool-run-stat")).toBeNull();
+  });
+
+  test("a read-only gitDiff beside an edit is not counted twice, and alone is no change", () => {
+    const edit = {
+      kind: "tool",
+      id: "e1",
+      round: 1,
+      name: "editFile",
+      arguments: JSON.stringify({ path: "src/a.ts" }),
+      status: "done",
+      result: { diff: { linesAdded: 7, linesRemoved: 3, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+    } as Block;
+    const diff = {
+      kind: "tool",
+      id: "d1",
+      round: 1,
+      name: "gitDiff",
+      arguments: JSON.stringify({ path: "src/a.ts" }),
+      status: "done",
+      result: { diff: { linesAdded: 100, linesRemoved: 50, unifiedDiff: "@@ -1 +1 @@\n-a\n+b" } },
+    } as Block;
+    const both = panel(state([edit, diff]));
+    expect(both.container.querySelector(".tool-run-stat")?.textContent).toBe("+7 -3");
+    both.unmount();
+    const alone = panel(state([diff]));
+    expect(alone.container.querySelector(".tool-run-stat")).toBeNull();
   });
 });

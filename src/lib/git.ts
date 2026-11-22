@@ -38,36 +38,36 @@ export async function onFolderChanged(root: string | null, handler: () => void):
 export type ChangeTotals = { files: number; add: number; del: number };
 
 /** `null` outside a repository, and outside the desktop app. */
-export async function gitTotals(): Promise<ChangeTotals | null> {
+export async function gitTotals(workspace: string | null): Promise<ChangeTotals | null> {
   if (!inTauri()) return null;
-  return invoke<ChangeTotals | null>("git_totals");
+  return invoke<ChangeTotals | null>("git_totals", { workspace });
 }
 
-export async function gitChanges(): Promise<WorkingChanges> {
+export async function gitChanges(workspace: string | null): Promise<WorkingChanges> {
   requireBackend();
-  return invoke<WorkingChanges>("git_changes");
+  return invoke<WorkingChanges>("git_changes", { workspace });
 }
 
-export async function gitStage(paths: string[]): Promise<void> {
+export async function gitStage(paths: string[], workspace: string | null): Promise<void> {
   requireBackend();
-  return invoke("git_stage", { paths });
+  return invoke("git_stage", { paths, workspace });
 }
 
-export async function gitUnstage(paths: string[]): Promise<void> {
+export async function gitUnstage(paths: string[], workspace: string | null): Promise<void> {
   requireBackend();
-  return invoke("git_unstage", { paths });
+  return invoke("git_unstage", { paths, workspace });
 }
 
 /** Commits what is staged; resolves to the new commit's short id. */
-export async function gitCommit(message: string): Promise<string> {
+export async function gitCommit(message: string, workspace: string | null): Promise<string> {
   requireBackend();
-  return invoke<string>("git_commit", { message });
+  return invoke<string>("git_commit", { message, workspace });
 }
 
 /** A message for what is staged, written by the model; `draft` is what the box already holds. */
-export async function gitCommitMessage(draft: string): Promise<string> {
+export async function gitCommitMessage(draft: string, workspace: string | null): Promise<string> {
   requireBackend();
-  return invoke<string>("git_commit_message", { draft });
+  return invoke<string>("git_commit_message", { draft, workspace });
 }
 
 /** Mirrors `domain::git_branches::BranchRef`: `origin/x` is remote, listed only with no local `x`. */
@@ -76,21 +76,21 @@ export type BranchRef = { name: string; remote: boolean };
 export type CheckoutOutcome = { kind: "switched" } | { kind: "conflicts"; paths: string[] };
 
 /** Local branches first, then remote ones. */
-export async function gitBranches(): Promise<BranchRef[]> {
+export async function gitBranches(workspace: string | null): Promise<BranchRef[]> {
   requireBackend();
-  return invoke<BranchRef[]>("git_branches");
+  return invoke<BranchRef[]>("git_branches", { workspace });
 }
 
-/** Switches the open folder, or names the files that stand in the way — never overwrites them. */
-export async function gitCheckout(branch: string): Promise<CheckoutOutcome> {
+/** Switches the folder `workspace` names, or names the files that stand in the way — never overwrites them. */
+export async function gitCheckout(branch: string, workspace: string | null): Promise<CheckoutOutcome> {
   requireBackend();
-  return invoke<CheckoutOutcome>("git_checkout", { branch });
+  return invoke<CheckoutOutcome>("git_checkout", { branch, workspace });
 }
 
 /** A new worktree on a new branch from `base`; resolves to its folder, not yet opened. */
-export async function gitWorktreeAdd(base: string): Promise<string> {
+export async function gitWorktreeAdd(base: string, workspace: string | null): Promise<string> {
   requireBackend();
-  return invoke<string>("git_worktree_add", { base });
+  return invoke<string>("git_worktree_add", { base, workspace });
 }
 
 /** Mirrors `commands::git::WorktreeCheck`: a worktree as removing it would find it. */
@@ -108,13 +108,13 @@ export type WorktreeCheck = {
 /** Mirrors `commands::git::WorktreeRemoved`. */
 export type WorktreeRemoved = { branchKept: string | null; chatsRemoved: number };
 
-/** `path` is a worktree from the folder list, not the open folder. */
+/** `path` is a worktree from the folder list, not an open folder. */
 export async function gitWorktreeCheck(path: string): Promise<WorktreeCheck> {
   requireBackend();
   return invoke<WorktreeCheck>("git_worktree_check", { path });
 }
 
-/** Removes the worktree at `path` — from the folder list, not the open folder — and its chats. */
+/** Removes the worktree at `path` — from the folder list, not an open folder — and its chats. */
 export async function gitWorktreeRemove(path: string): Promise<WorktreeRemoved> {
   requireBackend();
   return invoke<WorktreeRemoved>("git_worktree_remove", { path });
@@ -133,9 +133,9 @@ export type GitHistory = {
 };
 
 /** Where HEAD is and the newest `limit` commits from it, newest first. */
-export async function gitHistory(limit: number): Promise<GitHistory> {
+export async function gitHistory(limit: number, workspace: string | null): Promise<GitHistory> {
   requireBackend();
-  return invoke<GitHistory>("git_history", { limit });
+  return invoke<GitHistory>("git_history", { limit, workspace });
 }
 
 /**
@@ -149,9 +149,9 @@ export type FileTarget = { path: string; side: FileSide };
 /** Mirrors `domain::git_changes::FileView`: `null` on a side the file is not on. */
 export type FileView = { old: string | null; new: string | null; unviewable: "binary" | "tooLarge" | null };
 
-export async function fileView(target: FileTarget): Promise<FileView> {
+export async function fileView(target: FileTarget, workspace: string | null): Promise<FileView> {
   requireBackend();
-  return invoke<FileView>("file_view", target);
+  return invoke<FileView>("file_view", { ...target, workspace });
 }
 
 /** Mirrors `domain::file_write::FileSave`: changed on disk since it was opened, nothing was written. */

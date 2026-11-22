@@ -10,14 +10,43 @@ let recent: string[] = [];
 const folders = (paths: string[]) => paths.map((path) => ({ path, worktreeOf: null }));
 let current: string | null = null;
 let failOpen = false;
+// The backend's registry: the last activated first, as `workspaces_list` answers.
+let openSet: string[] = [];
+// `workspaces.json`: the folders open last time, the last activated first;
+// `null` when it was never written.
+let saved: string[] | null = null;
+let worktreeOf: Record<string, string> = {};
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: unknown) => {
     calls.push({ command, args });
+    const path = (args as { path?: string } | undefined)?.path ?? "";
     if (command === "workspace_recent") return Promise.resolve(folders(recent));
     if (command === "workspace_current") return Promise.resolve(current);
-    if (command === "workspace_open" && failOpen) return Promise.reject("cannot open: gone");
-    return Promise.resolve(command === "workspace_open" ? (args as { path: string }).path : null);
+    if (command === "workspaces_list")
+      return Promise.resolve(openSet.map((one) => ({ path: one, active: one === current, worktreeOf: worktreeOf[one] ?? null })));
+    if (command === "workspace_add") {
+      if (failOpen) return Promise.reject("cannot open: gone");
+      openSet = [path, ...openSet.filter((one) => one !== path)];
+      current = path;
+      return Promise.resolve(path);
+    }
+    if (command === "workspaces_restore") {
+      if (current) return Promise.resolve(current);
+      // As the backend: with no open set saved, the folder opened last.
+      const reopen = saved ?? (recent[0] && !failOpen ? [recent[0]] : []);
+      for (const one of [...reopen].reverse()) {
+        openSet = [one, ...openSet.filter((other) => other !== one)];
+        current = one;
+      }
+      return Promise.resolve(current);
+    }
+    if (command === "workspace_close") {
+      openSet = openSet.filter((one) => one !== path);
+      if (current === path) current = openSet[0] ?? null;
+      return Promise.resolve(null);
+    }
+    return Promise.resolve(null);
   },
   // The dialog plugin imports this from the same module; a mock that omits it
   // fails at import time rather than at the call.
@@ -44,6 +73,10 @@ afterEach(() => {
   recent = [];
   current = null;
   failOpen = false;
+  openSet = [];
+  saved = null;
+  worktreeOf = {};
+  localStorage.removeItem("kibo-folder-order");
 });
 
 const settle = () => act(async () => {
@@ -51,11 +84,22 @@ const settle = () => act(async () => {
 });
 
 describe("coming back", () => {
-  test("a new launch reopens the folder opened last, and says it came back", async () => {
+  /// F-8.8: every folder open last time, the one activated last active.
+  test("a launch reopens every folder open last time, the last activated active", async () => {
+    saved = ["/work/b", "/work/a"];
+    recent = ["/work/c"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    expect(result.current.path).toBe("/work/b");
+    expect(result.current.folders).toEqual(["/work/a", "/work/b"]);
+    expect(result.current.resumed).toBe(true);
+    expect(calls.filter((call) => call.command === "workspace_add")).toEqual([]);
+  });
+
+  test("with none open last time, a launch reopens the folder opened last, and says it came back", async () => {
     recent = ["/work/b", "/work/a"];
     const { result } = renderHook(() => useWorkspace());
     await settle();
-    expect(calls).toContainEqual({ command: "workspace_open", args: { path: "/work/b", keepRunning: false } });
     expect(result.current.path).toBe("/work/b");
     expect(result.current.recent).toEqual(folders(["/work/b", "/work/a"]));
     expect(result.current.resumed).toBe(true);
@@ -64,17 +108,31 @@ describe("coming back", () => {
   test("a reloaded window keeps the backend's folder and opens nothing", async () => {
     recent = ["/work/b"];
     current = "/work/a";
+    openSet = ["/work/a", "/work/c"];
     const { result } = renderHook(() => useWorkspace());
     await settle();
-    expect(calls.filter((call) => call.command === "workspace_open")).toEqual([]);
+    expect(calls.filter((call) => call.command === "workspace_add")).toEqual([]);
     expect(result.current.path).toBe("/work/a");
+    expect(result.current.folders).toEqual(["/work/c", "/work/a"]);
     expect(result.current.resumed).toBe(true);
+  });
+
+  /// Closing every folder is deliberate: the recent one does not come back either.
+  test("every folder closed last time: the window starts empty", async () => {
+    saved = [];
+    recent = ["/work/b"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    expect(result.current.path).toBeNull();
+    expect(result.current.folders).toEqual([]);
+    expect(result.current.resumed).toBe(false);
+    expect(result.current.recent).toEqual(folders(["/work/b"]));
   });
 
   test("nothing opened before: nothing open, nothing resumed", async () => {
     const { result } = renderHook(() => useWorkspace());
     await settle();
-    expect(calls.filter((call) => call.command === "workspace_open")).toEqual([]);
+    expect(calls.filter((call) => call.command === "workspace_add")).toEqual([]);
     expect(result.current.path).toBeNull();
     expect(result.current.resumed).toBe(false);
   });
@@ -120,10 +178,7 @@ describe("picking a folder", () => {
       expect(await result.current.pick()).toBe(true);
     });
 
-    expect(calls).toContainEqual({
-      command: "workspace_open",
-      args: { path: "/Users/me/project", keepRunning: false },
-    });
+    expect(calls).toContainEqual({ command: "workspace_add", args: { path: "/Users/me/project" } });
     expect(result.current.path).toBe("/Users/me/project");
   });
 
@@ -137,10 +192,187 @@ describe("picking a folder", () => {
       expect(await result.current.pick()).toBe(false);
     });
 
-    expect(calls.filter((call) => call.command === "workspace_open")).toEqual([]);
+    expect(calls.filter((call) => call.command === "workspace_add")).toEqual([]);
     expect(result.current.path).toBeNull();
     // And it is not a failure either: a toast saying something went wrong is
     // a strange answer to having pressed Cancel.
     expect(result.current.error).toBeNull();
+  });
+});
+
+// F-8.6: a folder opens beside the others, and closes on its own.
+describe("open folders", () => {
+  test("a worktree among them is known by its main checkout", async () => {
+    worktreeOf = { "/wt/api/fix": "/work/api" };
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    for (const path of ["/work/api", "/wt/api/fix"]) {
+      await act(async () => {
+        await result.current.open(path);
+      });
+    }
+    expect(result.current.worktrees).toEqual({ "/wt/api/fix": "/work/api" });
+  });
+
+  test("opening a folder adds it and makes it active; the others stay open, in their places", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    for (const path of ["/work/a", "/work/b", "/work/c"]) {
+      await act(async () => {
+        await result.current.open(path);
+      });
+    }
+    expect(result.current.folders).toEqual(["/work/a", "/work/b", "/work/c"]);
+
+    // Back to a folder already open: active again, and its section does not move.
+    await act(async () => {
+      await result.current.open("/work/a");
+    });
+    expect(result.current.path).toBe("/work/a");
+    expect(result.current.folders).toEqual(["/work/a", "/work/b", "/work/c"]);
+  });
+
+  test("closing a folder leaves the rest, and the backend's next one is active", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    for (const path of ["/work/a", "/work/b"]) {
+      await act(async () => {
+        await result.current.open(path);
+      });
+    }
+    // Not the active one: it stays active.
+    await act(async () => {
+      expect(await result.current.close("/work/a")).toBe(true);
+    });
+    expect(calls).toContainEqual({ command: "workspace_close", args: { path: "/work/a" } });
+    expect(result.current.folders).toEqual(["/work/b"]);
+    expect(result.current.path).toBe("/work/b");
+
+    // The active one: the backend's next is active — here none is left.
+    await act(async () => {
+      await result.current.close("/work/b");
+    });
+    expect(result.current.folders).toEqual([]);
+    expect(result.current.path).toBeNull();
+  });
+
+  test("the active folder has its section even when the open set cannot be read", async () => {
+    current = "/work/a";
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    // `workspaces_list` answers nothing here: the mock's set is empty, as a failed read leaves it.
+    expect(result.current.path).toBe("/work/a");
+    expect(result.current.folders).toEqual(["/work/a"]);
+  });
+});
+
+describe("keepOrder", () => {
+  test("keeps the places shown, drops the closed, and puts the new at the end", async () => {
+    const { keepOrder } = await import("../hooks/useWorkspace");
+    expect(keepOrder(["/a", "/b", "/c"], ["/b", "/d", "/a"])).toEqual(["/a", "/b", "/d"]);
+    expect(keepOrder([], ["/c", "/b", "/a"])).toEqual(["/a", "/b", "/c"]);
+  });
+});
+
+// FO-1: the manual order of the sections is a view state in window storage,
+// apart from the backend's open set (which also remembers the launch folder).
+describe("manual folder order", () => {
+  const openThree = async (result: { current: ReturnType<typeof useWorkspace> }) => {
+    for (const path of ["/work/a", "/work/b", "/work/c"]) {
+      await act(async () => {
+        await result.current.open(path);
+      });
+    }
+  };
+
+  test("move swaps a folder with its neighbour and keeps the order in storage", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+    expect(result.current.folders).toEqual(["/work/a", "/work/b", "/work/c"]);
+
+    act(() => result.current.move("/work/c", -1));
+    expect(result.current.folders).toEqual(["/work/a", "/work/c", "/work/b"]);
+    expect(JSON.parse(localStorage.getItem("kibo-folder-order") ?? "null")).toEqual(["/work/a", "/work/c", "/work/b"]);
+    // The order is the view's: no backend call is made for it.
+    expect(calls.filter((call) => call.command === "workspaces_reorder")).toEqual([]);
+  });
+
+  test("two moves before a rerender both land, not just the last", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+    act(() => {
+      result.current.move("/work/a", 1);
+      result.current.move("/work/a", 1);
+    });
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/a"]);
+  });
+
+  test("at an edge, or for a folder not open, move does nothing", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+
+    act(() => result.current.move("/work/a", -1));
+    act(() => result.current.move("/work/c", 1));
+    act(() => result.current.move("/nowhere", -1));
+    expect(result.current.folders).toEqual(["/work/a", "/work/b", "/work/c"]);
+    // The order the reads already stored is left as it was — no new write.
+    expect(JSON.parse(localStorage.getItem("kibo-folder-order") ?? "null")).toEqual(["/work/a", "/work/b", "/work/c"]);
+  });
+
+  /// A close and reopen move sections without a `move`; the stored order must
+  /// follow the screen, or a restart would seed a stale arrangement.
+  test("the order after a close and reopen is the one a restart seeds", async () => {
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    await openThree(result);
+    act(() => result.current.move("/work/c", -1));
+    await act(async () => {
+      await result.current.close("/work/a");
+    });
+    await act(async () => {
+      await result.current.open("/work/d");
+    });
+    await act(async () => {
+      await result.current.open("/work/a");
+    });
+    expect(result.current.folders).toEqual(["/work/c", "/work/b", "/work/d", "/work/a"]);
+    expect(JSON.parse(localStorage.getItem("kibo-folder-order") ?? "null")).toEqual(["/work/c", "/work/b", "/work/d", "/work/a"]);
+  });
+
+  test("the stored order seeds the first read, surviving a restart", async () => {
+    // Deliberately not the default (reverse of the file): the seed must show.
+    localStorage.setItem("kibo-folder-order", JSON.stringify(["/work/b", "/work/c", "/work/a"]));
+    saved = ["/work/b", "/work/a", "/work/c"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/a"]);
+  });
+
+  test("a new folder joins the end of the stored order, a closed one leaves it", async () => {
+    localStorage.setItem("kibo-folder-order", JSON.stringify(["/work/b", "/work/c", "/work/a"]));
+    saved = ["/work/b", "/work/a", "/work/c"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+
+    await act(async () => {
+      await result.current.open("/work/d");
+    });
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/a", "/work/d"]);
+
+    await act(async () => {
+      await result.current.close("/work/a");
+    });
+    expect(result.current.folders).toEqual(["/work/b", "/work/c", "/work/d"]);
+  });
+
+  test("a stored value of the wrong shape is ignored, not a broken order", async () => {
+    localStorage.setItem("kibo-folder-order", JSON.stringify({ not: "a list" }));
+    saved = ["/work/b", "/work/a"];
+    const { result } = renderHook(() => useWorkspace());
+    await settle();
+    expect(result.current.folders).toEqual(["/work/a", "/work/b"]);
   });
 });

@@ -25,6 +25,10 @@ pub struct FeatureView {
     pub tools: Vec<FeatureTool>,
     /// Whether the model gets them while the feature is on.
     pub tools_on: bool,
+    /// Whether Fix also selects the corrected text's dominant system keyboard layout.
+    pub layout_switch_on: bool,
+    /// The native switch exists on macOS and Windows; the Catalog hides it elsewhere.
+    pub layout_switch_supported: bool,
     /// Where the model is given them: a chat's role, a mode in a folder.
     pub places: Vec<String>,
     /// Its file, as a path under the home folder reads; `None` for a feature with none.
@@ -63,6 +67,12 @@ pub fn set_tools(id: &str, on: bool) -> Result<(), FeatureError> {
     Ok(())
 }
 
+/// Whether Fix also selects the corrected text's dominant system keyboard layout.
+pub fn set_layout_switch(on: bool) -> Result<(), FeatureError> {
+    settings_store::update(|s| s.layout_correction_switch = on)?;
+    Ok(())
+}
+
 /// Removes the feature's file or folder. Only while it is off: the model could be
 /// writing to it.
 pub fn delete_data(id: &str) -> Result<(), String> {
@@ -74,6 +84,10 @@ pub fn delete_data(id: &str) -> Result<(), String> {
     // book's own lock keeps that from writing it back.
     if feature == Feature::VoiceMemory {
         return voices_store::delete().map_err(|e| e.to_string());
+    }
+    // A database is more than its one file, and a board kept before it may lie beside it.
+    if feature == Feature::Board {
+        return app_dir::dir().map_or(Ok(()), |dir| crate::infra::board_store::delete(&dir).map_err(|e| e.to_string()));
     }
     let Some(path) = data_path(feature, app_dir::dir().ok().as_deref()) else {
         return Ok(());
@@ -110,9 +124,15 @@ fn views(settings: &AppSettings, app_dir: Option<&Path>) -> Vec<FeatureView> {
                 on: on.is_on(feature),
                 tools,
                 tools_on: settings.feature_tools.is_enabled(manifest.id),
+                layout_switch_on: settings.layout_correction_switch,
+                layout_switch_supported: crate::infra::keyboard_layout::SUPPORTED,
                 places: places(manifest.tools),
                 data: manifest.data.map(|file| format!("~/.kibo/{file}")),
-                has_data: data_path(feature, app_dir).is_some_and(|path| path.exists()),
+                has_data: match (feature, app_dir) {
+                    // A board.json not yet taken in is data too: the database comes with the first read.
+                    (Feature::Board, Some(dir)) => crate::infra::board_store::has_data(dir),
+                    _ => data_path(feature, app_dir).is_some_and(|path| path.exists()),
+                },
             }
         })
         .collect()
@@ -145,7 +165,7 @@ mod tests {
         assert_eq!(board.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["board"]);
         assert!(board.tools[0].description.contains("remind"), "{}", board.tools[0].description);
         assert_eq!(board.places, ["Assistant chat", "Agent", "Analyst"]);
-        assert_eq!(board.data.as_deref(), Some("~/.kibo/board.json"));
+        assert_eq!(board.data.as_deref(), Some("~/.kibo/board.db"));
 
         std::fs::write(dir.join("board.json"), "[]").unwrap();
         let mut settings = AppSettings::default();
@@ -183,6 +203,18 @@ mod tests {
     }
 
     #[test]
+    fn the_layout_switch_is_off_until_chosen_and_its_choice_is_saved() {
+        crate::testing::with_app_dir("features-layout-switch", || {
+            let current = || list().into_iter().find(|f| f.id == "layout-correction").unwrap();
+            assert!(!current().layout_switch_on);
+            set_layout_switch(true).unwrap();
+            assert!(current().layout_switch_on);
+            set_layout_switch(false).unwrap();
+            assert!(!current().layout_switch_on);
+        });
+    }
+
+    #[test]
     fn a_choice_is_saved_and_its_data_deleted_only_while_off() {
         crate::testing::with_app_dir("features-set", || {
             let dir = app_dir::dir().unwrap();
@@ -190,13 +222,16 @@ mod tests {
             set("board", true).unwrap();
             assert!(enabled().is_on(Feature::Board));
 
-            std::fs::write(dir.join("board.json"), "[]").unwrap();
+            let files = ["board.db", "board.db-wal", "board.db-shm", "board.json", "board.json.imported"];
+            for file in files {
+                std::fs::write(dir.join(file), "").unwrap();
+            }
             assert!(delete_data("board").unwrap_err().contains("turn Board off"));
-            assert!(dir.join("board.json").exists());
+            assert!(dir.join("board.db").exists());
 
             set("board", false).unwrap();
             delete_data("board").unwrap();
-            assert!(!dir.join("board.json").exists());
+            assert!(files.iter().all(|file| !dir.join(file).exists()), "the database with its journal, and the board kept before it");
             // Nothing there is nothing to delete, not a failure.
             delete_data("board").unwrap();
             assert!(set("nope", true).is_err());

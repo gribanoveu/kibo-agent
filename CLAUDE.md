@@ -179,3 +179,7 @@ picking another, and `tauri dev` then fails with a blank window.
   how to rebuild it with `scripts/build-embedding-model.py`, and what to check after.
   The weights are Git LFS objects — `git lfs pull` after a clone, or the model tests
   fail with a message saying so.
+- `src/lib/layoutModel.ts` is generated: the letter-trigram model behind the wrong-layout
+  hint, trained on the Hunspell dictionaries in devDependencies. Rebuild it with
+  `bun scripts/build-layout-model.ts`, then run `bun test src/__tests__/layoutCorrection.test.ts`
+  — its corpus is what the threshold in `lib/layoutCorrection.ts` was tuned against.

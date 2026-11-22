@@ -20,6 +20,8 @@ export type ToolDisplay = {
   arg: string;
   /** The secondary fact: a line range, a match count, a diff size, an exit code. */
   meta?: string;
+  /** The model's own few words about the call, under the row — runCommand's description. */
+  note?: string;
   /** The expandable body. Empty means there is nothing to expand. */
   detail: string;
   /** `detail` is a unified diff, to be drawn as one rather than as text. */
@@ -64,10 +66,6 @@ export const LABELS: Record<string, string> = {
   review: "Review",
   explore: "Explore",
   remember: "Memory",
-  knowledgeWrite: "Knowledge",
-  knowledgeSearch: "Knowledge search",
-  knowledgeRead: "Knowledge doc",
-  knowledgeRelations: "Knowledge links",
   kubeList: "Kube list",
   kubeGet: "Kube get",
   kubeEvents: "Events",
@@ -292,62 +290,6 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
     }
 
-    // The documents by id once kept; while the call is written, how many.
-    // The open row shows them as the model wrote them.
-    case "knowledgeWrite": {
-      const strings = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
-      const documents = strings(args.documents);
-      const written = strings(result.written);
-      const deleted = strings(result.deleted);
-      const domains = strings(result.newDomains);
-      return {
-        name,
-        arg: written.length ? written.join(", ") : `${documents.length} ${documents.length === 1 ? "document" : "documents"}`,
-        meta: [deleted.length ? `${deleted.length} deleted` : "", domains.length ? `new: ${domains.join(", ")}` : ""].filter(Boolean).join(" · ") || undefined,
-        detail: documents.join("\n\n"),
-      };
-    }
-
-    // The hits as the model got them: id, title, section, the passage.
-    case "knowledgeSearch": {
-      const hits = Array.isArray(result.hits) ? (result.hits as Json[]) : [];
-      return {
-        name,
-        arg: str(args.query) ?? "",
-        meta: block.result === undefined ? undefined : `${hits.length} ${hits.length === 1 ? "document" : "documents"}`,
-        detail: hits
-          .map(
-            (h) =>
-              `${str(h.id) ?? ""}  ${str(h.title) ?? ""}${str(h.section) ? ` § ${str(h.section)}` : ""}${h.stale === true ? " — stale" : ""}\n${str(h.text) ?? ""}`,
-          )
-          .join("\n\n"),
-      };
-    }
-
-    // Who is on each side of the contract asked about, as the model got it.
-    case "knowledgeRelations": {
-      const relations = Array.isArray(result.relations) ? (result.relations as Json[]) : [];
-      const entity = str(args.entity)?.trim();
-      const repo = str(args.repo)?.trim();
-      return {
-        name,
-        arg: [entity, repo && `in ${repo}`].filter(Boolean).join(" "),
-        meta: block.result === undefined ? undefined : `${relations.length} ${relations.length === 1 ? "document" : "documents"}`,
-        detail: relations.map((r) => `${str(r.kind) ?? ""}: ${str(r.name) ?? ""}  ${str(r.side) ?? ""}  ${str(r.id) ?? ""}  ${str(r.title) ?? ""}`).join("\n"),
-      };
-    }
-
-    // The document, or the section of it, the model read.
-    case "knowledgeRead": {
-      const section = str(args.section)?.trim();
-      return {
-        name,
-        arg: `${str(args.id) ?? ""}${section ? ` § ${section}` : ""}`,
-        meta: [str(result.domain), result.stale === true ? "stale" : undefined].filter(Boolean).join(" · ") || undefined,
-        detail: str(result.text) ?? "",
-      };
-    }
-
     // The card the call was about; the board itself is on its page.
     case "board": {
       const cards = Array.isArray(result.cards) ? result.cards.length : undefined;
@@ -523,6 +465,9 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
       };
 
     case "runCommand": {
+      // What the model said the line does, under the row in every shape —
+      // the schema promises it beside the command in the transcript.
+      const note = str(args.description) || undefined;
       // Started to run on: the answer is a number, not an exit code.
       if (args.background === true) {
         const id = num(result.id);
@@ -530,6 +475,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
           name,
           arg: str(args.command) ?? "",
           meta: id === undefined ? "background" : `background #${id}`,
+          note,
           detail: "",
           process: id,
         };
@@ -543,6 +489,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
           name,
           arg: str(args.command) ?? "",
           meta: [id === undefined ? "background" : `moved to background #${id}`, took(num(result.afterMs))].filter(Boolean).join(" · "),
+          note,
           detail: collapseRedraws(streamed),
           process: id,
         };
@@ -558,6 +505,7 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
         meta: [result.stopped ? "stopped" : result.timedOut ? "timed out" : code === undefined ? undefined : `exit ${code}`, took(num(result.durationMs))]
           .filter(Boolean)
           .join(" · ") || undefined,
+        note,
         // While it runs there is only what has streamed in; once it settles the
         // captured output is authoritative — and shorter, being truncated in
         // the middle rather than cut off wherever the turn ended.
@@ -622,6 +570,21 @@ export function describeTool(block: Extract<Block, { kind: "tool" }>): ToolDispl
             .join(" · ") || undefined,
         detail: str(result.text) ?? block.output,
         agent: agent === undefined ? undefined : { id: agent, task: str(args.task) ?? "" },
+      };
+    }
+
+    // A review's helper reads the change in the same steps a call is made of:
+    // the one under way is what the row says, and every step taken unfolds.
+    // A settled review is a card of its own (`lib/finding.ts`), so this is the
+    // row while it runs; a failed one takes the branch above, with its error.
+    case "review": {
+      const steps = block.output.split("\n").filter(Boolean).map(describeHelperStep);
+      const under = steps[steps.length - 1];
+      return {
+        name,
+        arg: under ?? (block.status === "running" ? "Reading the change…" : ""),
+        meta: steps.length > 1 ? `${steps.length} steps` : undefined,
+        detail: steps.join("\n"),
       };
     }
 
@@ -770,6 +733,13 @@ export function describeActive(block: Extract<Block, { kind: "tool" }>): string 
   return [ACTIVE_VERBS[name] ?? name, arg].filter(Boolean).join(" ");
 }
 
+/** A helper's step as the folded line says a call: `readFile src/a.rs` → `Reading src/a.rs`. */
+export function describeHelperStep(line: string): string {
+  const gap = line.indexOf(" ");
+  const label = toolLabel(gap < 0 ? line : line.slice(0, gap));
+  return [ACTIVE_VERBS[label] ?? label, gap < 0 ? "" : line.slice(gap + 1)].filter(Boolean).join(" ");
+}
+
 // A run of calls folded into one line, the way a person would say it: "Read 3
 // files, searched 2 patterns, ran a command". Each verb takes the count; a
 // label without a phrase here is counted under its own name.
@@ -799,6 +769,30 @@ const RUN_PHRASES: Record<string, (n: number) => string> = {
   Scale: (n) => `scaled ${n === 1 ? "a workload" : `${n} workloads`}`,
   Diagnose: (n) => `diagnosed ${n === 1 ? "a workload" : `${n} workloads`}`,
 };
+
+/** The calls that change the tree, as `touchedFiles` counts them: a read-only
+ * diff (`gitDiff`) is not a change, and summing it would double the lines of
+ * an edit the agent then checked. */
+const CHANGES = new Set(["editFile", "writeFile", "deleteFile", "delete"]);
+
+/** A call's diff arithmetic from its result, not from the row's wording: the
+ * added and removed lines, or `null` when the call carries no diff. Summing
+ * this keeps the group's stat honest however the row's meta is phrased. */
+export function diffStatOf(block: Extract<Block, { kind: "tool" }>): { added: number; removed: number } | null {
+  if (!CHANGES.has(block.name)) return null;
+  const result = asObject(block.result);
+  const diff = asObject(result.diff);
+  const added = num(diff.linesAdded);
+  if (added !== undefined) return { added, removed: num(diff.linesRemoved) ?? 0 };
+  if (Array.isArray(result.files)) {
+    const files = result.files as Json[];
+    return {
+      added: files.reduce((n, f) => n + (num(asObject(f.diff).linesAdded) ?? 0), 0),
+      removed: files.reduce((n, f) => n + (num(asObject(f.diff).linesRemoved) ?? 0), 0),
+    };
+  }
+  return null;
+}
 
 export function describeRun(tools: Extract<Block, { kind: "tool" }>[]): string {
   const counts = new Map<string, number>();

@@ -8,7 +8,7 @@
 //!
 //! Alfa Atlas debounced per path on the leading edge: the first event fired,
 //! and events within the window after it were dropped. The last save of a
-//! burst was then never indexed (`docs/07-upstream-findings.md`, B-12). Here
+//! burst was then never indexed. Here
 //! the call comes once the tree has been quiet for [`QUIET`] — or after
 //! [`MAX_WAIT`], so a file rewritten without pause cannot hold the index back
 //! for good. Changes made while `on_change` runs are queued and give one more

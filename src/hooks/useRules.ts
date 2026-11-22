@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type RuleListItem, rulesList, setRuleEnabled } from "../lib/skills";
 
 /**
@@ -9,13 +9,21 @@ export function useRules(visible: boolean, workspace: string | null) {
   const [rules, setRules] = useState<RuleListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // An answer for a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
+
   const reload = useCallback(async () => {
     try {
-      setRules(await rulesList());
+      const read = await rulesList(workspace);
+      if (shown.current === workspace) setRules(read);
     } catch (e) {
-      setError(String(e));
+      if (shown.current === workspace) setError(String(e));
     }
-  }, []);
+  }, [workspace]);
+
+  // Another folder's refusal is not this one's.
+  useEffect(() => setError(null), [workspace]);
 
   useEffect(() => {
     if (visible) reload();
@@ -28,11 +36,11 @@ export function useRules(visible: boolean, workspace: string | null) {
       try {
         await setRuleEnabled(path, enabled);
       } catch (e) {
-        setError(String(e));
+        if (shown.current === workspace) setError(String(e));
       }
       await reload();
     },
-    [reload],
+    [reload, workspace],
   );
 
   return { rules, error, setEnabled };

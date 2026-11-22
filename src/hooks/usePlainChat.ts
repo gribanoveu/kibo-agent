@@ -27,7 +27,7 @@ import {
   plainChatSave,
   plainChatSend,
 } from "../lib/plainChat";
-import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived } from "../lib/savedChats";
+import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived, setChatGroup, setChatPinned } from "../lib/savedChats";
 import {
   acceptEvent,
   acceptOutcome,
@@ -464,9 +464,12 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     void plainChatCancel(session.key).catch(() => {});
   };
 
-  const makeRoom = async (force: boolean) => {
+  /** Folds the older part of a conversation into a summary. `true` when it
+      folded; the reason it failed; `null` when there was nothing worth
+      folding, or a pass is already under way. */
+  const makeRoom = async (force: boolean): Promise<true | string | null> => {
     const session = active.current;
-    if (session.turn.status === "running" || session.turn.status === "awaitingApproval" || session.compacting) return false;
+    if (session.turn.status === "running" || session.turn.status === "awaitingApproval" || session.compacting) return null;
     session.compacting = true;
     changed(session);
     const id = mint(session, "compact");
@@ -482,7 +485,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     try {
       const shorter = await plainChatCompact(session.role, kubeFor(session, lastKubeconfig), session.history, force, id, session.chatId);
       end(shorter && { folded: shorter.folded });
-      if (!shorter) return false;
+      if (!shorter) return null;
       session.history = shorter.history;
       session.unsaved = true;
       refreshContext(session);
@@ -491,7 +494,9 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       end(null);
       session.error = String(e);
       changed(session);
-      return false;
+      // The reason goes back to the caller: the error on the hook is a
+      // render behind by the time this promise lands.
+      return String(e);
     } finally {
       session.compacting = false;
       // A background compaction has a save to schedule even when no status changed.
@@ -605,6 +610,26 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     void refresh();
   };
 
+  const pin = async (id: string, pinned: boolean) => {
+    try {
+      await setChatPinned(id, pinned);
+    } catch (e) {
+      active.current.error = String(e);
+      changed(active.current);
+    }
+    void refresh();
+  };
+
+  const move = async (id: string, groupId: string | null) => {
+    try {
+      await setChatGroup(id, groupId);
+    } catch (e) {
+      active.current.error = String(e);
+      changed(active.current);
+    }
+    void refresh();
+  };
+
   const preview = useCallback(
     (calls: PendingToolCall[]) => plainChatPreview(kubeFor(active.current, lastKubeconfig), calls),
     [lastKubeconfig],
@@ -636,7 +661,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     send,
     decide,
     stop,
-    compact: () => (busy ? Promise.resolve(false) : makeRoom(true)),
+    compact: (): Promise<true | string | null> => (busy ? Promise.resolve(null) : makeRoom(true)),
     open,
     newChat,
     restore,
@@ -646,6 +671,9 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     draft: current.draft,
     remove,
     archive,
+    pin,
+    move,
+    refresh,
   };
 }
 

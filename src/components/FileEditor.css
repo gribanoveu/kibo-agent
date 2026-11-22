@@ -1,3 +1,17 @@
+/* The lines a link pointed at, fading out over REVEAL_MS (useOpenFiles.ts).
+   A shadow, not a background: a changed line keeps its own tint under it. */
+.file-editor .cm-line.cm-revealed {
+  animation: file-editor-revealed 1.6s ease-out forwards;
+}
+@keyframes file-editor-revealed {
+  from {
+    box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  to {
+    box-shadow: inset 0 0 0 100vmax transparent;
+  }
+}
+
 /* Fills the viewer's body; CodeMirror scrolls inside it. */
 .file-editor {
   flex: 1;

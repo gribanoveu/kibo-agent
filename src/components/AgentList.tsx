@@ -1,6 +1,6 @@
 import { ChevronRight, Square } from "lucide-react";
 import { type AgentInfo, agentStatus, briefTitle, splitStep } from "../lib/agents";
-import type { AgentFocus } from "../lib/describeTool";
+import { toolLabel, type AgentFocus } from "../lib/describeTool";
 import "./AgentList.css";
 
 type Props = {
@@ -29,14 +29,16 @@ export function AgentList({ agents, error, onStop, onOpen }: Props) {
         const running = a.state.state === "running";
         // What it is doing now: the last tool it called.
         const now = a.steps[a.steps.length - 1];
+        // Listed before the model has written its task: a bar, not a blank.
+        const awaiting = running && !a.task.trim();
         return (
           // The sheet's opener, Stop included: a click on either leaves it open.
           <div key={a.id} className={`agent-run ${a.state.state}`} data-sheet-opener>
             <div className="agent-head">
               <button type="button" className="agent-open" title={a.task} onClick={() => onOpen({ id: a.id, task: a.task })}>
                 <span className="agent-dot" aria-hidden />
-                <span className="agent-title">{briefTitle(a.task)}</span>
-                <span className="agent-now">{running ? (now ? splitStep(now).tool : "thinking") : agentStatus(a.state)}</span>
+                <span className={`agent-title${awaiting ? " skeleton" : ""}`}>{awaiting ? "" : briefTitle(a.task)}</span>
+                <span className="agent-now">{running ? (now ? toolLabel(splitStep(now).tool) : awaiting ? "writing the task…" : "thinking") : agentStatus(a.state)}</span>
                 <ChevronRight className="agent-chev" size={13} aria-hidden />
               </button>
               {running && (

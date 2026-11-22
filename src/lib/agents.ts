@@ -9,6 +9,15 @@ import { compactTokens } from "./usage";
 export type AgentState = { state: "running" } | { state: "done" } | { state: "failed"; reason: string } | { state: "stopped" };
 /** Mirrors `domain::agents::AgentTokens`: what the provider reported, summed over the run. */
 export type AgentTokens = { prompt: number; cached: number; completion: number };
+/** Mirrors `domain::agents::AgentProgress`: the stream under way, for the live meter. */
+export type AgentProgress = {
+  /** When the round under way streamed its first token (ms since the epoch); `null` before it has. */
+  streamSince: number | null;
+  /** Characters the round under way has streamed: text, reasoning, call arguments. */
+  streamChars: number;
+  /** The finished rounds' tokens, streaming time and characters the ratio comes from. */
+  timed: { tokens: number; ms: number; chars: number };
+};
 /** Mirrors `domain::agents::AgentInfo`: one `explore` run, as the Agents tab shows it. */
 export type AgentInfo = {
   id: number;
@@ -17,6 +26,10 @@ export type AgentInfo = {
   steps: string[];
   tokens: AgentTokens;
   answer: string | null;
+  progress: AgentProgress;
+  /** The tool call that started it, when the backend named it; the calling
+      card pairs with its own run by this while it is still running. */
+  call?: string | null;
 };
 
 /**
@@ -30,15 +43,25 @@ export async function onAgentChanged(handler: (id: number) => void): Promise<Unl
   return listen<{ id: number }>(AGENT_EVENT, ({ payload }) => handler(payload.id));
 }
 
+/** A review brief's focus line — `domain::review::review_message`, whose tests pin the wording. */
+const REVIEW_FOCUS = "The one asking for this review asks to pay particular attention to: ";
+
 /**
  * What a helper is asked, in one line: the brief's `Goal:` or `Question:`
  * line when it has one — a model often opens with context such as
- * `Repository: /path` — else its first line.
+ * `Repository: /path` — a review's `focus`, when the caller gave one, since
+ * its first line is the same for every review — else its first line.
  */
 export function briefTitle(task: string): string {
   const lines = task.split("\n").map((line) => line.trim()).filter(Boolean);
-  const asked = lines.map((line) => /^(?:goal|question|task|цель|вопрос|задача)\s*:\s*(.+)$/i.exec(line)?.[1]).find(Boolean);
-  return asked ?? lines[0] ?? "";
+  // A label is the brief's own line, written at the start of a line — so the
+  // match is against the untrimmed line. Embedded material never is: a diff's
+  // lines carry `+`/`-` or a context space, a code snippet is indented, and
+  // `task: …` in either must not be read as the brief's `Task:`.
+  const asked = task.split("\n").map((line) => /^(?:goal|question|task|цель|вопрос|задача)\s*:\s*(.+)$/i.exec(line)?.[1].trim()).find(Boolean);
+  // The template's trailing dot is not the focus's own.
+  const focus = lines.find((line) => line.startsWith(REVIEW_FOCUS))?.slice(REVIEW_FOCUS.length).replace(/\.$/, "");
+  return asked ?? focus ?? lines[0] ?? "";
 }
 
 /** The runs chat `chatId` started, newest first. */
@@ -65,6 +88,26 @@ export function tokensSpent(tokens: AgentTokens): string {
 /** How a run stands, in a word or two. */
 export function agentStatus(state: AgentState): string {
   return state.state === "failed" ? "failed" : state.state;
+}
+
+/** Characters per token of the run's finished rounds — or the chat's own guess
+    before there is one (`liveSpeed` in `chatTurnReducer.ts`). */
+const charsPerToken = ({ progress: { timed } }: AgentInfo) => (timed.chars > 0 && timed.tokens > 0 ? timed.chars / timed.tokens : 3.5);
+
+/**
+ * The run's output speed while its round streams, the chat's own estimate:
+ * characters turned into tokens at the finished rounds' ratio. `null` for the
+ * first second, when a few characters say nothing.
+ */
+export function agentSpeed(a: AgentInfo, now: number): number | null {
+  const { streamSince, streamChars } = a.progress;
+  if (streamSince === null || now - streamSince < 1000) return null;
+  return (streamChars / charsPerToken(a)) * (1000 / (now - streamSince));
+}
+
+/** What the run has spent so far: every round reported, the one under way estimated. */
+export function tokensLive(a: AgentInfo): number {
+  return a.tokens.prompt + a.tokens.completion + Math.round(a.progress.streamChars / charsPerToken(a));
 }
 
 /** A step as the helper logged it, `readFile src/auth.rs`: the tool, then what it was called on. */

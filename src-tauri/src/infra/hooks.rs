@@ -99,6 +99,7 @@ fn rewrite(edit: impl FnOnce(&mut HooksConfig)) -> Result<HooksConfig, HooksConf
 pub fn run(hook: &HookCommand, input: &str, cwd: &Path) -> Result<CommandOutput, CommandError> {
     let request = CommandRequest {
         command: hook.command.clone(),
+        description: None,
         cwd: None,
         timeout_seconds: Some(hook.timeout_secs()),
         background: None,

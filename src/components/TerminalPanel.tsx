@@ -71,7 +71,7 @@ function TerminalView({ terminal, onAddToChat }: { terminal: TerminalInfo; onAdd
 export function TerminalPanel({ active, workspace, chatId, processFocus, onOpenAgent, onFocusTaken, terminalPaste, onTerminalPasted, onAddToChat, onClosePane }: Props) {
   const { processes, error: processError, stop } = useProcesses(active, chatId);
   const { agents, error: agentError, stop: stopAgent } = useAgents(active, chatId);
-  const shells = useTerminals(active);
+  const shells = useTerminals(active, workspace);
   const [picked, setPicked] = useState<Shown | null>(null);
   // The ask taken from App, kept here: the list is drawn only once it is picked.
   const [processAsk, setProcessAsk] = useState<{ id: number | null } | null>(null);

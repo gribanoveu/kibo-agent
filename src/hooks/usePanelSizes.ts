@@ -9,8 +9,9 @@ const zeros = (): Record<PanelKey, number> => ({ sidebar: 0, aside: 0, bottom: 0
 // and each is what the panel's widest row needs on one line.
 export const PANEL_LIMITS: Record<PanelKey, { min: number; max: number; initial: number; rail?: number }> = {
   // `rail` is the collapsed width. The side panel has none: it is hidden from
-  // the chat header, never by dragging.
-  sidebar: { min: 180, max: 420, initial: 248, rail: 58 },
+  // the chat header, never by dragging. The minimum is the chat menu's 190px
+  // plus a fifth of it: the menu opens beside the panel, it never outgrows it.
+  sidebar: { min: 228, max: 420, initial: 248, rail: 58 },
   // Changes' "Generate description" and "Commit" side by side: 246.
   aside: { min: 260, max: 560, initial: 300 },
   // A height: the terminal under the message box. Like the side panel it stops

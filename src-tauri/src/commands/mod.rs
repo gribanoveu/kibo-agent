@@ -6,11 +6,13 @@
 //! stringly-typed errors are the right answer.
 
 pub mod chat;
+pub mod agent_state;
+pub mod approval;
+pub mod workspace;
 pub mod chat_events;
 pub mod plain_chat;
 pub mod prototype;
 pub mod artifacts;
-pub mod knowledge;
 pub mod settings;
 pub mod chat_history;
 pub mod workspace_events;
@@ -29,6 +31,7 @@ pub mod dictation;
 pub mod meeting;
 pub mod mongo;
 pub mod features;
+pub mod keyboard_layout;
 pub mod terminal;
 pub mod git;
 pub mod files;

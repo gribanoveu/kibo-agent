@@ -96,6 +96,10 @@ git show --stat HEAD   # 5 файлов, +6 −4
 
 - Строка 1 — `Kibo Agent <версия>`: название релиза.
 - Строка 2 — пустая: воркфлоу берёт тело с третьей (`tail -n +3`).
+- Строка 3 — `## What's new`, дальше буллеты вида `- **Заголовок фичи** — что пользователь
+  теперь может`, как в релизе v0.12.0.
+- `--cleanup=verbatim` обязателен: без него git считает строки на `#` комментариями и
+  выбрасывает `## What's new` из тега (так вышел 0.13.0, заголовок вернули правкой релиза).
 - Строки CHANGELOG и список PR **не повторять** — их добавляют воркфлоу и GitHub.
 - `## Changelog` в теле не писать: для воркфлоу это значит «changelog уже есть», и раздел из
   `CHANGELOG.md` не добавится (`grep -q '^## Changelog'` в `build-release.yml`).
@@ -103,15 +107,15 @@ git show --stat HEAD   # 5 файлов, +6 −4
   появится, так что анонс не должен на него полагаться.
 
 ```bash
-git tag -a v0.12.0 -m "Kibo Agent 0.12.0" -m "## What's new
+git tag -a --cleanup=verbatim v0.12.0 -m "Kibo Agent 0.12.0" -m "## What's new
 
-- Voice input: dictate into the message box from the microphone button or a held Option or Alt key, in Russian, recognized on this computer
-- Two modes instead of three: Analyst answers with the file and line as evidence, and Agent asked for a plan writes it and offers an Implement button
-- One design across the window: a compact message box with its settings in a panel under it, and a Kubernetes chat's cluster in a chip of its own"
+- **Voice input** — dictate into the message box from the microphone button or a held Option or Alt key, in Russian, recognized on this computer
+- **Two modes instead of three** — Analyst answers with the file and line as evidence, and Agent asked for a plan writes it and offers an Implement button
+- **A redesigned window** — a compact message box with its settings in a panel under it, and a Kubernetes chat's cluster in a chip of its own"
 
 git cat-file -t v0.12.0          # tag, не commit
 git rev-parse v0.12.0^{commit}    # = HEAD
-git tag -n99 -l v0.12.0 | head   # как это прочитает GitHub
+git cat-file -p v0.12.0 | sed -n '6,9p'   # пустая строка, ## What's new — как прочитает воркфлоу
 ```
 
 Опечатка после пуша: сам тег не переписать (он уже ушёл), а тело релиза правится

@@ -20,7 +20,7 @@ pub const DEFAULT_CONTEXT_LIMIT: u32 = 260_000;
 ///
 /// Unlike its counterpart in Alfa Atlas, every entry here is a complete
 /// definition rather than an override of a compiled-in preset — this build
-/// ships no presets (see `docs/06-port-plan.md`, F-1.12c), so `base_url` is a
+/// ships no presets, so `base_url` is a
 /// plain `String` and a half-filled entry simply does not exist yet.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,7 +128,7 @@ pub struct LlmSettings {
 /// the backstop beside it — a tool whose weight is misconfigured to zero
 /// would otherwise make the loop unstoppable. `parallel` bounds the window
 /// instead: how many chats' turns may run at once before a start is refused
-/// outright (docs/45-parallel-sessions.md).
+/// outright.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TurnLimits {
@@ -237,6 +237,8 @@ pub struct AppSettings {
     /// Features whose tools the model is not given, by id. The feature stays
     /// on, with its page: a MongoDB page with no `mongo` in the chat.
     pub feature_tools: OptOut,
+    /// After a wrong-layout Fix, select the corrected text's dominant keyboard layout.
+    pub layout_correction_switch: bool,
     /// A call recorded on the Meetings page is transcribed as soon as it is
     /// stopped; off, it waits in the list for Transcribe (`docs/36`).
     pub meeting_auto_process: bool,
@@ -324,8 +326,8 @@ impl WebSearchBackend {
 /// The user's answer per folder, by canonical path. A repository's skills and
 /// commands are text its author wrote for the agent — a skill can tell it to
 /// run a script of the repository's — so a folder cloned from somewhere is not
-/// read until the user says it may be. As pi does
-/// (`docs/27-pi-ideas.md`, item 5), a decision covers the folders inside it.
+/// read until the user says it may be. As pi does,
+/// a decision covers the folders inside it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct FolderTrust(std::collections::BTreeMap<String, bool>);

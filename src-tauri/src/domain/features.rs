@@ -22,9 +22,9 @@ pub enum Feature {
     DeepseekSearch,
     MeetingNotes,
     VoiceMemory,
-    Knowledge,
     Mongodb,
     VoiceInput,
+    LayoutCorrection,
 }
 
 /// Why a choice on the Catalog was not saved.
@@ -49,7 +49,7 @@ pub struct Manifest {
 }
 
 impl Feature {
-    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Knowledge, Feature::Mongodb, Feature::VoiceInput];
+    pub const ALL: &'static [Feature] = &[Feature::Board, Feature::ProviderBalance, Feature::DeepseekSearch, Feature::MeetingNotes, Feature::VoiceMemory, Feature::Mongodb, Feature::VoiceInput, Feature::LayoutCorrection];
 
     pub fn manifest(self) -> Manifest {
         match self {
@@ -60,7 +60,7 @@ impl Feature {
                     in To do, Doing and Done.",
                 enabled_by_default: false,
                 tools: &[ToolName::Board],
-                data: Some("board.json"),
+                data: Some("board.db"),
             },
             Feature::ProviderBalance => Manifest {
                 id: "provider-balance",
@@ -102,16 +102,6 @@ impl Feature {
                 tools: &[],
                 data: Some("voices.json"),
             },
-            Feature::Knowledge => Manifest {
-                id: "knowledge",
-                name: "Knowledge base",
-                description: "The model keeps documents about the repositories it works in — endpoints, topics, tables, \
-                    how a calculation goes — filed by domain, for work in other repositories later. Kept on this computer; \
-                    each document is checked by the model before it is saved.",
-                enabled_by_default: false,
-                tools: &[ToolName::KnowledgeWrite, ToolName::KnowledgeSearch, ToolName::KnowledgeRead, ToolName::KnowledgeRelations],
-                data: Some("knowledge"),
-            },
             Feature::Mongodb => Manifest {
                 id: "mongodb",
                 name: "MongoDB",
@@ -129,6 +119,15 @@ impl Feature {
                 name: "Voice input",
                 description: "Dictate into the message box: the microphone button beside Send, or hold the right Option or Alt key. \
                     Russian only. The speech is recognized on this computer and no sound is kept; the text goes nowhere until you send it.",
+                enabled_by_default: false,
+                tools: &[],
+                data: None,
+            },
+            Feature::LayoutCorrection => Manifest {
+                id: "layout-correction",
+                name: "Keyboard layout correction",
+                description: "The message boxes notice Russian or English typed in the other keyboard layout, including the wrong words in mixed prose, and offer the likely text. \
+                    Nothing changes until you click Fix or press Cmd/Ctrl+F; ordinary Undo restores what you typed. On macOS and Windows, an optional switch also selects the corrected text's dominant installed layout.",
                 enabled_by_default: false,
                 tools: &[],
                 data: None,
@@ -211,7 +210,7 @@ mod tests {
     #[test]
     fn the_ids_are_the_ones_the_window_knows() {
         let ids: Vec<&str> = Feature::ALL.iter().map(|f| f.manifest().id).collect();
-        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "knowledge", "mongodb", "voice-input"]);
+        assert_eq!(ids, ["board", "provider-balance", "deepseek-search", "meeting-notes", "voice-memory", "mongodb", "voice-input", "layout-correction"]);
     }
 
     #[test]
@@ -231,6 +230,7 @@ mod tests {
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::MeetingNotes), "experimental, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::VoiceMemory), "voice prints, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Mongodb), "a network client, off until chosen");
+        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::LayoutCorrection), "an opt-in writing aid");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));
         // An id from another build changes nothing here.
