@@ -581,7 +581,9 @@ export default function App() {
           kube={kube}
           onSetUpKube={() => openSettings("kubernetes")}
           onCompact={async () => {
-            if (!(await plain.compact())) toast.show(plain.error ?? "Nothing worth folding away yet");
+            const folded = await plain.compact();
+            // The reason comes back from the call: the hook's error is a render behind.
+            if (folded !== true) toast.show(typeof folded === "string" ? folded : "Nothing worth folding away yet");
           }}
           onRewind={rewinding.ask}
           pages={
