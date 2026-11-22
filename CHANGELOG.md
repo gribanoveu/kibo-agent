@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- 2026-11-22 The Catalog's "Show all" is the last card of a cut section's grid, in the eighth card's place, instead of a link by the heading — it is clear the section shows only part of the list
+- 2026-11-22 The empty chat screens in Agent and Chat drop their description paragraphs: the greeting, the suggestions and the Enter hint stay
+- 2026-11-22 The wrong-layout hint sits above the message box instead of under it
 - 2026-11-21 A turn's work survives a crash or a closed window: reopening the chat restores its history and transcript with an "interrupted" note, and a provider failure mid-turn keeps the work too; a cache miss now says what changed — the system prompt, the tool set, a message of the history, or the provider losing the cache; a tool list sent as a JSON string (`todo.ids`, `readFile.paths`, `semanticSearch.fts`) is read as the list instead of failing or searching for the brackets
 - 2026-11-21 A narrow chat column (the IDE layout's, or one dragged thin): the message box takes the whole width with its buttons on a row under it and grows taller instead of scrolling inside itself, the Working line keeps time, tokens and processes on one line, and the checklist shows two rows with a done/total count beside them
 - 2026-11-21 A file link with lines in an answer (`a.ts:42`, `a.ts:42-50`, `#L42-L50`) opens the file scrolled to those lines and lights them for a moment, in the tab the file already has
