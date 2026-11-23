@@ -379,6 +379,9 @@ export type ContextUsage = {
   limit: number | null;
   /** The total at which a pass starts happening on its own. */
   compactsAt: number | null;
+  /** The total is the provider's own count for the last request plus what was
+   * added since, not an estimate from the text — the meter names its source. */
+  anchored?: boolean;
 };
 
 export async function contextUsage(chatId: string, messages: LlmMessage[]): Promise<ContextUsage> {

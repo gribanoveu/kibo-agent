@@ -181,6 +181,11 @@ pub struct ContextUsage {
     /// The total at which a pass starts happening on its own. `None` without a
     /// limit, for the same reason.
     pub compacts_at: Option<usize>,
+    /// Whether the total is anchored on the provider's own count for the last
+    /// request (docs/60) rather than estimated from the text: the meter names
+    /// its source, so a reader knows which number they are trusting.
+    #[serde(default)]
+    pub anchored: bool,
 }
 
 /// What goes in front of the conversation on every request, by part — the
@@ -252,6 +257,7 @@ impl ContextUsage {
             limit,
             compacts_at: limit
                 .map(|limit| (u64::from(limit) * TRIGGER_PERCENT / 100) as usize),
+            anchored: false,
         }
     }
 }
@@ -275,7 +281,8 @@ pub fn should_compact(estimated_tokens: usize, context_limit: Option<u32>) -> bo
 /// error is bounded by the tail, not the whole conversation. Without a
 /// trustworthy anchor — none yet, a rewritten history, another model — the
 /// full estimate, as before. `current` is the fingerprint of the request about
-/// to be sent, taken where it is assembled.
+/// to be sent, taken where it is assembled. Returns the total and whether it
+/// is anchored, so the meter names the source the number actually came from.
 pub fn anchored_tokens(
     anchor: Option<&Anchor>,
     current: &RequestFingerprint,
@@ -283,10 +290,10 @@ pub fn anchored_tokens(
     model: &str,
     frame: RequestFrame,
     history: &[LlmMessage],
-) -> usize {
+) -> (usize, bool) {
     match anchor.filter(|anchor| anchor.holds_for(provider_id, model, current)) {
-        Some(anchor) => anchor.prompt_tokens as usize + estimate_tokens(anchor.trailing(history)),
-        None => frame.total() + estimate_tokens(history),
+        Some(anchor) => (anchor.prompt_tokens as usize + estimate_tokens(anchor.trailing(history)), true),
+        None => (frame.total() + estimate_tokens(history), false),
     }
 }
 
@@ -884,10 +891,10 @@ mod tests {
         let history = vec![user("go"), assistant("ok"), user("next")];
         let anchor = Anchor { prompt_tokens: 1_000, fingerprint: crate::domain::request_marker::fingerprint(&[], &[], &history[..2]), provider_id: "p".into(), model: "m".into() };
         let current = crate::domain::request_marker::fingerprint(&[], &[], &history);
-        assert_eq!(anchored_tokens(Some(&anchor), &current, "p", "m", counted_frame(), &history), 1_000 + estimate_tokens(&history[2..]));
+        assert_eq!(anchored_tokens(Some(&anchor), &current, "p", "m", counted_frame(), &history), (1_000 + estimate_tokens(&history[2..]), true));
         // Nothing added since: exactly the provider's count, no estimate at all.
         let same = crate::domain::request_marker::fingerprint(&[], &[], &history[..2]);
-        assert_eq!(anchored_tokens(Some(&anchor), &same, "p", "m", counted_frame(), &history[..2]), 1_000);
+        assert_eq!(anchored_tokens(Some(&anchor), &same, "p", "m", counted_frame(), &history[..2]), (1_000, true));
     }
 
     /// Without a trustworthy anchor — none yet, a rewritten history, another
@@ -897,11 +904,11 @@ mod tests {
         let history = vec![user("go"), assistant("ok")];
         let full = counted_frame().total() + estimate_tokens(&history);
         let current = crate::domain::request_marker::fingerprint(&[], &[], &history);
-        assert_eq!(anchored_tokens(None, &current, "p", "m", counted_frame(), &history), full);
+        assert_eq!(anchored_tokens(None, &current, "p", "m", counted_frame(), &history), (full, false));
         let stale = Anchor { prompt_tokens: 1_000, fingerprint: crate::domain::request_marker::fingerprint(&[], &[], &[user("other")]), provider_id: "p".into(), model: "m".into() };
-        assert_eq!(anchored_tokens(Some(&stale), &current, "p", "m", counted_frame(), &history), full);
+        assert_eq!(anchored_tokens(Some(&stale), &current, "p", "m", counted_frame(), &history), (full, false));
         let other_model = Anchor { model: "m2".into(), ..stale.clone() };
-        assert_eq!(anchored_tokens(Some(&other_model), &current, "p", "m", counted_frame(), &history), full);
+        assert_eq!(anchored_tokens(Some(&other_model), &current, "p", "m", counted_frame(), &history), (full, false));
     }
 
     #[test]

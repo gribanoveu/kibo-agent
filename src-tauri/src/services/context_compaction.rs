@@ -110,8 +110,10 @@ pub fn anchored_usage(
     anchor: Option<&Anchor>,
     current: &RequestFingerprint,
 ) -> ContextUsage {
-    let total = compaction::anchored_tokens(anchor, current, &session.provider_id, &session.model, frame, history);
-    ContextUsage::new(frame, history, session.context_limit).with_total(total)
+    let (total, anchored) = compaction::anchored_tokens(anchor, current, &session.provider_id, &session.model, frame, history);
+    let mut usage = ContextUsage::new(frame, history, session.context_limit).with_total(total);
+    usage.anchored = anchored;
+    usage
 }
 
 /// A pass before the conversation fails rather than after, when the session
@@ -142,7 +144,7 @@ pub fn anchored_compact_if_needed(
     anchor: Option<&Anchor>,
     current: &RequestFingerprint,
 ) -> Result<Option<Compacted>, LlmError> {
-    let total = compaction::anchored_tokens(anchor, current, &session.provider_id, &session.model, frame, history);
+    let (total, _) = compaction::anchored_tokens(anchor, current, &session.provider_id, &session.model, frame, history);
     let needed = force || compaction::should_compact(total, session.context_limit);
     if !needed {
         return Ok(None);
@@ -816,7 +818,9 @@ mod tests {
         let anchor = Anchor { prompt_tokens: 95_000, fingerprint: current.clone(), provider_id: "test".into(), model: "m".into() };
         let usage = anchored_usage(&session, bare(), &history, Some(&anchor), &current);
         assert_eq!(usage.total, 95_000);
+        assert!(usage.anchored, "the meter names the provider's count as its source");
         assert_eq!(usage.instructions + usage.skills + usage.tools + usage.mcp + usage.conversation, 95_000);
+        assert!(!anchored_usage(&session, bare(), &history, None, &current).anchored, "no anchor: an estimate, and said so");
     }
 
     /// Asking for it outright skips the threshold — and nothing else. A
