@@ -220,13 +220,10 @@ const SLOW_SYNC_KNOWN: &[&str] = &[];
 /// at the call site: they probe the shell, read the marker row, gather rules
 /// and skills (docs/60, CU-3). An async command reaches them inside its
 /// blocking closure, like the IO itself.
-const SLOW_HELPERS: &[&str] = &["next_request_frame(", "next_folder_frame(", "chat_anchor(", "request_parts(", "probe_shell("];
+const SLOW_HELPERS: &[&str] = &["next_request_frame(", "next_folder_frame(", "chat_anchor(", "request_parts(", "probe_shell(", "chat_prompt_workspace("];
 
 /// Async commands with a slow line in the async body, before the blocking
 /// closure: the wait runs on an async worker, not off the loop. Only shrinks.
-/// `chat_prompt_workspace` is deliberately not listed: one SQLite read of the
-/// chat record, in the async body of both meter commands since before the
-/// anchor existed — moving it is its own concern.
 const SLOW_ASYNC_BODY_KNOWN: &[&str] = &[];
 
 /// An async command's IO waits inside its blocking closure (AGENTS.md, IPC
