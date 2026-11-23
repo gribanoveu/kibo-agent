@@ -252,17 +252,18 @@ if [[ -n ${PR:-} ]]; then
   step "13. the PR's activities — comments as events"
   req activities "$API/pull-requests/$PR/activities?limit=100" auth
   note "activities: HTTP $CODE, $(json '.values | length' activities) item(s); actions: $(json '[.values[]?.action] | unique | join(",")' activities)"
-  json '.values[]? | select(.action == "COMMENTED") | "    comment \(.comment.id) by \(.comment.author.slug): severity=\(.comment.severity // "?") state=\(.comment.state // "?") threadResolved=\(.comment.threadResolved // "?") anchor=\(.commentAnchor.path // .comment.anchor.path // "-"):\(.commentAnchor.line // .comment.anchor.line // "-")"' activities
+  json '.values[]? | select(.action == "COMMENTED") | "    comment \(.comment.id) by \(.comment.author.slug): severity=\(.comment.severity // "?") state=\(.comment.state // "?") threadResolved=\(.comment.threadResolved) anchor=\(.commentAnchor.path // .comment.anchor.path // "-"):\(.commentAnchor.line // .comment.anchor.line // "-")"' activities
   note "activities isLastPage=$(json '.isLastPage // "?"' activities) — pagination is start/limit, as everywhere"
 
-  step "14. the PR's comments — the list with anchors"
+  step "14. the PR's comments — per-file only: the server wants a path"
   req comments "$API/pull-requests/$PR/comments?limit=100" auth
   if [[ $CODE != 200 ]]; then
-    # The documentation lists the filters as required; older servers take them.
+    # 8.19 answers 400 "The path query parameter is required": this endpoint
+    # reads one file's comments, not the PR's — activities above is the read.
     req comments "$API/pull-requests/$PR/comments?limit=100&anchorState=ALL&state=ALL&diffType=EFFECTIVE" auth
   fi
   note "comments: HTTP $CODE, $(json '.values | length' comments) item(s); with anchor=$(json '[.values[]? | select(.anchor != null)] | length' comments), replies=$(json '[.values[]? | select(.parent != null)] | length' comments)"
-  json '.values[]? | "    \(.id) by \(.author.slug): severity=\(.severity // "?") state=\(.state // "?") threadResolved=\(.threadResolved // "?") parent=\(.parent.id // "-") anchor=\(.anchor.path // "-"):\(.anchor.line // "-")"' comments
+  json '.values[]? | "    \(.id) by \(.author.slug): severity=\(.severity // "?") state=\(.state // "?") threadResolved=\(.threadResolved) parent=\(.parent.id // "-") anchor=\(.anchor.path // "-"):\(.anchor.line // "-")"' comments
 
   step "15. the PR's tasks — blocker comments"
   req blockers "$API/pull-requests/$PR/blocker-comments?limit=100" auth

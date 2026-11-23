@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-23 Work the review of your Bitbucket pull request from the chat: Resolve conflicts and Address comments buttons on the PR row in Overview and under the agent's answer put a ready request into the message box — the open remarks with their file, line and author, resolved ones left out; the agent reads all of them with `pullRequestStatus`
 - 2026-11-23 On a wide monitor the conversation, in Agent and Chat modes alike, keeps a reading width (750px) and stays centred in the panel, instead of stretching across its whole width; the message box, its queue and the line under it stay centred with it, two percent of the text's width wider on each side
 - 2026-11-23 The next-step buttons under an answer grow three kinds: update a worktree branch from its base when it falls behind (`syncBase`), remove a worktree nothing would be lost from (`cleanup`, stepping into the main checkout and opening the removal dialog), and the model's own suggestions — up to two short messages it writes itself, sent exactly as written when pressed (`message`); the plan button now opens the Plan tab, where the plan is read and implementation starts
 - 2026-11-23 The chat thread keeps following a streaming answer under load: a scroll event reading an older position (WebKit's scrolling thread commits lag the stick) no longer passes for the user scrolling away, which stopped the auto-scroll until the next manual scroll; scrolling up to read still lets go at once, and scrolling back to the end picks it up again
