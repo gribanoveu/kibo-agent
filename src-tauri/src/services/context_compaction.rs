@@ -784,6 +784,7 @@ mod tests {
             skills: &skills,
             rules: &rules,
             worktree_of: None,
+            worktree_base: None,
             parallel: None,
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
             mcp_servers: McpTools::default().notes(),
