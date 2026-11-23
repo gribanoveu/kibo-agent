@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { ImagePart } from "../lib/images";
-import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST } from "../lib/offer";
+import { COMMIT_REQUEST, type Offer, PULL_REQUEST, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
 import { exportChat, moveChatToWorktree } from "../lib/savedChats";
 import { pickSavePath } from "../lib/dialog";
 import { withLanguageReminder, type ReplyLanguage } from "../lib/settings";
@@ -33,12 +33,15 @@ export function useChatRouting({
   focusComposer,
   leavePage,
   giveBack,
+  worktreeMain,
+  openPlan,
+  askWorktreeRemoval,
 }: {
   agentMode: boolean;
   agent: Pick<ReturnType<typeof useAgentTurn>, "chatId" | "turn" | "open" | "reset" | "send" | "compact">;
   plain: Pick<ReturnType<typeof usePlainChat>, "open" | "newChat">;
   history: Pick<ReturnType<typeof useChatHistory>, "chats" | "folderOf">;
-  workspace: Pick<ReturnType<typeof useWorkspace>, "path" | "open" | "pick">;
+  workspace: Pick<ReturnType<typeof useWorkspace>, "path" | "open" | "pick" | "close">;
   folderSwitch: Pick<ReturnType<typeof useFolderSwitch>, "guard">;
   conversation: { value: ConversationMode; pick: (mode: ConversationMode) => Promise<string | null> };
   replyLanguage: ReplyLanguage;
@@ -46,6 +49,12 @@ export function useChatRouting({
   focusComposer: () => void;
   leavePage: () => void;
   giveBack: (text: string, images?: ImagePart[]) => void;
+  /** The main checkout when the open folder is a worktree of it (`useWorktreeOf`). */
+  worktreeMain: string | null;
+  /** Opens the Plan tab: the plan card leads there, implementation starts in it. */
+  openPlan: () => void;
+  /** Opens the removal dialog for a worktree the chat has already left. */
+  askWorktreeRemoval: (path: string) => void;
 }) {
   // A chat to open once its folder is the active one: one moved to its
   // worktree, or one of another folder picked in the sidebar. Opened only
@@ -119,15 +128,45 @@ export function useChatRouting({
   const implement = async () => {
     const failed = await conversation.pick("agent");
     if (failed) return notify(failed);
+    // Not `send`: that would drop the checklist the plan came with.
     agent.send(IMPLEMENT_PLAN, undefined, [], true);
   };
 
-  const pickOffer = async (kind: OfferKind) => {
+  const pickOffer = async (offer: Offer) => {
+    const kind = offer.kind;
+    // The model's own suggestion: pressing sends exactly what it wrote.
+    if (kind === "message") {
+      if (!offer.text) return;
+      return send(offer.text);
+    }
     if (kind === "review") return send(REVIEW_REQUEST);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
-    // Not `send`: that would drop the checklist the plan came with.
-    if (kind === "implement") return implement();
+    if (kind === "syncBase") return send(SYNC_BASE);
+    if (kind === "cleanup") {
+      const path = workspace.path;
+      // Not silent: the card is pressable, so an unknown main checkout has to
+      // say why nothing follows — the folder list can still remove it.
+      if (!path || !worktreeMain) {
+        return notify("The main checkout of this worktree is unknown — open it in the folder list and remove the worktree there");
+      }
+      // Closing a worktree stops its processes and terminals, and an open
+      // folder is never removable: the guard asks first — a turn still
+      // working there keeps the window where it is — and then the main
+      // checkout opens, this folder closes, and the removal dialog reads
+      // what is left to take.
+      return folderSwitch.guard(
+        async () => {
+          if (!(await workspace.open(worktreeMain))) return;
+          if (!(await workspace.close(path))) return;
+          askWorktreeRemoval(path);
+        },
+        undefined,
+        [path],
+      );
+    }
+    // The plan is read before it is implemented: the card only opens the tab.
+    if (kind === "plan") return openPlan();
     const id = agent.chatId;
     if (!id) return;
     try {

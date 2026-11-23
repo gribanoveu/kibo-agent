@@ -226,6 +226,10 @@ export default function App() {
     focusComposer,
     leavePage,
     giveBack,
+    worktreeMain: worktreeOf,
+    openPlan: () => openTab("plan"),
+    // Declared below; the closure runs on a press, long after this render.
+    askWorktreeRemoval: (path) => worktreeRemoval.ask(path),
   });
   // An archived chat is not where the user left off, even when it was touched last.
   useFolderConversation(
@@ -468,7 +472,6 @@ export default function App() {
             onToggleIde={toggleIde}
             onOpenPanel={openTab}
             onExport={exportOpenChat}
-            onOpenPlan={() => openTab("plan")}
             checklist={agent.checklist}
             onOpenProcess={openProcess}
             onOpenAgent={openAgent}
@@ -480,7 +483,7 @@ export default function App() {
             onBranch={agent.branch}
             onRewind={(id) => void rewinding.ask(id)}
             onFix={giveBack}
-            onOffer={conversation.value === "agent" ? (kind) => void pickOffer(kind) : undefined}
+            onOffer={conversation.value === "agent" ? (offer) => void pickOffer(offer) : undefined}
             steered={agent.steered}
             onWithdraw={agent.withdraw}
           />

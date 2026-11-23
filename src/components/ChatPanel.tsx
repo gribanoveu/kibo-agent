@@ -42,7 +42,7 @@ import {
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard, ReviewReport } from "./ReviewCard";
 import { findingOf, reviewOf } from "../lib/finding";
-import { offerOf, offersOf, type OfferKind } from "../lib/offer";
+import { offerOf, offersOf, type Offer } from "../lib/offer";
 import { OfferCards } from "./OfferCards";
 import { presentedOf } from "../lib/prototype";
 import { PresentedCard, RestoredCard } from "./PresentedCard";
@@ -918,8 +918,6 @@ type Props = {
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
   onOpenRepo: () => void;
-  /** Opens the Plan tab, where the plan is read and edited before it is implemented. */
-  onOpenPlan?: () => void;
   /** The agent's checklist, drawn above the clock while a turn runs. */
   checklist?: Task[];
   /** Opens the Terminal tab on a background process a call started. */
@@ -941,8 +939,8 @@ type Props = {
   onFix?: (text: string) => void;
   /** Previews approval calls in this chat's own checkout. */
   preview?: PreviewCalls;
-  /** Sends what an offer under the last answer offered, as the user's message. */
-  onOffer?: (kind: OfferKind) => void;
+  /** Takes what an offer under the last answer offered: a message sent, or the plan opened. */
+  onOffer?: (offer: Offer) => void;
   /** Notes sent into the running turn that no round has read yet; one taken
       back goes to the box, with the pictures it carried. */
   steered?: SteeredNote[];
@@ -969,7 +967,6 @@ type TranscriptProps = Pick<
   | "onRewind"
   | "onFix"
   | "onOffer"
-  | "onOpenPlan"
   | "steered"
   | "onWithdraw"
   | "onAnswerQuestion"
@@ -1028,7 +1025,6 @@ export function Transcript({
   onRewind,
   onFix,
   onOffer,
-  onOpenPlan,
   onAnswerQuestion,
   checklist = [],
   onOpenVersion,
@@ -1087,7 +1083,7 @@ export function Transcript({
           )}
         </div>
       ))}
-      {onOffer && <OfferCards offers={offers} onPick={onOffer} onOpenPlan={onOpenPlan} />}
+      {onOffer && <OfferCards offers={offers} onPick={onOffer} />}
       {steered.length > 0 && (
         <div className="turn">
           <div className="role">You</div>
@@ -1125,7 +1121,6 @@ export function ChatPanel({
   onDecide,
   onOpenRepo,
   checklist = [],
-  onOpenPlan,
   onOpenProcess,
   onOpenAgent,
   runningProcesses = [],
@@ -1266,7 +1261,6 @@ export function ChatPanel({
               onFix={onFix}
               preview={preview}
               onOffer={onOffer}
-              onOpenPlan={onOpenPlan}
               checklist={checklist}
               steered={steered}
               onWithdraw={onWithdraw}

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-23 The next-step buttons under an answer grow three kinds: update a worktree branch from its base when it falls behind (`syncBase`), remove a worktree nothing would be lost from (`cleanup`, stepping into the main checkout and opening the removal dialog), and the model's own suggestions — up to two short messages it writes itself, sent exactly as written when pressed (`message`); the plan button now opens the Plan tab, where the plan is read and implementation starts
 - 2026-11-23 The chat thread keeps following a streaming answer under load: a scroll event reading an older position (WebKit's scrolling thread commits lag the stick) no longer passes for the user scrolling away, which stopped the auto-scroll until the next manual scroll; scrolling up to read still lets go at once, and scrolling back to the end picks it up again
 - 2026-11-23 The context meter shows the provider's own count for the last request plus what was added since, instead of a characters-based estimate that under-counted Russian text and a thinking model's reasoning; the panel names which source the number is from, and auto-compaction folds at the real share of the window rather than late
 - 2026-11-22 While a command runs, the folded working line shows the model's own description of what it does (`runCommand`'s `description`), falling back to the command line when there is none

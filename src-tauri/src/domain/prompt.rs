@@ -161,11 +161,11 @@ You can research, change the repository and run commands.
 
 For a request of three or more steps, keep `todo`: a short outline of them, each ticked off once it is done and checked. When the work needs a plan of its own — a long task, one that reads more than you can keep in view at once — write it with `writePlan`: the plan is the work itself, and what you find goes into it as you go: names, paths, line numbers, decisions.
 
-When the user asks for a plan rather than the work — \"make a plan\", \"how would you do this\", \"plan it first\" — the plan is the whole task. Read what you need, write it with `writePlan`, outline its steps with `todo`, and change nothing: no edits, no command that writes. Then put it to them with `offer`, kind implement, and stop. They read the plan in the Plan tab and may edit it there; pressing the button is what starts the work. In the chat, summarize the plan in a few lines rather than repeating it.
+When the user asks for a plan rather than the work — \"make a plan\", \"how would you do this\", \"plan it first\" — the plan is the whole task. Read what you need, write it with `writePlan`, outline its steps with `todo`, and change nothing: no edits, no command that writes. Then put it to them with `offer`, kind plan, and stop. Pressing it opens the Plan tab, where they read the plan, may edit it, and start the work themselves. In the chat, summarize the plan in a few lines rather than repeating it.
 
 The project instructions (AGENTS.md, CLAUDE.md and the like) say what stays true. Edit them when the user asks, or when a command, convention or layer they describe changes — never to record progress or the state of the work: that goes in the plan, the checklist or the project's own docs.
 
-When the work leaves one next step the user is likely to want and has not asked for, put it to them. A review or a commit goes through `offer`, as a button after your answer — a review the user presses runs a helper on the change, and its findings come back to you to fix or dismiss. Offer a review once, at the end of a task whose change is not trivial — several files, logic, concurrency, security, error handling — and not for typos, docs or renames; a commit when the task is done and checked. Do not ask about what you offered. Any other step — the next part of a larger task — you may end with one short question naming it: \"Move on to the parser?\". Leave it out when the reply already settles the request, and never ask \"Anything else?\".",
+When the work leaves one next step the user is likely to want and has not asked for, put it to them. A review or a commit goes through `offer`, as a button after your answer — a review the user presses runs a helper on the change, and its findings come back to you to fix or dismiss. Offer a review once, at the end of a task whose change is not trivial — several files, logic, concurrency, security, error handling — and not for typos, docs or renames; a commit when the task is done and checked. Do not ask about what you offered. Any other step the user is likely to want — the next part of a larger task, a choice between two ways on — goes through `offer` too, kind message: its text is the exact message they send by pressing it (\"Start OF-1 and stop for review\"), a phrase or two, at most two per turn, and only for a real choice — a ready plan is kind plan, not message. Leave it out when the reply already settles the request, and never offer \"Anything else?\".",
         // Written for the reader it has: someone who asks what the system does
         // and cannot check an answer by reading the code themselves.
         ConversationMode::Analyst => "## This conversation: Analyst
@@ -228,6 +228,8 @@ pub struct TurnContext<'a> {
     pub rules: &'a [RuleFile],
     /// The main working tree, when the open folder is a linked worktree of it.
     pub worktree_of: Option<&'a Path>,
+    /// The branch this chat's worktree started from, when the move recorded one.
+    pub worktree_base: Option<&'a str>,
     /// The parallel-session warning as this chat's first turn froze it.
     pub parallel: Option<&'a str>,
     /// The language the user asked replies in; `None` asks nothing.
@@ -261,8 +263,9 @@ pub fn context_block(ctx: &TurnContext) -> String {
         );
     }
     if let Some(main) = ctx.worktree_of {
+        let from = ctx.worktree_base.map(|base| format!(" (started from {base})")).unwrap_or_default();
         text.push_str(&format!(
-            "\n- The open folder is a git worktree of {}, on a branch of its own. That folder is the \
+            "\n- The open folder is a git worktree of {}, on a branch of its own{from}. That folder is the \
              user's own checkout and may hold work in progress: do not edit files there, run commands \
              in it, or point git at it. Commits made here land on this worktree's branch.",
             main.display(),
@@ -550,6 +553,7 @@ mod tests {
             skills: &[],
             rules: &[],
             worktree_of: None,
+            worktree_base: None,
             parallel: None,
             language: None,
             mcp_servers: &[],
@@ -797,6 +801,10 @@ mod tests {
         let text = context_block(&TurnContext { worktree_of: Some(&main), ..ctx(&workspace) });
         assert!(text.contains("git worktree of /work/project"), "{text}");
         assert!(text.contains("do not edit files there"), "{text}");
+        assert!(!text.contains("started from"), "{text}");
+
+        let text = context_block(&TurnContext { worktree_of: Some(&main), worktree_base: Some("main"), ..ctx(&workspace) });
+        assert!(text.contains("on a branch of its own (started from main)"), "{text}");
     }
 
     /// A mode's paragraph may only name tools that mode offers: telling a mode
@@ -811,7 +819,7 @@ mod tests {
                 }
             }
         }
-        assert!(mode_instructions(ConversationMode::Agent).contains("`offer`, kind implement"));
+        assert!(mode_instructions(ConversationMode::Agent).contains("`offer`, kind plan"));
         assert!(mode_instructions(ConversationMode::Agent).contains("`writePlan`"));
     }
 

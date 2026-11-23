@@ -1,5 +1,6 @@
 /* The agent's offered next steps, under its answer: one card per step, the
-   chat's width, each sending its step when pressed. */
+   chat's width, each taking its step when pressed — a message sent, or the
+   plan opened. */
 .offer-cards {
   display: grid;
   gap: 6px;
@@ -8,9 +9,6 @@
 .offer-cards-caption {
   color: var(--text-faint);
   font-size: var(--fs-xs);
-}
-.offer-cards-plan {
-  justify-self: start;
 }
 .offer-card {
   --tint: var(--accent);
@@ -58,6 +56,11 @@
   min-width: 0;
 }
 .offer-card-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   font-size: var(--fs-sm);
   font-weight: 500;
 }

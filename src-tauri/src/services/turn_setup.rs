@@ -230,6 +230,8 @@ pub fn next_folder_frame(workspace: Option<&Path>, mode: ConversationMode, serve
             skills: &skills,
             rules: &rules,
             worktree_of: worktree_of.as_deref(),
+            // Per-chat, and this frame is no chat's: the turn names its own base.
+            worktree_base: None,
             parallel: None,
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),

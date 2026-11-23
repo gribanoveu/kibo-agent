@@ -397,6 +397,7 @@ mod definition_tests {
                 vec![ToolCall::Offer(crate::domain::tools::OfferArgs {
                     kind: crate::domain::tools::OfferKind::Commit,
                     reason: "the counter".to_string(),
+                    text: String::new(),
                 })],
             ),
             ToolName::Explore => (

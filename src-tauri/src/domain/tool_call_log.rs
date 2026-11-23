@@ -308,10 +308,12 @@ mod tests {
                 Some(ToolCall::Remember(crate::domain::tools::RememberArgs { fact: "bench needs --release".into() })),
                 ToolResult::Remembered { already: false },
             ),
-            // The reason is the model's own words, shown on the button.
+            // The reason is the model's own words, shown on the button, and
+            // stays. The suggestion's text is content by field name — the
+            // audit log redacts it as grep's matches; the transcript keeps it.
             ToolName::Offer => (
-                Some(ToolCall::Offer(crate::domain::tools::OfferArgs { kind: crate::domain::tools::OfferKind::Review, reason: "the lock".into() })),
-                ToolResult::Offered { kind: crate::domain::tools::OfferKind::Review },
+                Some(ToolCall::Offer(crate::domain::tools::OfferArgs { kind: crate::domain::tools::OfferKind::Message, reason: "the lock".into(), text: LEAK.into() })),
+                ToolResult::Offered { kind: crate::domain::tools::OfferKind::Message },
             ),
             ToolName::ReportFinding => (
                 None,

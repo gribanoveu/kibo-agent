@@ -12,11 +12,34 @@ use crate::domain::review;
 use crate::domain::tools::{OfferArgs, OfferKind, ToolDeps, ToolError, ToolResult, ToolScope};
 use crate::infra::{git_branches, git_changes};
 
+/// A suggestion is a phrase or two, not a letter.
+const MESSAGE_MAX: usize = 300;
+
 pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
     if args.reason.trim().is_empty() {
         return Err(ToolError::InvalidArguments {
             tool: "offer".into(),
             reason: "reason is empty — say in a few words why, the user reads it on the button".into(),
+        });
+    }
+    let text = args.text.trim();
+    if args.kind == OfferKind::Message {
+        if text.is_empty() {
+            return Err(ToolError::InvalidArguments {
+                tool: "offer".into(),
+                reason: "text is empty — a message offer sends it when pressed; write the exact message".into(),
+            });
+        }
+        if text.chars().count() > MESSAGE_MAX {
+            return Err(ToolError::InvalidArguments {
+                tool: "offer".into(),
+                reason: format!("text is over {MESSAGE_MAX} characters — a suggestion is a phrase or two, not a letter"),
+            });
+        }
+    } else if !text.is_empty() {
+        return Err(ToolError::InvalidArguments {
+            tool: "offer".into(),
+            reason: "text is only for kind message — a fixed kind sends the app's own message".into(),
         });
     }
     match args.kind {
@@ -56,11 +79,34 @@ pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<Too
             })?;
             git_branches::pr_ready(scope.root(), base).map_err(|e| ToolError::Command(e.to_string()))?;
         }
-        OfferKind::Implement => {
-            if !deps.has_plan {
-                return Err(ToolError::Command("no plan to implement: write it with writePlan first".into()));
+        OfferKind::SyncBase => {
+            let base = deps.worktree_base.ok_or_else(|| {
+                ToolError::Command("a base sync is offered only from a chat moved to its own worktree".into())
+            })?;
+            if git_branches::base_behind(scope.root(), base).map_err(|e| ToolError::Command(e.to_string()))? == 0 {
+                return Err(ToolError::Command("the worktree is up to date with its base — nothing to sync".into()));
             }
         }
+        OfferKind::Cleanup => {
+            let state = git_branches::worktree_state(scope.root()).map_err(|e| ToolError::Command(e.to_string()))?;
+            if !state.dirty.is_empty() {
+                return Err(ToolError::Command(format!("commit the worktree changes first: {}", state.dirty.join(", "))));
+            }
+            if state.own_commits > 0 {
+                return Err(ToolError::Command(format!(
+                    "the branch has {} commit(s) on no other branch — publish or merge them first",
+                    state.own_commits
+                )));
+            }
+        }
+        OfferKind::Plan => {
+            if !deps.has_plan {
+                return Err(ToolError::Command("no plan to show: write it with writePlan first".into()));
+            }
+        }
+        // Nothing to check beyond the text above: the suggestion is its own
+        // precondition, and the display keeps at most two.
+        OfferKind::Message => {}
     }
     Ok(ToolResult::Offered { kind: args.kind })
 }
@@ -73,14 +119,18 @@ review: once, at the end of a task whose change is not trivial — several files
 commit: when the task is done and checked, and the user has not said they commit themselves. \
 worktree: while another chat is running in this checkout and this task needs file changes; pressing it moves only this chat to a clean worktree from the current branch. \
 pullRequest: after committing this chat's worktree changes, when the branch is ahead of and not behind its recorded base; pressing it asks you to push and create the PR with confirmed commands. \
-implement: after writePlan, when the user asked for a plan rather than the work; pressing it asks you to carry the plan out, so end your turn there. \
+syncBase: when this chat's worktree is behind its recorded base — the step a refused pullRequest names; pressing it asks you to bring the branch up to date from the base with confirmed commands. \
+cleanup: when this chat's worktree is no longer needed — its PR merged or the attempt abandoned — and nothing would be lost: a clean tree, every commit on another branch. Pressing it steps into the main checkout and opens the removal dialog, which removes the worktree with its chats. \
+plan: after writePlan, when the user asked for a plan rather than the work; pressing it opens the Plan tab, where the user reads it and starts implementation, so end your turn there. \
+message: a next step of your own wording, when no fixed kind covers it and the user faces a real choice — text is the exact message sent as the user's next message when pressed, a phrase or two; at most two are shown, a later one replaces the oldest. A ready plan is kind plan, not message; starting a named phase of it can be one. \
 Do not also ask about it in your answer: the button is the question. Calling a kind again replaces its reason."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
-                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "implement"] },
-                "reason": { "type": "string", "description": "Why, in a few words the user reads on the button: what the change touched." }
+                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "syncBase", "cleanup", "plan", "message"] },
+                "reason": { "type": "string", "description": "Why, in a few words the user reads on the button: what the change touched." },
+                "text": { "type": "string", "description": "For kind message only: the exact message sent when pressed, at most 300 characters." }
             },
             "required": ["kind", "reason"]
         }),
@@ -107,7 +157,11 @@ mod tests {
     }
 
     fn args(kind: OfferKind, reason: &str) -> OfferArgs {
-        OfferArgs { kind, reason: reason.into() }
+        OfferArgs { kind, reason: reason.into(), text: String::new() }
+    }
+
+    fn message(text: &str) -> OfferArgs {
+        OfferArgs { kind: OfferKind::Message, reason: "the next step".into(), text: text.into() }
     }
 
     #[test]
@@ -245,14 +299,77 @@ mod tests {
     }
 
     #[test]
+    fn a_base_sync_needs_a_recorded_base_and_commits_behind_it() {
+        let (dir, scope) = folder("offer-sync-base");
+        let refused = offer(&scope, &args(OfferKind::SyncBase, "the base moved"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("moved"), "{refused}");
+
+        let base = crate::infra::git_head::current_branch(&dir).unwrap();
+        let path = git_branches::add_agent_worktree(&dir, &base, "chat-1", &temp_dir("offer-sync-base-home")).unwrap();
+        let scope = ToolScope::new(&path).unwrap();
+        let deps = ToolDeps { worktree_base: Some(&base), ..ToolDeps::default() };
+        let refused = offer(&scope, &args(OfferKind::SyncBase, "x"), &deps).unwrap_err();
+        assert!(refused.to_string().contains("up to date"), "{refused}");
+
+        // The base moves; the worktree's own commit does not cancel the sync.
+        fs::write(dir.join("b.rs"), "base\n").unwrap();
+        git_changes::stage(&dir, &["b.rs".into()]).unwrap();
+        git_changes::commit(&dir, "base moved").unwrap();
+        fs::write(path.join("a.rs"), "two\n").unwrap();
+        git_changes::stage(&path, &["a.rs".into()]).unwrap();
+        git_changes::commit(&path, "own work").unwrap();
+        assert_eq!(
+            offer(&scope, &args(OfferKind::SyncBase, "the base moved"), &deps).unwrap(),
+            ToolResult::Offered { kind: OfferKind::SyncBase }
+        );
+    }
+
+    #[test]
+    fn cleanup_needs_a_worktree_with_nothing_left_to_lose() {
+        let (dir, scope) = folder("offer-cleanup");
+        let refused = offer(&scope, &args(OfferKind::Cleanup, "done"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("worktree"), "{refused}");
+
+        let base = crate::infra::git_head::current_branch(&dir).unwrap();
+        let path = git_branches::add_agent_worktree(&dir, &base, "chat-1", &temp_dir("offer-cleanup-home")).unwrap();
+        let scope = ToolScope::new(&path).unwrap();
+        // A fresh worktree has nothing of its own: an abandoned attempt goes.
+        assert_eq!(
+            offer(&scope, &args(OfferKind::Cleanup, "abandoned"), &ToolDeps::default()).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Cleanup }
+        );
+
+        // Its own commit is not lost until it lives on another branch too.
+        fs::write(path.join("a.rs"), "two\n").unwrap();
+        git_changes::stage(&path, &["a.rs".into()]).unwrap();
+        git_changes::commit(&path, "work").unwrap();
+        let refused = offer(&scope, &args(OfferKind::Cleanup, "x"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("publish or merge"), "{refused}");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let head = crate::infra::git_head::current_commit(&path).unwrap();
+        let branch = crate::infra::git_head::current_branch(&path).unwrap();
+        repo.remote("origin", "https://example.invalid/r.git").unwrap();
+        repo.reference(&format!("refs/remotes/origin/{branch}"), head.parse().unwrap(), false, "").unwrap();
+        assert_eq!(
+            offer(&scope, &args(OfferKind::Cleanup, "merged"), &ToolDeps::default()).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Cleanup }
+        );
+
+        fs::write(path.join("b.rs"), "dirty\n").unwrap();
+        let refused = offer(&scope, &args(OfferKind::Cleanup, "x"), &ToolDeps::default()).unwrap_err();
+        assert!(refused.to_string().contains("commit the worktree changes first"), "{refused}");
+    }
+
+    #[test]
     fn a_plan_is_offered_only_once_there_is_one() {
         let (_dir, scope) = folder("offer-implement");
-        let refused = offer(&scope, &args(OfferKind::Implement, "the parser"), &ToolDeps::default()).unwrap_err();
+        let refused = offer(&scope, &args(OfferKind::Plan, "the parser"), &ToolDeps::default()).unwrap_err();
         assert!(refused.to_string().contains("no plan"), "{refused}");
         let deps = ToolDeps { has_plan: true, ..ToolDeps::default() };
         assert_eq!(
-            offer(&scope, &args(OfferKind::Implement, "the parser"), &deps).unwrap(),
-            ToolResult::Offered { kind: OfferKind::Implement }
+            offer(&scope, &args(OfferKind::Plan, "the parser"), &deps).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Plan }
         );
     }
 
@@ -261,9 +378,44 @@ mod tests {
     fn the_schema_lists_every_kind() {
         let schema = definition().parameters;
         let listed = schema["properties"]["kind"]["enum"].as_array().unwrap();
-        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::Implement] {
+        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::SyncBase, OfferKind::Cleanup, OfferKind::Plan, OfferKind::Message] {
             assert!(listed.contains(&serde_json::to_value(kind).unwrap()), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_message_offer_carries_its_text() {
+        let (_dir, scope) = folder("offer-message");
+        assert_eq!(
+            offer(&scope, &message("Start OF-1 and stop for review"), &ToolDeps::default()).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Message }
+        );
+        let empty = offer(&scope, &message("   "), &ToolDeps::default()).unwrap_err();
+        assert!(empty.to_string().contains("text is empty"), "{empty}");
+        // Characters, not bytes: a Russian suggestion of 300 letters fits.
+        let fits = "я".repeat(MESSAGE_MAX);
+        assert!(offer(&scope, &message(&fits), &ToolDeps::default()).is_ok());
+        let long = offer(&scope, &message(&"я".repeat(MESSAGE_MAX + 1)), &ToolDeps::default()).unwrap_err();
+        assert!(long.to_string().contains("over 300"), "{long}");
+    }
+
+    /// A fixed kind sends the app's own message; text on it would say the
+    /// model can rewrite that message, which it cannot.
+    #[test]
+    fn a_fixed_kind_refuses_text() {
+        let (dir, scope) = folder("offer-fixed-text");
+        fs::write(dir.join("a.rs"), "two\n").unwrap();
+        let mut args = args(OfferKind::Commit, "the counter");
+        args.text = "commit it my way".into();
+        let err = offer(&scope, &args, &ToolDeps::default()).unwrap_err();
+        assert!(err.to_string().contains("only for kind message"), "{err}");
+    }
+
+    #[test]
+    fn the_old_implement_kind_still_parses_as_plan() {
+        let args: OfferArgs = serde_json::from_str(r#"{"kind":"implement","reason":"the parser"}"#).unwrap();
+        assert_eq!(args.kind, OfferKind::Plan);
+        assert_eq!(serde_json::to_value(OfferKind::Plan).unwrap(), "plan");
     }
 
     #[test]

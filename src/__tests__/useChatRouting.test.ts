@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test, mock } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
-import { COMMIT_REQUEST, PULL_REQUEST, REVIEW_REQUEST } from "../lib/offer";
+import { COMMIT_REQUEST, PULL_REQUEST, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
 import { withLanguageReminder } from "../lib/settings";
 import { STAY } from "../hooks/useSidebarActions";
 
@@ -47,14 +47,19 @@ type Over = Partial<{
   newChatAnswer: boolean;
   compactResult: true | string | null;
   modeFail: string | null;
+  worktreeMain: string | null;
+  closeAnswer: boolean;
   replyLanguage: "auto" | "english" | "russian";
   holdOpens: boolean;
+  guardBlocks: boolean;
 }>;
 
-/** The stores as recording doubles; the guard lets everything through. */
+/** The stores as recording doubles; the guard lets everything through unless `guardBlocks`. */
 function setup(over: Over = {}) {
   const calls: string[] = [];
   const said: string[] = [];
+  const asked: string[] = [];
+  const guarded: string[][] = [];
   const sent: [string, string | undefined, unknown[], boolean | undefined][] = [];
   const back: [string, unknown[]][] = [];
   let focused = 0;
@@ -105,11 +110,18 @@ function setup(over: Over = {}) {
       calls.push("workspace.pick");
       return over.pickAnswer ?? null;
     },
+    close: (folder: string) => {
+      calls.push(`workspace.close:${folder}`);
+      return Promise.resolve(over.closeAnswer ?? true);
+    },
   };
   const folderSwitch = {
-    guard: (go: () => void) => {
+    guard: (go: () => void, _onCancel?: () => void, closing: string[] = []) => {
       calls.push("guard");
-      return go();
+      guarded.push(closing);
+      // A guard that keeps its dialog open — a running turn there, say — runs nothing after it.
+      if (over.guardBlocks) return Promise.resolve();
+      return Promise.resolve(go());
     },
   };
   const conversation = {
@@ -133,6 +145,9 @@ function setup(over: Over = {}) {
       focusComposer: () => focused++,
       leavePage: () => left++,
       giveBack: (text, images = []) => back.push([text, images]),
+      worktreeMain: over.worktreeMain === undefined ? "/repo-main" : over.worktreeMain,
+      openPlan: () => calls.push("openPlan"),
+      askWorktreeRemoval: (path) => asked.push(path),
     }),
   );
   const landOpens = async (opened: boolean, count = opens.length) => {
@@ -140,7 +155,7 @@ function setup(over: Over = {}) {
       for (const land of opens.splice(0, count)) land(opened);
     });
   };
-  return { ...view, calls, said, sent, back, focused: () => focused, left: () => left, landOpens };
+  return { ...view, calls, said, sent, back, asked, guarded, focused: () => focused, left: () => left, landOpens };
 }
 
 describe("picking a chat", () => {
@@ -243,41 +258,92 @@ describe("sending", () => {
 });
 
 describe("the offers after an answer", () => {
-  test("review, commit and pull request send their own request", async () => {
+  test("review, commit, pull request and base sync send their own request", async () => {
     const { result, sent } = setup();
-    await act(async () => result.current.pickOffer("review"));
-    await act(async () => result.current.pickOffer("commit"));
-    await act(async () => result.current.pickOffer("pullRequest"));
-    expect(sent.map(([text]) => text)).toEqual([REVIEW_REQUEST, COMMIT_REQUEST, PULL_REQUEST]);
+    await act(async () => result.current.pickOffer({ kind: "review", reason: "why" }));
+    await act(async () => result.current.pickOffer({ kind: "commit", reason: "why" }));
+    await act(async () => result.current.pickOffer({ kind: "pullRequest", reason: "why" }));
+    await act(async () => result.current.pickOffer({ kind: "syncBase", reason: "why" }));
+    expect(sent.map(([text]) => text)).toEqual([REVIEW_REQUEST, COMMIT_REQUEST, PULL_REQUEST, SYNC_BASE]);
   });
 
-  test("implement picks the writing mode first, and a refusal sends nothing", async () => {
+  test("a message offer sends exactly its text", async () => {
+    const { result, sent } = setup();
+    await act(async () => result.current.pickOffer({ kind: "message", reason: "why", text: "Start OF-1 and stop for review" }));
+    expect(sent.map(([text]) => text)).toEqual(["Start OF-1 and stop for review"]);
+  });
+
+  test("a message offer without text sends nothing", async () => {
+    const { result, sent } = setup();
+    await act(async () => result.current.pickOffer({ kind: "message", reason: "why" }));
+    expect(sent).toEqual([]);
+  });
+
+  test("the plan card opens the Plan tab and sends nothing; the tab's own button picks the writing mode first", async () => {
     const { result, calls, sent } = setup();
-    await act(async () => result.current.pickOffer("implement"));
-    expect(calls).toEqual(["pick:agent"]);
+    await act(async () => result.current.pickOffer({ kind: "plan", reason: "why" }));
+    expect(calls).toEqual(["openPlan"]);
+    expect(sent).toEqual([]);
+    await act(async () => result.current.implement());
+    expect(calls).toEqual(["openPlan", "pick:agent"]);
     expect(sent).toEqual([["Implement the plan above. Work through the checklist in order.", undefined, [], true]]);
     const refused = setup({ modeFail: "not now" });
-    await act(async () => refused.result.current.pickOffer("implement"));
+    await act(async () => refused.result.current.implement());
     expect(refused.sent).toEqual([]);
     expect(refused.said).toEqual(["not now"]);
   });
 
   test("worktree moves the chat and opens its folder beside this one; a failure drops the pending chat", async () => {
     const { result } = setup();
-    await act(async () => result.current.pickOffer("worktree"));
+    await act(async () => result.current.pickOffer({ kind: "worktree", reason: "why" }));
     expect(result.current.pendingChat).toEqual({ id: "c1", path: "/repo-wt" });
     const refused = setup({ openAnswer: false });
-    await act(async () => refused.result.current.pickOffer("worktree"));
+    await act(async () => refused.result.current.pickOffer({ kind: "worktree", reason: "why" }));
     expect(refused.result.current.pendingChat).toBeNull();
     moved.fail = "boom";
     const failing = setup();
-    await act(async () => failing.result.current.pickOffer("worktree"));
+    await act(async () => failing.result.current.pickOffer({ kind: "worktree", reason: "why" }));
     expect(failing.result.current.pendingChat).toBeNull();
     expect(failing.said).toEqual(["Error: boom"]);
     moved.fail = null;
     const noChat = setup({ chatId: null });
-    await act(async () => noChat.result.current.pickOffer("worktree"));
+    await act(async () => noChat.result.current.pickOffer({ kind: "worktree", reason: "why" }));
     expect(noChat.calls).toEqual([]);
+  });
+
+  test("cleanup asks the folder guard first, then opens the main checkout, closes the worktree, and asks the removal dialog", async () => {
+    const { result, calls, asked, guarded } = setup();
+    await act(async () => result.current.pickOffer({ kind: "cleanup", reason: "why" }));
+    // What closes is what the guard reads processes and turns for — an open
+    // folder is never removable, so the main checkout comes first.
+    expect(guarded).toEqual([["/repo"]]);
+    expect(calls).toEqual(["guard", "workspace.open:/repo-main", "workspace.close:/repo"]);
+    expect(asked).toEqual(["/repo"]);
+    // A guard held open by a running turn there runs nothing after it.
+    const blocked = setup({ guardBlocks: true });
+    await act(async () => blocked.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
+    expect(blocked.calls).toEqual(["guard"]);
+    expect(blocked.asked).toEqual([]);
+    // A failed open or close stops before the dialog: an open folder is never removable.
+    const refused = setup({ openAnswer: false });
+    await act(async () => refused.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
+    expect(refused.calls).toEqual(["guard", "workspace.open:/repo-main"]);
+    expect(refused.asked).toEqual([]);
+    const closeFail = setup({ closeAnswer: false });
+    await act(async () => closeFail.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
+    expect(closeFail.calls).toEqual(["guard", "workspace.open:/repo-main", "workspace.close:/repo"]);
+    expect(closeFail.asked).toEqual([]);
+    const noMain = setup({ worktreeMain: null });
+    await act(async () => noMain.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
+    expect(noMain.calls).toEqual([]);
+    expect(noMain.asked).toEqual([]);
+    // A press that can do nothing says why, instead of nothing happening.
+    expect(noMain.said).toEqual(["The main checkout of this worktree is unknown — open it in the folder list and remove the worktree there"]);
+    const noFolder = setup({ path: null });
+    await act(async () => noFolder.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
+    expect(noFolder.calls).toEqual([]);
+    expect(noFolder.asked).toEqual([]);
+    expect(noFolder.said).toEqual(["The main checkout of this worktree is unknown — open it in the folder list and remove the worktree there"]);
   });
 });
 
