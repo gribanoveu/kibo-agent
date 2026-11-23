@@ -168,7 +168,10 @@ pub async fn chat_start<R: Runtime>(
     // before it starts.
     session.cancel.store(false, Ordering::SeqCst);
     session.begin_turn(state.mode());
-    crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
+    // The prompt is counted even if the turn's setup then fails. The counter
+    // opens SQLite and waits on its lock, so it runs off the loop, detached:
+    // best-effort, and nothing downstream reads it.
+    tauri::async_runtime::spawn_blocking(|| crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]));
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })

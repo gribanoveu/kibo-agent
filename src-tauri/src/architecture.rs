@@ -224,12 +224,10 @@ const SLOW_HELPERS: &[&str] = &["next_request_frame(", "next_folder_frame(", "ch
 
 /// Async commands with a slow line in the async body, before the blocking
 /// closure: the wait runs on an async worker, not off the loop. Only shrinks.
-/// `chat_start` and `plain_chat_send` write a fire-and-forget metrics row
-/// (`daily_metrics::record`) before their closure, since before this rule;
-/// moving it is its own concern. `chat_prompt_workspace` is deliberately not
-/// listed at all: one SQLite read of the chat record, in the async body of
-/// both meter commands since before the anchor existed.
-const SLOW_ASYNC_BODY_KNOWN: &[&str] = &["chat_start", "plain_chat_send"];
+/// `chat_prompt_workspace` is deliberately not listed: one SQLite read of the
+/// chat record, in the async body of both meter commands since before the
+/// anchor existed — moving it is its own concern.
+const SLOW_ASYNC_BODY_KNOWN: &[&str] = &[];
 
 /// An async command's IO waits inside its blocking closure (AGENTS.md, IPC
 /// conventions): the async body only captures arguments and builds the sink.
