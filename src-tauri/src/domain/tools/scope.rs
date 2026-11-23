@@ -47,9 +47,11 @@ pub enum ToolPreview {
     /// approve is a path that turned out broader than it looked.
     #[serde(rename_all = "camelCase")]
     Removes { path: String, files: usize },
-    /// A command line and where it would run.
+    /// A command line and where it would run. `description` is the model's own
+    /// words for it, shown beside the line — the line stays the thing read
+    /// before agreeing.
     #[serde(rename_all = "camelCase")]
-    Command { command: String, cwd: String },
+    Command { command: String, description: Option<String>, cwd: String },
     /// A change to a cluster: where, and what it would become — the server
     /// has already accepted it as a dry run.
     #[serde(rename_all = "camelCase")]

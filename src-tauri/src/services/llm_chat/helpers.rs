@@ -25,8 +25,9 @@ pub(super) fn check_with(session: &LlmSession, prompt: &str, text: &str) -> Resu
 /// It shares what the calling turn has — the model, the folder, the stop
 /// button, the hooks, the log — and nothing of its conversation: no history,
 /// no plan, no checklist. Of its events only the calls go out, as lines of
-/// the calling card's output, and its usage goes to its record: its text is
-/// the result, and its tokens are not this chat's context.
+/// the calling card's output; its usage and the shape of its stream go to
+/// its record, for the live meter: its text is the result, and its tokens
+/// are not this chat's context.
 ///
 /// Recorded in the Agents tab from start to end, and stopped from there too;
 /// the caller says how it ended (`Agents::finish`). The chat's own Stop ends
@@ -44,6 +45,7 @@ pub(super) fn run_helper(
     review: Option<Arc<crate::domain::review::ReviewDesk>>,
     approval: &ApprovalPolicy,
     progress: &CommandSink,
+    call: &str,
 ) -> Result<(Arc<crate::domain::agents::Agents>, u32, Result<ChatStreamOutcome, TurnError>), crate::domain::tools::ToolError> {
     // Offered only in a folder; the chat's preflight refuses it first.
     let Some(scope) = turn.place.scope() else {
@@ -54,28 +56,52 @@ pub(super) fn run_helper(
     // same way either way.
     let agents = turn.agents.clone().unwrap_or_default();
     let id = agents.start(brief);
+    // The calling card finds its own run by this, while it is still running.
+    agents.link_call(id, call);
     let events: ChatEventSink = {
         let agents = Arc::clone(&agents);
         let progress = progress.clone();
-        Arc::new(move |event: ChatTurnEvent| match event.event {
-            ChatEventPayload::ToolCall(call) => {
-                let step = explore_step(&call.name, &call.arguments);
-                progress(CommandEvent {
-                    stream: crate::domain::command_exec::OutputStream::Stdout,
-                    chunk: format!("{step}\n"),
-                });
-                agents.step(id, step);
+        Arc::new(move |event: ChatTurnEvent| {
+            let now = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+            match event.event {
+                ChatEventPayload::ToolCall(call) => {
+                    let step = explore_step(&call.name, &call.arguments);
+                    progress(CommandEvent {
+                        stream: crate::domain::command_exec::OutputStream::Stdout,
+                        chunk: format!("{step}\n"),
+                    });
+                    agents.step(id, step);
+                }
+                // The budget note is the card's own line, not a notice in the
+                // chat: it belongs where the review's steps are.
+                ChatEventPayload::WrapUpReminded { text, .. } => {
+                    progress(CommandEvent {
+                        stream: crate::domain::command_exec::OutputStream::Stdout,
+                        chunk: format!("{text}\n"),
+                    });
+                }
+                ChatEventPayload::ContextUsage { usage, .. } => {
+                    agents.spent(id, &usage, now());
+                    // The subagents' share of the chat's session total, counted
+                    // where the round reports it — the same spend `Counted` keeps
+                    // under the chat, so the two agree by construction.
+                    // ponytail: a compaction inside the helper asks outside this
+                    // event and is not counted here; a counter on the helper's
+                    // own provider wrapper if that ever shows.
+                    if let Some(chat) = agents.chat() {
+                        let spent = u64::from(usage.prompt_tokens) + u64::from(usage.completion_tokens);
+                        crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::SubagentTokens, chat, spent)]);
+                    }
+                }
+                // The live meter's quantities: characters as they stream, the
+                // round's start and end. The text itself stays the result's.
+                ChatEventPayload::RoundStarted => agents.round_started(id),
+                ChatEventPayload::Delta { delta } | ChatEventPayload::Reasoning { delta } => {
+                    agents.streamed(id, delta.chars().count() as u64, now());
+                }
+                ChatEventPayload::ToolCallDelta(call) => agents.streamed(id, call.arguments.chars().count() as u64, now()),
+                _ => {}
             }
-            // The budget note is the card's own line, not a notice in the
-            // chat: it belongs where the review's steps are.
-            ChatEventPayload::WrapUpReminded { text, .. } => {
-                progress(CommandEvent {
-                    stream: crate::domain::command_exec::OutputStream::Stdout,
-                    chunk: format!("{text}\n"),
-                });
-            }
-            ChatEventPayload::ContextUsage(usage) => agents.spent(id, &usage),
-            _ => {}
         })
     };
     let stopped = || (turn.cancelled)() || agents.stop_asked(id);
@@ -140,6 +166,8 @@ pub(super) fn run_helper(
         deepseek: None,
         features,
         fork: fork.is_some(),
+        markers: None,
+        journal: None,
     };
     let outcome = stream(&helper, messages, Vec::new());
     Ok((agents, id, outcome))
@@ -160,6 +188,7 @@ pub(super) fn run_explore(
     args: &crate::domain::tools::ExploreArgs,
     history: &[LlmMessage],
     progress: &CommandSink,
+    call: &str,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
     use crate::domain::tools::ToolError;
@@ -169,7 +198,7 @@ pub(super) fn run_explore(
     if let Some(start) = fork {
         fork_can_start(turn, start, &history[before_reply..])?;
     }
-    let (agents, id, outcome) = run_helper(turn, task, fork, ConversationMode::Explore, None, &ApprovalPolicy::default(), progress)?;
+    let (agents, id, outcome) = run_helper(turn, task, fork, ConversationMode::Explore, None, &ApprovalPolicy::default(), progress, call)?;
     let failed = |reason: String| (AgentState::Failed { reason: reason.clone() }, Err(reason));
     let (state, answer) = match outcome {
         Ok(ChatStreamOutcome::Done(ChatDone { limit_reached: Some(rounds), .. })) => failed(format!(
@@ -268,6 +297,7 @@ pub(super) fn run_review(
     desk: Arc<crate::domain::review::ReviewDesk>,
     range: crate::domain::review::ReviewRange,
     progress: &CommandSink,
+    call: &str,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     use crate::domain::agents::AgentState;
     enum Close {
@@ -276,7 +306,7 @@ pub(super) fn run_review(
         Stopped,
         Failed(String),
     }
-    let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress)?;
+    let (agents, id, outcome) = run_helper(turn, brief, None, ConversationMode::Review, Some(Arc::clone(&desk)), turn.approval, progress, call)?;
     let (state, answer, close) = match outcome {
         Ok(ChatStreamOutcome::Done(done)) if done.limit_reached.is_some() => (AgentState::Done, Some(done.result.text), Close::Rounds),
         Ok(ChatStreamOutcome::Done(done)) => (AgentState::Done, Some(done.result.text), Close::Clean),
@@ -326,6 +356,7 @@ pub(super) fn run_review_tool(
     turn: &Turn,
     args: &crate::domain::tools::ReviewArgs,
     progress: &CommandSink,
+    call: &str,
 ) -> Result<ToolResult, crate::domain::tools::ToolError> {
     // The turn's folder, never the app's global one: a chat working in a
     // worktree reviews the worktree.
@@ -357,7 +388,7 @@ pub(super) fn run_review_tool(
     };
     let brief = crate::domain::review::review_message(&kept, &range, crate::services::llm_session::reply_language(), args.focus.as_deref());
     let desk = Arc::new(crate::domain::review::ReviewDesk::new(kept));
-    run_review(turn, &brief, desk, range, progress)
+    run_review(turn, &brief, desk, range, progress, call)
 }
 
 /// One line of a helper's progress: the tool, and what it was pointed at.

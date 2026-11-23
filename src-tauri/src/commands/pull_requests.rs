@@ -1,4 +1,4 @@
-//! The pull request strip in Changes and its servers (`docs/56-bitbucket-prs.md`),
+//! The pull request strip in Changes and its servers (`docs/62-bitbucket-prs.md`),
 //! through `services::pull_requests`. Everything here reaches a server, the
 //! keychain or git, so every command but the watch's switches is `async`.
 

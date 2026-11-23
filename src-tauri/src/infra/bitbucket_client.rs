@@ -1,5 +1,5 @@
 //! Bitbucket Data Center's REST 1.0, as the `CodeHost` a strip asks
-//! (`docs/56-bitbucket-prs.md`, decisions 2, 3 and 9).
+//! (`docs/62-bitbucket-prs.md`, decisions 2, 3 and 9).
 //!
 //! Every address and every shape read here was answered by the probe of that
 //! plan against a live 8.19.26; the tests' JSON is those answers with the names
@@ -596,7 +596,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    // What the probe of `docs/56-bitbucket-prs.md` saved for this repository,
+    // What the probe of `docs/62-bitbucket-prs.md` saved for this repository,
     // with slugs and titles replaced. The builds list was empty on the probed
     // commit, so its entries are shaped by the field names the legacy path
     // documents rather than copied from an answer.

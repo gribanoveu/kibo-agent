@@ -96,6 +96,30 @@ pub fn hash_at(target: &Path, folder: bool, files: &[String]) -> Option<String> 
     Some(fs::read(target).map_or_else(|_| String::new(), |bytes| content_hash(&[("", &bytes)])))
 }
 
+/// Whether something is at `target` — a dangling symlink included. Only the
+/// fact: [`hash_at`] reads a file whole to hash it, which a place that merely
+/// must be empty does not need.
+pub fn occupied(target: &Path) -> bool {
+    fs::symlink_metadata(target).is_ok()
+}
+
+/// The first parent of `target` under `root` that is a symlink, if any: a
+/// write would follow it out of the folder's own tree, and git keeps
+/// symlinks, so an open repository can hold one. `target` itself is not
+/// checked — [`place`] refuses a symlink in the place on its own.
+pub fn linked_parent(root: &Path, target: &Path) -> Option<PathBuf> {
+    let rest = target.strip_prefix(root).ok()?;
+    let mut at = root.to_path_buf();
+    let mut parts = rest.components().peekable();
+    while let Some(part) = parts.next() {
+        at.push(part);
+        if parts.peek().is_some() && fs::symlink_metadata(&at).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+            return Some(at);
+        }
+    }
+    None
+}
+
 /// Writes an entry into its place, never half of it: a folder is written in
 /// full beside its place, then renamed in; a single file goes through
 /// [`app_dir::write_private`]. Refuses when something is there already, and a
@@ -340,6 +364,35 @@ mod tests {
         assert!(place(&root.join("other.md"), false, &files(&[("", "a"), ("", "b")])).is_err());
         remove(&target, false).unwrap();
         assert_eq!(hash_at(&target, false, &[]), None);
+    }
+
+    #[test]
+    fn occupied_is_the_fact_of_something_there() {
+        let root = temp_dir("catalog-occupied");
+        let target = root.join("x.json");
+        assert!(!occupied(&target));
+        fs::write(&target, "mine").unwrap();
+        assert!(occupied(&target));
+        fs::remove_file(&target).unwrap();
+        assert!(!occupied(&target));
+        // A folder in the place is something there too.
+        fs::create_dir(&target).unwrap();
+        assert!(occupied(&target));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_parent_is_named_and_the_target_itself_is_not_one() {
+        let root = temp_dir("catalog-linked-parent");
+        let outside = temp_dir("catalog-linked-parent-out");
+        assert_eq!(linked_parent(&root, &root.join(".kibo/x.json")), None, "missing parents are not links");
+        std::os::unix::fs::symlink(&outside, root.join(".kibo")).unwrap();
+        assert_eq!(linked_parent(&root, &root.join(".kibo/x.json")), Some(root.join(".kibo")));
+        // The place itself is `place`'s own refusal, not a parent's.
+        let link = root.join("x.json");
+        std::os::unix::fs::symlink(outside.join("gone"), &link).unwrap();
+        assert_eq!(linked_parent(&root, &link), None);
+        assert!(occupied(&link), "a dangling symlink is something there");
     }
 
     #[test]

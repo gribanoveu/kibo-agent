@@ -59,7 +59,7 @@ function BuildIcon({ state }: { state: BuildState }) {
 
 /**
  * The branch's pull request, under the branch in Overview's Changes card
- * (docs/56-bitbucket-prs.md, decision 5): its title, "repo #id" and the
+ * (docs/62-bitbucket-prs.md, decision 5): its title, "repo #id" and the
  * reviews under it, a dot for whether it can go in, the "⋯" of what else can
  * be done, and one button for the next step — Mark ready on a draft, Merge
  * while the server allows it. Clicked, it opens into its reviewers and why it

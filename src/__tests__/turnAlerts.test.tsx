@@ -54,15 +54,20 @@ describe("what a change of status asks of the user", () => {
   });
 });
 
-type Props = Parameters<typeof useTurnAlerts>[0];
+type Turn = import("../hooks/useTurnAlerts").TurnAlert;
+type Prefs = Parameters<typeof useTurnAlerts>[0]["prefs"];
+/** The chat on screen, as the cases below move it: one session key at a time. */
+type Props = Turn & { sessionKey: string; prefs: Prefs };
 
 const ALL_ON = DEFAULT_ALERTS;
 const base: Props = { sessionKey: "chat-a", status: "running", failed: false, chatTitle: "Fix login", prefs: ALL_ON };
 
+const hook = ({ sessionKey, prefs, ...turn }: Props) => useTurnAlerts({ turns: { [sessionKey]: turn }, prefs });
+
 /** A hook that starts at `initial` and is moved through `steps`, each a change to the props before it. */
 const run = (steps: Partial<Props>[], initial: Partial<Props> = {}) => {
   let props = { ...base, ...initial };
-  const { rerender } = renderHook((p: Props) => useTurnAlerts(p), { initialProps: props });
+  const { rerender } = renderHook(hook, { initialProps: props });
   for (const step of steps) {
     props = { ...props, ...step };
     rerender(props);
@@ -157,6 +162,33 @@ describe("calling the user back", () => {
     await settle();
     expect(played).toEqual([]);
     expect(shown).toEqual([]);
+  });
+});
+
+// F-8.7: a turn left working in another chat or folder is told when it ends,
+// named after its own chat; the chat on screen, idle, says nothing.
+describe("chats off screen", () => {
+  test("a turn ending in another chat is heard and named after that chat", async () => {
+    const idle: Turn = { status: "done", failed: false, chatTitle: "On screen" };
+    const working: Turn = { status: "running", failed: false, chatTitle: "In the other folder" };
+    const { rerender } = renderHook((turns: Record<string, Turn>) => useTurnAlerts({ turns, prefs: ALL_ON }), {
+      initialProps: { shown: idle, away: working },
+    });
+    rerender({ shown: idle, away: { ...working, status: "done" } });
+    expect(played).toEqual(["done"]);
+    await waitFor(() => expect(shown).toEqual([{ title: "In the other folder", body: "The agent has finished." }]));
+
+    rerender({ shown: idle, away: { ...working, status: "awaitingApproval" } });
+    await waitFor(() => expect(shown.map((n) => n.title)).toEqual(["In the other folder", "In the other folder"]));
+  });
+
+  test("two chats ending at once are two alerts", async () => {
+    const working: Turn = { status: "running", failed: false, chatTitle: null };
+    const { rerender } = renderHook((turns: Record<string, Turn>) => useTurnAlerts({ turns, prefs: ALL_ON }), {
+      initialProps: { a: working, b: working },
+    });
+    rerender({ a: { ...working, status: "done" }, b: { ...working, status: "done", failed: true } });
+    expect(played.sort()).toEqual(["attention", "done"]);
   });
 });
 

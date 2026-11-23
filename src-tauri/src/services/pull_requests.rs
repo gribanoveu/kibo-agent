@@ -1,6 +1,6 @@
 //! The pull request of the open folder's branch: the strip's snapshot, its
 //! three buttons, the connect form's checks, and the watcher that keeps the
-//! strip current (`docs/56-bitbucket-prs.md`, BB-3).
+//! strip current (`docs/62-bitbucket-prs.md`, BB-3).
 //!
 //! The server is the one the user added (`code_host_store`), found by the
 //! folder's remote (`domain::code_host::server_for`); the host is reached only

@@ -1,87 +1,56 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { type BranchRef, gitBranches, gitCheckout, gitWorktreeAdd } from "../lib/git";
-import type { ImagePart } from "../lib/images";
 
 /** A switch refused because it would overwrite these files; held until the user decides. */
 export type BranchConflict = { branch: string; paths: string[] };
 
 type Deps = {
-  /** The chat on screen: Worktree and its base are that chat's choice, not the next one's. */
-  chatId: string | null;
+  /** The folder the branches are read from and switched in — the active one. */
+  workspace: string | null;
   /** The branch checked out now: picking it again is not a switch. */
   current: string | null;
   /** Runs `go` once leaving the open folder is agreed to, `onCancel` if it is not — `useFolderSwitch`'s guard. */
   guard: (go: () => void, onCancel?: () => void) => void;
   open: (path: string) => Promise<boolean>;
   notify: (message: string) => void;
-  /** Sends a message in the folder open now — the agent's; `sent` as `useAgentTurn`'s. */
-  send: (text: string, sent?: string, images?: ImagePart[]) => void;
   /** The open folder is on another branch now — the chat keeps it as its own. */
   onSwitched?: () => void;
 };
 
 /**
- * The branch a new chat starts on. With Worktree off, picking a branch
- * switches the open folder. With it on, the pick is only where the worktree
- * will start (`base`); the first message makes it, opens it and is sent there.
- *
- * Call it after `useFolderConversation`: the message is sent from an effect,
- * and the fresh thread the folder switch starts has to be in place first.
+ * The branch a new chat starts on: picking a branch switches the open folder.
+ * A worktree is made from a branch by an explicit action (`startWorktree`),
+ * which opens it; the chat then works in it as in any open folder.
  *
  * The app never decides what happens to uncommitted work. A switch that would
  * overwrite it is refused by the backend and shown as a conflict, with a
  * worktree as the way round it; committing or stashing is left to the user,
  * or to the agent when asked.
  */
-export function useBranchPicker({ chatId, current, guard, open, notify, send, onSwitched }: Deps) {
+export function useBranchPicker({ workspace, current, guard, open, notify, onSwitched }: Deps) {
   const [branches, setBranches] = useState<BranchRef[]>([]);
-  const [worktree, setWorktree] = useState(false);
-  // Where a worktree starts; `null` is the branch checked out now.
-  const [base, setBase] = useState<string | null>(null);
   const [conflict, setConflict] = useState<BranchConflict | null>(null);
-  // A first message waiting for its worktree to be the open folder.
-  const [waiting, setWaiting] = useState<{ text: string; sent?: string; images?: ImagePart[] } | null>(null);
-
-  // Another chat is not this one's start: whatever was ticked for it is dropped.
-  useEffect(() => {
-    setWorktree(false);
-    setBase(null);
-  }, [chatId]);
-
-  useEffect(() => {
-    if (waiting === null) return;
-    setWaiting(null);
-    send(waiting.text, waiting.sent, waiting.images);
-    // Once per message: `send` is a new function every render.
-  }, [waiting]);
 
   // Read as the menu opens rather than kept current: a branch made in a
   // terminal is then there the next time anyone looks.
   const load = useCallback(() => {
-    gitBranches().then(setBranches, (e) => notify(String(e)));
-  }, [notify]);
+    gitBranches(workspace).then(setBranches, (e) => notify(String(e)));
+  }, [notify, workspace]);
 
   /**
-   * Makes a worktree from `from`, opens it, and sends `message` there;
-   * `false` when it did not open — cancelled or refused — and nothing was
-   * sent. Made only after leaving the folder is agreed to: a worktree nobody
-   * opens would be left on disk for nothing.
+   * Makes a worktree from `from` and opens it; `false` when it did not open —
+   * cancelled or refused. Made only after leaving the folder is agreed to: a
+   * worktree nobody opens would be left on disk for nothing.
    */
   const startWorktree = useCallback(
-    (from: string, message?: string, sent?: string, images?: ImagePart[]) =>
+    (from: string) =>
       new Promise<boolean>((resolve) => {
         setConflict(null);
         guard(
           () => {
             void (async () => {
               try {
-                const opened = await open(await gitWorktreeAdd(from));
-                if (opened) {
-                  setWorktree(false);
-                  setBase(null);
-                  if (message !== undefined) setWaiting({ text: message, sent, images });
-                }
-                resolve(opened);
+                resolve(await open(await gitWorktreeAdd(from, workspace)));
               } catch (e) {
                 notify(String(e));
                 resolve(false);
@@ -91,38 +60,29 @@ export function useBranchPicker({ chatId, current, guard, open, notify, send, on
           () => resolve(false),
         );
       }),
-    [guard, open, notify],
+    [guard, open, notify, workspace],
   );
 
   const pick = useCallback(
     async (name: string) => {
-      if (worktree) return setBase(name === current ? null : name);
       if (name === current) return;
       try {
-        const outcome = await gitCheckout(name);
+        const outcome = await gitCheckout(name, workspace);
         if (outcome.kind === "conflicts") setConflict({ branch: name, paths: outcome.paths });
         else onSwitched?.();
       } catch (e) {
         notify(String(e));
       }
     },
-    [worktree, current, notify, onSwitched],
+    [current, notify, onSwitched, workspace],
   );
 
   const closeConflict = useCallback(() => setConflict(null), []);
-  // Off, a base chosen earlier is forgotten: on again starts from where the folder is.
-  const toggleWorktree = useCallback((on: boolean) => {
-    setWorktree(on);
-    if (!on) setBase(null);
-  }, []);
 
   return {
     branches,
     load,
     pick,
-    worktree,
-    setWorktree: toggleWorktree,
-    base: base ?? current,
     conflict,
     closeConflict,
     startWorktree,

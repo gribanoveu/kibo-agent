@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { ContextMeter } from "../components/ContextMeter";
+import { ContextMeter, ContextDetails } from "../components/ContextMeter";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
 
 // The ring beside the send button, and the panel it opens: how full the
@@ -120,6 +120,21 @@ describe("the context meter", () => {
     expect(screen.queryByRole("dialog", { name: "Context" })).toBeNull();
   });
 
+  /// The subagents' share of the session total, under it — with the icon
+  /// that says what the two numbers mean.
+  test("the subagents' row under the session total; a dash until read, and nothing unasked", () => {
+    const live = render(<ContextDetails context={context()} spent={38_000} subagents={12_400} />);
+    expect(screen.getByText("Subagents tokens").nextElementSibling?.textContent).toBe("12k");
+    fireEvent.pointerEnter(screen.getByRole("button", { name: "More info" }));
+    expect(screen.getByRole("tooltip").textContent).toContain("Session tokens above count every call");
+    live.unmount();
+    const unread = render(<ContextDetails context={context()} spent={38_000} subagents={null} />);
+    expect(screen.getByText("Subagents tokens").nextElementSibling?.textContent).toBe("—");
+    unread.unmount();
+    render(<ContextDetails context={context()} spent={38_000} />);
+    expect(screen.queryByText("Subagents tokens")).toBeNull();
+  });
+
   /// No window is a number with no scale — not a ring filled against a guess.
   test("fills no ring without a known window, and says why", () => {
     const { container } = meter();
@@ -127,5 +142,29 @@ describe("the context meter", () => {
     expect(container.querySelector(".ctx-arc")).toBeNull();
     openMeter();
     expect(screen.getByText(/window is not known/)).toBeTruthy();
+  });
+
+  /// CU-4: the meter names its source. An anchored total is the provider's
+  /// own count for the last request plus what was added since; until a
+  /// request reports one, the number is an estimate and says so.
+  test("names the provider's count as the source when the total is anchored", () => {
+    meter({ context: { anchored: true, limit: 200_000 } });
+
+    openMeter();
+    expect(screen.getByText("The provider's count for the last request, plus what was added since.")).toBeTruthy();
+    expect(screen.queryByText(/An estimate from the text/)).toBeNull();
+  });
+
+  test("calls an unanchored total an estimate, in the meter and in the overview alike", () => {
+    const opened = meter();
+    openMeter();
+    expect(screen.getByText(/An estimate from the text/)).toBeTruthy();
+    opened.unmount();
+
+    const overview = render(<ContextDetails context={context({ anchored: true })} />);
+    expect(overview.getByText("The provider's count for the last request, plus what was added since.")).toBeTruthy();
+    overview.unmount();
+    const estimated = render(<ContextDetails context={context()} />);
+    expect(estimated.getByText(/An estimate from the text/)).toBeTruthy();
   });
 });

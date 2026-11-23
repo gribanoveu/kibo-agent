@@ -262,8 +262,8 @@ pub(super) fn execute_call(
     // Built per call, because the id is what pairs a line of output with the
     // call that produced it — a round may have started more than one.
     let output = command_output_sink(turn.events, round, &call.id);
-    let explore = |args: &crate::domain::tools::ExploreArgs| run_explore(turn, args, history, &output);
-    let review_run = |args: &crate::domain::tools::ReviewArgs| run_review_tool(turn, args, &output);
+    let explore = |args: &crate::domain::tools::ExploreArgs| run_explore(turn, args, history, &output, &call.id);
+    let review_run = |args: &crate::domain::tools::ReviewArgs| run_review_tool(turn, args, &output, &call.id);
     let check = |prompt: &str, text: &str| check_with(turn.session, prompt, text);
     let ask = |server: &str, question: &crate::domain::mcp::McpQuestion| ask_user(turn, round, &call.id, server, question);
     let deps = ToolDeps {
@@ -299,10 +299,7 @@ pub(super) fn execute_call(
             Place::Folder { parallel, .. } => Some(parallel),
             Place::Chat { .. } => None,
         },
-        worktree_base: match turn.place {
-            Place::Folder { worktree_base, .. } => worktree_base,
-            Place::Chat { .. } => None,
-        },
+        worktree_base: turn.place.worktree_base(),
         chat_head: turn.chat_head,
         waiting: match turn.place {
             Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),
@@ -544,6 +541,9 @@ pub(super) fn log_call(
         ts_ms: crate::infra::tool_call_log::now_ms(),
         // Empty for a chat, which works in no folder.
         repo_root: turn.place.scope().map(|scope| scope.root().display().to_string()).unwrap_or_default(),
+        // The adapter that wires `log_call` names the chat and turn.
+        chat_id: String::new(),
+        turn_id: String::new(),
         round,
         provider_id: turn.session.provider_id.clone(),
         model: turn.session.model.clone(),

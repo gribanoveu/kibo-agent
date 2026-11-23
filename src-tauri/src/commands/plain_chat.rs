@@ -118,7 +118,9 @@ pub async fn plain_chat_send<R: Runtime>(
     let running = state.begin(&chat_id, super::chat::parallel_limit(), false)?;
     let session = state.session(&chat_id);
     session.cancel.store(false, Ordering::SeqCst);
-    crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
+    // Counted even if the turn's setup then fails; off the loop, detached —
+    // the counter opens SQLite and waits on its lock (see chat_start).
+    tauri::async_runtime::spawn_blocking(|| crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]));
     run_turn(app, state, session, running, turn_id, chat_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
 }
 
@@ -166,7 +168,7 @@ where
     R: Runtime,
     F: FnOnce(&plain_chat::ChatTurn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
-    let events = chat_event_sink(&app, turn_id);
+    let events = chat_event_sink(&app, turn_id.clone());
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
     let board: Arc<dyn crate::domain::board::TaskBoard> = app.state::<Arc<crate::infra::board_store::Board>>().inner().clone();
     let embeddings = app.state::<Arc<crate::services::workspace_index::WorkspaceIndex>>().embeddings();
@@ -175,7 +177,7 @@ where
     tauri::async_runtime::spawn_blocking(move || {
         let _running = running;
         let cancelled = || session.cancel.load(Ordering::SeqCst);
-        let chat = ChatTurnInput { chat_id, role, kube, clusters, board, mongo, embeddings, approval, events: &events, cancelled: &cancelled };
+        let chat = ChatTurnInput { chat_id, turn_id, role, kube, clusters, board, mongo, embeddings, approval, events: &events, cancelled: &cancelled };
         let outcome = turn_setup::run_in_chat(chat, run).map_err(|e| e.to_string())?;
         session.paused.store(matches!(&outcome, ChatStreamOutcome::PendingApproval(_)), Ordering::SeqCst);
         Ok(outcome)

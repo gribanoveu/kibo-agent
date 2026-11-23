@@ -16,14 +16,23 @@ mock.module("@tauri-apps/api/core", () => ({
     // The app's own features have their file (features.test.tsx); none here.
     if (command === "features_list") return Promise.resolve([]);
     calls.push([command, args]);
-    if (command === "catalog_preview")
+    if (command === "catalog_preview") {
+      const { kind, id } = args as { kind: string; id: string };
+      // A server that reads a config beside itself, as the Kibana entry does.
+      if (id === "kibana")
+        return Promise.resolve({
+          text: '{"command": "npx", "env": {"KIBANA_SOURCE_CATALOG_PATH": ".kibo/kibana-sources.json"}}',
+          secrets: [],
+          projectFiles: [{ path: ".kibo/kibana-sources.json", from: "mcp/kibana.sources.example.json" }],
+        });
       return Promise.resolve(
-        (args as { kind: string }).kind === "mcp"
-          ? { text: '{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}}', secrets: ["GITHUB_TOKEN"] }
-          : (args as { kind: string }).kind === "hooks"
-            ? { text: '{"hooks": {"PreToolUse": [{"matcher": "runCommand", "hooks": [{"type": "command", "command": "exit 2"}]}]}}', secrets: [] }
-            : { text: "# Review\n\nRead the **diff**.", secrets: [] },
+        kind === "mcp"
+          ? { text: '{"url": "https://api.example/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}}', secrets: ["GITHUB_TOKEN"], projectFiles: [] }
+          : kind === "hooks"
+            ? { text: '{"hooks": {"PreToolUse": [{"matcher": "runCommand", "hooks": [{"type": "command", "command": "exit 2"}]}]}}', secrets: [], projectFiles: [] }
+            : { text: "# Review\n\nRead the **diff**.", secrets: [], projectFiles: [] },
       );
+    }
     if (command === "catalog_install" && failInstall) return Promise.reject(failInstall);
     if (command === "catalog_update_preview")
       return Promise.resolve({
@@ -32,6 +41,7 @@ mock.module("@tauri-apps/api/core", () => ({
           { name: "same.md", diff: "", added: 0, removed: 0 },
         ],
         secrets: (args as { kind: string }).kind === "mcp" ? ["ORG"] : [],
+        projectFiles: (args as { id: string }).id === "kibana" ? [{ path: ".kibo/kibana-sources.json", from: "mcp/kibana.sources.example.json" }] : [],
         edited: true,
       });
     return Promise.resolve(null);
@@ -130,12 +140,12 @@ describe("the catalog page", () => {
     expect(screen.getByText("Nothing matches “nothing like it”.")).toBeTruthy();
   });
 
-  test("a kind shows 8 cards at first, and Show all opens its tab with the rest", async () => {
+  test("a kind shows 7 cards and Show all in the eighth's place, which opens its tab with the rest", async () => {
     answer = [{ ...own, items: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"].map(skill) }];
     render(<CatalogPage openPane={() => {}} />);
     await screen.findByText("Skill a");
-    expect(screen.getByText("Skill h")).toBeTruthy();
-    expect(screen.queryByText("Skill i")).toBeNull();
+    expect(screen.getByText("Skill g")).toBeTruthy();
+    expect(screen.queryByText("Skill h")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Show all 10/ }));
     expect(screen.getByText("Skill j")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Skills" }).getAttribute("aria-selected")).toBe("true");
@@ -273,6 +283,21 @@ describe("the catalog page", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  test("a server that reads a config beside itself says which file goes into the folder", async () => {
+    answer = [withItems(entry({ id: "kibana", kind: "mcp", name: "Kibana", path: "mcp/kibana-exact.json", target: "~/.kibo/mcp.json" }))];
+    render(<CatalogPage openPane={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Kibana" }));
+    const panel = screen.getByRole("complementary", { name: "Kibana details" });
+    expect(await within(panel).findByText(".kibo/kibana-sources.json")).toBeTruthy();
+    expect(within(panel).getByText(/into the open folder/)).toBeTruthy();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Install" }));
+    const dialog = screen.getByRole("dialog", { name: "Install Kibana?" });
+    // The dialog reads the entry again on open, as the hooks dialog does.
+    expect(await within(dialog).findByText(".kibo/kibana-sources.json")).toBeTruthy();
+    expect(within(dialog).getByText(/left as it is/)).toBeTruthy();
+  });
+
   test("hooks are installed from a dialog that shows their commands", async () => {
     answer = [own];
     calls = [];
@@ -316,6 +341,16 @@ describe("the catalog page", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Update" }));
     await waitFor(() => expect(calls.at(-1)).toEqual(["catalog_update", { source: own.url, kind: "command", id: "changelog", secrets: {} }]));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("a server's update says it writes the config file beside itself", async () => {
+    answer = [withItems(entry({ id: "kibana", kind: "mcp", name: "Kibana", path: "mcp/kibana-exact.json", target: "~/.kibo/mcp.json", state: "update", rev: "2", installedRev: "1" }))];
+    render(<CatalogPage openPane={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Kibana" }));
+    fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Update" }));
+    const dialog = screen.getByRole("dialog", { name: "Update Kibana?" });
+    expect(await within(dialog).findByText(".kibo/kibana-sources.json")).toBeTruthy();
+    expect(within(dialog).getByText(/when that file is not there yet/)).toBeTruthy();
   });
 
   test("a server's update asks only for the secrets it does not have, and up to date shows no Update", async () => {

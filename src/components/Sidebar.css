@@ -337,6 +337,24 @@
   font-weight: 500;
 }
 
+/* The rest of a folder's long list, behind "Show all". */
+.chat-show-all {
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-show-all:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 /* A row is the chat and its ⋮, which shows on hover or while its menu is open. */
 .chat-row {
   position: relative;
@@ -425,6 +443,7 @@
 }
 .chat-folder-name {
   overflow: hidden;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
 .chat-folder-count {
@@ -435,6 +454,82 @@
   padding: 4px 12px 6px;
   color: var(--text-faint);
   font-size: var(--fs-sm);
+}
+
+.chat-workspace-new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.chat-workspace-new:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* An open folder's section (F-8.6): its name, a new chat in it, its ⋮. */
+.chat-section + .chat-section {
+  margin-top: 10px;
+}
+.chat-workspace-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--control);
+  padding: 0 4px 0 4px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.chat-workspace-head.active {
+  color: var(--text);
+}
+.chat-workspace-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.chat-workspace-toggle:hover {
+  color: var(--text);
+}
+.chat-workspace-chev {
+  flex: none;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+.chat-workspace-chev.chat-workspace-open {
+  transform: rotate(90deg);
+}
+.chat-workspace-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.chat-workspace-of {
+  color: var(--text-box-hint);
+}
+.chat-workspace-head .chat-menu-button {
+  width: 24px;
+  height: 24px;
 }
 
 /* The folder-name field and the refusal, kept in the dialog. */

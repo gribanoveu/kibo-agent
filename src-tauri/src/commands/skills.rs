@@ -3,10 +3,16 @@
 
 use crate::services::skills::{self, SkillsView};
 
-/// The open folder's skills and the user's; only the user's while no folder is open.
+/// The folder's skills and the user's; only the user's while `workspace` is
+/// `None` (Chat mode). The path is canonicalized and accepted only as an open
+/// folder (F-8, invariant 1).
 #[tauri::command]
-pub fn skills_list(state: tauri::State<'_, std::sync::Arc<super::agent_state::AgentState>>) -> Result<SkillsView, String> {
-    skills::list(state.workspace().ok().as_deref()).map_err(|e| e.to_string())
+pub fn skills_list(
+    workspace: Option<String>,
+    state: tauri::State<'_, std::sync::Arc<super::agent_state::AgentState>>,
+) -> Result<SkillsView, String> {
+    let workspace = state.ui_workspace(&workspace)?;
+    skills::list(workspace.as_deref()).map_err(|e| e.to_string())
 }
 
 /// A skills folder — `project`, `app`, `agents`, `claude` — read or not, for every repository.
@@ -21,10 +27,14 @@ pub fn skills_set_enabled(name: String, enabled: bool) -> Result<(), String> {
     skills::set_enabled(&name, enabled).map_err(|e| e.to_string())
 }
 
-/// The open folder's instruction files; none while no folder is open.
+/// The folder's instruction files; none while `workspace` is `None` (Chat mode).
 #[tauri::command]
-pub fn rules_list(state: tauri::State<'_, std::sync::Arc<super::agent_state::AgentState>>) -> Vec<crate::domain::project_rules::RuleListItem> {
-    state.workspace().map(|root| crate::services::project_rules::list(&root)).unwrap_or_default()
+pub fn rules_list(
+    workspace: Option<String>,
+    state: tauri::State<'_, std::sync::Arc<super::agent_state::AgentState>>,
+) -> Result<Vec<crate::domain::project_rules::RuleListItem>, String> {
+    let workspace = state.ui_workspace(&workspace)?;
+    Ok(workspace.map(|root| crate::services::project_rules::list(&root)).unwrap_or_default())
 }
 
 #[tauri::command]

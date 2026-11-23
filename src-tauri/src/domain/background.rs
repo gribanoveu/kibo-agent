@@ -3,7 +3,7 @@
 //!
 //! Started by `runCommand` with `background: true`, read with `readOutput`,
 //! stopped with `stopProcess` or from the Terminal tab. Each lives until it
-//! exits, is stopped, the workspace changes, or the app quits — not the turn:
+//! exits, is stopped, its folder is closed, or the app quits — not the turn:
 //! a dev server the agent started has to be there when the next message
 //! asks it something.
 //!
@@ -18,8 +18,9 @@ use thiserror::Error;
 
 use crate::domain::command_exec::Shell;
 
-/// Running at once. A sixth start is refused with the list of what runs, so
-/// the model stops one rather than piling up servers on ports.
+/// Running at once in one folder. A sixth start is refused with the list of
+/// what runs there, so the model stops one rather than piling up servers on
+/// ports — another folder's are not its to stop, so they do not count.
 pub const MAX_RUNNING: usize = 5;
 /// Kept per process, newest last; what falls off the front is gone, and a
 /// read that missed it says so.
@@ -35,6 +36,11 @@ pub const TAIL_BYTES: usize = 8 * 1024;
 pub struct ProcessInfo {
     pub id: u32,
     pub command: String,
+    /// What the model said the command does — carried from the `runCommand`
+    /// call that started it, for the user reading the list and the ended
+    /// card. `None` for processes saved before the field, and for hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Relative to the workspace, as it was asked for; `.` for the root.
     pub cwd: String,
     pub state: ProcessState,
@@ -46,7 +52,7 @@ pub enum ProcessState {
     Running,
     /// Ended on its own; `None` when a signal ended it.
     Exited { code: Option<i32> },
-    /// Stopped by `stopProcess`, the Terminal tab, or a workspace change.
+    /// Stopped by `stopProcess`, the Terminal tab, or its folder closing.
     Stopped,
 }
 
@@ -118,7 +124,16 @@ pub enum BackgroundError {
 }
 
 pub trait BackgroundProcesses: Send + Sync {
-    fn start(&self, shell: &Shell, command: &str, cwd: &Path, shown_cwd: &str) -> Result<ProcessInfo, BackgroundError>;
+    /// `description` is the call's own `description`, carried into the
+    /// [`ProcessInfo`] untouched — for showing, never for deciding.
+    fn start(
+        &self,
+        shell: &Shell,
+        command: &str,
+        description: Option<&str>,
+        cwd: &Path,
+        shown_cwd: &str,
+    ) -> Result<ProcessInfo, BackgroundError>;
 
     /// Takes over a `runCommand` still running at its timeout: it goes on as
     /// one of these, `backlog` — what it wrote so far — unread in its output.
@@ -128,6 +143,7 @@ pub trait BackgroundProcesses: Send + Sync {
         &self,
         child: std::process::Child,
         command: &str,
+        description: Option<&str>,
         shown_cwd: &str,
         backlog: &str,
     ) -> Result<(ProcessInfo, [Feed; 2]), BackgroundError>;
@@ -251,7 +267,7 @@ mod tests {
 
     #[test]
     fn ended_processes_are_told_one_line_each() {
-        let info = |id, state| ProcessInfo { id, command: format!("cmd{id}"), cwd: ".".into(), state };
+        let info = |id, state| ProcessInfo { id, command: format!("cmd{id}"), description: None, cwd: ".".into(), state };
         assert_eq!(ended_note(&[]), None);
         let note = ended_note(&[
             info(1, ProcessState::Exited { code: Some(1) }),

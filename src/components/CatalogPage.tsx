@@ -50,7 +50,7 @@ const featureMatches = (feature: FeatureView, query: string) => {
   return !q || [feature.id, feature.name, feature.description].some((text) => text.toLowerCase().includes(q));
 };
 
-/** How many cards a kind shows under All before "Show all": a row is one to four wide, so eight is two rows of four. */
+/** How many cells a kind fills under All: a row is one to four wide, so eight is two rows of four — seven cards and "Show all" in the eighth's place. */
 const PREVIEW = 8;
 
 /** `raw.githubusercontent.com/<owner>/<repo>/<branch>/` as the repository it is; any other address as it is. */
@@ -237,6 +237,13 @@ function Details({
           </>
         )}
       </dl>
+
+      {preview?.read && preview.read.projectFiles.length > 0 && (
+        <p className="catalog-detail-note">
+          Installing it also writes <span className="mono">{preview.read.projectFiles.map((file) => file.path).join(", ")}</span> into the open folder — the config this server
+          reads beside itself, from the catalog's template. A file already there is left as it is.
+        </p>
+      )}
 
       <h4 className="catalog-detail-file">{file}</h4>
       {preview?.error ? (
@@ -528,6 +535,12 @@ function UpdateDialog({ entry, onUpdate, onClose }: { entry: Entry; onUpdate: (s
           ))}
           {changed.length === 0 && <p className="catalog-detail-note">The text is the same; only the version changes.</p>}
           {same.length > 0 && <p className="modal-note">Unchanged: {same.map((change) => change.name).join(", ")}</p>}
+          {read.projectFiles.length > 0 && (
+            <p className="catalog-detail-note">
+              It also writes <span className="mono">{read.projectFiles.map((file) => file.path).join(", ")}</span> into the open folder — the config it reads beside itself —
+              when that file is not there yet.
+            </p>
+          )}
           <SecretFields names={read.secrets} values={secrets} onChange={setSecrets} target={item.target} />
         </>
       )}
@@ -629,6 +642,12 @@ function InstallDialog({ entry, onInstall, onClose }: { entry: Entry; onInstall:
               <p className="catalog-detail-confirm">
                 Adds the server <b>{item.id}</b> to {item.target}. It starts with the next Agent or Analyst turn, as this entry says — the command it runs or the address it
                 sends to:
+              </p>
+            )}
+            {item.kind === "mcp" && read && read.projectFiles.length > 0 && (
+              <p className="catalog-detail-note">
+                It also writes <span className="mono">{read.projectFiles.map((file) => file.path).join(", ")}</span> into the open folder — the config it reads beside itself.
+                A file already there is left as it is.
               </p>
             )}
             {preview?.error ? (
@@ -804,14 +823,9 @@ export function CatalogPage() {
           <section key={kind} className="catalog-section" aria-label={label}>
             <div className="catalog-section-head">
               <h2>{label}</h2>
-              {cut && (
-                <button type="button" className="catalog-more" onClick={() => setTab(kind)}>
-                  Show all {entries.length} <ArrowRight size={14} />
-                </button>
-              )}
             </div>
             <div className="catalog-grid">
-              {(cut ? entries.slice(0, PREVIEW) : entries).map((entry) => (
+              {(cut ? entries.slice(0, PREVIEW - 1) : entries).map((entry) => (
                 <Card
                   key={`${entry.source}/${kind}/${entry.item.id}`}
                   entry={entry}
@@ -822,6 +836,12 @@ export function CatalogPage() {
                   onInstall={onInstall}
                 />
               ))}
+              {/* The rest of the list, as the grid's last card: the cut is visible where the cards are. */}
+              {cut && (
+                <button type="button" className="catalog-card catalog-card-all" onClick={() => setTab(kind)}>
+                  Show all {entries.length} <ArrowRight size={14} />
+                </button>
+              )}
             </div>
           </section>
         );

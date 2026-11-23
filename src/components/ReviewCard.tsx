@@ -1,4 +1,4 @@
-import { Bot, SearchCheck, Wrench } from "lucide-react";
+import { Bot, ChevronRight, SearchCheck, Wrench } from "lucide-react";
 import type { Finding, Review } from "../lib/finding";
 import { Markdown } from "./Markdown";
 import "./ReviewCard.css";
@@ -90,12 +90,6 @@ export function ReviewReport({
           </button>
         )}
       </div>
-      {review.range && <div className="review-report-range">{review.range}</div>}
-      {review.summary && (
-        <div className="review-report-summary">
-          <Markdown text={review.summary} streaming={false} />
-        </div>
-      )}
       {review.findings.map((finding) => (
         <FindingCard
           key={`${finding.path}:${finding.startLine}:${finding.title}`}
@@ -104,6 +98,23 @@ export function ReviewReport({
           onFix={onFix}
         />
       ))}
+      {/* The reviewer's own words are secondary to the findings, so they fold
+          away below them — but with no findings they are the whole report,
+          and stand open. */}
+      {(review.range || review.summary) && (
+        <details className="review-notes" open={count === 0 || undefined}>
+          <summary title="What the reviewer said and what it compared">
+            <ChevronRight className="chev" size={12} aria-hidden />
+            Summary
+          </summary>
+          {review.range && <div className="review-report-range">{review.range}</div>}
+          {review.summary && (
+            <div className="review-report-summary">
+              <Markdown text={review.summary} streaming={false} />
+            </div>
+          )}
+        </details>
+      )}
     </section>
   );
 }

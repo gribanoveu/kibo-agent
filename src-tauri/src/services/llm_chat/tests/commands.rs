@@ -5,7 +5,7 @@ use super::*;
 /// Reports one ended process, once.
 pub(super) struct EndedOnce(Mutex<Vec<crate::domain::background::ProcessInfo>>);
 impl BackgroundProcesses for EndedOnce {
-    fn start(&self, _: &Shell, _: &str, _: &std::path::Path, _: &str) -> Result<crate::domain::background::ProcessInfo, crate::domain::background::BackgroundError> {
+    fn start(&self, _: &Shell, _: &str, _: Option<&str>, _: &std::path::Path, _: &str) -> Result<crate::domain::background::ProcessInfo, crate::domain::background::BackgroundError> {
         unreachable!()
     }
     fn read(&self, _: u32) -> Result<crate::domain::background::ProcessOutput, crate::domain::background::BackgroundError> {
@@ -24,6 +24,7 @@ impl BackgroundProcesses for EndedOnce {
         &self,
         _: std::process::Child,
         _: &str,
+        _: Option<&str>,
         _: &str,
         _: &str,
     ) -> Result<(crate::domain::background::ProcessInfo, [crate::domain::background::Feed; 2]), crate::domain::background::BackgroundError> {
@@ -89,6 +90,7 @@ fn a_process_that_ended_is_told_to_the_model_once() {
     h.processes = Some(Arc::new(EndedOnce(Mutex::new(vec![crate::domain::background::ProcessInfo {
         id: 2,
         command: "npm run dev".into(),
+        description: None,
         cwd: ".".into(),
         state: crate::domain::background::ProcessState::Exited { code: Some(1) },
     }]))));
@@ -201,11 +203,11 @@ fn an_offer_asks_nothing_and_the_turn_ends() {
     assert!(tool_contents(&h.provider.requests()[1]).iter().any(|c| c.starts_with("Offered")));
 }
 
-/// Implement needs a plan, and a turn that wrote one has it for the
+/// The plan offer needs a plan, and a turn that wrote one has it for the
 /// `offer` in the same round: the calls run in the order asked.
 #[test]
 fn a_plan_written_in_the_same_round_can_be_offered() {
-    let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+    let implement = r#"{"kind":"plan","reason":"the parser"}"#;
     let h = harness(
         "offer-implement-same-round",
         vec![asks(vec![wants("p", "writePlan", r##"{"content":"# Plan"}"##), wants("o", "offer", implement)]), text("done")],
@@ -218,7 +220,7 @@ fn a_plan_written_in_the_same_round_can_be_offered() {
 /// an `offer` among them would not see the one this turn wrote.
 #[test]
 fn an_offer_after_a_read_sees_the_plan_this_turn_wrote() {
-    let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+    let implement = r#"{"kind":"plan","reason":"the parser"}"#;
     let h = harness(
         "offer-implement-after-read",
         vec![
@@ -234,7 +236,7 @@ fn an_offer_after_a_read_sees_the_plan_this_turn_wrote() {
 /// The plan the window holds counts, but one emptied there does not.
 #[test]
 fn the_windows_plan_can_be_offered_unless_it_is_blank() {
-    let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+    let implement = r#"{"kind":"plan","reason":"the parser"}"#;
     let said = |label: &str, plan: Option<&str>| {
         let mut h = harness(label, vec![asks(vec![wants("o", "offer", implement)]), text("done")]);
         h.plan = plan.map(str::to_string);
@@ -313,6 +315,7 @@ fn each_note_of_the_loop_repeats_the_reply_language() {
     ended.processes = Some(Arc::new(EndedOnce(Mutex::new(vec![crate::domain::background::ProcessInfo {
         id: 2,
         command: "npm run dev".into(),
+        description: None,
         cwd: ".".into(),
         state: crate::domain::background::ProcessState::Exited { code: Some(1) },
     }]))));
@@ -462,6 +465,7 @@ fn a_named_empty_range_says_so() {
             turn,
             &crate::domain::tools::ReviewArgs { from: Some("HEAD".into()), to: Some("HEAD".into()), focus: None },
             &progress,
+            "r1",
         )
     })
     .unwrap_err();
@@ -484,7 +488,7 @@ fn a_stopped_review_keeps_its_findings() {
 
     let result = h.run(|turn| {
         let progress = command_output_sink(turn.events, 0, "r1");
-        run_review(turn, &brief, desk, range, &progress)
+        run_review(turn, &brief, desk, range, &progress, "r1")
     });
 
     let result = result.expect("a review result, never an error now");
@@ -515,7 +519,7 @@ fn a_review_out_of_rounds_keeps_its_findings() {
 
     let result = h.run(|turn| {
         let progress = command_output_sink(turn.events, 0, "r1");
-        run_review(turn, &brief, desk, range, &progress)
+        run_review(turn, &brief, desk, range, &progress, "r1")
     });
 
     let result = result.expect("a review result, never an error now");

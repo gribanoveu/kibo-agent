@@ -4,15 +4,17 @@ import "./FolderSwitchDialog.css";
 
 type Props = {
   blocked: SwitchBlock | null;
-  /** The folder open now — the one that would be left. */
-  folder: string | null;
-  onStopAgent: () => void;
+  /** Stops the turns of these chats — the ones working in the folder that closes. */
+  onStopAgent: (chats: string[]) => void;
   onClose: () => void;
 };
 
-/** Says what opening another folder would end, before it does. */
-export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Props) {
-  const name = folder?.split(/[\\/]/).filter(Boolean).pop() ?? "this folder";
+const nameOf = (path: string | null | undefined) => path?.split(/[\\/]/).filter(Boolean).pop();
+
+/** Says why a folder cannot close yet, or what closing it would end, before it does. */
+export function FolderSwitchDialog({ blocked, onStopAgent, onClose }: Props) {
+  const name = blocked?.kind === "agent" ? (nameOf(blocked.folder) ?? blocked.folder) : "";
+  const closing = blocked?.kind === "processes" ? blocked.folders.map((path) => nameOf(path) ?? path).join(", ") : "";
   const agent = blocked?.kind === "agent";
   // A paused turn is ended by answering its card, not by Stop.
   const waiting = blocked?.kind === "agent" && blocked.waiting;
@@ -32,12 +34,12 @@ export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Pr
               type="button"
               className="btn btn-primary"
               onClick={() => {
-                if (blocked?.kind === "agent") onStopAgent();
+                if (blocked?.kind === "agent") onStopAgent(blocked.chats);
                 else blocked?.go();
                 onClose();
               }}
             >
-              {agent ? "Stop the agent" : "Stop them and switch"}
+              {agent ? "Stop the agent" : "Stop them and close"}
             </button>
           )}
         </>
@@ -45,19 +47,17 @@ export function FolderSwitchDialog({ blocked, folder, onStopAgent, onClose }: Pr
     >
       {waiting ? (
         <p className="switch-text">
-          It is waiting for your answer on a card in <b>{name}</b>, and its chat is saved there when the turn ends.
-          Answer the card, then open the other folder.
+          A turn in <b>{name}</b> is waiting for your answer on a card. Answer the card, then close the folder.
         </p>
       ) : blocked?.kind === "agent" ? (
         <p className="switch-text">
-          It is working in <b>{name}</b>, and its chat is saved there when it finishes. Stop it first, then open the
-          other folder.
+          It is working in <b>{name}</b>. Stop it first, then close the folder.
         </p>
       ) : (
         blocked && (
           <>
             <p className="switch-text">
-              Opening another folder stops what runs in <b>{name}</b>:
+              Closing <b>{closing}</b> stops what runs in it:
             </p>
             <ul className="switch-processes">
               {blocked.processes.map((p) => (

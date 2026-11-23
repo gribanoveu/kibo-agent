@@ -2,14 +2,20 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import type { IndexEvent, IndexSnapshot } from "../lib/chat";
 
-// The first sync starts inside `workspace_open`, before the window knows the
+// The first sync starts inside `workspace_add`, before the window knows the
 // folder's path; the hook must not lose what it said meanwhile.
 
 let emit: (event: IndexEvent) => void = () => {};
 let snapshot: IndexSnapshot | null = null;
+/** The folders the snapshot was asked for. */
+let asked: unknown[] = [];
 
 mock.module("@tauri-apps/api/core", () => ({
-  invoke: (command: string) => Promise.resolve(command === "workspace_index_status" ? snapshot : null),
+  invoke: (command: string, args?: { workspace?: string }) => {
+    if (command !== "workspace_index_status") return Promise.resolve(null);
+    asked.push(args?.workspace);
+    return Promise.resolve(snapshot);
+  },
   transformCallback: (callback: unknown) => callback,
 }));
 mock.module("@tauri-apps/api/event", () => ({
@@ -29,6 +35,7 @@ const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)))
 
 beforeEach(() => {
   snapshot = null;
+  asked = [];
 });
 
 describe("useIndexStatus", () => {
@@ -52,6 +59,8 @@ describe("useIndexStatus", () => {
     const { result } = renderHook(() => useIndexStatus("/repo"));
     await settle();
     expect(result.current?.embedded).toBe(7);
+    // Every open folder keeps an index (F-8.2): the snapshot is this folder's.
+    expect(asked).toEqual(["/repo"]);
 
     act(() => emit({ root: "/repo", kind: "embeddingProgress", done: 1, total: 4 }));
     expect(result.current?.phase).toBe("embedding");

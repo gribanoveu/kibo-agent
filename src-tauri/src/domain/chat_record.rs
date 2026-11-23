@@ -30,6 +30,32 @@ pub const CHAT_SCHEMA_VERSION: u32 = 1;
 /// no open folder's listing reaches them — a folder's path is never empty.
 pub const NO_FOLDER: &str = "";
 
+/// Which set of chat folders a list draws from. Chat mode keeps its own; every
+/// project shares one, so a folder can hold chats of several projects — a
+/// folder is a view of chats, and a chat still lives in its own project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupList {
+    Chat,
+    Projects,
+}
+
+impl GroupList {
+    /// The key the folders of this set are filed under. A project's path is
+    /// never `*`, nor empty.
+    pub fn key(self) -> &'static str {
+        match self {
+            GroupList::Chat => NO_FOLDER,
+            GroupList::Projects => "*",
+        }
+    }
+
+    /// The set a chat filed under `workspace` takes its folder from.
+    pub fn of_workspace(workspace: &str) -> Self {
+        if workspace == NO_FOLDER { GroupList::Chat } else { GroupList::Projects }
+    }
+}
+
 /// Longest title derived from a first message. Past this the sidebar elides it
 /// anyway, and the rest is only weight in every listing.
 const TITLE_CHARS: usize = 60;
@@ -278,6 +304,19 @@ pub fn check_id(id: &str) -> Result<(), ChatError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window names a set as `"chat"` or `"projects"`; a project's chat
+    /// takes the projects' folders, Chat mode's its own, and the two sets are
+    /// filed apart — and never under a path a project could have.
+    #[test]
+    fn a_folder_set_is_chat_modes_or_the_projects() {
+        let read = |name: &str| serde_json::from_value::<GroupList>(serde_json::json!(name)).unwrap();
+        assert_eq!((read("chat"), read("projects")), (GroupList::Chat, GroupList::Projects));
+        assert_eq!(GroupList::of_workspace(NO_FOLDER), GroupList::Chat);
+        assert_eq!(GroupList::of_workspace("/work/api"), GroupList::Projects);
+        assert_ne!(GroupList::Chat.key(), GroupList::Projects.key());
+        assert!(!std::path::Path::new(GroupList::Projects.key()).is_absolute());
+    }
 
     fn record() -> ChatRecord {
         ChatRecord {

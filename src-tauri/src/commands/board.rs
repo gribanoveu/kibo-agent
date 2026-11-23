@@ -19,13 +19,15 @@ pub fn board_event_sink<R: Runtime>(app: &AppHandle<R>) -> BoardEventSink {
 }
 
 #[tauri::command]
-pub fn board_list(board: State<'_, Arc<Board>>) -> Result<Vec<Card>, String> {
-    board.cards().map_err(|e| e.to_string())
+pub async fn board_list(board: State<'_, Arc<Board>>) -> Result<Vec<Card>, String> {
+    let board = board.inner().clone();
+    super::blocking(move || board.cards()).await
 }
 
 #[tauri::command]
-pub fn board_change(change: BoardChange, board: State<'_, Arc<Board>>) -> Result<Vec<Card>, String> {
-    board.change(&change).map_err(|e| e.to_string())
+pub async fn board_change(change: BoardChange, board: State<'_, Arc<Board>>) -> Result<Vec<Card>, String> {
+    let board = board.inner().clone();
+    super::blocking(move || board.change(&change)).await
 }
 
 #[cfg(test)]
@@ -47,9 +49,8 @@ mod tests {
         app.handle().listen(BOARD_EVENT, move |event| {
             let _ = tx.send(event.payload().to_string());
         });
-        let path = crate::testing::temp_dir("board-command").join("board.json");
-        Board::new(Some(path), board_event_sink(app.handle()))
-            .change(&BoardChange::Add { title: "a".into(), note: None, due: None })
+        Board::new(Some(crate::testing::temp_dir("board-command")), board_event_sink(app.handle()))
+            .change(&BoardChange::Add { title: "a".into(), note: None, due: None, tags: vec![] })
             .unwrap();
         assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), "null");
     }

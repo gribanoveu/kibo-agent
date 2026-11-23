@@ -66,7 +66,7 @@ beforeEach(() => {
     layoutSwitchOn: false,
     layoutSwitchSupported: true,
     places: ["Assistant chat", "Agent", "Analyst"],
-    data: "~/.kibo/board.json",
+    data: "~/.kibo/board.db",
     hasData: true,
   };
 });
@@ -82,7 +82,7 @@ describe("features on the catalog page", () => {
     const panel = within(screen.getByRole("complementary", { name: "Board details" }));
     expect(panel.getByText("Assistant chat, Agent, Analyst")).toBeTruthy();
     expect(panel.getByText("When the user asks you to remind them…")).toBeTruthy();
-    expect(panel.getByText("~/.kibo/board.json")).toBeTruthy();
+    expect(panel.getByText("~/.kibo/board.db")).toBeTruthy();
   });
 
   test("+ turns it on, and the panel turns it off again", async () => {

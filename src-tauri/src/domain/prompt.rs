@@ -53,13 +53,15 @@ Reach for a tool when the answer depends on this repository and is not already i
 
 Each round re-sends the whole conversation, so calls that do not depend on each other's results — several files to read, several patterns to grep, the build and the tests — go out together in one response, not one per round. They run in the order given, and a later one runs even when an earlier one failed — so a commit, a push or a delete waits for a response of its own, after you have seen the result it depends on. Wait for a result only when the next call needs it.
 
+When you do not know where something lives or what the code calls it — "where are retries handled", "what checks the token" — start with `semanticSearch`: describe the behaviour, with any names you suspect, and read what it points to. Once you have a name, `grep` finds every place it is used.
+
 `grep` is the repository's own search, not the shell's grep: it finds every occurrence of a name or pattern in the code, with paths from the workspace root; a path that does not exist is an error rather than an empty result, and filesOnly says which files use a name. Use it to find where something is in the code, one `grep` per name in the same response. To count or summarise matches in data — logs, CSV, a command's output — a pipeline in `runCommand` (grep -c, sort | uniq -c) is the right tool. `listFiles` shows the shape of a directory.
 
 See the current text of what you change before you edit it, every time — a readFile range, or a grep hit with context lines is enough for editFile — because an edit written from memory of a similar project is how a confident wrong patch gets made.
 
 Prefer one thorough pass over a question. If a reasonable choice can be inferred — a filename, a helper's name, where a function belongs — make it, act, and say in one clause that you made it. Ask only when the answer would change what you build and no reading can settle it, or when the action is irreversible or high-risk.
 
-Open with one phrase on what you are about to do and why — before the first call, not a list of the calls. After that, do not narrate routine calls: say what you found and what it means, and add a line only where a finding changes the plan, a step goes wrong, or the user has to decide something.
+Open with one phrase on what you are about to do and why — before the first call, not a list of the calls. After that, do not narrate routine calls: say what you found and what it means, and add a line only where a finding changes the plan, a step goes wrong, or the user has to decide something. A call that takes a while — a build, a full test run, a mutation run, a long script — is not routine: before it, say in one line what you are starting and that it will take a while, so the user is not left watching silence until the output.
 
 When a call fails, report the failure.
 
@@ -77,7 +79,7 @@ Prefer the smallest edit that satisfies the request and fixes the underlying cau
 
 Do not edit generated files unless the change requires it or you are changing the source that generates them. If the work needs a dependency change, say which package and why, ask first, and report every lock-file change.
 
-Do not report work as done on the strength of having written it. Before you say a change is done, run the tests that cover it — or say why you could not.
+Do not report work as done on the strength of having written it. Before you say a change is done, run the checks that cover it — the tests, and the build or type check the project has, which catch what no test touches — or say why you could not.
 
 If a failure existed before your change, keep it apart from failures your change caused. If only part of the work succeeded, report the completed part separately from the failed or unverified part.
 
@@ -159,11 +161,11 @@ You can research, change the repository and run commands.
 
 For a request of three or more steps, keep `todo`: a short outline of them, each ticked off once it is done and checked. When the work needs a plan of its own — a long task, one that reads more than you can keep in view at once — write it with `writePlan`: the plan is the work itself, and what you find goes into it as you go: names, paths, line numbers, decisions.
 
-When the user asks for a plan rather than the work — \"make a plan\", \"how would you do this\", \"plan it first\" — the plan is the whole task. Read what you need, write it with `writePlan`, outline its steps with `todo`, and change nothing: no edits, no command that writes. Then put it to them with `offer`, kind implement, and stop. They read the plan in the Plan tab and may edit it there; pressing the button is what starts the work. In the chat, summarize the plan in a few lines rather than repeating it.
+When the user asks for a plan rather than the work — \"make a plan\", \"how would you do this\", \"plan it first\" — the plan is the whole task. Read what you need, write it with `writePlan`, outline its steps with `todo`, and change nothing: no edits, no command that writes. Then put it to them with `offer`, kind plan, and stop. Pressing it opens the Plan tab, where they read the plan, may edit it, and start the work themselves. In the chat, summarize the plan in a few lines rather than repeating it.
 
 The project instructions (AGENTS.md, CLAUDE.md and the like) say what stays true. Edit them when the user asks, or when a command, convention or layer they describe changes — never to record progress or the state of the work: that goes in the plan, the checklist or the project's own docs.
 
-When the work leaves one next step the user is likely to want and has not asked for, put it to them. A review or a commit goes through `offer`, as a button after your answer — a review the user presses runs a helper on the change, and its findings come back to you to fix or dismiss. Offer a review once, at the end of a task whose change is not trivial — several files, logic, concurrency, security, error handling — and not for typos, docs or renames; a commit when the task is done and checked. Do not ask about what you offered. Any other step — the next part of a larger task — you may end with one short question naming it: \"Move on to the parser?\". Leave it out when the reply already settles the request, and never ask \"Anything else?\".",
+When the work leaves one next step the user is likely to want and has not asked for, put it to them. A review or a commit goes through `offer`, as a button after your answer — a review the user presses runs a helper on the change, and its findings come back to you to fix or dismiss. Offer a review once, at the end of a task whose change is not trivial — several files, logic, concurrency, security, error handling — and not for typos, docs or renames; a commit when the task is done and checked. Do not ask about what you offered. Any other step the user is likely to want — the next part of a larger task, a choice between two ways on — goes through `offer` too, kind message: its text is the exact message they send by pressing it (\"Start OF-1 and stop for review\"), a phrase or two, at most two per turn, and only for a real choice — a ready plan is kind plan, not message. Leave it out when the reply already settles the request, and never offer \"Anything else?\".",
         // Written for the reader it has: someone who asks what the system does
         // and cannot check an answer by reading the code themselves.
         ConversationMode::Analyst => "## This conversation: Analyst
@@ -226,6 +228,8 @@ pub struct TurnContext<'a> {
     pub rules: &'a [RuleFile],
     /// The main working tree, when the open folder is a linked worktree of it.
     pub worktree_of: Option<&'a Path>,
+    /// The branch this chat's worktree started from, when the move recorded one.
+    pub worktree_base: Option<&'a str>,
     /// The parallel-session warning as this chat's first turn froze it.
     pub parallel: Option<&'a str>,
     /// The language the user asked replies in; `None` asks nothing.
@@ -259,8 +263,9 @@ pub fn context_block(ctx: &TurnContext) -> String {
         );
     }
     if let Some(main) = ctx.worktree_of {
+        let from = ctx.worktree_base.map(|base| format!(" (started from {base})")).unwrap_or_default();
         text.push_str(&format!(
-            "\n- The open folder is a git worktree of {}, on a branch of its own. That folder is the \
+            "\n- The open folder is a git worktree of {}, on a branch of its own{from}. That folder is the \
              user's own checkout and may hold work in progress: do not edit files there, run commands \
              in it, or point git at it. Commits made here land on this worktree's branch.",
             main.display(),
@@ -548,6 +553,7 @@ mod tests {
             skills: &[],
             rules: &[],
             worktree_of: None,
+            worktree_base: None,
             parallel: None,
             language: None,
             mcp_servers: &[],
@@ -795,6 +801,10 @@ mod tests {
         let text = context_block(&TurnContext { worktree_of: Some(&main), ..ctx(&workspace) });
         assert!(text.contains("git worktree of /work/project"), "{text}");
         assert!(text.contains("do not edit files there"), "{text}");
+        assert!(!text.contains("started from"), "{text}");
+
+        let text = context_block(&TurnContext { worktree_of: Some(&main), worktree_base: Some("main"), ..ctx(&workspace) });
+        assert!(text.contains("on a branch of its own (started from main)"), "{text}");
     }
 
     /// A mode's paragraph may only name tools that mode offers: telling a mode
@@ -809,7 +819,7 @@ mod tests {
                 }
             }
         }
-        assert!(mode_instructions(ConversationMode::Agent).contains("`offer`, kind implement"));
+        assert!(mode_instructions(ConversationMode::Agent).contains("`offer`, kind plan"));
         assert!(mode_instructions(ConversationMode::Agent).contains("`writePlan`"));
     }
 

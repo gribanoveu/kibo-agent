@@ -61,7 +61,7 @@ impl Feature {
                     in To do, Doing and Done.",
                 enabled_by_default: false,
                 tools: &[ToolName::Board],
-                data: Some("board.json"),
+                data: Some("board.db"),
             },
             Feature::ProviderBalance => Manifest {
                 id: "provider-balance",

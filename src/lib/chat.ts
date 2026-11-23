@@ -59,6 +59,16 @@ export type ChatUsage = {
   cachedTokens?: number;
 };
 
+/** Why the shared prefix was paid for again, as far as the backend's
+    request marker can say — the notice's answer to "why did the cache
+    miss". Mirrors `domain::request_marker::MissCause`. `history.from` is
+    0-based; the notice shows it 1-based. */
+export type MissCause =
+  | { kind: "system" }
+  | { kind: "tools" }
+  | { kind: "history"; from: number; of: number }
+  | { kind: "unchanged" };
+
 export type TurnResult = {
   text: string;
   reasoning?: string;
@@ -76,6 +86,27 @@ export type Outcome =
   | { status: "done"; value: TurnResult }
   | { status: "pendingApproval"; value: Checkpoint }
   | { status: "cancelled"; value: TurnResult };
+
+/** What a failed turn hands back: the history as of its last completed
+    round — every call answered, valid to send on — with its checklist and
+    plan. Mirrors `domain::turn::TurnRecovery`. */
+export type TurnRecovery = { history: LlmMessage[]; todos: Task[]; plan: string | null };
+
+/** A turn that failed with work to keep. Mirrors `domain::turn::TurnFailure`. */
+export type TurnFailure = { message: string; recovery?: TurnRecovery };
+
+/**
+ * Reads a `startChat`/`resumeChat` rejection: a plain message (a refused
+ * start, a closed folder) or a failed turn with work to keep. Anything else
+ * — a string, an Error — reads as its message with nothing to keep.
+ */
+export function asTurnFailure(e: unknown): TurnFailure {
+  if (typeof e === "string") return { message: e };
+  if (typeof e === "object" && e !== null && !(e instanceof Error) && typeof (e as TurnFailure).message === "string") {
+    return e as TurnFailure;
+  }
+  return { message: String(e) };
+}
 
 export type OutputStream = "stdout" | "stderr";
 
@@ -100,7 +131,7 @@ export type TurnEvent = { turnId: string; seq: number; round: number; targetId?:
   | { type: "commandOutput"; payload: { id: string; stream: OutputStream; chunk: string } }
   | { type: "mcpQuestion"; payload: { id: string; call: string; server: string; question: McpQuestion } }
   | { type: "mcpQuestionClosed"; payload: { id: string; action: McpAnswer["action"] } }
-  | { type: "contextUsage"; payload: ChatUsage }
+  | { type: "contextUsage"; payload: ChatUsage & { cause?: MissCause } }
   | { type: "contextEstimate"; payload: ContextUsage }
 );
 
@@ -113,9 +144,36 @@ export const CHAT_TURN_EVENT = "chat:turn-event";
 
 // ------------------------------------------------------------- the commands
 
-export async function openWorkspace(path: string, keepRunning = false): Promise<string> {
+/** An open folder. Mirrors `commands::workspace::OpenFolder`. */
+export type OpenFolder = {
+  path: string;
+  active: boolean;
+  /** The main checkout, when the folder is a linked worktree of it. */
+  worktreeOf: string | null;
+};
+
+/** Adds a folder to the open set and makes it active; nothing of the folder active before stops (F-8). */
+export async function addWorkspace(path: string): Promise<string> {
   requireBackend();
-  return invoke<string>("workspace_open", { path, keepRunning });
+  return invoke<string>("workspace_add", { path });
+}
+
+/** At launch, reopens the folders open last time; answers the active one — the folder of the chat viewed last (F-8.8). */
+export async function restoreWorkspaces(): Promise<string | null> {
+  requireBackend();
+  return invoke<string | null>("workspaces_restore");
+}
+
+/** Closes an open folder: out of the open set, its processes, terminals and index stopped. Refused while a turn runs in it (F-8). */
+export async function closeWorkspace(path: string): Promise<void> {
+  requireBackend();
+  return invoke("workspace_close", { path });
+}
+
+/** The folders open in the window, the last added first. */
+export async function listWorkspaces(): Promise<OpenFolder[]> {
+  if (!inTauri()) return [];
+  return invoke<OpenFolder[]>("workspaces_list");
 }
 
 export async function currentWorkspace(): Promise<string | null> {
@@ -123,16 +181,16 @@ export async function currentWorkspace(): Promise<string | null> {
   return invoke<string | null>("workspace_current");
 }
 
-/** The branch checked out in the open folder; `null` outside a repository. */
-export async function currentBranch(): Promise<string | null> {
+/** The branch checked out in the folder `workspace` names; `null` outside a repository. */
+export async function currentBranch(workspace: string | null): Promise<string | null> {
   if (!inTauri()) return null;
-  return invoke<string | null>("workspace_branch");
+  return invoke<string | null>("workspace_branch", { workspace });
 }
 
-/** The main working tree when the open folder is a git worktree of it; `null` otherwise. */
-export async function worktreeOf(): Promise<string | null> {
+/** The main working tree when the folder `workspace` names is a git worktree of it; `null` otherwise. */
+export async function worktreeOf(workspace: string | null): Promise<string | null> {
   if (!inTauri()) return null;
-  return invoke<string | null>("workspace_worktree_of");
+  return invoke<string | null>("workspace_worktree_of", { workspace });
 }
 
 /** Folders opened lately that still exist, the last one first. */
@@ -158,7 +216,7 @@ export async function forgetWorkspace(path: string): Promise<void> {
  */
 export const INDEX_EVENT = "workspace-index:event";
 
-/** One report of a sync. `root` is the string `openWorkspace` returned. */
+/** One report of a sync. `root` is the string `addWorkspace` returned. */
 export type IndexEvent = { root: string } & (
   | { kind: "syncStarted" }
   | { kind: "keywordsReady"; indexed: number; unchanged: number; removed: number; skipped: number }
@@ -176,9 +234,10 @@ export type IndexSnapshot = {
   embeddingError: string | null;
 };
 
-export async function indexStatus(): Promise<IndexSnapshot | null> {
+/** `workspace`'s index — each open folder keeps its own. */
+export async function indexStatus(workspace: string): Promise<IndexSnapshot | null> {
   if (!inTauri()) return null;
-  return invoke<IndexSnapshot | null>("workspace_index_status");
+  return invoke<IndexSnapshot | null>("workspace_index_status", { workspace });
 }
 
 /** Every folder's index events: a sync can outlive its folder being open. */
@@ -195,9 +254,11 @@ export async function startChat(
   messages: LlmMessage[],
   todos: Task[] = [],
   plan: string | null = null,
+  /** The folder a new chat was typed in; ignored once the chat is saved or its turn has started. */
+  workspace: string | null = null,
 ): Promise<Outcome> {
   requireBackend();
-  return invoke<Outcome>("chat_start", { turnId, chatId, messages, todos, plan });
+  return invoke<Outcome>("chat_start", { turnId, chatId, messages, todos, plan, workspace });
 }
 
 /**
@@ -260,9 +321,10 @@ export async function cancelSteer(id: string, chatId: string): Promise<boolean> 
   return invoke<boolean>("chat_cancel_steer", { id, chatId });
 }
 
-export async function alwaysAllow(tool: string): Promise<void> {
+/** "Always allow" from a card of a turn in `chatId`: it holds in that chat's folder only. */
+export async function alwaysAllow(tool: string, chatId: string): Promise<void> {
   requireBackend();
-  return invoke<void>("approval_always_allow", { tool });
+  return invoke<void>("approval_always_allow", { tool, chatId });
 }
 
 /**
@@ -317,6 +379,9 @@ export type ContextUsage = {
   limit: number | null;
   /** The total at which a pass starts happening on its own. */
   compactsAt: number | null;
+  /** The total is the provider's own count for the last request plus what was
+   * added since, not an estimate from the text — the meter names its source. */
+  anchored?: boolean;
 };
 
 export async function contextUsage(chatId: string, messages: LlmMessage[]): Promise<ContextUsage> {
@@ -397,7 +462,7 @@ export type FileDiffStats = {
 export type ToolPreview =
   | { kind: "diff"; path: string; diff: FileDiffStats }
   | { kind: "removes"; path: string; files: number }
-  | { kind: "command"; command: string; cwd: string }
+  | { kind: "command"; command: string; description?: string | null; cwd: string }
   /** A change to a cluster: where, what becomes of what, and what to know first. */
   | { kind: "change"; place: string; summary: string; notes: string[]; production?: boolean; diffs?: { title: string; diff: FileDiffStats }[] }
   | { kind: "failed"; reason: string }

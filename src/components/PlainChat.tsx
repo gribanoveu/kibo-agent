@@ -37,15 +37,6 @@ const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   prototype: AppWindow,
 };
 
-/** What the empty chat says the role can do — longer than its menu hint, and plain about the limits. */
-const ROLE_WELCOME: Record<ChatRoleId, string> = {
-  assistant: "The model answers in text here: it does not read your files, run commands or change anything.",
-  kubernetes:
-    "The model reads the cluster picked below: pods, events, logs. With Allow changes on it can change it too, asking you first.",
-  prototype:
-    "The model builds a page — a site, a small app, a slide deck — as files in this chat's own folder. It reaches nothing else on your machine.",
-};
-
 type Props = {
   chat: PlainChatState;
   /** Each change puts the cursor in the box. */
@@ -193,10 +184,13 @@ export function PlainChat({
   const fit = useCallback(() => {
     const el = input.current;
     if (!el) return;
+    // The cap is the stylesheet's — a narrow column gets a taller box — not a
+    // number kept in step with it here.
+    const cap = parseFloat(getComputedStyle(el).maxHeight) || 160;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
-    el.style.overflowY = el.scrollHeight > 160 ? "auto" : "hidden";
+    el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
   }, []);
 
   useEffect(() => {
@@ -228,7 +222,6 @@ export function PlainChat({
             <div className="plain-welcome">
               <KiboBrand />
               <h2>{greeting}</h2>
-              <p>{ROLE_WELCOME[chat.role]}</p>
               <div className="plain-suggest">
                 {suggestions.map((text) => (
                   <button
@@ -245,7 +238,7 @@ export function PlainChat({
               </div>
             </div>
           ) : (
-            <div ref={contentRef}>
+            <div ref={contentRef} className="thread-content">
               <Transcript
                 turn={chat.turn}
                 onDecide={chat.decide}
@@ -262,6 +255,9 @@ export function PlainChat({
       </section>
 
       <div className="plain-composer-wrap">
+        {correction.suggestion && (
+          <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />
+        )}
         <section className={`plain-composer${attachments.dragging ? " dropping" : ""}`}>
           {attachments.dragging && (
             <div className="plain-drop" aria-hidden="true">
@@ -335,9 +331,6 @@ export function PlainChat({
           </div>
           {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
         </section>
-        {correction.suggestion && (
-          <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />
-        )}
         {/* Under the box, where the agent's says which folder: here, who the
             model is. The chat's own settings go on this strip as they come. */}
         <div className="plain-tab">

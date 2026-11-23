@@ -190,6 +190,22 @@ fn every_request_in_a_worktree_names_the_checkout_to_keep_out_of() {
 }
 
 #[test]
+fn a_worktree_turn_names_the_base_it_started_from() {
+    let mut h = harness("turn-worktree-base", vec![text("done")]);
+    h.worktree_of = Some(PathBuf::from("/work/the-main-checkout"));
+    h.worktree_base = Some("main".into());
+
+    h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes");
+
+    for request in h.provider.requests() {
+        assert!(
+            request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("on a branch of its own (started from main)"))),
+            "a request went out without naming the worktree's base"
+        );
+    }
+}
+
+#[test]
 fn every_request_carries_the_project_instructions() {
     let mut h = harness("turn-rules", vec![asks(vec![wants("r1", "listFiles", r#"{"path":"."}"#)]), text("done")]);
     h.rules = vec![RuleFile::new("AGENTS.md", "Run cargo test before saying done.")];

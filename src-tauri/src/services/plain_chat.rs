@@ -153,6 +153,8 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         deepseek: chat.deepseek.clone(),
         features: chat.features.clone(),
         fork: false,
+        markers: None,
+        journal: None,
     };
     run(&turn)
 }
@@ -305,8 +307,8 @@ mod tests {
     /// card asking first, and the model reads the board back.
     #[test]
     fn the_assistant_puts_a_reminder_on_the_board_without_asking() {
-        let path = crate::testing::temp_dir("plain-chat-board").join("board.json");
-        let board = Arc::new(crate::infra::board_store::Board::new(Some(path), Arc::new(|_| {})));
+        let dir = crate::testing::temp_dir("plain-chat-board");
+        let board = Arc::new(crate::infra::board_store::Board::new(Some(dir), Arc::new(|_| {})));
         let mut chat = chat(
             vec![calls("board", r#"{"op":"add","title":"Заявка на память в wlbuh"}"#), said("Записал на доску.")],
             None,
@@ -320,30 +322,30 @@ mod tests {
         assert_eq!(done.result.text, "Записал на доску.");
         let cards = crate::domain::board::TaskBoard::cards(board.as_ref()).unwrap();
         assert_eq!(cards.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["Заявка на память в wlbuh"]);
-        assert!(tool_result(&done.history).contains("c1 Заявка на память в wlbuh"), "{}", tool_result(&done.history));
+        assert!(tool_result(&done.history).contains("T1 Заявка на память в wlbuh"), "{}", tool_result(&done.history));
     }
 
     /// The board turned off since: a call from memory is refused before it
     /// runs, and the model is told where the user turns it back on.
     #[test]
     fn a_board_call_while_the_feature_is_off_is_refused_and_says_where_to_turn_it_on() {
-        let path = crate::testing::temp_dir("plain-chat-board-off").join("board.json");
-        let board = Arc::new(crate::infra::board_store::Board::new(Some(path.clone()), Arc::new(|_| {})));
+        let dir = crate::testing::temp_dir("plain-chat-board-off");
+        let board = Arc::new(crate::infra::board_store::Board::new(Some(dir.clone()), Arc::new(|_| {})));
         let mut chat = chat(vec![calls("board", r#"{"op":"add","title":"x"}"#), said("Доска выключена.")], None);
         chat.board = Some(board);
         let done = done(chat.start(ChatRole::Assistant, vec![LlmMessage::user("напомни")]));
 
         let result = tool_result(&done.history);
         assert!(result.contains("turned off") && result.contains("Catalog"), "{result}");
-        assert!(!path.exists(), "nothing was written");
+        assert!(!dir.join("board.db").exists(), "nothing was written");
     }
 
     /// The board on, its tools kept from the model: not offered, and a call
     /// from memory is told where they are given back, not to turn on what is on.
     #[test]
     fn a_board_call_with_its_tools_kept_is_refused_and_says_where_to_give_them_back() {
-        let path = crate::testing::temp_dir("plain-chat-board-kept").join("board.json");
-        let board = Arc::new(crate::infra::board_store::Board::new(Some(path.clone()), Arc::new(|_| {})));
+        let dir = crate::testing::temp_dir("plain-chat-board-kept");
+        let board = Arc::new(crate::infra::board_store::Board::new(Some(dir.clone()), Arc::new(|_| {})));
         let mut chat = chat(vec![calls("board", r#"{"op":"add","title":"x"}"#), said("No board here.")], None);
         chat.board = Some(board);
         let kept = crate::domain::settings::OptOut { disabled: vec!["board".to_string()] };
@@ -353,7 +355,7 @@ mod tests {
         assert!(chat.asked()[0].tools.is_empty());
         let result = tool_result(&done.history);
         assert!(result.contains("panel on the Catalog page") && !result.contains("turned off"), "{result}");
-        assert!(!path.exists(), "nothing was written");
+        assert!(!dir.join("board.db").exists(), "nothing was written");
     }
 
     /// The meter is the estimate of what a turn sends: the role's prompt, its
@@ -906,8 +908,8 @@ mod tests {
             let processes = std::sync::Arc::new(crate::infra::background::Processes::default());
             let dir = crate::testing::temp_dir("chat-delete-processes");
             let shell = crate::domain::command_exec::Shell::default();
-            processes.for_chat(id).start(&shell, "sleep 30", &dir, ".").unwrap();
-            processes.for_chat("other").start(&shell, "sleep 30", &dir, ".").unwrap();
+            processes.for_chat(id, &dir).start(&shell, "sleep 30", None, &dir, ".").unwrap();
+            processes.for_chat("other", &dir).start(&shell, "sleep 30", None, &dir, ".").unwrap();
 
             delete_chat(id, &processes).unwrap();
             assert!(processes.running_for(id).is_empty());

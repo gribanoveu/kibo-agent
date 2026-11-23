@@ -79,6 +79,13 @@ pub struct ToolCallLogEntry {
     /// Unix milliseconds.
     pub ts_ms: i64,
     pub repo_root: String,
+    /// The chat and turn the call belongs to. The loop knows neither — the
+    /// adapter that wires `log_call` fills them in. Empty in a row written
+    /// before they were kept, and in a test's own entry.
+    #[serde(default)]
+    pub chat_id: String,
+    #[serde(default)]
+    pub turn_id: String,
     pub round: u32,
     pub provider_id: String,
     pub model: String,
@@ -223,6 +230,7 @@ mod tests {
         let process = || crate::domain::background::ProcessInfo {
             id: 1,
             command: "npm run dev".into(),
+            description: None,
             cwd: ".".into(),
             state: crate::domain::background::ProcessState::Running,
         };
@@ -271,7 +279,7 @@ mod tests {
             ToolName::GitBlame => (None, ToolResult::GitBlame { path: path(), hunks: vec![], truncated: false }),
             ToolName::GitLog => (None, ToolResult::GitLog { path: path(), commits: vec![], truncated: false }),
             ToolName::RunCommand => (
-                Some(ToolCall::RunCommand(CommandRequest { command: "cargo test".into(), cwd: None, timeout_seconds: None, background: None })),
+                Some(ToolCall::RunCommand(CommandRequest { command: "cargo test".into(), description: None, cwd: None, timeout_seconds: None, background: None })),
                 ToolResult::CommandRan(CommandOutput {
                     stdout: LEAK.into(),
                     stderr: LEAK.into(),
@@ -302,10 +310,12 @@ mod tests {
                 Some(ToolCall::Remember(crate::domain::tools::RememberArgs { fact: "bench needs --release".into() })),
                 ToolResult::Remembered { already: false },
             ),
-            // The reason is the model's own words, shown on the button.
+            // The reason is the model's own words, shown on the button, and
+            // stays. The suggestion's text is content by field name — the
+            // audit log redacts it as grep's matches; the transcript keeps it.
             ToolName::Offer => (
-                Some(ToolCall::Offer(crate::domain::tools::OfferArgs { kind: crate::domain::tools::OfferKind::Review, reason: "the lock".into() })),
-                ToolResult::Offered { kind: crate::domain::tools::OfferKind::Review },
+                Some(ToolCall::Offer(crate::domain::tools::OfferArgs { kind: crate::domain::tools::OfferKind::Message, reason: "the lock".into(), text: LEAK.into() })),
+                ToolResult::Offered { kind: crate::domain::tools::OfferKind::Message },
             ),
             ToolName::ReportFinding => (
                 None,

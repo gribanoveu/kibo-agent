@@ -30,9 +30,9 @@ export type SkillSourceItem = { id: "project" | "app" | "agents" | "claude"; pat
 /** `dir` is where the user's own skills go, so an empty list can say so. */
 export type SkillsView = { dir: string; skills: SkillListItem[]; sources: SkillSourceItem[] };
 
-export async function skillsList(): Promise<SkillsView> {
+export async function skillsList(workspace: string | null): Promise<SkillsView> {
   if (!inTauri()) return { dir: "", skills: [], sources: [] };
-  return invoke<SkillsView>("skills_list");
+  return invoke<SkillsView>("skills_list", { workspace });
 }
 
 /** A command the user wrote in `.kibo/commands`. Mirrors `domain::slash_commands::CommandFile`. */
@@ -47,10 +47,10 @@ export type CommandFile = {
   source: "project" | "user";
 };
 
-/** The open folder's command files and the user's, the folder's first on a shared name. */
-export async function commandFilesList(): Promise<CommandFile[]> {
+/** The folder's command files and the user's, the folder's first on a shared name. */
+export async function commandFilesList(workspace: string | null): Promise<CommandFile[]> {
   if (!inTauri()) return [];
-  return invoke<CommandFile[]>("slash_commands_list");
+  return invoke<CommandFile[]>("slash_commands_list", { workspace });
 }
 
 /**
@@ -61,14 +61,14 @@ export async function commandFilesList(): Promise<CommandFile[]> {
 export type FolderTrust = { folder: string; needed: boolean; trusted: boolean | null };
 
 /** `null` while no folder is open. */
-export async function folderTrust(): Promise<FolderTrust | null> {
+export async function folderTrust(workspace: string | null): Promise<FolderTrust | null> {
   if (!inTauri()) return null;
-  return invoke<FolderTrust | null>("folder_trust_get");
+  return invoke<FolderTrust | null>("folder_trust_get", { workspace });
 }
 
-export async function setFolderTrust(trusted: boolean): Promise<void> {
+export async function setFolderTrust(workspace: string | null, trusted: boolean): Promise<void> {
   requireBackend();
-  return invoke<void>("folder_trust_set", { trusted });
+  return invoke<void>("folder_trust_set", { workspace, trusted });
 }
 
 /** A skills folder read or not, for every repository. */
@@ -95,9 +95,9 @@ export type RuleListItem = {
   error: string | null;
 };
 
-export async function rulesList(): Promise<RuleListItem[]> {
+export async function rulesList(workspace: string | null): Promise<RuleListItem[]> {
   if (!inTauri()) return [];
-  return invoke<RuleListItem[]>("rules_list");
+  return invoke<RuleListItem[]>("rules_list", { workspace });
 }
 
 export async function setRuleEnabled(path: string, enabled: boolean): Promise<void> {

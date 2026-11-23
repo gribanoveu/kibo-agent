@@ -28,7 +28,7 @@ use serde_json::Value;
 use crate::domain::chat_export;
 use crate::domain::compaction::SUMMARY_PREFIX;
 use crate::domain::chat_record::{
-    self, ChatError, ChatGroup, ChatRecord, ChatSummary, CHAT_SCHEMA_VERSION, NO_FOLDER,
+    self, ChatError, ChatGroup, ChatRecord, ChatSummary, GroupList, CHAT_SCHEMA_VERSION, NO_FOLDER,
 };
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::KubePin;
@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS runs (
   PRIMARY KEY (kind, id)
 );
 CREATE INDEX IF NOT EXISTS runs_chat ON runs(chat_id, kind, id);
+CREATE TABLE IF NOT EXISTS turn_journal (
+  chat_id   TEXT NOT NULL,
+  turn_id   TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  kind      TEXT NOT NULL,
+  body      TEXT NOT NULL,
+  msg_count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (chat_id, seq)
+);
 ";
 
 pub(crate) fn store(e: rusqlite::Error) -> ChatError {
@@ -137,7 +146,57 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
     // review counts as "this chat's work". NULL for rows saved before the
     // column and for chats begun before their folder's first commit.
     add_column(&conn, "head_at_start", "TEXT")?;
+    share_project_folders(&conn)?;
     Ok(conn)
+}
+
+/// Folders were once filed per project; now every project shares one set
+/// (`GroupList::Projects`). A database from before has them under their
+/// projects' paths: they move to the shared set, one folder per name — the
+/// later of two same-named folders gives its chats to the first and goes —
+/// and are numbered again in the order they stood. A no-op once moved.
+fn share_project_folders(conn: &Connection) -> Result<(), ChatError> {
+    let shared = GroupList::Projects.key();
+    let old: bool = conn
+        .query_row("SELECT COUNT(*) > 0 FROM chat_groups WHERE workspace NOT IN (?1, ?2)", params![NO_FOLDER, shared], |row| row.get(0))
+        .map_err(store)?;
+    if !old {
+        return Ok(());
+    }
+    // Immediate: two windows opening the store at once would otherwise both
+    // read the old sets and merge them twice. The second one, let in after
+    // the first commits, reads only the shared set and changes nothing.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate).map_err(store)?;
+    let folders: Vec<(String, String)> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id, name FROM chat_groups WHERE workspace != ?1
+                 ORDER BY workspace != ?2, position, workspace, id",
+            )
+            .map_err(store)?;
+        let rows = stmt.query_map(params![NO_FOLDER, shared], |row| Ok((row.get(0)?, row.get(1)?))).map_err(store)?;
+        rows.collect::<Result<_, _>>().map_err(store)?
+    };
+    // ASCII case only, as `name_taken`'s `lower()` compares.
+    let mut kept: Vec<(String, String)> = Vec::new();
+    for (id, name) in folders {
+        let key = name.to_ascii_lowercase();
+        match kept.iter().find(|(_, other)| *other == key) {
+            Some((first, _)) => {
+                tx.execute("UPDATE chats SET group_id = ?1 WHERE group_id = ?2", params![first, id]).map_err(store)?;
+                tx.execute("DELETE FROM chat_groups WHERE id = ?1", params![id]).map_err(store)?;
+            }
+            None => kept.push((id, key)),
+        }
+    }
+    for (position, (id, _)) in kept.iter().enumerate() {
+        tx.execute(
+            "UPDATE chat_groups SET workspace = ?2, position = ?3 WHERE id = ?1",
+            params![id, shared, position as i64 + 1],
+        )
+        .map_err(store)?;
+    }
+    tx.commit().map_err(store)
 }
 
 fn add_column(conn: &Connection, name: &str, definition: &str) -> Result<(), ChatError> {
@@ -224,6 +283,71 @@ pub fn load(id: &str) -> Result<ChatRecord, ChatError> {
     chat_record::parse(&body.ok_or_else(|| ChatError::NotFound(id.to_string()))?)
 }
 
+/// One row of a turn's journal (`domain::turn_journal`): the history's
+/// tail or whole, or the window's transcript. `seq` is handed out by the
+/// insert itself: one `INSERT … SELECT MAX(seq)+1` is a single statement,
+/// and SQLite lets one writer at a time, so two writers never share a
+/// number.
+pub fn journal_append(chat_id: &str, turn_id: &str, kind: &str, body: &Value, msg_count: usize) -> Result<(), ChatError> {
+    chat_record::check_id(chat_id)?;
+    open()?
+        .execute(
+            "INSERT INTO turn_journal (chat_id, turn_id, seq, kind, body, msg_count)
+             VALUES (?1, ?2, (SELECT COALESCE(MAX(seq), 0) + 1 FROM turn_journal WHERE chat_id = ?1), ?3, ?4, ?5)",
+            params![chat_id, turn_id, kind, body.to_string(), msg_count as i64],
+        )
+        .map_err(store)?;
+    Ok(())
+}
+
+/// The chat's journal in the order it was written, parsed. A row that does
+/// not parse is skipped: a damaged line costs what it carried, not the
+/// recovery.
+pub fn journal_entries(chat_id: &str) -> Result<Vec<crate::domain::turn_journal::JournalEntry>, ChatError> {
+    chat_record::check_id(chat_id)?;
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT kind, body FROM turn_journal WHERE chat_id = ?1 ORDER BY seq")
+        .map_err(store)?;
+    let rows = stmt
+        .query_map([chat_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(store)?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let (kind, body) = row.map_err(store)?;
+        if let Ok(value) = serde_json::from_str::<Value>(&body) {
+            if let Some(entry) = crate::domain::turn_journal::JournalEntry::parse(&kind, &value) {
+                entries.push(entry);
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// How many messages of one turn's history its journal already holds: the
+/// last snapshot's count plus the appends after it. A resume counts the
+/// tail to append from here.
+pub fn journal_message_count(chat_id: &str, turn_id: &str) -> Result<usize, ChatError> {
+    chat_record::check_id(chat_id)?;
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT kind, msg_count FROM turn_journal WHERE chat_id = ?1 AND turn_id = ?2 ORDER BY seq")
+        .map_err(store)?;
+    let rows = stmt
+        .query_map(params![chat_id, turn_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(store)?;
+    let mut count = 0i64;
+    for row in rows {
+        let (kind, n) = row.map_err(store)?;
+        match kind.as_str() {
+            "snapshot" => count = n,
+            "append" => count += n,
+            _ => {}
+        }
+    }
+    Ok(count.max(0) as usize)
+}
+
 /// Whether a chat with this id is stored, readable or not.
 pub fn exists(id: &str) -> Result<bool, ChatError> {
     chat_record::check_id(id)?;
@@ -257,7 +381,9 @@ pub fn head_at_start(id: &str) -> Result<Option<String>, ChatError> {
         .map_err(store)
 }
 
-/// Writes the conversation whole, keeping the moment it started.
+/// Writes the conversation whole, keeping the moment it started, and folds
+/// the turn's journal away — this is the save that ends a turn (or recovers
+/// one). A save mid-turn goes through [`save_keep_journal`].
 ///
 /// Whole because a conversation is edited from both ends — a compaction
 /// rewrites the middle, a retry replaces the tail — so an append log would
@@ -272,6 +398,59 @@ pub fn save(
     plan: Option<&str>,
     branched_from: Option<&str>,
     git_branch: Option<&str>,
+) -> Result<ChatSummary, ChatError> {
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, true, None)
+}
+
+/// As [`save`], but the journal folds for one turn only: the turn this
+/// save ends. The next turn may already have started — the queue sends it
+/// without waiting for this save — and its base snapshot must survive a
+/// delete that is still in flight. `None` folds every turn's rows, as a
+/// recovery does.
+#[allow(clippy::too_many_arguments)]
+pub fn save_turn(
+    id: &str,
+    workspace: &str,
+    messages: &[LlmMessage],
+    blocks: &Value,
+    todos: &[Task],
+    plan: Option<&str>,
+    branched_from: Option<&str>,
+    git_branch: Option<&str>,
+    turn_id: Option<&str>,
+) -> Result<ChatSummary, ChatError> {
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, true, turn_id)
+}
+
+/// As [`save`], but the journal stays: a save that does not end the turn
+/// (a plan edited while it pauses for approval) must leave it alone — the
+/// resume counts its tail from it, and a recovery replays it.
+#[allow(clippy::too_many_arguments)]
+pub fn save_keep_journal(
+    id: &str,
+    workspace: &str,
+    messages: &[LlmMessage],
+    blocks: &Value,
+    todos: &[Task],
+    plan: Option<&str>,
+    branched_from: Option<&str>,
+    git_branch: Option<&str>,
+) -> Result<ChatSummary, ChatError> {
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, false, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_impl(
+    id: &str,
+    workspace: &str,
+    messages: &[LlmMessage],
+    blocks: &Value,
+    todos: &[Task],
+    plan: Option<&str>,
+    branched_from: Option<&str>,
+    git_branch: Option<&str>,
+    fold_journal: bool,
+    fold_turn: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
     let _write = write_lock();
     // An existing chat keeps its checkout: a save already in flight when the
@@ -297,24 +476,31 @@ pub fn save(
     };
     #[cfg(test)]
     std::thread::yield_now();
-    upsert(ChatRecord {
-        schema_version: CHAT_SCHEMA_VERSION,
-        id: id.to_string(),
-        workspace,
-        title: chat_record::derive_title(messages, blocks),
-        created_at: 0,
-        updated_at: 0,
-        messages: messages.to_vec(),
-        blocks: blocks.clone(),
-        todos: todos.to_vec(),
-        plan: plan.map(str::to_string),
-        branched_from: branched_from.map(str::to_string),
-        role: None,
-        kube: None,
-        worktree_base,
-        git_branch,
-        head_at_start,
-    })
+    upsert(
+        ChatRecord {
+            schema_version: CHAT_SCHEMA_VERSION,
+            id: id.to_string(),
+            workspace,
+            title: chat_record::derive_title(messages, blocks),
+            created_at: 0,
+            updated_at: 0,
+            messages: messages.to_vec(),
+            blocks: blocks.clone(),
+            todos: todos.to_vec(),
+            plan: plan.map(str::to_string),
+            branched_from: branched_from.map(str::to_string),
+            role: None,
+            kube: None,
+            worktree_base,
+            git_branch,
+            head_at_start,
+        },
+        // A turn-ending save folds the journal into this record and deletes
+        // it in the same transaction — a crash between the two would leave
+        // a finished turn to be "recovered" over its own saved result.
+        fold_journal,
+        fold_turn,
+    )
 }
 
 /// A Chat mode conversation, filed under no folder. `blocks` is its
@@ -345,7 +531,7 @@ pub fn save_plain(
         worktree_base: None,
         git_branch: None,
         head_at_start: None,
-    })
+    }, false, None)
 }
 
 /// Moves only the chat's own record; the worktree has already been made.
@@ -357,13 +543,17 @@ pub fn relocate(id: &str, workspace: &str, base: &str) -> Result<ChatSummary, Ch
     record.workspace = workspace.to_string();
     record.worktree_base = Some(base.to_string());
     record.git_branch = crate::infra::git_head::current_branch(Path::new(workspace));
-    upsert(record)
+    // A move is not a turn ending: a running turn's journal stays.
+    upsert(record, false, None)
 }
 
 /// Writes `record`, stamped now and keeping the moment it was first saved.
-fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
+/// `fold_journal` deletes the chat's turn journal in the same transaction —
+/// true only for a save that ends a turn (or recovers one); `fold_turn`
+/// scopes the delete to one turn, `None` taking every turn's rows.
+fn upsert(mut record: ChatRecord, fold_journal: bool, fold_turn: Option<&str>) -> Result<ChatSummary, ChatError> {
     chat_record::check_id(&record.id)?;
-    let conn = open()?;
+    let mut conn = open()?;
     let stored: Option<(i64, bool, Option<String>, bool, Option<String>)> = conn
         .query_row("SELECT created_at, archived, generated_title, pinned, group_id FROM chats WHERE id = ?1", params![record.id], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
@@ -385,7 +575,8 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
     // is written only by the INSERT half — the conflict branch deliberately
     // leaves it: a chat's start is its first save's, however often the chat
     // is saved afterwards.
-    conn.execute(
+    let tx = conn.transaction().map_err(store)?;
+    tx.execute(
         "INSERT INTO chats
            (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, git_branch, generated_title, head_at_start)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, (SELECT generated_title FROM chats WHERE id = ?7), ?11)
@@ -414,6 +605,15 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
         ],
     )
     .map_err(store)?;
+    if fold_journal {
+        match fold_turn {
+            Some(turn) => tx
+                .execute("DELETE FROM turn_journal WHERE chat_id = ?1 AND turn_id = ?2", params![record.id, turn])
+                .map_err(store)?,
+            None => tx.execute("DELETE FROM turn_journal WHERE chat_id = ?1", [&record.id]).map_err(store)?,
+        };
+    }
+    tx.commit().map_err(store)?;
     let mut summary = ChatSummary { archived, pinned, group, ..ChatSummary::from(&record) };
     if let Some(title) = generated {
         summary.title = title;
@@ -457,10 +657,11 @@ pub fn set_pinned(id: &str, pinned: bool) -> Result<(), ChatError> {
     }
 }
 
-/// The folders of one workspace, in the order the user arranged them. An
-/// empty folder is listed too — otherwise a folder made ahead of its first
-/// chat could not be renamed or deleted at all.
-pub fn groups(workspace: &str) -> Result<Vec<ChatGroup>, ChatError> {
+/// The folders of one set, in the order the user arranged them. An empty
+/// folder is listed too — otherwise a folder made ahead of its first chat
+/// could not be renamed or deleted at all.
+pub fn groups(list: GroupList) -> Result<Vec<ChatGroup>, ChatError> {
+    let workspace = list.key();
     let conn = open()?;
     let mut stmt = conn
         .prepare("SELECT id, name, position FROM chat_groups WHERE workspace = ?1 ORDER BY position, id")
@@ -488,7 +689,7 @@ fn checked_name(name: &str) -> Result<String, ChatError> {
     }
 }
 
-/// Whether another folder of the same workspace already carries the name —
+/// Whether another folder of the same set already carries the name —
 /// case-insensitively, so "Release" and "release" are one folder to the eye.
 fn name_taken(conn: &Connection, workspace: &str, name: &str, except_id: Option<&str>) -> Result<bool, ChatError> {
     conn.query_row(
@@ -499,8 +700,9 @@ fn name_taken(conn: &Connection, workspace: &str, name: &str, except_id: Option<
     .map_err(store)
 }
 
-/// Makes a folder at the end of the workspace's list.
-pub fn create_group(workspace: &str, name: &str) -> Result<ChatGroup, ChatError> {
+/// Makes a folder at the end of the set's list.
+pub fn create_group(list: GroupList, name: &str) -> Result<ChatGroup, ChatError> {
+    let workspace = list.key();
     let _write = write_lock();
     let name = checked_name(name)?;
     let conn = open()?;
@@ -525,7 +727,8 @@ pub fn create_group(workspace: &str, name: &str) -> Result<ChatGroup, ChatError>
 
 /// Renames a folder. The name's rules are the creation's; another folder's
 /// name is refused rather than silently numbered.
-pub fn rename_group(workspace: &str, id: &str, name: &str) -> Result<(), ChatError> {
+pub fn rename_group(list: GroupList, id: &str, name: &str) -> Result<(), ChatError> {
+    let workspace = list.key();
     let _write = write_lock();
     let name = checked_name(name)?;
     let conn = open()?;
@@ -545,7 +748,8 @@ pub fn rename_group(workspace: &str, id: &str, name: &str) -> Result<(), ChatErr
 /// Removes the folder and files its chats under no folder, in one transaction:
 /// deleting what reads as "remove the label" must not delete the
 /// conversations it held.
-pub fn delete_group(workspace: &str, id: &str) -> Result<(), ChatError> {
+pub fn delete_group(list: GroupList, id: &str) -> Result<(), ChatError> {
+    let workspace = list.key();
     let _write = write_lock();
     let mut conn = open()?;
     let own: bool = conn
@@ -561,9 +765,10 @@ pub fn delete_group(workspace: &str, id: &str) -> Result<(), ChatError> {
     Ok(())
 }
 
-/// Moves a chat into a folder of its own workspace, or out to no folder with
-/// `None`. The folder has to belong to the same workspace: a chat about one
-/// project never lands in another's list. The write lock is taken because the
+/// Moves a chat into a folder of its set, or out to no folder with `None`.
+/// The folder has to be of the chat's set: a project's chat goes into the
+/// projects' shared folders, never Chat mode's, and the other way round. The
+/// write lock is taken because the
 /// check and the write are two statements: without it, a folder deleted in
 /// between would leave the chat pointing at a group that is gone.
 pub fn set_group(id: &str, group: Option<&str>) -> Result<(), ChatError> {
@@ -576,8 +781,9 @@ pub fn set_group(id: &str, group: Option<&str>) -> Result<(), ChatError> {
         .map_err(store)?;
     let workspace = workspace.ok_or_else(|| ChatError::NotFound(id.to_string()))?;
     if let Some(group) = group {
+        let list = GroupList::of_workspace(&workspace).key();
         let own: bool = conn
-            .query_row("SELECT COUNT(*) > 0 FROM chat_groups WHERE id = ?1 AND workspace = ?2", params![group, workspace], |row| row.get(0))
+            .query_row("SELECT COUNT(*) > 0 FROM chat_groups WHERE id = ?1 AND workspace = ?2", params![group, list], |row| row.get(0))
             .map_err(store)?;
         if !own {
             return Err(ChatError::NotFound(group.to_string()));
@@ -610,6 +816,7 @@ pub fn delete(id: &str) -> Result<(), ChatError> {
     chat_record::check_id(id)?;
     let conn = open()?;
     conn.execute("DELETE FROM runs WHERE chat_id = ?1", params![id]).map_err(store)?;
+    conn.execute("DELETE FROM turn_journal WHERE chat_id = ?1", params![id]).map_err(store)?;
     match conn.execute("DELETE FROM chats WHERE id = ?1", params![id]).map_err(store)? {
         0 => Err(ChatError::NotFound(id.to_string())),
         _ => Ok(()),
@@ -620,6 +827,8 @@ pub fn delete(id: &str) -> Result<(), ChatError> {
 pub fn delete_in(workspace: &str) -> Result<usize, ChatError> {
     let conn = open()?;
     conn.execute("DELETE FROM runs WHERE chat_id IN (SELECT id FROM chats WHERE workspace = ?1)", params![workspace])
+        .map_err(store)?;
+    conn.execute("DELETE FROM turn_journal WHERE chat_id IN (SELECT id FROM chats WHERE workspace = ?1)", params![workspace])
         .map_err(store)?;
     conn.execute("DELETE FROM chats WHERE workspace = ?1", params![workspace]).map_err(store)
 }
@@ -731,7 +940,7 @@ mod tests {
             save_one("four", "/repo", "d");
 
             let ran = |chat: &str| {
-                let info = ProcessInfo { id: chat.len() as u32, command: "x".into(), cwd: ".".into(), state: ProcessState::Stopped };
+                let info = ProcessInfo { id: chat.len() as u32, command: "x".into(), description: None, cwd: ".".into(), state: ProcessState::Stopped };
                 RunStore.save_process(chat, &ProcessView { info, tail: String::new() });
             };
             let runs = |chat: &str| RunStore.processes(chat).len();
@@ -994,7 +1203,7 @@ mod tests {
         with_app_dir("chat-store-delete", || {
             save_one("one", "/repo", "first");
             save_one("two", "/repo", "second");
-            let run = |id| AgentInfo { id, task: "t".into(), state: AgentState::Done, steps: Vec::new(), tokens: Default::default(), answer: None };
+            let run = |id| AgentInfo { id, task: "t".into(), state: AgentState::Done, steps: Vec::new(), tokens: Default::default(), answer: None, progress: Default::default(), call: None };
             RunStore.save_agent("one", &run(1));
             RunStore.save_agent("two", &run(2));
             delete("one").unwrap();
@@ -1158,7 +1367,7 @@ mod tests {
     fn a_chat_moves_into_a_folder_and_back_out() {
         with_app_dir("chat-store-group-set", || {
             save_one("one", "/repo", "first");
-            let group = create_group("/repo", "release").unwrap();
+            let group = create_group(GroupList::Projects, "release").unwrap();
 
             set_group("one", Some(&group.id)).unwrap();
             let held = |id: &str| list("/repo").unwrap().into_iter().find(|c| c.id == id).unwrap().group;
@@ -1168,9 +1377,81 @@ mod tests {
             assert_eq!(held("one"), None);
             assert!(matches!(set_group("nope", Some(&group.id)), Err(ChatError::NotFound(_))));
             assert!(matches!(set_group("../x", Some(&group.id)), Err(ChatError::BadId(_))));
-            // The folder belongs to this workspace; another's is not found here.
-            let other = create_group("/other", "release").unwrap();
+            // Chat mode's folders are another set; a project's chat finds none of them.
+            let other = create_group(GroupList::Chat, "release").unwrap();
             assert!(matches!(set_group("one", Some(&other.id)), Err(ChatError::NotFound(_))));
+        });
+    }
+
+    /// The projects share their folders: one holds chats of several projects,
+    /// each still listed under its own project; Chat mode's chats keep to
+    /// Chat mode's folders.
+    #[test]
+    fn a_folder_holds_chats_of_several_projects() {
+        with_app_dir("chat-store-group-shared", || {
+            save_one("api", "/work/api", "first");
+            save_one("web", "/work/web", "second");
+            let release = create_group(GroupList::Projects, "release").unwrap();
+            set_group("api", Some(&release.id)).unwrap();
+            set_group("web", Some(&release.id)).unwrap();
+
+            assert_eq!(list("/work/api").unwrap()[0].group.as_deref(), Some(release.id.as_str()));
+            assert_eq!(list("/work/web").unwrap()[0].group.as_deref(), Some(release.id.as_str()));
+            assert!(matches!(create_group(GroupList::Projects, "Release"), Err(ChatError::AlreadyExists(_))));
+
+            save_plain("plain", ChatRole::Assistant, None, &[LlmMessage::user("hi")], &serde_json::json!([])).unwrap();
+            assert!(matches!(set_group("plain", Some(&release.id)), Err(ChatError::NotFound(_))));
+            let notes = create_group(GroupList::Chat, "notes").unwrap();
+            set_group("plain", Some(&notes.id)).unwrap();
+        });
+    }
+
+    /// A database from when every project had its own folders: they move to
+    /// the shared set, a name met twice becomes one folder holding the chats
+    /// of both, and they are numbered in the order they stood; Chat mode's
+    /// stay its own. Opening again changes nothing.
+    #[test]
+    fn folders_filed_per_project_become_one_shared_set() {
+        with_app_dir("chat-store-group-migrate", || {
+            save_one("a1", "/work/api", "first");
+            save_one("w1", "/work/web", "second");
+            let conn = open().unwrap();
+            conn.execute_batch(
+                "INSERT INTO chat_groups VALUES ('g-api-rel', '/work/api', 'release', 1);
+                 INSERT INTO chat_groups VALUES ('g-api-ops', '/work/api', 'ops', 2);
+                 INSERT INTO chat_groups VALUES ('g-web-rel', '/work/web', 'Release', 1);
+                 INSERT INTO chat_groups VALUES ('g-chat', '', 'release', 1);
+                 UPDATE chats SET group_id = 'g-api-rel' WHERE id = 'a1';
+                 UPDATE chats SET group_id = 'g-web-rel' WHERE id = 'w1';",
+            )
+            .unwrap();
+            drop(conn);
+
+            let shared = || groups(GroupList::Projects).unwrap().into_iter().map(|g| (g.id, g.name, g.position)).collect::<Vec<_>>();
+            let moved = shared();
+            assert_eq!(moved.iter().map(|g| g.0.as_str()).collect::<Vec<_>>(), ["g-api-rel", "g-api-ops"]);
+            assert_eq!(moved.iter().map(|g| g.2).collect::<Vec<_>>(), [1, 2], "numbered again in the order they stood");
+            assert_eq!(list("/work/web").unwrap()[0].group.as_deref(), Some("g-api-rel"), "the second release's chat is in the first");
+            assert_eq!(list("/work/api").unwrap()[0].group.as_deref(), Some("g-api-rel"));
+            assert_eq!(groups(GroupList::Chat).unwrap().len(), 1, "Chat mode's folder is its own");
+            assert_eq!(shared(), moved, "opening again changes nothing");
+            let rows: i64 = open().unwrap().query_row("SELECT COUNT(*) FROM chat_groups", [], |row| row.get(0)).unwrap();
+            assert_eq!(rows, 3, "the merged folder is gone, not left behind");
+        });
+    }
+
+    /// Once shared, opening the store writes nothing to the folders: a gap
+    /// a deleted folder left in the order stays as it is.
+    #[test]
+    fn shared_folders_are_not_rewritten_on_open() {
+        with_app_dir("chat-store-group-no-rewrite", || {
+            create_group(GroupList::Projects, "a").unwrap();
+            let gone = create_group(GroupList::Projects, "b").unwrap();
+            create_group(GroupList::Projects, "c").unwrap();
+            delete_group(GroupList::Projects, &gone.id).unwrap();
+
+            let positions: Vec<i64> = groups(GroupList::Projects).unwrap().into_iter().map(|g| g.position).collect();
+            assert_eq!(positions, [1, 3]);
         });
     }
 
@@ -1180,7 +1461,7 @@ mod tests {
     fn saving_a_grouped_chat_keeps_its_folder() {
         with_app_dir("chat-store-group-save", || {
             save_one("one", "/repo", "first");
-            let group = create_group("/repo", "release").unwrap();
+            let group = create_group(GroupList::Projects, "release").unwrap();
             set_group("one", Some(&group.id)).unwrap();
 
             let saved = save_one("one", "/repo", "first");
@@ -1197,19 +1478,19 @@ mod tests {
         with_app_dir("chat-store-group-delete", || {
             save_one("one", "/repo", "first");
             save_one("two", "/repo", "second");
-            let group = create_group("/repo", "release").unwrap();
+            let group = create_group(GroupList::Projects, "release").unwrap();
             set_group("one", Some(&group.id)).unwrap();
 
-            delete_group("/repo", &group.id).unwrap();
+            delete_group(GroupList::Projects, &group.id).unwrap();
 
-            assert!(groups("/repo").unwrap().is_empty());
+            assert!(groups(GroupList::Projects).unwrap().is_empty());
             let mut unfiled: Vec<String> = list("/repo").unwrap().into_iter().map(|c| (c.id, c.group)).filter(|(_, g)| g.is_none()).map(|(id, _)| id).collect();
             unfiled.sort();
             assert_eq!(unfiled, ["one", "two"]);
-            assert!(matches!(delete_group("/repo", &group.id), Err(ChatError::NotFound(_))));
-            // Another workspace's folder of the same name is not this one.
-            let elsewhere = create_group("/other", "release").unwrap();
-            assert!(matches!(delete_group("/repo", &elsewhere.id), Err(ChatError::NotFound(_))));
+            assert!(matches!(delete_group(GroupList::Projects, &group.id), Err(ChatError::NotFound(_))));
+            // Chat mode's folder of the same name is not this one.
+            let elsewhere = create_group(GroupList::Chat, "release").unwrap();
+            assert!(matches!(delete_group(GroupList::Projects, &elsewhere.id), Err(ChatError::NotFound(_))));
         });
     }
 
@@ -1218,11 +1499,11 @@ mod tests {
     #[test]
     fn an_empty_folder_is_listed() {
         with_app_dir("chat-store-group-empty", || {
-            create_group("/repo", "release").unwrap();
-            let listed = groups("/repo").unwrap();
+            create_group(GroupList::Projects, "release").unwrap();
+            let listed = groups(GroupList::Projects).unwrap();
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].name, "release");
-            assert!(groups("/other").unwrap().is_empty());
+            assert!(groups(GroupList::Chat).unwrap().is_empty());
         });
     }
 
@@ -1231,31 +1512,31 @@ mod tests {
     #[test]
     fn folders_keep_the_order_they_were_made_in() {
         with_app_dir("chat-store-group-order-folders", || {
-            create_group("/repo", "beta").unwrap();
-            create_group("/repo", "alpha").unwrap();
+            create_group(GroupList::Projects, "beta").unwrap();
+            create_group(GroupList::Projects, "alpha").unwrap();
 
-            let names: Vec<String> = groups("/repo").unwrap().into_iter().map(|g| g.name).collect();
+            let names: Vec<String> = groups(GroupList::Projects).unwrap().into_iter().map(|g| g.name).collect();
             assert_eq!(names, ["beta", "alpha"]);
         });
     }
 
-    /// Names are compared trimmed and case-insensitively, per workspace:
-    /// "Release" and "release" are one folder to the eye, and the same name
-    /// is free in another project.
+    /// Names are compared trimmed and case-insensitively, per set: "Release"
+    /// and "release" are one folder to the eye, and the same name is free in
+    /// Chat mode's set.
     #[test]
     fn a_folder_name_is_unique_within_its_workspace() {
         with_app_dir("chat-store-group-names", || {
-            let made = create_group("/repo", " Release ").unwrap();
+            let made = create_group(GroupList::Projects, " Release ").unwrap();
             assert_eq!(made.name, "Release");
-            assert!(matches!(create_group("/repo", "release"), Err(ChatError::AlreadyExists(_))));
-            let launch = create_group("/repo", "launch").unwrap();
-            assert!(matches!(rename_group("/repo", &made.id, "Launch"), Err(ChatError::AlreadyExists(_))));
-            rename_group("/repo", &made.id, " ship ").unwrap();
-            assert_eq!(groups("/repo").unwrap().iter().find(|g| g.id == made.id).unwrap().name, "ship");
-            create_group("/other", "release").unwrap();
+            assert!(matches!(create_group(GroupList::Projects, "release"), Err(ChatError::AlreadyExists(_))));
+            let launch = create_group(GroupList::Projects, "launch").unwrap();
+            assert!(matches!(rename_group(GroupList::Projects, &made.id, "Launch"), Err(ChatError::AlreadyExists(_))));
+            rename_group(GroupList::Projects, &made.id, " ship ").unwrap();
+            assert_eq!(groups(GroupList::Projects).unwrap().iter().find(|g| g.id == made.id).unwrap().name, "ship");
+            create_group(GroupList::Chat, "release").unwrap();
 
-            assert!(matches!(create_group("/repo", "   "), Err(ChatError::EmptyName)));
-            assert!(matches!(rename_group("/repo", &launch.id, "  "), Err(ChatError::EmptyName)));
+            assert!(matches!(create_group(GroupList::Projects, "   "), Err(ChatError::EmptyName)));
+            assert!(matches!(rename_group(GroupList::Projects, &launch.id, "  "), Err(ChatError::EmptyName)));
         });
     }
 
@@ -1268,8 +1549,8 @@ mod tests {
             save_one("in-release", "/repo", "b");
             save_one("in-launch", "/repo", "c");
             save_one("loose", "/repo", "d");
-            let launch = create_group("/repo", "launch").unwrap();
-            let release = create_group("/repo", "release").unwrap();
+            let launch = create_group(GroupList::Projects, "launch").unwrap();
+            let release = create_group(GroupList::Projects, "release").unwrap();
             set_group("in-launch", Some(&launch.id)).unwrap();
             set_group("in-release", Some(&release.id)).unwrap();
             set_pinned("pinned", true).unwrap();
@@ -1304,8 +1585,8 @@ mod tests {
             let listed = list("/repo").unwrap();
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].group, None);
-            assert!(groups("/repo").unwrap().is_empty());
-            let group = create_group("/repo", "release").unwrap();
+            assert!(groups(GroupList::Projects).unwrap().is_empty());
+            let group = create_group(GroupList::Projects, "release").unwrap();
             set_group("old", Some(&group.id)).unwrap();
             assert_eq!(list("/repo").unwrap()[0].group.as_deref(), Some(group.id.as_str()));
         });
@@ -1394,6 +1675,71 @@ mod tests {
             commit_to(&repo, None);
             save_one("one", &root, "after the folder's first commit");
             assert_eq!(head_at_start("one").unwrap(), None, "still none: only the first save writes");
+        });
+    }
+
+    /// TJ-4: the journal rows come back in the order they were written,
+    /// and the message count is the last snapshot plus the appends after it.
+    #[test]
+    fn journal_rows_come_back_in_order_and_count_their_messages() {
+        with_app_dir("chat-journal-rows", || {
+            save_one("one", "/repo", "go");
+            let msg = |text: &str| serde_json::to_value(vec![LlmMessage::user(text)]).unwrap();
+            journal_append("one", "t1", "snapshot", &msg("go"), 1).unwrap();
+            journal_append("one", "t1", "append", &msg("a"), 1).unwrap();
+            journal_append("one", "t1", "blocks", &serde_json::json!({"blocks": [], "todos": [], "plan": null}), 0).unwrap();
+            journal_append("one", "t1", "append", &msg("b"), 1).unwrap();
+            journal_append("one", "t2", "snapshot", &msg("fresh"), 1).unwrap();
+
+            let entries = journal_entries("one").unwrap();
+            assert_eq!(entries.len(), 5);
+            assert!(matches!(entries[0], crate::domain::turn_journal::JournalEntry::Snapshot(_)));
+            assert!(matches!(entries[2], crate::domain::turn_journal::JournalEntry::Blocks { .. }));
+            assert_eq!(journal_message_count("one", "t1").unwrap(), 3);
+            assert_eq!(journal_message_count("one", "t2").unwrap(), 1, "another turn's rows are its own");
+            // A damaged row is skipped, not fatal.
+            open().unwrap().execute("UPDATE turn_journal SET body = '{ not json' WHERE seq = 2", []).unwrap();
+            assert_eq!(journal_entries("one").unwrap().len(), 4);
+        });
+    }
+
+    /// The turn's save folds the journal away in the same transaction; a
+    /// move (relocate) is not a turn ending and leaves it. Deleting the
+    /// chat takes its journal with it.
+    #[test]
+    fn a_save_folds_the_journal_and_a_move_does_not() {
+        with_app_dir("chat-journal-fold", || {
+            save_one("one", "/repo", "go");
+            let msg = serde_json::to_value(vec![LlmMessage::user("go")]).unwrap();
+            journal_append("one", "t1", "snapshot", &msg, 1).unwrap();
+
+            relocate("one", "/repo-wt", "main").unwrap();
+            assert_eq!(journal_entries("one").unwrap().len(), 1, "a move leaves the journal");
+
+            save_one("one", "/repo-wt", "done");
+            assert!(journal_entries("one").unwrap().is_empty(), "the save folded it");
+
+            journal_append("one", "t2", "snapshot", &msg, 1).unwrap();
+            delete("one").unwrap();
+            assert!(journal_entries("one").unwrap().is_empty(), "a deleted chat's journal goes with it");
+        });
+    }
+
+    /// A turn's save folds only its own rows: the next turn's base, already
+    /// written, is not this turn's to delete.
+    #[test]
+    fn a_turns_save_folds_only_its_own_journal() {
+        with_app_dir("chat-journal-turn-fold", || {
+            save_one("one", "/repo", "go");
+            let msg = serde_json::to_value(vec![LlmMessage::user("go")]).unwrap();
+            journal_append("one", "t1", "snapshot", &msg, 1).unwrap();
+            journal_append("one", "t2", "snapshot", &msg, 1).unwrap();
+            save_turn("one", "/repo", &[LlmMessage::user("done")], &serde_json::json!([]), &[], None, None, None, Some("t1")).unwrap();
+            assert_eq!(journal_message_count("one", "t1").unwrap(), 0);
+            assert_eq!(journal_message_count("one", "t2").unwrap(), 1, "the next turn's base survives");
+            // Without a turn, every row goes — as a recovery folds them.
+            save_turn("one", "/repo", &[LlmMessage::user("done")], &serde_json::json!([]), &[], None, None, None, None).unwrap();
+            assert!(journal_entries("one").unwrap().is_empty());
         });
     }
 

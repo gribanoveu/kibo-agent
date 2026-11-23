@@ -18,7 +18,7 @@ import {
 } from "../lib/pullRequests";
 
 /**
- * The pull request strip of the open folder (docs/56-bitbucket-prs.md), read
+ * The pull request strip of the open folder (docs/62-bitbucket-prs.md), read
  * while it is on screen: when it opens, when the backend's watcher says the
  * server changed, and when `.git` moved in a way the server could know of — a
  * switch of branch or a push; the backend decides that, so staging a file costs

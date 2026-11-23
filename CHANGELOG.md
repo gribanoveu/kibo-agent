@@ -2,9 +2,64 @@
 
 ## Unreleased
 
+- 2026-11-23 On a wide monitor the conversation, in Agent and Chat modes alike, keeps a reading width (750px) and stays centred in the panel, instead of stretching across its whole width; the message box, its queue and the line under it stay centred with it, two percent of the text's width wider on each side
+- 2026-11-23 The next-step buttons under an answer grow three kinds: update a worktree branch from its base when it falls behind (`syncBase`), remove a worktree nothing would be lost from (`cleanup`, stepping into the main checkout and opening the removal dialog), and the model's own suggestions — up to two short messages it writes itself, sent exactly as written when pressed (`message`); the plan button now opens the Plan tab, where the plan is read and implementation starts
+- 2026-11-23 The chat thread keeps following a streaming answer under load: a scroll event reading an older position (WebKit's scrolling thread commits lag the stick) no longer passes for the user scrolling away, which stopped the auto-scroll until the next manual scroll; scrolling up to read still lets go at once, and scrolling back to the end picks it up again
+- 2026-11-23 The context meter shows the provider's own count for the last request plus what was added since, instead of a characters-based estimate that under-counted Russian text and a thinking model's reasoning; the panel names which source the number is from, and auto-compaction folds at the real share of the window rather than late
+- 2026-11-22 While a command runs, the folded working line shows the model's own description of what it does (`runCommand`'s `description`), falling back to the command line when there is none
+- 2026-11-22 A Board card's description and comments keep their line breaks as typed: a single newline reads as a new line in the card's panel, not one flowing paragraph
+- 2026-11-22 The Catalog's "Show all" is the last card of a cut section's grid, in the eighth card's place, instead of a link by the heading — it is clear the section shows only part of the list
+- 2026-11-22 The empty chat screens in Agent and Chat drop their description paragraphs: the greeting, the suggestions and the Enter hint stay
+- 2026-11-22 The wrong-layout hint sits above the message box instead of under it
+- 2026-11-21 A turn's work survives a crash or a closed window: reopening the chat restores its history and transcript with an "interrupted" note, and a provider failure mid-turn keeps the work too; a cache miss now says what changed — the system prompt, the tool set, a message of the history, or the provider losing the cache; a tool list sent as a JSON string (`todo.ids`, `readFile.paths`, `semanticSearch.fts`) is read as the list instead of failing or searching for the brackets
+- 2026-11-21 A narrow chat column (the IDE layout's, or one dragged thin): the message box takes the whole width with its buttons on a row under it and grows taller instead of scrolling inside itself, the Working line keeps time, tokens and processes on one line, and the checklist shows two rows with a done/total count beside them
+- 2026-11-21 A file link with lines in an answer (`a.ts:42`, `a.ts:42-50`, `#L42-L50`) opens the file scrolled to those lines and lights them for a moment, in the tab the file already has
 - 2026-11-21 Let the agent open the pull request of its branch on your Bitbucket — you approve it on a card that shows the server, the branches, the title and the description
 - 2026-11-21 Ask the agent about the pull request of a branch: it reads the reviewers, the builds and why it cannot be merged from your Bitbucket, and changes nothing
 - 2026-11-19 See the pull request of the branch you are on, from your Bitbucket Data Center, under the branch in Overview — whether it can be merged and why not, the latest build, its reviewers — and Create (as a draft too), Mark ready, Convert to draft, Approve or Unapprove, Merge and Open it from there; turn on Pull requests in Catalog and add the server and its token in its panel
+
+## v0.14.0 — 2026-11-20
+
+- 2026-11-20 A hairline ring just darker than the theme outlines the app window on macOS (uniform over the panels; Windows keeps its system edge)
+- 2026-11-20 Scrollbars are narrower app-wide (6px), one style for every pane
+- 2026-11-20 Done keeps the last 8 finished cards (was 5); an info hint on its header says older ones move to the Archive, and the Archive toggle's chevron sits at the row's right end
+- 2026-11-20 Board columns are fixed boxes that fill the page: each scrolls its own cards with its header pinned, so a column's top and bottom stay in view; an open archive scrolls itself under its pinned Archive button
+- 2026-11-20 A running helper's card shows its own live token speed and count (the estimate that used to sit on the Working line); the Working line keeps only the chat's own meter
+- 2026-11-20 A helper's card shows a shimmering skeleton and “writing the task…” while the model is still writing its prompt, instead of an empty title
+- 2026-11-20 Make a worktree straight from a branch row in the branch menu (a worktree-from-here action on each branch): created and opened at once, and reachable even while a turn locks branch switching
+- 2026-11-20 Reorder the open folders in Agent mode from a section's ⋮ menu (Move up / Move down); the order is remembered across restarts
+- 2026-11-20 A chat's ⋮ menu stays open while the agent replies: only scrolling the list that holds the row closes it, not the chat log's own autoscroll
+- 2026-11-20 A folder's chat list in Agent mode shows its first four chats; the rest open with a "Show all" button, and a search still finds every chat
+- 2026-11-19 The Board is kept in SQLite, `~/.kibo/board.db`: a card is a row, its tags and comments rows of their own; a board kept in `board.json` is taken in on first open
+- 2026-11-19 Dictate a comment on a Board card, as a message is, while voice input is on
+- 2026-11-19 Filter the Board by tag: the board's tags sit over the columns as toggles, with All to show every card again; a card added under the filter gets its tags
+- 2026-11-19 Tag Board cards in their side panel — the box offers the board's tags as you type, or creates a new one; the tags show on the card and stay yours — the Assistant does not see them
+- 2026-11-19 Board cards are keyed T1, T2… as issues in a tracker; a board kept before reads with the new keys
+- 2026-11-19 Leave comments on a Board card in its side panel — written as Markdown, the newest first, counted on the card, and seen by the Assistant when it lists the board
+- 2026-11-19 A card on the Board opens in a side panel, as an issue does in a tracker: its status and actions on top, its title and description (read as Markdown) edited in place, how far off its due day is; a new card is written and lands on top of To do, from the + in its heading
+- 2026-11-19 The box under the message field picks a folder and a branch only for a new chat: a started chat shows its folder there and its branch in Overview
+- 2026-11-18 Switching chats no longer shifts the Overview: the context card keeps its place with placeholders while the new chat's numbers are read
+- 2026-11-18 Chat folders you made stand at the top of the sidebar, above the open folders' sections, and are shared by every project: one folder holds chats of several, each still opening in its own; folders of the same name made per project before become one
+- 2026-11-18 Keep many folders open for little memory: only the folder on screen and folders with a turn running are indexed and watched, and search by meaning loads a model a third the size it was
+- 2026-11-17 Pick a chat's folder when it starts: a new chat chooses its folder under the composer, a started one only names it; the list's head no longer has an Add folder button
+- 2026-11-17 Fold a folder's section in the sidebar under its head; the chats below the pinned ones and the chat folders are one list, without Today and Earlier headings
+- 2026-11-17 Hear and see when a turn ends or waits in a chat off screen, in any open folder; a worktree's section in the sidebar says whose worktree it is
+- 2026-11-17 Come back to every folder open last time: the app reopens them all at launch, on the folder of the chat viewed last
+- 2026-11-17 Move between folders and their chats while agents work: a turn goes on in its own folder and is saved there
+- 2026-11-17 Keep several folders open at once: the sidebar lists each folder's chats, a chat opens in its own folder, and a folder is added beside the others or closed on its own
+- 2026-11-16 With no model pinned (Auto), the line under the message box names the model that would go out — the provider's first — instead of "no model", and after a turn it shows the one actually sent
+- 2026-11-16 `runCommand` takes a `description` — the agent explains in a few words what a command it runs does, and the explanation stands on the approval card beside the command line and names a background process when one ends; the approval decision still reads the command line alone
+- 2026-11-16 A review's report in the chat shows its finding cards first: the reviewer's summary and the range it read fold behind a Summary toggle, open by default only when there are no findings
+- 2026-11-16 The review and explore cards in the chat wear the robot icon, the same as the agent's sheet and the Subagent button
+- 2026-11-16 A review subagent in Overview and the Agents tab is named by its focus when one was given, else by its brief's first line — not by a `task:` line of code that happened to be in the diff it reviews
+- 2026-11-16 While subagents run, the Working panel shows their live speed and tokens as a line of its own, the run's sheet shows its speed too, and Overview gains a Subagents tokens row under Session tokens with an info icon explaining what each counts
+
+## v0.13.1 — 2026-11-16
+
+- 2026-11-16 On Windows a command the agent runs no longer flashes a console window: the release app has none of its own, so `taskkill` — which ends what a command leaves behind, on every run — was opening one
+
+- 2026-11-15 The agent says what it started before a long build, test run or rollout wait, and looks for code by meaning first when it does not know where it lives
+- 2026-11-15 Frost, a dark theme of frozen glass: on macOS the desktop shows through the window, blurred
 
 ## v0.13.0 — 2026-11-14
 
@@ -29,6 +84,7 @@
 - 2026-11-08 The Catalog shows eight cards of each kind under All before "Show all", which opens that kind's tab with the whole list; MCP servers sit right under Skills
 - 2026-11-08 A feature's card in the Catalog carries its own icon: the Meetings page's sound wave for Meeting notes, two people for Voice memory, the library for the knowledge base and a microphone for Voice input, instead of the generic puzzle piece
 - 2026-11-08 Chat with DeepSeek search on and the search in Settings off no longer answers that search is unavailable: what the model is told of it follows the tools it is given
+- 2026-11-07 A server installed from the Catalog can bring the config file it reads beside itself: Kibana's exact-index server gets `.kibo/kibana-sources.json` written into the open folder, and a file already there is left as it is
 
 ## v0.12.0 — 2026-11-07
 

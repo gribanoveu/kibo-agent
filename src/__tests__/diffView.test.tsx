@@ -76,7 +76,7 @@ describe("the row at a line", () => {
 describe("DiffView, virtual and wrapped", () => {
   test("a long line takes as many rows of height as it wraps into, and the rows after it move down", () => {
     // What the layout would measure: 8px characters, a 400px view, 18px lines.
-    const rect = HTMLElement.prototype.getBoundingClientRect;
+    const rect = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect");
     const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
     HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
       const w = this.textContent === "0".repeat(64) ? 64 * 8 : 0;
@@ -94,8 +94,15 @@ describe("DiffView, virtual and wrapped", () => {
       expect(tops).toEqual([0, 18, 72]);
       expect(parseFloat(document.querySelector<HTMLElement>(".diff-rows")!.style.height)).toBe(90);
     } finally {
-      HTMLElement.prototype.getBoundingClientRect = rect;
+      // The method lives on Element.prototype, not here: assigning it back
+      // would leave an own property on HTMLElement.prototype that shadows any
+      // later Element.prototype mock (InfoTip's, in Windows' file order). Put
+      // back only what was own; otherwise remove the mock outright.
+      if (rect) Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", rect);
+      else delete HTMLElement.prototype.getBoundingClientRect;
       if (width) Object.defineProperty(HTMLElement.prototype, "clientWidth", width);
     }
+    // No own getBoundingClientRect left behind to shadow a later mock.
+    expect(Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getBoundingClientRect")).toBeUndefined();
   });
 });

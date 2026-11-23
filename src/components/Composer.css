@@ -128,7 +128,13 @@
 .composer-wrap {
   /* The settings panel hangs from here. */
   position: relative;
-  margin-top: 2px;
+  /* Two percent of the reading width wider than the text on each side, plus
+     the box's own 14px side margins twice: on a wide monitor the box overhangs
+     the text column evenly, centred. Narrower than the cap, the wrap is the
+     panel's full width. */
+  width: 100%;
+  max-width: calc(var(--thread-width) * 1.04 + 28px);
+  margin: 2px auto 0;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -237,4 +243,37 @@
   color: var(--text-dim);
   font-size: var(--fs-md);
   pointer-events: none;
+}
+
+/* A narrow column (the chat's minimum is 400): in one row the buttons take
+   half the box and the text wraps into a scrolling column. The text takes a
+   row of its own, the buttons a row under it with Send at its right end, and
+   the box may grow taller — there is width to spare nowhere else. The
+   threshold is the chrome (~180px) plus a comfortable line of text. */
+@container (max-width: 500px) {
+  .composer {
+    margin: 0 8px;
+    padding: 6px;
+  }
+  .composer-bar {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .composer-bar > .composer-input {
+    flex: 1 1 100%;
+    order: -1;
+    /* Off the box's edge, as the wide box keeps it: on a row of its own the
+       text would otherwise start left of the buttons under it. A margin, not
+       padding — the argument hint is placed against this box and moves with it. */
+    margin-left: 6px;
+  }
+  .composer-bar > .send {
+    margin-left: auto;
+  }
+  .composer textarea {
+    max-height: min(240px, 34vh);
+  }
+  .composer-strip {
+    margin: 6px 8px 10px;
+  }
 }

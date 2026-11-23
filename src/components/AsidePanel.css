@@ -116,9 +116,6 @@
   overscroll-behavior: contain;
   flex: 1;
 }
-.tabpanel::-webkit-scrollbar {
-  width: 6px;
-}
 
 .panel-section {
   margin-bottom: 14px;

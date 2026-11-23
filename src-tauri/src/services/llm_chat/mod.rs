@@ -32,6 +32,8 @@ use crate::domain::runbooks::Runbook;
 
 use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::prompt::{self, CHECKLIST_LEGEND};
+use crate::domain::request_marker::{self, MissCause, RequestMarkers, RequestRecord};
+use crate::domain::turn_journal::TurnJournal;
 use crate::domain::tool_call_log::{self, CallStatus, ToolCallLogEntry};
 use crate::domain::project_rules::RuleFile;
 use crate::domain::skills::Skill;
@@ -126,6 +128,14 @@ pub struct Turn<'a> {
     /// a turn under test never touches whatever app directory another test
     /// has installed.
     pub log_call: &'a (dyn Fn(ToolCallLogEntry) + Sync),
+    /// Where each request's marker goes: the chat's previous fingerprint in
+    /// memory and the row on disk. `None` for a helper's turn, a chat-mode
+    /// turn and a test without one — their requests are not marked.
+    pub markers: Option<&'a dyn RequestMarkers>,
+    /// Where the turn's history goes after each completed round, so a crash
+    /// does not take the turn's work (`domain::turn_journal`). `None` for a
+    /// helper, a chat-mode turn and a test without one.
+    pub journal: Option<&'a dyn TurnJournal>,
     /// The chat's plan as the window holds it — the user's edits included.
     /// Read at the start of the turn; it reaches the model through the
     /// history ([`restore_plan`]), never the prompt.
@@ -246,6 +256,15 @@ impl<'a> Place<'a> {
             Place::Chat { .. } => None,
         }
     }
+
+    /// The base this chat's worktree was moved from; `None` in Chat mode and
+    /// for a chat that never moved.
+    pub fn worktree_base(&self) -> Option<&'a str> {
+        match self {
+            Place::Folder { worktree_base, .. } => *worktree_base,
+            Place::Chat { .. } => None,
+        }
+    }
 }
 
 /// Notes typed while a turn is running, waiting for the next round.
@@ -293,6 +312,19 @@ impl SteeringQueue {
 pub enum TurnError {
     #[error("{0}")]
     Provider(#[from] LlmError),
+    /// A provider failure after the turn had done work: the error, and the
+    /// history, checklist and plan as of the last completed round. Every
+    /// call in that history is answered — a round enters it only once its
+    /// calls are about to run, and a failure reaches this point only from
+    /// `ask_round`, before the failing round's own reply is added — so the
+    /// window can save it and send it on (`docs/57-turn-journal.md`, TJ-2).
+    #[error("{error}")]
+    Failed {
+        error: LlmError,
+        history: Vec<LlmMessage>,
+        todos: Vec<Task>,
+        plan: Option<String>,
+    },
     #[error("cannot resume: {0}")]
     BadResume(String),
     #[error(transparent)]
@@ -364,6 +396,12 @@ pub fn stream(
         reads: ReadFiles::default(),
         written_plan: None,
     };
+    // The journal's base: the history this turn was sent with, whole. The
+    // saved record may lag it (an existing chat's new message is not saved
+    // until the turn ends), so recovery replays from this, not from disk.
+    if let Some(journal) = turn.journal {
+        journal.snapshot(&state.history);
+    }
     run(turn, state, 0, None)
 }
 
@@ -526,9 +564,28 @@ fn run(
             // note it earned is in the history.
             (calls, decisions, false)
         } else {
-            match ask_round(turn, &events, round, &mut state, &mut pass)? {
+            let next = match ask_round(turn, &events, round, &mut state, &mut pass) {
+                Ok(next) => next,
+                // The turn's work is kept, not lost with the error: the
+                // window saves this history as it saves a finished turn.
+                Err(TurnError::Provider(error)) => {
+                    return Err(TurnError::Failed {
+                        error,
+                        history: state.history,
+                        todos: state.todos,
+                        plan: state.written_plan,
+                    });
+                }
+                Err(other) => return Err(other),
+            };
+            match next {
                 Next::Run(calls, truncated) => (calls, Vec::new(), truncated),
-                Next::Again => continue,
+                Next::Again => {
+                    // A round that ran no calls still said something: its
+                    // reply and the notes it answered are history now.
+                    journal_tail(turn, &state);
+                    continue;
+                }
                 Next::Done(result) => return Ok(ChatStreamOutcome::Done(ended(state, result))),
                 Next::Cancelled(result) => return Ok(ChatStreamOutcome::Cancelled(ended(state, result))),
                 Next::Paused(calls) => {
@@ -545,6 +602,27 @@ fn run(
             }
         };
         run_calls(turn, &events, round, &mut state, &mut pass, &calls, &decisions, round_truncated);
+        // The round is whole: every call it asked for is answered. What it
+        // added goes to the journal before the next round is asked. A stop
+        // mid-batch leaves calls unanswered — `ended` stubs those in the
+        // history it returns, and the journal keeps the last whole round
+        // instead: a dangling request in it would poison the next message.
+        if !(turn.cancelled)() {
+            journal_tail(turn, &state);
+        }
+    }
+}
+
+/// The history's tail the journal does not have yet. A rewrite that left
+/// the journal longer than the history (a fold that missed its snapshot)
+/// is healed with a whole one rather than a wrong tail.
+fn journal_tail(turn: &Turn, state: &State) {
+    let Some(journal) = turn.journal else { return };
+    let from = journal.len();
+    if from > state.history.len() {
+        journal.snapshot(&state.history);
+    } else if from < state.history.len() {
+        journal.append(&state.history[from..]);
     }
 }
 

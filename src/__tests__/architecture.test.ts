@@ -39,6 +39,9 @@ const RULES: Rule[] = [
     known: [
       // Enter or Space on an element with role="button" is its activation, not a shortcut — stays.
       "components/CatalogPage.tsx",
+      // PageUp/ArrowUp/Home scroll the box natively; the hook only notices them
+      // to let go of the end — the app answers to no shortcut here.
+      "hooks/useFollowBottom.ts",
     ],
     why: "a key the app answers to is an entry in src/lib/shortcuts.ts, checked with matches(e, id)",
   },
@@ -56,6 +59,8 @@ const RULES: Rule[] = [
     known: [
       // The clock that redraws elapsed time — AGENTS.md says it is not polling.
       "components/ChatPanel.tsx",
+      // The same clock for a run's live speed estimate; the data is event-read.
+      "components/AgentSheet.tsx",
     ],
     why: "the frontend does not poll the backend: it listens for an event and reads again",
   },

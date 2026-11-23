@@ -1,4 +1,4 @@
-//! Opening a folder as the window's workspace, once the command has checked
+//! Opening and closing a folder of the window, once the command has checked
 //! that it is one.
 
 use std::path::Path;
@@ -6,44 +6,55 @@ use std::path::Path;
 use crate::domain::workspace_index::IndexEventSink;
 use crate::infra::background::Processes;
 use crate::infra::terminal::Terminals;
+use crate::services::mcp_servers::McpServers;
 use crate::services::workspace_index::WorkspaceIndex;
 
-/// Makes `root` the folder the window works in: what ran in the folder
-/// before stops — unless `keep_running`, a chat moved to its worktree, which
-/// must not stop the neighbouring chat's processes — the folder goes on the
-/// recent list, and its index opens. Blocking: the index reads what was
-/// embedded before. An index that cannot open does not stop the folder
-/// opening: the reason goes out on `sink`, and the agent works without search.
-pub fn open(
-    root: &Path,
-    keep_running: bool,
-    processes: Option<&Processes>,
-    terminals: Option<&Terminals>,
-    index: &WorkspaceIndex,
-    sink: IndexEventSink,
-) {
-    if !keep_running {
-        if let Some(processes) = processes {
-            processes.stop_all();
-        }
-        if let Some(terminals) = terminals {
-            terminals.close_all();
-        }
-    }
+/// Makes `root` the folder the window works in: it goes on the recent list,
+/// and its index opens. The index of the folder active before closes unless a
+/// turn searches it (LZ-4); nothing else of that folder stops (F-8.3).
+/// Blocking: the index reads what was embedded before.
+/// An index that cannot open does not stop the folder opening: the reason
+/// goes out on `sink`, and the agent works without search.
+pub fn open(root: &Path, index: &WorkspaceIndex, sink: IndexEventSink) {
     // Only a convenience for the next launch: a folder that opened stays open
     // even if the list could not be written.
     if let Err(e) = crate::infra::recent_workspaces::record(&root.display().to_string()) {
         eprintln!("recent folders not saved: {e}");
     }
     // Reported through the sink; see above.
-    let _ = index.open(root, sink);
+    let _ = index.activate(root, sink);
+}
+
+/// Everything of `root` stops (F-8 invariant 4): its processes, its shells,
+/// its MCP servers, its index's watch — and nothing of another folder's.
+/// Blocking: a process is waited for once killed.
+pub fn close(
+    root: &Path,
+    processes: Option<&Processes>,
+    terminals: Option<&Terminals>,
+    mcp: Option<&McpServers>,
+    index: &WorkspaceIndex,
+) {
+    if let Some(processes) = processes {
+        processes.stop_workspace(root);
+    }
+    if let Some(terminals) = terminals {
+        terminals.close_workspace(root);
+    }
+    if let Some(mcp) = mcp {
+        mcp.stop(root);
+    }
+    index.close(root);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::background::BackgroundProcesses;
+    use crate::domain::background::{BackgroundProcesses, ProcessState};
+    use crate::domain::command_exec::Shell;
     use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
+    use crate::domain::mcp::{McpCallResult, McpClient, McpConfig, McpError, McpServerConfig, McpTool};
+    use crate::domain::terminal::{TerminalSize, TerminalState};
     use crate::testing::temp_dir;
     use std::sync::Arc;
 
@@ -57,25 +68,59 @@ mod tests {
         }
     }
 
-    /// A folder switch stops what ran in the old one; a chat moving to its
-    /// worktree leaves the neighbours' processes running. Either way the
-    /// folder is remembered and indexed.
+    struct Server;
+    impl McpClient for Server {
+        fn list_tools(&self) -> Result<Vec<McpTool>, McpError> {
+            Ok(vec![McpTool { name: "t".into(), ..Default::default() }])
+        }
+        fn call_tool(&self, _: &str, _: serde_json::Value, _: &dyn Fn() -> bool) -> Result<McpCallResult, McpError> {
+            Err(McpError::Cancelled)
+        }
+    }
+
+    /// F-8.3, F-8.4: opening B leaves A's processes running, and A indexed
+    /// while a turn there holds its search (LZ-4); closing A stops A's
+    /// processes, shells, MCP servers and index, and nothing of B's.
     #[cfg(unix)]
     #[test]
-    fn a_switch_stops_the_old_folders_processes_and_a_worktree_move_does_not() {
-        crate::testing::with_app_dir("folder-open", || {
-            let processes = Processes::default();
-            let index = WorkspaceIndex::new(temp_dir("folder-open-index"), Arc::new(NoModel));
-            let root = crate::infra::paths::canonicalize_plain(&temp_dir("folder-open-root")).unwrap();
-            processes.start(&crate::domain::command_exec::Shell::default(), "sleep 30", &root, ".").unwrap();
+    fn closing_a_folder_stops_its_things_and_no_others() {
+        crate::testing::with_app_dir("folder-close", || {
+            let processes = Arc::new(Processes::default());
+            let terminals = Terminals::with_shell("/bin/sh");
+            let index = Arc::new(WorkspaceIndex::new(temp_dir("folder-close-index"), Arc::new(NoModel)));
+            let plain = |label| crate::infra::paths::canonicalize_plain(&temp_dir(label)).unwrap();
+            let (a, b) = (plain("folder-close-a"), plain("folder-close-b"));
+            let size = TerminalSize::new(80, 24).unwrap();
+            let mcp = McpServers::new(Arc::new(|_, _, _| Ok(Arc::new(Server) as Arc<dyn McpClient>)), Arc::new(|_| {}));
+            let mut config = McpConfig::default();
+            config.mcp_servers.insert("s".into(), McpServerConfig { command: "x".into(), ..Default::default() });
+            let in_folder = |root: &Path| {
+                processes.for_chat("c", root).start(&Shell::default(), "sleep 30", None, root, ".").unwrap();
+                terminals.open(root, size).unwrap();
+                mcp.for_turn(&config, root, &|| false);
+            };
+            let serves = |root: &Path| mcp.running(root).get("mcp__s__t").is_some();
+            open(&a, &index, Arc::new(|_| {}));
+            in_folder(&a);
+            let _turn_in_a = index.searcher(&a, Arc::new(|_| {})).unwrap();
+            open(&b, &index, Arc::new(|_| {}));
+            in_folder(&b);
+            let running = |root: &Path| processes.list_in(root).iter().filter(|p| p.info.state == ProcessState::Running).count();
+            let shells = |root: &Path| terminals.list_in(root).iter().filter(|t| t.state == TerminalState::Running).count();
+            assert_eq!((running(&a), shells(&a)), (1, 1), "opening B stopped nothing of A's");
+            assert!(serves(&a), "a turn in B stopped A's servers");
+            assert!(index.indexer(&a).is_some());
 
-            open(&root, true, Some(&processes), None, &index, Arc::new(|_| {}));
-            assert_eq!(processes.list().iter().filter(|p| p.state == crate::domain::background::ProcessState::Running).count(), 1, "a worktree move keeps them");
-            assert_eq!(index.current().map(|i| i.root().to_path_buf()), Some(root.clone()));
-            assert_eq!(crate::infra::recent_workspaces::load(), vec![root.display().to_string()]);
+            close(&a, Some(&processes), Some(&terminals), Some(&mcp), &index);
 
-            open(&root, false, Some(&processes), None, &index, Arc::new(|_| {}));
-            assert_eq!(processes.list().iter().filter(|p| p.state == crate::domain::background::ProcessState::Running).count(), 0, "a switch stops them");
+            assert_eq!(running(&a), 0, "A's process stopped");
+            assert!(terminals.list_in(&a).is_empty(), "A's shell closed");
+            assert!(index.indexer(&a).is_none(), "A's index closed");
+            assert!(!serves(&a), "A's servers stopped");
+            assert_eq!((running(&b), shells(&b)), (1, 1), "B's untouched");
+            assert!(serves(&b), "B's servers untouched");
+            assert!(index.indexer(&b).is_some());
+            processes.stop_all();
         });
     }
 }

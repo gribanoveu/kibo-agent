@@ -15,11 +15,16 @@ export type OverviewProps = {
   branch: string | null;
   /** `null` outside a repository. */
   changes: ChangeTotals | null;
-  /** `null` until the first estimate arrives. */
+  /** `null` until the first estimate arrives, and when none can be made. */
   context: ContextUsage | null;
+  /** The estimate is on its way: the card keeps its place with a placeholder,
+      so switching chats does not shift the cards under it. */
+  contextPending?: boolean;
   usage: ChatUsage | null;
   /** Every model call of the open chat, in tokens — helpers, title and checks included; `null` until read. */
   spent: number | null;
+  /** The subagents' share of the session total, in tokens; `null` until read. */
+  subagents: number | null;
   servers: McpServerItem[];
   /** Background processes and helper agents, running or ended. */
   processes: ProcessInfo[];
@@ -52,14 +57,17 @@ function serverStatus(server: McpServerItem): { label: string; tone: "ok" | "off
 
 /** The open session at a glance: how full the model's window is, which MCP
     servers are on, what runs in the background, and what the folder holds
-    against its last commit. The folder and branch are under the message box.
+    against its last commit, on which branch. The folder is under the message box;
+    the branch is picked there only for a new chat.
     Each section leads to the pane that does something about it. */
 export function OverviewPanel({
   branch,
   changes,
   context,
+  contextPending = false,
   usage,
   spent,
+  subagents,
   servers,
   processes,
   agents,
@@ -75,9 +83,9 @@ export function OverviewPanel({
   const ended = processes.length - busyProcesses.length + agents.length - busyAgents.length;
   return (
     <div className="overview">
-      {context && (
-        <section className="overview-card overview-ctx">
-          <ContextDetails context={context} cache={usage} spent={spent} onOpenPane={onOpenPanel} />
+      {(context || contextPending) && (
+        <section className="overview-card overview-ctx" aria-busy={!context}>
+          <ContextDetails context={context} cache={usage} spent={spent} subagents={subagents} onOpenPane={onOpenPanel} />
         </section>
       )}
 

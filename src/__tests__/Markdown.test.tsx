@@ -47,6 +47,23 @@ describe("Markdown", () => {
     expect(container.textContent).not.toContain("**");
   });
 
+  test("breaks: a single newline is a line of its own; without it the paragraph flows", () => {
+    const note = "first line\nsecond line\n\nnew paragraph";
+    const plain = render(<Markdown text={note} streaming={false} />);
+    expect(plain.container.querySelectorAll("br")).toHaveLength(0);
+    plain.unmount();
+    const { container } = render(<Markdown text={note} streaming={false} breaks />);
+    expect(container.querySelectorAll("p")).toHaveLength(2);
+    expect(container.querySelectorAll("br")).toHaveLength(1);
+    expect(container.querySelector("p")?.textContent).toBe("first line\nsecond line");
+  });
+
+  test("breaks: a fence keeps its own lines, not extra breaks", () => {
+    const { container } = render(<Markdown text={"line one\nline two\n\n```sh\na\nb\n```"} streaming={false} breaks />);
+    expect(container.querySelectorAll("br")).toHaveLength(1);
+    expect(container.querySelectorAll(".md-code-line")).toHaveLength(2);
+  });
+
   // The window lets `artifact:` frames in for the Prototype preview
   // (docs/31-prototype-role.md). A frame the model writes into an answer would
   // be one without the preview's sandbox, so none of its HTML may become one.

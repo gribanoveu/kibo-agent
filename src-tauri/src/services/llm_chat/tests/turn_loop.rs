@@ -354,7 +354,7 @@ fn a_conversation_is_summarized_once_and_then_the_refusal_stands() {
 
     let outcome = h.run(|turn| stream(turn, long_conversation(), vec![]));
 
-    assert!(matches!(outcome, Err(TurnError::Provider(_))), "{outcome:?}");
+    assert!(matches!(outcome, Err(TurnError::Failed { .. })), "{outcome:?}");
     assert_eq!(h.provider.summaries.lock().unwrap().len(), 1, "summarized twice");
 }
 
@@ -368,7 +368,7 @@ fn a_short_conversation_that_does_not_fit_is_reported_rather_than_summarized() {
 
     let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("x".repeat(9_000))], vec![]));
 
-    assert!(matches!(outcome, Err(TurnError::Provider(_))), "{outcome:?}");
+    assert!(matches!(outcome, Err(TurnError::Failed { .. })), "{outcome:?}");
     assert!(h.provider.summaries.lock().unwrap().is_empty());
 }
 
@@ -383,7 +383,7 @@ fn another_kind_of_refusal_is_not_answered_by_summarizing() {
 
     let outcome = h.run(|turn| stream(turn, long_conversation(), vec![]));
 
-    assert!(matches!(outcome, Err(TurnError::Provider(_))), "{outcome:?}");
+    assert!(matches!(outcome, Err(TurnError::Failed { .. })), "{outcome:?}");
     assert!(h.provider.summaries.lock().unwrap().is_empty());
 }
 

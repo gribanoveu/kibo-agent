@@ -150,6 +150,31 @@ describe("useSkills", () => {
     expect(result.current.error).toContain("settings.json is not valid");
     expect(result.current.view?.skills[0].enabled).toBe(true);
   });
+
+  test("a refusal stays with the folder it was made in", async () => {
+    let refuse = (_: string) => {};
+    holdToggle = new Promise<void>((_, reject) => (refuse = reject));
+    const { result, rerender } = renderHook(({ folder }) => useSkills(true, folder), { initialProps: { folder: "/one" } });
+    await settle();
+
+    // The switch is left in flight across the folder change, not inside one act.
+    let switching: Promise<void> = Promise.resolve();
+    act(() => void (switching = result.current.setEnabled("release", false)));
+    rerender({ folder: "/two" });
+    await settle();
+    await act(async () => {
+      refuse("settings.json is not valid");
+      await switching;
+    });
+    expect(result.current.error).toBeNull();
+
+    failToggle = true;
+    await act(() => result.current.setEnabled("release", false));
+    expect(result.current.error).toContain("settings.json is not valid");
+    rerender({ folder: "/one" });
+    await settle();
+    expect(result.current.error).toBeNull();
+  });
 });
 
 describe("the side panel", () => {

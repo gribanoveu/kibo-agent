@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { Build, CodeHostServer, PrStrip, PullRequest, Reviewer } from "../lib/pullRequests";
 import { buildText, offersConnect, reviewsAtAGlance } from "../lib/pullRequestView";
 
-// The pull request strip above the Changes list (docs/56-bitbucket-prs.md,
+// The pull request strip above the Changes list (docs/62-bitbucket-prs.md,
 // BB-4): a state of its own for each folder, buttons only as the server
 // allows, a confirmation before anything leaves for the server, and reads
 // only for its own folder's events.

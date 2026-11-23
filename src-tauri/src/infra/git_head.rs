@@ -68,14 +68,17 @@ pub fn pushed_state(root: &Path) -> Option<(String, Vec<String>)> {
 }
 
 /// The main working tree of the repository `root` is a linked worktree of;
-/// `None` for the main one itself, and outside a repository.
+/// `None` for the main one itself, and outside a repository. Spelled as the
+/// app spells a folder: git2 answers `C:/…` on Windows, which matches no
+/// open or recent folder (`C:\…`).
 pub fn worktree_of(root: &Path) -> Option<PathBuf> {
     let repo = Repository::discover(root).ok()?;
     if !repo.is_worktree() {
         return None;
     }
     // The shared `.git` sits in the main working tree.
-    repo.commondir().parent().map(Path::to_path_buf)
+    let main = repo.commondir().parent()?;
+    Some(crate::infra::paths::canonicalize_plain(main).unwrap_or_else(|_| main.to_path_buf()))
 }
 
 #[cfg(test)]

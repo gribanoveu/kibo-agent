@@ -354,6 +354,8 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
         deepseek: None,
         features: Default::default(),
         fork: false,
+        markers: None,
+        journal: None,
     };
     let outcome = llm_chat::stream(&turn, vec![LlmMessage::user(task.prompt.clone())], Vec::new());
     let seconds = started.elapsed().as_secs_f64();
@@ -396,7 +398,7 @@ fn run_task(session: &LlmSession, model: &Arc<dyn EmbeddingProvider>, task: &Tas
     for e in events.iter() {
         let entry = by_round.entry(e.round).or_default();
         match &e.event {
-            ChatEventPayload::ContextUsage(u) => {
+            ChatEventPayload::ContextUsage { usage: u, .. } => {
                 entry.insert("in".into(), json!(u.prompt_tokens));
                 entry.insert("cached".into(), json!(u.cached_tokens));
                 entry.insert("out".into(), json!(u.completion_tokens));
@@ -454,7 +456,7 @@ fn tokens_spent(events: &[ChatTurnEvent], helpers: &[crate::domain::agents::Agen
         (i + run.tokens.prompt, c + run.tokens.cached, o + run.tokens.completion)
     });
     events.iter().fold(helped, |(i, c, o), e| match &e.event {
-        ChatEventPayload::ContextUsage(u) => {
+        ChatEventPayload::ContextUsage { usage: u, .. } => {
             (i + u64::from(u.prompt_tokens), c + u64::from(u.cached_tokens), o + u64::from(u.completion_tokens))
         }
         _ => (i, c, o),
@@ -470,12 +472,12 @@ fn a_run_costs_its_own_requests_and_its_helpers() {
         seq: 0,
         round: 1,
         target_id: None,
-        event: ChatEventPayload::ContextUsage(ChatUsage {
+        event: ChatEventPayload::ContextUsage { usage: ChatUsage {
             prompt_tokens: prompt,
             completion_tokens: completion,
             total_tokens: prompt + completion,
             cached_tokens: cached,
-        }),
+        }, cause: None },
     };
     let helper = AgentInfo {
         id: 1,
@@ -484,6 +486,8 @@ fn a_run_costs_its_own_requests_and_its_helpers() {
         steps: vec![],
         tokens: AgentTokens { prompt: 5000, cached: 4000, completion: 300 },
         answer: None,
+        progress: Default::default(),
+        call: None,
     };
     let events = [usage(1000, 800, 50), usage(1200, 1000, 70)];
     assert_eq!(tokens_spent(&events, &[]), (2200, 1800, 120));

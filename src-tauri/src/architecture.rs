@@ -211,10 +211,45 @@ const SLOW: &[&str] = &[
     "chat_store::", "tool_call_log::", "daily_metrics::", "next_prompt_log::", "llm_session::resolve", "list_models",
     "llm_credentials_store::", "has_saved_key", "master_key::", "git_head::", "git2::", "rewind::", "preview::",
     "meeting_store::", "rename_speaker", "meeting_notes::", "artifacts::", "free_space", "mongo::", "microphone::", "code_host_store::", "PullRequests::",
+    // The board is SQLite: its calls by name, the module being behind `State<Arc<Board>>`.
+    "board.cards()", "board.change(",
 ];
 
 /// Sync commands that reach one of [`SLOW`] today. Only shrinks.
 const SLOW_SYNC_KNOWN: &[&str] = &[];
+
+/// The measurement path's helpers, which wait without naming a [`SLOW`] module
+/// at the call site: they probe the shell, read the marker row, gather rules
+/// and skills (docs/60, CU-3). An async command reaches them inside its
+/// blocking closure, like the IO itself.
+const SLOW_HELPERS: &[&str] = &["next_request_frame(", "next_folder_frame(", "chat_anchor(", "request_parts(", "probe_shell(", "chat_prompt_workspace("];
+
+/// Async commands with a slow line in the async body, before the blocking
+/// closure: the wait runs on an async worker, not off the loop. Only shrinks.
+const SLOW_ASYNC_BODY_KNOWN: &[&str] = &[];
+
+/// An async command's IO waits inside its blocking closure (AGENTS.md, IPC
+/// conventions): the async body only captures arguments and builds the sink.
+/// Line-based, as the rule above: a slow call before the `blocking(` opener is
+/// in the async body; the helpers hide their IO one call down, so they are
+/// listed beside the modules.
+#[test]
+fn an_async_commands_io_waits_inside_its_blocking_closure() {
+    let mut slow_body: Vec<String> = Vec::new();
+    for command in commands().into_iter().filter(|command| !command.sync) {
+        let opener = command.body.iter().position(|line| line.contains("blocking(")).unwrap_or(command.body.len());
+        // Skip the signature: a command's own name can contain a slow word
+        // (`artifact_free_space`, `meeting_rename_speaker`) without calling it.
+        let waits_in_body = command.body[1..opener].iter().any(|line| SLOW.iter().chain(SLOW_HELPERS).any(|s| line.contains(s)));
+        if waits_in_body {
+            slow_body.push(command.name);
+        }
+    }
+    let new: Vec<&String> = slow_body.iter().filter(|name| !SLOW_ASYNC_BODY_KNOWN.contains(&name.as_str())).collect();
+    assert!(new.is_empty(), "async commands waiting on IO in the async body — move it into the blocking closure: {new:?}");
+    let fixed: Vec<&&str> = SLOW_ASYNC_BODY_KNOWN.iter().filter(|name| !slow_body.iter().any(|s| s == *name)).collect();
+    assert!(fixed.is_empty(), "moved into the closure or no longer slow — delete from SLOW_ASYNC_BODY_KNOWN: {fixed:?}");
+}
 
 /// A synchronous command runs on the main thread (AGENTS.md, IPC conventions).
 #[test]

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { gitChanges, gitCommit, gitCommitMessage, gitStage, gitUnstage, onFolderChanged, type WorkingChanges } from "../lib/git";
 
 const none: WorkingChanges = { staged: [], unstaged: [] };
@@ -12,20 +12,32 @@ const none: WorkingChanges = { staged: [], unstaged: [] };
 export function useStaging(visible: boolean, workspace: string | null) {
   const [changes, setChanges] = useState<WorkingChanges>(none);
   const [error, setError] = useState<string | null>(null);
+  // An answer for a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
+
+  // Another folder's files are never shown under this one, not even until
+  // its own are read: Stage would send their paths here.
+  useEffect(() => {
+    setChanges(none);
+    setError(null);
+  }, [workspace]);
 
   const load = useCallback(
     () =>
-      gitChanges().then(
+      gitChanges(workspace).then(
         (next) => {
+          if (shown.current !== workspace) return;
           setChanges(next);
           setError(null);
         },
         (e) => {
+          if (shown.current !== workspace) return;
           setChanges(none);
           setError(String(e));
         },
       ),
-    [],
+    [workspace],
   );
 
   useEffect(() => {
@@ -56,10 +68,10 @@ export function useStaging(visible: boolean, workspace: string | null) {
   return {
     ...changes,
     error,
-    stage: (paths: string[]) => act(() => gitStage(paths)),
-    unstage: (paths: string[]) => act(() => gitUnstage(paths)),
-    commit: (message: string) => act(() => gitCommit(message)),
+    stage: (paths: string[]) => act(() => gitStage(paths, workspace)),
+    unstage: (paths: string[]) => act(() => gitUnstage(paths, workspace)),
+    commit: (message: string) => act(() => gitCommit(message, workspace)),
     // Changes nothing, so nothing to read back.
-    describe: (draft: string) => gitCommitMessage(draft),
+    describe: (draft: string) => gitCommitMessage(draft, workspace),
   };
 }

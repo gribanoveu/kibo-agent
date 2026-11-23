@@ -6,9 +6,6 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.history::-webkit-scrollbar {
-  width: 6px;
-}
 .history-branch {
   display: flex;
   align-items: baseline;

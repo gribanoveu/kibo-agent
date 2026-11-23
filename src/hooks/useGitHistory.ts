@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { gitHistory, type GitHistory, onGitChanged } from "../lib/git";
 
 /** Commits asked for at a time: the first screen, then each "Load more". */
@@ -13,20 +13,30 @@ export function useGitHistory(visible: boolean, workspace: string | null) {
   const [limit, setLimit] = useState(PAGE);
   const [history, setHistory] = useState<GitHistory | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // An answer for a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
+
+  useEffect(() => {
+    setHistory(null);
+    setError(null);
+  }, [workspace]);
 
   const load = useCallback(
     () =>
-      gitHistory(limit).then(
+      gitHistory(limit, workspace).then(
         (next) => {
+          if (shown.current !== workspace) return;
           setHistory(next);
           setError(null);
         },
         (e) => {
+          if (shown.current !== workspace) return;
           setHistory(null);
           setError(String(e));
         },
       ),
-    [limit],
+    [limit, workspace],
   );
 
   useEffect(() => {

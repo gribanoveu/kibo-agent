@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { SendHorizontal, Square, ShieldCheck, CornerDownRight, GitFork, X } from "lucide-react";
+import { SendHorizontal, Square, ShieldCheck, CornerDownRight, X } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
 import { ContextMeter } from "./ContextMeter";
@@ -51,9 +51,6 @@ type Props = {
   /** `true` when the turn runs without asking — `ApprovalPolicy::skip_all`. */
   unattended: boolean;
   onUnattended: (unattended: boolean) => void;
-  /** Offered only before the chat starts: a worktree is a new folder, and a new
-      chat in it. `title` says where it would start. */
-  worktree?: { on: boolean; title: string; onChange: (on: boolean) => void };
   /** Text put into the box from outside — a branch hands back its message.
       Replaces what was typed; `seq` makes the same text twice land twice, and
       `images` come back with a note taken out of a running turn. */
@@ -107,7 +104,6 @@ export function Composer({
   onConversation,
   unattended,
   onUnattended,
-  worktree,
   draft = null,
   quote = null,
   models,
@@ -172,10 +168,13 @@ export function Composer({
   const grow = () => {
     const el = area.current;
     if (!el) return;
+    // The cap is the stylesheet's — a narrow column gets a taller box — not a
+    // number kept in step with it here.
+    const cap = parseFloat(getComputedStyle(el).maxHeight) || 120;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
-    el.style.overflowY = el.scrollHeight > 120 ? "auto" : "hidden";
+    el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
   };
 
   // Another chat's draft was put in the box during the render, so the box has
@@ -339,6 +338,7 @@ export function Composer({
           {queued.map((item) => queueRow(item))}
         </ul>
       )}
+      {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
       <section className={`composer${attachments.dragging ? " dropping" : ""}`} ref={box}>
         {attachments.dragging && (
           <div className="composer-drop" aria-hidden="true">
@@ -455,7 +455,6 @@ export function Composer({
         </div>
         {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
       </section>
-      {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
       <div className="composer-strip">
         {tab}
         <ComposerSettings
@@ -472,7 +471,6 @@ export function Composer({
           note={<span>{unattended ? "auto" : "ask"}</span>}
           status={index && <IndexBadge state={index} />}
           toggles={[
-            ...(worktree ? [{ label: "Worktree", icon: <GitFork size={14} />, ...worktree }] : []),
             {
               label: "Approve automatically",
               icon: <ShieldCheck size={14} />,

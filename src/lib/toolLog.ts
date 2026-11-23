@@ -10,6 +10,9 @@ export type ToolLogRow = {
   id: number;
   tsMs: number;
   repoRoot: string;
+  /** The chat and turn the call belongs to; empty in a row written before they were kept. */
+  chatId: string;
+  turnId: string;
   round: number;
   providerId: string;
   model: string;

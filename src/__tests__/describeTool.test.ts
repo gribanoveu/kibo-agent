@@ -9,7 +9,7 @@ import { briefTitle } from "../lib/agents";
 
 const tool = (over: Partial<Extract<Block, { kind: "tool" }>>): Extract<Block, { kind: "tool" }> => ({
   kind: "tool",
-  id: "c1",
+  id: "T1",
   round: 1,
   name: "readFile",
   arguments: "{}",
@@ -53,10 +53,10 @@ describe("what each call shows", () => {
   test("a board call names the card it is about, and an edit shows the note it wrote", () => {
     const board = (args: string) => describeTool(tool({ name: "board", arguments: args, result: { cards: [{}, {}] } }));
     expect(board('{"op":"add","title":"Renew cert"}')).toMatchObject({ name: "Board", arg: "Renew cert", meta: "2 cards" });
-    expect(board('{"op":"move","id":"c1","column":"done"}')).toMatchObject({ arg: "c1 → done" });
-    expect(board('{"op":"edit","id":"c1","title":null,"note":"wlbuh, 1 Nov"}')).toMatchObject({ arg: "c1", detail: "wlbuh, 1 Nov" });
-    expect(board('{"op":"edit","id":"c1","title":"Renew the cert"}')).toMatchObject({ arg: "c1 Renew the cert" });
-    expect(board('{"op":"edit","id":"c1","due":"2026-11-01"}')).toMatchObject({ arg: "c1", detail: "due 2026-11-01" });
+    expect(board('{"op":"move","id":"T1","column":"done"}')).toMatchObject({ arg: "T1 → done" });
+    expect(board('{"op":"edit","id":"T1","title":null,"note":"wlbuh, 1 Nov"}')).toMatchObject({ arg: "T1", detail: "wlbuh, 1 Nov" });
+    expect(board('{"op":"edit","id":"T1","title":"Renew the cert"}')).toMatchObject({ arg: "T1 Renew the cert" });
+    expect(board('{"op":"edit","id":"T1","due":"2026-11-01"}')).toMatchObject({ arg: "T1", detail: "due 2026-11-01" });
     expect(board('{"op":"add","title":"Renew cert","note":"wlbuh","due":"2026-11-01"}')).toMatchObject({ detail: "wlbuh\ndue 2026-11-01" });
     expect(board('{"op":"list"}')).toMatchObject({ arg: "list", detail: "" });
   });
@@ -166,6 +166,22 @@ describe("what each call shows", () => {
     expect(briefTitle("Контекст: сервис налогов\nВопрос: где считается сальдо?")).toBe("где считается сальдо?");
     expect(briefTitle("\n  Where is X?  \nGoals: none")).toBe("Where is X?");
     expect(briefTitle("")).toBe("");
+  });
+
+  test("a review brief is named by its first line, not a `task:` line of code in its diff", () => {
+    const task =
+      'Review the change in this repository.\nRange: HEAD → working tree, 2 files.\n\n<changes>\n=== src-tauri/src/infra/run_store.rs (modified) ===\n@@ -120,4 +120,4 @@\n     fn agent(id: u32) {\n         task: format!("t{id}"),\n</changes>';
+    expect(briefTitle(task)).toBe("Review the change in this repository.");
+    // The rule is the line's start, not a marker: an indented snippet in any
+    // brief is material too, and a `+` line of a diff is not a label either.
+    expect(briefTitle('Where is the retry?\nSnippet:\n    task: format!("t{id}"),')).toBe("Where is the retry?");
+    expect(briefTitle("What changed?\n+task: run the tests")).toBe("What changed?");
+  });
+
+  test("a review with a focus is named by the focus, without the template's dot", () => {
+    const task =
+      "Review the change in this repository.\nRange: HEAD → working tree, 2 files.\nThe one asking for this review asks to pay particular attention to: error handling in the loader.\n\n<changes>\n@@ -1 +1 @@\n-a\n+b\n</changes>";
+    expect(briefTitle(task)).toBe("error handling in the loader");
   });
 
   test("a note to memory shows the note, and says when it was there already", () => {
@@ -581,6 +597,23 @@ describe("what each call shows", () => {
     expect(shown.detail).toBe("--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-a\n+b\n--- a/src/c.rs\n+++ b/src/c.rs\n@@ -0,0 +1,2 @@\n+x\n+y\n");
   });
 
+  test("a command's description is its note, in every shape the row takes", () => {
+    const described = (args: string, over: Partial<Extract<Block, { kind: "tool" }>> = {}) =>
+      describeTool(tool({ name: "runCommand", arguments: args, ...over })).note;
+    const finished = { result: { stdout: "", stderr: "", exitCode: 0, timedOut: false } };
+    expect(described('{"command":"python fix.py --apply","description":"Rewrites imports in place"}', finished)).toBe("Rewrites imports in place");
+    expect(described('{"command":"npm run dev","background":true,"description":"Dev server"}')).toBe("Dev server");
+    expect(
+      described('{"command":"cargo test","description":"The whole suite"}', {
+        result: { result: "commandMoved", id: 4, command: "cargo test", cwd: ".", state: { state: "running" }, afterMs: 120000 },
+      }),
+    ).toBe("The whole suite");
+    // Nothing said, or an empty string: no note under the row.
+    expect(described('{"command":"make"}', finished)).toBeUndefined();
+    expect(described('{"command":"make","description":null}', finished)).toBeUndefined();
+    expect(described('{"command":"make","description":""}', finished)).toBeUndefined();
+  });
+
   test("a command says how long it took next to how it ended", () => {
     const ran = (durationMs: number) =>
       describeTool(tool({ name: "runCommand", arguments: '{"command":"make"}', result: { stdout: "", stderr: "", exitCode: 0, timedOut: false, durationMs } })).meta;
@@ -779,6 +812,16 @@ describe("a call under way, in words", () => {
   test("says what it is doing to what", () => {
     expect(describeActive(tool({ name: "readFile", arguments: '{"path":"a.rs"}' }))).toBe("Reading a.rs");
     expect(describeActive(tool({ name: "runCommand", arguments: '{"command":"cargo test"}' }))).toMatch(/^Running cargo test/);
+  });
+
+  test("a command described by the line's own words shows them, not the command", () => {
+    const described = tool({ name: "runCommand", arguments: '{"command":"bun test","description":"Run the frontend tests"}' });
+    expect(describeActive(described)).toBe("Run the frontend tests");
+    // Background and moved-to-background are the same call, said the same way.
+    const background = tool({ name: "runCommand", arguments: '{"command":"bun run tauri dev","description":"Start the dev server","background":true}' });
+    expect(describeActive(background)).toBe("Start the dev server");
+    // An empty description is none: the command line stays.
+    expect(describeActive(tool({ name: "runCommand", arguments: '{"command":"cargo test","description":""}' }))).toMatch(/^Running cargo test/);
   });
 });
 

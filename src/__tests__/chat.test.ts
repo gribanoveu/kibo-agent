@@ -59,7 +59,7 @@ describe("command wrappers", () => {
     const outcome = await chat.startChat("turn-1", "c1", messages, [], "# Plan");
 
     expect(calls).toEqual([
-      { command: "chat_start", args: { turnId: "turn-1", chatId: "c1", messages, todos: [], plan: "# Plan" } },
+      { command: "chat_start", args: { turnId: "turn-1", chatId: "c1", messages, todos: [], plan: "# Plan", workspace: null } },
     ]);
     expect(outcome.status).toBe("done");
   });
@@ -96,9 +96,10 @@ describe("command wrappers", () => {
     await chat.steer("use the helper", undefined, "c1");
     await chat.steer("", undefined, "c1", [picture]);
     await chat.cancelSteer("note-1", "c1");
-    await chat.alwaysAllow("writeFile");
+    await chat.alwaysAllow("writeFile", "c1");
     await chat.setUnattended(true);
-    await chat.openWorkspace("/tmp/project");
+    await chat.addWorkspace("/tmp/project");
+    await chat.restoreWorkspaces();
 
     expect(calls.map((c) => c.command)).toEqual([
       "chat_cancel",
@@ -107,11 +108,13 @@ describe("command wrappers", () => {
       "chat_cancel_steer",
       "approval_always_allow",
       "approval_set_unattended",
-      "workspace_open",
+      "workspace_add",
+      "workspaces_restore",
     ]);
     expect(calls[1]?.args).toEqual({ text: "use the helper", shown: null, images: [], chatId: "c1" });
     expect(calls[2]?.args).toEqual({ text: "", shown: null, images: [picture], chatId: "c1" });
-    expect(calls[6]?.args).toEqual({ path: "/tmp/project", keepRunning: false });
+    expect(calls[4]?.args).toEqual({ tool: "writeFile", chatId: "c1" });
+    expect(calls[6]?.args).toEqual({ path: "/tmp/project" });
   });
 });
 
@@ -176,7 +179,7 @@ describe("saved chats", () => {
     const summary = await savedChats.saveChat("c1", messages, blocks, [], null);
 
     expect(calls).toEqual([
-      { command: "chat_save", args: { id: "c1", messages, blocks, todos: [], plan: null, branchedFrom: null } },
+      { command: "chat_save", args: { id: "c1", messages, blocks, todos: [], plan: null, branchedFrom: null, workspace: null, turnId: null } },
     ]);
     expect(summary.title).toBe("fix the parser");
   });
@@ -193,10 +196,12 @@ describe("saved chats", () => {
     expect(calls).toEqual([{ command: "chat_load", args: { id: "c1" } }]);
   });
 
-  test("the list asks for nothing: the backend knows which folder is open", async () => {
+  test("the list asks for the folder named, and nothing for Chat mode", async () => {
     invokeResult = [];
-    await savedChats.listChats();
-    expect(calls).toEqual([{ command: "chat_list", args: undefined }]);
+    await savedChats.listChats("/repo");
+    expect(calls).toEqual([{ command: "chat_list", args: { workspace: "/repo" } }]);
+    await savedChats.listChats(null);
+    expect(calls[1]).toEqual({ command: "chat_list", args: { workspace: null } });
   });
 
   test("pinning sends the id and the value it was given", async () => {
@@ -208,20 +213,20 @@ describe("saved chats", () => {
     ]);
   });
 
-  test("folders are listed for the workspace given, and moved by id", async () => {
+  test("folders are listed for the set given, and moved by id", async () => {
     invokeResult = [];
-    await savedChats.listChatGroups("/repo");
-    expect(calls).toEqual([{ command: "chat_group_list", args: { workspace: "/repo" } }]);
+    await savedChats.listChatGroups("projects");
+    expect(calls).toEqual([{ command: "chat_group_list", args: { list: "projects" } }]);
 
     invokeResult = { id: "g1", name: "release", position: 1 };
-    const made = await savedChats.createChatGroup("/repo", "release");
-    expect(calls[1]).toEqual({ command: "chat_group_create", args: { workspace: "/repo", name: "release" } });
+    const made = await savedChats.createChatGroup("projects", "release");
+    expect(calls[1]).toEqual({ command: "chat_group_create", args: { list: "projects", name: "release" } });
     expect(made.name).toBe("release");
 
-    await savedChats.renameChatGroup("/repo", "g1", "launch");
-    expect(calls[2]).toEqual({ command: "chat_group_rename", args: { workspace: "/repo", id: "g1", name: "launch" } });
-    await savedChats.deleteChatGroup("/repo", "g1");
-    expect(calls[3]).toEqual({ command: "chat_group_delete", args: { workspace: "/repo", id: "g1" } });
+    await savedChats.renameChatGroup("projects", "g1", "launch");
+    expect(calls[2]).toEqual({ command: "chat_group_rename", args: { list: "projects", id: "g1", name: "launch" } });
+    await savedChats.deleteChatGroup("projects", "g1");
+    expect(calls[3]).toEqual({ command: "chat_group_delete", args: { list: "projects", id: "g1" } });
 
     await savedChats.setChatGroup("c1", "g1");
     await savedChats.setChatGroup("c1", null);

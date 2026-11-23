@@ -111,6 +111,7 @@ export function useLlmSettings() {
     settings,
     error,
     busy,
+    reload,
     save,
     remove,
     select,
@@ -138,15 +139,22 @@ export const choiceKey = (choice: Pick<ModelChoice, "providerId" | "model">) =>
  * Every model the composer can switch to, as `provider/model` in lower case,
  * with the active one first-class: `current` is what the chip shows. A
  * provider without a pinned model is "auto" — the first one it lists, pinned
- * on the first turn (`services::llm_session::effective_model`).
+ * on the first turn (`services::llm_session::effective_model`). Once the list
+ * is known, the auto choice names that model, so the chip says what would go
+ * out rather than "no model".
  */
 export function modelChoices(settings: LlmSettings | null, served: Record<string, string[]>) {
   const choices: ModelChoice[] = [];
   for (const provider of settings?.providers ?? []) {
-    const names = [...new Set([provider.model, ...(served[provider.id] ?? [])].filter((m): m is string => !!m))];
-    const models = names.length ? names : [null];
+    const listed = [...new Set(served[provider.id] ?? [])];
+    const names = [...new Set([provider.model, ...listed].filter((m): m is string => !!m))];
+    // Auto stays a choice while nothing is pinned, even once the list is
+    // known: without it `current` would find nothing and the chip would say
+    // "no model" with a provider ready to answer.
+    const models = provider.model ? names : [null, ...names];
     for (const model of models) {
-      choices.push({ providerId: provider.id, model, label: `${provider.id}/${model ?? "auto"}`.toLowerCase() });
+      const shown = model ?? (listed[0] ? `${listed[0]} (auto)` : "auto");
+      choices.push({ providerId: provider.id, model, label: `${provider.id}/${shown}`.toLowerCase() });
     }
   }
   const active = settings?.providers.find((p) => p.id === settings.activeProviderId);

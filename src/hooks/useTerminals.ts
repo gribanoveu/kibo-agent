@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   onTerminalChanged,
   terminalClose,
@@ -8,20 +8,23 @@ import {
 } from "../lib/terminal";
 
 /**
- * The user's shells, read while the Terminal tab is open: when it opens, and
- * each time the backend says one opened, ended or closed.
+ * The shells of the folder `workspace`, read while the Terminal tab is open: when it opens,
+ * when the folder changes, and each time the backend says one opened, ended or closed.
  */
-export function useTerminals(visible: boolean) {
+export function useTerminals(visible: boolean, workspace: string | null) {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   // Read at least once since the tab opened: an empty list means none, not "not yet".
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A shell opened in a folder left meanwhile is not this one's.
+  const shown = useRef(workspace);
+  shown.current = workspace;
 
   useEffect(() => {
     if (!visible) return;
     let live = true;
     const load = () =>
-      terminalList().then(
+      terminalList(workspace).then(
         (list) => {
           if (!live) return;
           setTerminals(list);
@@ -35,22 +38,26 @@ export function useTerminals(visible: boolean) {
     return () => {
       live = false;
       setLoaded(false);
+      // Another folder's shells are not this one's to draw while its list is read.
+      setTerminals([]);
       unlisten?.();
     };
-  }, [visible]);
+  }, [visible, workspace]);
 
-  /** In the open folder. The new one, or null when it did not start — the reason is in `error`. */
+  /** In the folder `workspace` names. The new one, or null when it did not start — the reason is in `error` —
+      or when the window left that folder meanwhile: the shell runs there, listed when it is shown again. */
   const open = useCallback(async (): Promise<TerminalInfo | null> => {
     try {
-      const terminal = await terminalOpen();
+      const terminal = await terminalOpen(workspace);
+      if (shown.current !== workspace) return null;
       setTerminals((list) => (list.some((t) => t.id === terminal.id) ? list : [...list, terminal]));
       setError(null);
       return terminal;
     } catch (e) {
-      setError(String(e));
+      if (shown.current === workspace) setError(String(e));
       return null;
     }
-  }, []);
+  }, [workspace]);
 
   const close = useCallback(async (id: number) => {
     try {

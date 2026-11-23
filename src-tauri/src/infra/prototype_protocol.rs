@@ -368,7 +368,7 @@ mod tests {
     /// unchecked until the probe runs again.
     #[test]
     fn tauri_and_wry_are_the_versions_the_preview_probe_checked() {
-        const PROBED: &[(&str, &str)] = &[("tauri", "2.11.5"), ("wry", "0.55.1")];
+        const PROBED: &[(&str, &str)] = &[("tauri", "2.12.7"), ("wry", "0.57.3")];
         let lock = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock")).unwrap();
         for (name, probed) in PROBED {
             let version = lock

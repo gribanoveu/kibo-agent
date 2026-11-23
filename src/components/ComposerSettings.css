@@ -9,6 +9,9 @@
 }
 .composer-settings-toggle {
   display: flex;
+  /* At the right end of its 180px: a short summary (a plain chat's, with no
+     mode or approval in it) otherwise leaves a gap after the chip. */
+  margin-left: auto;
   align-items: center;
   gap: 5px;
   max-width: 100%;

@@ -1,5 +1,5 @@
 //! `pullRequestCreate` — the agent opens a pull request from the folder's
-//! branch on the user's Bitbucket (`docs/56-bitbucket-prs.md`, decision 10,
+//! branch on the user's Bitbucket (`docs/62-bitbucket-prs.md`, decision 10,
 //! BB-7). The strip's own Create: the branch and the server are the folder's,
 //! a branch not on the server is refused before anything is posted, and the
 //! strip reads again after it. Mutating, so it goes through the approval

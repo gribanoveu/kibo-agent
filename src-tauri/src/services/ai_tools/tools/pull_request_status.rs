@@ -1,6 +1,6 @@
 //! `pullRequestStatus` — the pull request of the folder's branch, or of one
 //! the model names, as the strip under the branch in Overview reads it
-//! (`docs/56-bitbucket-prs.md`, decision 8, BB-6): reviewers and their
+//! (`docs/62-bitbucket-prs.md`, decision 8, BB-6): reviewers and their
 //! decisions, the builds of the branch's head commit, whether it can be merged
 //! and what the server says stands in the way.
 //!

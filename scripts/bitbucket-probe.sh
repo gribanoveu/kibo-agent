@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BB-0 of docs/56-bitbucket-prs.md: what a Bitbucket Data Center server answers,
+# BB-0 of docs/62-bitbucket-prs.md: what a Bitbucket Data Center server answers,
 # before the app is written against it. Only GET requests: nothing is changed.
 #
 # Run from a clone whose `origin` is on that server:

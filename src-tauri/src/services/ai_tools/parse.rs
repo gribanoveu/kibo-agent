@@ -422,6 +422,61 @@ mod tests {
         assert!(todo("{}").is_err());
     }
 
+    /// The exact call Qwen made twice in a row: `ids` as a JSON string, both
+    /// refused with `invalid type: string`, after which it closed six tasks
+    /// one call each. The list coercion reads it; a lone id string is a list
+    /// of one; an empty list still says nothing, as a bare `[]` always did.
+    #[test]
+    fn todo_ids_written_as_a_string_are_the_list() {
+        let todo = |arguments: &str| match parse_tool_call(&call("todo", arguments)) {
+            Ok(ToolCall::Todo(args)) => Ok(args),
+            Ok(other) => panic!("{other:?}"),
+            Err(e) => Err(e.to_string()),
+        };
+        let cancelled = |ids: &[&str]| {
+            Ok(TodoArgs::Update {
+                id: None,
+                ids: ids.iter().map(|t| t.to_string()).collect(),
+                status: Some(TodoUpdateStatus::Cancelled),
+                note: None,
+            })
+        };
+        assert_eq!(todo(r#"{"op": "update", "ids": "[\"t7\", \"t8\"]", "status": "cancelled"}"#), cancelled(&["t7", "t8"]));
+        assert_eq!(todo(r#"{"op": "update", "ids": ["t7", "t8"], "status": "cancelled"}"#), cancelled(&["t7", "t8"]));
+        assert_eq!(todo(r#"{"op": "update", "ids": "t7", "status": "cancelled"}"#), cancelled(&["t7"]));
+        // `ids` alone, with no `op`, still says which operation this is.
+        assert_eq!(
+            todo(r#"{"ids": "[\"t7\"]"}"#),
+            Ok(TodoArgs::Update { id: None, ids: vec!["t7".into()], status: None, note: None })
+        );
+        assert!(todo(r#"{"ids": "[]"}"#).unwrap_err().contains("op must be"));
+        let err = todo(r#"{"op": "update", "ids": "[1, 2]"}"#).unwrap_err();
+        assert!(err.contains("ids") && err.contains("list of strings"), "{err}");
+        // `null` and an empty string are the schema's own spelling of "not
+        // set" (`["array", "null"]`): the update lands on the active task.
+        for unset in ["null", "\"\""] {
+            assert_eq!(
+                todo(&format!(r#"{{"op": "update", "ids": {unset}, "status": "completed"}}"#)),
+                Ok(TodoArgs::Update { id: None, ids: vec![], status: Some(TodoUpdateStatus::Completed), note: None })
+            );
+        }
+    }
+
+    /// A list written as a string parses through the same coercion, and one
+    /// holding non-strings is refused with the path to the field — the
+    /// model's only clue which parameter to fix.
+    #[test]
+    fn a_string_array_of_non_strings_names_its_field() {
+        let parsed = parse_tool_call(&call("readFile", r#"{"paths": "[\"a.rs\", \"b.rs\"]"}"#)).unwrap();
+        let ToolCall::ReadFile(args) = parsed else { panic!("wrong variant") };
+        assert_eq!(args.paths, Some(vec!["a.rs".into(), "b.rs".into()]));
+
+        let err = parse_tool_call(&call("readFile", r#"{"paths": "[1, 2]"}"#)).unwrap_err();
+        let ToolError::InvalidArguments { tool, reason } = err else { panic!("wrong error") };
+        assert_eq!(tool, "readFile");
+        assert!(reason.contains("paths") && reason.contains("list of strings"), "{reason}");
+    }
+
     /// A confirmation card for a write that was always going to fail costs a
     /// human decision and teaches the model nothing it could not hear at once.
     #[test]

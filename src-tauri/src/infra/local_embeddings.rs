@@ -24,17 +24,19 @@
 //! `[UNK]`, which is dropped before pooling — they embed as nothing. Going back to the full model is the build script without the
 //! prune step, the directory name below, and a new `LOCAL_MODEL_ID`.
 //!
-//! ## Cost — measured, not estimated (release, macOS, 2026-09-18)
+//! ## Cost — measured, not estimated (release, macOS, 2026-09-18 and 2026-11-18)
 //!
-//! | | full, `f32` table | ru + en, `f32` table | **ru + en, int8 table** |
-//! |---|---|---|---|
-//! | on disk | 146 MB | 80 MB | 80 MB |
-//! | resident once loaded | ~1.07 GB | ~520 MB | **~320 MB** |
-//! | load | 0.7 s | 0.42 s | 0.35 s |
+//! | | full, `f32` table | ru + en, `f32` table | ru + en, int8 table | **+ compact tokenizer** |
+//! |---|---|---|---|---|
+//! | on disk | 146 MB | 80 MB | 80 MB | 80 MB |
+//! | resident once loaded | ~1.07 GB | ~520 MB | ~320 MB | **~100 MB** |
+//! | load | 0.7 s | 0.42 s | 0.35 s | 0.11 s |
 //!
-//! Resident is now mostly the tokenizer — a Unigram prefix tree with a node
-//! per character of every token, ~250 MB — plus the table at one byte a
-//! weight, ~70 MB. The `f32` columns are what `model2vec-rs` cost, which
+//! Resident is now the table at one byte a weight, ~70 MB, and the tokenizer,
+//! ~30 MB. The tokenizer was ~250 MB while it was `tokenizers`' own Unigram,
+//! whose prefix tree keeps a hash map in every node; [`CompactTokenizer`] is the
+//! same pipeline with the trie flattened (LZ-1), and the same ids to the token
+//! on every text of this repository. The `f32` columns are what `model2vec-rs` cost, which
 //! widened the table on load; [`Int8Model`] replaced it (F-5.8c) and pools the
 //! int8 rows directly, with the same result to the bit on every text of two
 //! repositories that has no `[UNK]` in it. Upstream's notes said 512 MB for
@@ -49,10 +51,12 @@
 //! hands the freed memory back to the OS. The next embed pays the load
 //! again. A project nobody searches semantically never pays at all.
 //!
-//! Dropping is not enough on its own. The tokenizer is millions of small
+//! Dropping is not enough on its own. The old tokenizer was millions of small
 //! allocations, and the allocator keeps freed small blocks for reuse: measured
 //! on the full model, a dropped one still left **375 MB** resident.
-//! [`release_freed_memory`] asks the allocator to return them — down to ~50 MB.
+//! [`release_freed_memory`] asks the allocator to return them — down to ~50 MB,
+//! ~35 MB with the compact tokenizer. Reading `tokenizer.json` leaves such
+//! blocks too, so it is also called once a load is done.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,7 +64,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tokenizers::Tokenizer;
+use crate::infra::compact_unigram::CompactTokenizer;
 
 use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
 
@@ -244,7 +248,7 @@ impl EmbeddingProvider for LocalEmbeddings {
 /// test against the Python vectors checks that; the saving is ~210 MB
 /// resident (F-5.8c).
 struct Int8Model {
-    tokenizer: Tokenizer,
+    tokenizer: CompactTokenizer,
     /// The whole `model.safetensors` file, as read. Rows start at
     /// `table_start`, each `DIMENSIONS` bytes; kept as `u8` and reinterpreted
     /// per weight, so loading copies nothing.
@@ -255,7 +259,7 @@ struct Int8Model {
     /// but looked the token up by a `unk_token` field that a Unigram
     /// tokenizer does not have, found nothing, and averaged `[UNK]` into
     /// every text containing a character outside the vocabulary.
-    unk_id: Option<u32>,
+    unk_id: u32,
     /// Texts are cut to `MAX_TOKENS × this` characters before tokenizing — the
     /// same pre-truncation `model2vec` does, so a megabyte of text is not
     /// tokenized to keep its first 512 tokens.
@@ -278,7 +282,7 @@ impl Int8Model {
                 .encode_batch_fast(truncated, false)
                 .map_err(|e| EmbeddingError::Invalid(format!("tokenization failed: {e}")))?;
             for encoding in encodings {
-                let ids = encoding.get_ids().iter().copied().filter(|id| Some(*id) != self.unk_id).take(MAX_TOKENS);
+                let ids = encoding.get_ids().iter().copied().filter(|&id| id != self.unk_id).take(MAX_TOKENS);
                 out.push(self.pool(ids));
             }
         }
@@ -313,7 +317,8 @@ fn load_model(dir: &Path) -> Result<Int8Model, EmbeddingError> {
     let bytes = read_model_file(&dir.join("model.safetensors"))?;
     let invalid = |why: String| EmbeddingError::Invalid(why);
 
-    let tokenizer = Tokenizer::from_bytes(&tokenizer_bytes).map_err(|e| invalid(format!("tokenizer: {e}")))?;
+    let tokenizer: CompactTokenizer =
+        serde_json::from_slice(&tokenizer_bytes).map_err(|e| invalid(format!("tokenizer: {e}")))?;
     drop(tokenizer_bytes);
 
     let (table_start, rows, width) = int8_table(&bytes).map_err(invalid)?;
@@ -329,10 +334,10 @@ fn load_model(dir: &Path) -> Result<Int8Model, EmbeddingError> {
         )));
     }
 
-    let unk_id = tokenizer_unk_id(&tokenizer);
-    let mut lengths: Vec<usize> = tokenizer.get_vocab(false).keys().map(String::len).collect();
-    lengths.sort_unstable();
-    let median_token_chars = lengths.get(lengths.len() / 2).copied().unwrap_or(1);
+    let unk_id = tokenizer.get_model().unk_id();
+    let median_token_chars = tokenizer.get_model().median_token_bytes();
+    // Reading the 10 MB of JSON left as many small blocks behind.
+    release_freed_memory();
 
     Ok(Int8Model { tokenizer, bytes, table_start, rows, unk_id, median_token_chars })
 }
@@ -365,13 +370,6 @@ fn int8_table(bytes: &[u8]) -> Result<(usize, usize, usize), String> {
         return Err(format!("`embeddings` is {rows}×{width} but its data does not fit"));
     }
     Ok((start, rows, width))
-}
-
-/// The Unigram model's `unk_id`, read from its serialized form: the only
-/// place a Unigram tokenizer keeps it.
-fn tokenizer_unk_id(tokenizer: &Tokenizer) -> Option<u32> {
-    let spec = serde_json::to_value(tokenizer).ok()?;
-    spec["model"]["unk_id"].as_u64().map(|id| id as u32)
 }
 
 fn read_model_file(path: &Path) -> Result<Vec<u8>, EmbeddingError> {
@@ -442,6 +440,52 @@ mod tests {
             let norm = got.0.iter().map(|x| x * x).sum::<f32>().sqrt();
             assert!((norm - 1.0).abs() < 1e-3, "{phrase:?}: norm {norm}");
         }
+    }
+
+    /// The tokenizer the model runs on is ours (`compact_unigram`), HF's
+    /// `Tokenizer` is what `parity.json` and every stored vector were made
+    /// with: on this repository's code and documents, Russian and English,
+    /// both must give the same ids — or the index built before is searched
+    /// with a different idea of the text.
+    #[test]
+    #[ignore = "loads the bundled model; run with: cargo test local_embeddings -- --ignored"]
+    fn the_compact_tokenizer_gives_hfs_ids_on_this_repository() {
+        let json = fs::read(bundled_model_dir(None).join("tokenizer.json")).unwrap();
+        let hf = tokenizers::Tokenizer::from_bytes(&json).unwrap();
+        let ours: CompactTokenizer = serde_json::from_slice(&json).unwrap();
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = vec![root.join("src"), root.join("../docs")];
+        let mut texts: Vec<String> = vec![
+            "Литерал [UNK] и [PAD] посреди текста".into(),
+            "Café 世界 µΣ — 🦀🔥\ttab\r\nCRLF   много   пробелов «ёлки» ½ ﬁ ①".into(),
+        ];
+        while let Some(path) = files.pop() {
+            if path.is_dir() {
+                files.extend(fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().path()));
+            } else if let Ok(text) = fs::read_to_string(&path) {
+                let chars: Vec<char> = text.chars().collect();
+                texts.extend(chars.chunks(5_000).map(|piece| piece.iter().collect::<String>()));
+            }
+        }
+        assert!(texts.len() > 1_000, "only {} texts", texts.len());
+
+        let want = hf.encode_batch_fast(texts.clone(), false).unwrap();
+        let got = ours.encode_batch_fast(texts.clone(), false).unwrap();
+        for ((text, want), got) in texts.iter().zip(&want).zip(&got) {
+            assert_eq!(got.get_ids(), want.get_ids(), "{:?}", text.chars().take(80).collect::<String>());
+        }
+    }
+
+    /// Texts are cut at `MAX_TOKENS` tokens of the median length of a
+    /// distinct vocabulary string — `model2vec`'s rule, 10 bytes here — and
+    /// `[UNK]` is the id dropped before pooling.
+    #[test]
+    #[ignore = "loads the bundled model; run with: cargo test local_embeddings -- --ignored"]
+    fn the_cut_and_the_unknown_token_come_from_the_vocabulary() {
+        let model = load_model(&bundled_model_dir(None)).unwrap();
+        assert_eq!(model.median_token_chars, 10);
+        assert_eq!(model.unk_id, 1);
     }
 
     /// The limit is part of the shipped model, not a property of the script

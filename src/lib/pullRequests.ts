@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inTauri, requireBackend } from "./backend";
 
 // The pull request of the open folder's branch, and the servers it is read
-// from (docs/56-bitbucket-prs.md). Mirrors `domain::code_host` and
+// from (docs/62-bitbucket-prs.md). Mirrors `domain::code_host` and
 // `commands/pull_requests.rs`.
 
 /** A server the user added. Never its token: only whether one is set. */

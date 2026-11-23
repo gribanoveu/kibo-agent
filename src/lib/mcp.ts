@@ -99,46 +99,47 @@ export type McpPromptItem = {
 
 /** The prompts of the servers running for the open folder; none are started to be asked. */
 /** The same, once the servers not running yet are started — slow the first time: a server may be downloaded. */
-export async function startMcpPrompts(): Promise<McpPromptItem[]> {
+export async function startMcpPrompts(workspace: string | null): Promise<McpPromptItem[]> {
   requireBackend();
-  return invoke<McpPromptItem[]>("mcp_prompts_start");
+  return invoke<McpPromptItem[]>("mcp_prompts_start", { workspace });
 }
 
-export async function mcpPrompts(): Promise<McpPromptItem[]> {
+export async function mcpPrompts(workspace: string | null): Promise<McpPromptItem[]> {
   if (!inTauri()) return [];
-  return invoke<McpPromptItem[]>("mcp_prompts");
+  return invoke<McpPromptItem[]>("mcp_prompts", { workspace });
 }
 
 /** A server's prompt written with what was typed after its name. */
-export async function mcpPromptGet(server: string, name: string, typed: string): Promise<string> {
+export async function mcpPromptGet(server: string, name: string, typed: string, workspace: string | null): Promise<string> {
   requireBackend();
-  return invoke<string>("mcp_prompt_get", { server, name, typed });
+  return invoke<string>("mcp_prompt_get", { server, name, typed, workspace });
 }
 
-export async function mcpConfig(): Promise<McpView> {
+/** The rows as they stand in `workspace` — each open folder runs servers of its own. */
+export async function mcpConfig(workspace: string | null): Promise<McpView> {
   if (!inTauri()) return { path: "", text: "", servers: [] };
-  return invoke<McpView>("mcp_config_get");
+  return invoke<McpView>("mcp_config_get", { workspace });
 }
 
 /** Refused, and the file left alone, when the text is not a valid `mcpServers` config. */
-export async function saveMcpConfig(text: string): Promise<McpView> {
+export async function saveMcpConfig(text: string, workspace: string | null): Promise<McpView> {
   requireBackend();
-  return invoke<McpView>("mcp_config_save", { text });
+  return invoke<McpView>("mcp_config_save", { text, workspace });
 }
 
 /** Starts the server if it is not running, so the tab can show its tools without a turn. */
-export async function connectMcpServer(name: string): Promise<McpView> {
+export async function connectMcpServer(name: string, workspace: string | null): Promise<McpView> {
   requireBackend();
-  return invoke<McpView>("mcp_server_connect", { name });
+  return invoke<McpView>("mcp_server_connect", { name, workspace });
 }
 
-export async function setMcpServerEnabled(name: string, enabled: boolean): Promise<McpView> {
+export async function setMcpServerEnabled(name: string, enabled: boolean, workspace: string | null): Promise<McpView> {
   requireBackend();
-  return invoke<McpView>("mcp_server_set_enabled", { name, enabled });
+  return invoke<McpView>("mcp_server_set_enabled", { name, enabled, workspace });
 }
 
 /** Offers one tool of a server to the model, or hides it; the server keeps running. */
-export async function setMcpToolShown(server: string, tool: string, shown: boolean): Promise<McpView> {
+export async function setMcpToolShown(server: string, tool: string, shown: boolean, workspace: string | null): Promise<McpView> {
   requireBackend();
-  return invoke<McpView>("mcp_tool_set_shown", { server, tool, shown });
+  return invoke<McpView>("mcp_tool_set_shown", { server, tool, shown, workspace });
 }

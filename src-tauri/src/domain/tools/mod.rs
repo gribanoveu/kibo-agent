@@ -126,7 +126,7 @@ pub enum ToolName {
     /// collections, documents, counts, aggregations, indexes (`docs/44-mongodb.md`, M-8).
     Mongo,
     /// The pull request of the folder's branch on the user's Bitbucket, read:
-    /// reviewers, builds, whether it can merge (`docs/56-bitbucket-prs.md`, BB-6).
+    /// reviewers, builds, whether it can merge (`docs/62-bitbucket-prs.md`, BB-6).
     PullRequestStatus,
     /// Opens a pull request from the folder's branch on the user's Bitbucket,
     /// through the approval card (BB-7). Never merges or approves.

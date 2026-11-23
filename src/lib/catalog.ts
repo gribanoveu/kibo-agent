@@ -64,6 +64,8 @@ export type CatalogPreview = {
   text: string;
   /** A server's `${NAME}` placeholders: installing it asks for each. */
   secrets: string[];
+  /** Files a server needs beside the open folder: each goes to `path`, from `from` in the source. */
+  projectFiles: { path: string; from: string }[];
 };
 
 /** One file of an update: what is there now beside what the catalog has now. */
@@ -73,6 +75,8 @@ export type CatalogUpdatePreview = {
   changes: CatalogFileChange[];
   /** A server's placeholders the installed entry does not give back a value for. */
   secrets: string[];
+  /** Files a server needs beside the open folder that the update writes where nothing is yet. */
+  projectFiles: { path: string; from: string }[];
   /** Changed here since it was installed. */
   edited: boolean;
 };

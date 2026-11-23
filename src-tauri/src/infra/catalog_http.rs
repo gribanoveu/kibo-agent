@@ -81,8 +81,8 @@ fn fetch_file_with(agent: &ureq::Agent, base: &Url, path: &str) -> Result<Vec<u8
     response
         .body_mut()
         .with_config()
-        // ureq refuses a body that reaches its limit; one at the limit is fine here.
-        .limit(catalog::MAX_FILE_BYTES + 1)
+        // ureq 3.5 allows a body exactly at its limit and refuses one past it.
+        .limit(catalog::MAX_FILE_BYTES)
         .read_to_vec()
         .map_err(|e| CatalogError::Unavailable(format!("{path}: {e}")))
 }

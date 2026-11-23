@@ -1,0 +1,41 @@
+.info-tip {
+  position: relative;
+  display: inline-flex;
+}
+.info-tip-btn {
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.info-tip-btn:hover,
+.info-tip-btn:focus-visible {
+  color: var(--text);
+}
+.info-tip-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: 220px;
+  padding: 8px 10px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-tip);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  color: var(--text-dim);
+  text-align: left;
+  line-height: 1.45;
+}
+/* Under the icon instead of over it: for a hint at the top of a pane, where
+   above would run into the bar over it. */
+.info-tip-pop.below {
+  bottom: auto;
+  top: calc(100% + 6px);
+}

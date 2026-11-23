@@ -4,7 +4,7 @@
 //! it reads stops there; what a strip needs from any host is here: where the
 //! repository sits on a server, which configured server it belongs to, what a
 //! snapshot holds, and what that snapshot allows. Decided by the probe recorded
-//! in `docs/56-bitbucket-prs.md`: the forms a remote comes in, `/scm/` and the
+//! in `docs/62-bitbucket-prs.md`: the forms a remote comes in, `/scm/` and the
 //! case of a project key, and the veto lines a merge check returns ready-made.
 //!
 //! **A remote is read to fill a form, never trusted.** Nothing here decides that

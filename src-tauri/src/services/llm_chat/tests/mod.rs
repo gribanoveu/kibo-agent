@@ -196,6 +196,7 @@ struct Harness {
     logged: Arc<Mutex<Vec<ToolCallLogEntry>>>,
     plan: Option<String>,
     worktree_of: Option<PathBuf>,
+    worktree_base: Option<String>,
     mcp: McpTools,
     hooks: Hooks,
     processes: Option<Arc<dyn BackgroundProcesses>>,
@@ -205,6 +206,10 @@ struct Harness {
     questions: Option<Arc<crate::services::mcp_questions::McpQuestions>>,
     /// The agent's web, as Settings would give it; `None` is off.
     web: Option<Web>,
+    /// The chat's request markers; `None` leaves the requests unmarked.
+    markers: Option<Arc<dyn crate::domain::request_marker::RequestMarkers>>,
+    /// The turn's journal; `None` leaves the history unjournaled.
+    journal: Option<Arc<dyn crate::domain::turn_journal::TurnJournal>>,
     features: Features,
     /// What `pullRequestStatus` reads through; `None` as with the feature off.
     pull_requests: Option<Arc<dyn crate::domain::code_host::AgentPullRequests>>,
@@ -254,6 +259,7 @@ fn harness(label: &str, steps: Vec<Step>) -> Harness {
         logged: Arc::new(Mutex::new(Vec::new())),
         plan: None,
         worktree_of: None,
+        worktree_base: None,
         mcp: McpTools::default(),
         hooks: Hooks::default(),
         processes: None,
@@ -262,6 +268,8 @@ fn harness(label: &str, steps: Vec<Step>) -> Harness {
         agents: None,
         questions: None,
         web: None,
+        markers: None,
+        journal: None,
         features: Features::default(),
         pull_requests: None,
         parallel: Vec::new(),
@@ -306,7 +314,7 @@ impl Harness {
             session: &self.session,
             place: match self.chat {
                 Some(role) => Place::Chat { role, kube: &self.kube, cluster: None, changes: None, runbooks: &[], web: None, scope: None },
-                None => Place::Folder { scope: &self.scope, mode: self.mode, web: self.web.as_ref(), parallel: &parallel, worktree_base: None },
+                None => Place::Folder { scope: &self.scope, mode: self.mode, web: self.web.as_ref(), parallel: &parallel, worktree_base: self.worktree_base.as_deref() },
             },
             approval: &self.approval,
             cancelled: &cancelled,
@@ -336,6 +344,8 @@ impl Harness {
             deepseek: None,
             features: self.features.clone(),
             fork: false,
+            markers: self.markers.as_deref(),
+            journal: self.journal.as_deref(),
         };
         f(&turn)
     }
@@ -353,7 +363,7 @@ fn payloads(events: &[ChatTurnEvent]) -> Vec<String> {
             ChatEventPayload::ToolCallDelta(_) => "toolCallDelta".to_string(),
             ChatEventPayload::ToolCall(c) => format!("toolCall:{}", c.id),
             ChatEventPayload::ToolResult(r) => format!("toolResult:{}", r.id),
-            ChatEventPayload::ContextUsage(_) => "contextUsage".to_string(),
+            ChatEventPayload::ContextUsage { .. } => "contextUsage".to_string(),
             ChatEventPayload::ContextEstimate(_) => "estimate".to_string(),
             ChatEventPayload::SteeringApplied { id, .. } => format!("steering:{id}"),
             ChatEventPayload::CommandOutput { id, .. } => format!("commandOutput:{id}"),
@@ -402,6 +412,8 @@ fn grep() -> ToolResult {
     ToolResult::GrepResults { matches: vec![], truncated: false, total: 0, total_files: 0, total_is_floor: false, skipped: vec![] }
 }
 
+mod journal;
+mod markers;
 mod rules;
 mod system_prompt;
 mod turn_loop;
