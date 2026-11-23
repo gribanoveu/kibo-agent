@@ -22,6 +22,7 @@
 
 use super::image::ImagePart;
 use super::llm::{LlmMessage, LlmRole, LlmToolDefinition};
+use super::request_marker::{Anchor, RequestFingerprint};
 use super::tools::{ToolName, TOOL_DENIED_PREFIX, TOOL_ERROR_PREFIX, TOOL_NOT_RUN_PREFIX};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -247,6 +248,26 @@ pub fn should_compact(estimated_tokens: usize, context_limit: Option<u32>) -> bo
         return false;
     };
     estimated_tokens as u64 * 100 >= u64::from(limit) * TRIGGER_PERCENT
+}
+
+/// The next request's cost, anchored on the provider's own count for the last
+/// request plus the estimate of what was added since (docs/60): the estimate's
+/// error is bounded by the tail, not the whole conversation. Without a
+/// trustworthy anchor — none yet, a rewritten history, another model — the
+/// full estimate, as before. `current` is the fingerprint of the request about
+/// to be sent, taken where it is assembled.
+pub fn anchored_tokens(
+    anchor: Option<&Anchor>,
+    current: &RequestFingerprint,
+    provider_id: &str,
+    model: &str,
+    frame: RequestFrame,
+    history: &[LlmMessage],
+) -> usize {
+    match anchor.filter(|anchor| anchor.holds_for(provider_id, model, current)) {
+        Some(anchor) => anchor.prompt_tokens as usize + estimate_tokens(anchor.trailing(history)),
+        None => frame.total() + estimate_tokens(history),
+    }
 }
 
 /// One pass, as positions in the history: `[..keep_head]` stays, the
@@ -815,6 +836,38 @@ mod tests {
     #[test]
     fn an_empty_conversation_costs_nothing() {
         assert_eq!(estimate_tokens(&[]), 0);
+    }
+
+    fn counted_frame() -> RequestFrame {
+        RequestFrame { instructions: 100, skills: 0, tools: 50, mcp: 0 }
+    }
+
+    /// With a trustworthy anchor the number is the provider's own count plus
+    /// the estimate of what was added since — the estimate's error is bounded
+    /// by the tail, not the whole conversation.
+    #[test]
+    fn an_anchored_total_is_the_real_count_plus_the_tail() {
+        let history = vec![user("go"), assistant("ok"), user("next")];
+        let anchor = Anchor { prompt_tokens: 1_000, fingerprint: crate::domain::request_marker::fingerprint(&[], &[], &history[..2]), provider_id: "p".into(), model: "m".into() };
+        let current = crate::domain::request_marker::fingerprint(&[], &[], &history);
+        assert_eq!(anchored_tokens(Some(&anchor), &current, "p", "m", counted_frame(), &history), 1_000 + estimate_tokens(&history[2..]));
+        // Nothing added since: exactly the provider's count, no estimate at all.
+        let same = crate::domain::request_marker::fingerprint(&[], &[], &history[..2]);
+        assert_eq!(anchored_tokens(Some(&anchor), &same, "p", "m", counted_frame(), &history[..2]), 1_000);
+    }
+
+    /// Without a trustworthy anchor — none yet, a rewritten history, another
+    /// model — the full estimate, as before.
+    #[test]
+    fn without_a_trustworthy_anchor_the_total_is_the_full_estimate() {
+        let history = vec![user("go"), assistant("ok")];
+        let full = counted_frame().total() + estimate_tokens(&history);
+        let current = crate::domain::request_marker::fingerprint(&[], &[], &history);
+        assert_eq!(anchored_tokens(None, &current, "p", "m", counted_frame(), &history), full);
+        let stale = Anchor { prompt_tokens: 1_000, fingerprint: crate::domain::request_marker::fingerprint(&[], &[], &[user("other")]), provider_id: "p".into(), model: "m".into() };
+        assert_eq!(anchored_tokens(Some(&stale), &current, "p", "m", counted_frame(), &history), full);
+        let other_model = Anchor { model: "m2".into(), ..stale.clone() };
+        assert_eq!(anchored_tokens(Some(&other_model), &current, "p", "m", counted_frame(), &history), full);
     }
 
     #[test]

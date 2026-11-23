@@ -50,6 +50,10 @@ pub(crate) struct SessionHandle {
     /// process — after a restart there is nothing to compare with, and the
     /// idle cause is the true one anyway.
     pub(super) last_request: Mutex<Option<crate::domain::request_marker::RequestFingerprint>>,
+    /// The last request that reported its cost, as the meter's anchor
+    /// (docs/60). Beside the fingerprint and with the same lifetime: across
+    /// turns, gone with the process — a reopen reads it from the marker row.
+    pub(super) last_anchor: Mutex<Option<crate::domain::request_marker::Anchor>>,
 }
 
 /// Counted while a chat's turn runs; clears itself on drop, however the turn

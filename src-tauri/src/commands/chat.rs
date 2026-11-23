@@ -82,7 +82,14 @@ impl crate::domain::request_marker::RequestMarkers for ChatMarkers {
 
     fn record(&self, record: crate::domain::request_marker::RequestRecord) {
         *self.session.last_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record.fingerprint.clone());
+        if let Some(anchor) = crate::domain::request_marker::Anchor::of(&record) {
+            *self.session.last_anchor.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(anchor);
+        }
         crate::infra::tool_call_log::append_request(&self.chat_id, &self.turn_id, &record);
+    }
+
+    fn last_anchor(&self) -> Option<crate::domain::request_marker::Anchor> {
+        self.session.last_anchor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 }
 
@@ -1112,6 +1119,19 @@ mod tests {
             // Another chat's session remembers nothing of this one.
             let other = ChatMarkers { session: Arc::new(SessionHandle::default()), chat_id: "c2".into(), turn_id: "c2/turn-1".into() };
             assert!(other.previous().is_none());
+            // CU-2: the anchor is the last request that reported its cost, and
+            // it too survives the turn boundary; a request with no usage keeps it.
+            assert!(second.last_anchor().is_none());
+            let costed = RequestRecord {
+                usage: Some(crate::domain::llm::ChatUsage { prompt_tokens: 500, completion_tokens: 2, total_tokens: 502, cached_tokens: 0 }),
+                ..record("s3")
+            };
+            second.record(costed);
+            let third = ChatMarkers { session: Arc::clone(&session), chat_id: "c1".into(), turn_id: "c1/turn-3".into() };
+            assert_eq!(third.last_anchor().map(|a| a.prompt_tokens), Some(500));
+            third.record(record("s4"));
+            assert_eq!(third.last_anchor().map(|a| a.prompt_tokens), Some(500), "a request with no usage keeps the anchor");
+            assert!(other.last_anchor().is_none());
 
             let conn = rusqlite::Connection::open(crate::infra::app_dir::ensure().unwrap().join("tool_calls.db")).unwrap();
             let rows: Vec<(String, String)> = conn
@@ -1121,7 +1141,7 @@ mod tests {
                 .unwrap()
                 .collect::<Result<_, _>>()
                 .unwrap();
-            assert_eq!(rows, vec![("c1".to_string(), "c1/turn-1".to_string()), ("c1".to_string(), "c1/turn-2".to_string())]);
+            assert_eq!(rows, vec![("c1".to_string(), "c1/turn-1".to_string()), ("c1".to_string(), "c1/turn-2".to_string()), ("c1".to_string(), "c1/turn-2".to_string()), ("c1".to_string(), "c1/turn-3".to_string())]);
         });
     }
 

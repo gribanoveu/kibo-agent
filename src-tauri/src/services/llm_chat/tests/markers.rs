@@ -13,6 +13,9 @@ impl RequestMarkers for Markers {
     fn record(&self, record: RequestRecord) {
         self.0.lock().unwrap().push(record);
     }
+    fn last_anchor(&self) -> Option<request_marker::Anchor> {
+        self.0.lock().unwrap().iter().rev().find_map(request_marker::Anchor::of)
+    }
 }
 
 fn usage(prompt: u32, cached: u32, completion: u32) -> ChatUsage {
