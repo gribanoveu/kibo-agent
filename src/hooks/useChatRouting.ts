@@ -145,7 +145,11 @@ export function useChatRouting({
     if (kind === "syncBase") return send(SYNC_BASE);
     if (kind === "cleanup") {
       const path = workspace.path;
-      if (!path || !worktreeMain) return;
+      // Not silent: the card is pressable, so an unknown main checkout has to
+      // say why nothing follows — the folder list can still remove it.
+      if (!path || !worktreeMain) {
+        return notify("The main checkout of this worktree is unknown — open it in the folder list and remove the worktree there");
+      }
       // Closing a worktree stops its processes and terminals, and an open
       // folder is never removable: the guard asks first — a turn still
       // working there keeps the window where it is — and then the main

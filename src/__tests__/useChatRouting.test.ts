@@ -337,10 +337,13 @@ describe("the offers after an answer", () => {
     await act(async () => noMain.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
     expect(noMain.calls).toEqual([]);
     expect(noMain.asked).toEqual([]);
+    // A press that can do nothing says why, instead of nothing happening.
+    expect(noMain.said).toEqual(["The main checkout of this worktree is unknown — open it in the folder list and remove the worktree there"]);
     const noFolder = setup({ path: null });
     await act(async () => noFolder.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
     expect(noFolder.calls).toEqual([]);
     expect(noFolder.asked).toEqual([]);
+    expect(noFolder.said).toEqual(["The main checkout of this worktree is unknown — open it in the folder list and remove the worktree there"]);
   });
 });
 

@@ -181,8 +181,9 @@ syncBase и cleanup — по образцу существующих видов,
 - Фронт: `src/lib/offer.ts` (виды, `text`, `SYNC_BASE`, предел двух, нормализация старого
   `implement`), `OfferCards.tsx` (LOOK, label из text для message, иконки, минус ghost-кнопка),
   `ChatPanel.tsx` (тип `onOffer`, минус `onOpenPlan`), `useChatRouting.ts` (`pickOffer(offer)`,
-  новые зависимости `cleanupWorktree`, `openPlan`), `App.tsx` (сборка `cleanupWorktree` из
-  `workspace` + `worktreeRemoval`, `openPlan` из `openTab`).
+  новые зависимости `worktreeMain`, `openPlan`, `askWorktreeRemoval`), `App.tsx` (сборка
+  `worktreeMain` из `useWorktreeOf`, `openPlan` из `openTab`, `askWorktreeRemoval` из
+  `worktreeRemoval.ask`).
 - Новых команд, каналов, фич Catalog нет.
 
 ## Нарезка
@@ -201,8 +202,8 @@ syncBase и cleanup — по образцу существующих видов,
 транскрипте). Проверки: tsc, bun test 1680 pass, cargo check, cargo test 2517 pass; ревью
 сабагентом — без замечаний. Бенч не прогнан (ключ по запросу, прогон после OF-4).
 
-**OF-2. cleanup — сделано (2026-11-22).** Ветка `offer` на `worktree_state`; фронт: `cleanupWorktree` в
-`useChatRouting` + сборка в `App`, `LOOK`. Тесты: не-worktree / грязное дерево /
+**OF-2. cleanup — сделано (2026-11-22).** Ветка `offer` на `worktree_state`; фронт:
+`askWorktreeRemoval`/`worktreeMain` в `useChatRouting` + сборка в `App`, `LOOK`. Тесты: не-worktree / грязное дерево /
 own_commits > 0 → отказы; чистый worktree без своих коммитов → Offered; pushed-ветка
 (коммиты на remote) → Offered; фронт — порядок open(main) → ask(path), отказ open не
 зовёт диалог. Мутации: снятая каждая проверка, порядок шагов, вызов ask без open.
@@ -264,8 +265,18 @@ delete+set, тест добавлен; low: поле text не упражнял�
 - **docs/59 «Слои» противоречил коду** про фикстуру и редакцию `text` — исправлено.
 - **Мелочи**: `message` без текста явно ничего не шлёт; промпт — «on a branch of its own
   (started from main)»; `Place::worktree_base()` вместо двух одинаковых `match`.
-- Не тронуто: `-webkit-line-clamp` у `.offer-card-label` — стили по живому виду, ручной
-  проверки в приложении ещё не было.
+
+Повторное ревью всей ветки (2026-11-23):
+
+- cleanup при неизвестном main-чекауте молчал — теперь говорит причину тостом (кнопка
+  нажимается, и объяснение есть; удалить всё ещё можно из списка папок);
+- `.offer-card-label` получил `-webkit-line-clamp: 2` и `overflow-wrap: anywhere` — текст
+  до 300 символов без пробелов больше не вылезает из карточки;
+- комментарий у `OfferKind` больше не говорит, что свободного текста нет вовсе;
+- docs/59: `cleanupWorktree` в «Слоях» и отчёте OF-2 заменён на настоящие зависимости
+  (`worktreeMain`, `openPlan`, `askWorktreeRemoval`).
+- Чужой неотслеживаемый `keycloak-token.mjs` в корне рабочего дерева — не фичи и не
+  в коммитах (`git log --all` пуст); его судьба — решение пользователя.
 
 ## Вне плана
 

@@ -210,8 +210,9 @@ pub struct WritePlanArgs {
     pub content: String,
 }
 
-/// What `offer` can put to the user. Closed: free text would end up as a
-/// button under every answer.
+/// What `offer` can put to the user. The set is closed — a new kind is a new
+/// variant — but one of them, `Message`, carries the model's own text, kept
+/// short and shown at most twice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum OfferKind {

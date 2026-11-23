@@ -56,6 +56,11 @@
   min-width: 0;
 }
 .offer-card-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   font-size: var(--fs-sm);
   font-weight: 500;
 }
