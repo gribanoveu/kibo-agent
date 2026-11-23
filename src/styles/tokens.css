@@ -546,6 +546,9 @@
   /* Every panel's header, separator included: side by side, their lines
      meet as one. */
   --head-height: 48px;
+  /* The width the conversation is read at on a wide monitor: the thread's
+     column and the message box under it keep to it, centred in the panel. */
+  --thread-width: 750px;
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "IBM Plex Sans", sans-serif;
   /* The chat keeps the face it was drawn in. */
   --font-chat: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -743,6 +746,14 @@
    sizes and the em inside them follow it. */
 .text-scale {
   --font-scale: var(--chat-font-scale, 1.1);
+}
+
+/* The conversation's reading column, in the agent's thread and a chat's alike:
+   on a wide monitor it keeps a reading width and stays centred, instead of
+   stretching across the whole panel. */
+.thread-content {
+  max-width: var(--thread-width);
+  margin: 0 auto;
 }
 
 * {

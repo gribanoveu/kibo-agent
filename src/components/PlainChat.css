@@ -70,7 +70,12 @@
 .plain-composer-wrap {
   /* The settings panel hangs from here. */
   position: relative;
-  margin-top: 2px;
+  /* As the agent's box (Composer.css): two percent of the reading width wider
+     than the text on each side, plus the box's own 14px side margins twice,
+     centred. Narrower than the cap, the wrap is the panel's full width. */
+  width: 100%;
+  max-width: calc(var(--thread-width) * 1.04 + 28px);
+  margin: 2px auto 0;
   flex: none;
   display: flex;
   flex-direction: column;
