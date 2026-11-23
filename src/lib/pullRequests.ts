@@ -47,12 +47,30 @@ export type Build = { key: string; name: string; state: BuildState; url: string;
 
 export type MergeCheck = { canMerge: boolean; conflicted: boolean; vetoes: string[] };
 
+/** A reviewer's remark (`domain::code_host::Comment`): a comment thread or a task, with its place when inline. */
+export type PrComment = {
+  id: number;
+  /** The login the server matches on. */
+  author: string;
+  /** What is shown — the login when the server gives no name. */
+  authorName: string;
+  text: string;
+  path: string | null;
+  line: number | null;
+  /** A task (blocker comment) rather than an ordinary comment. */
+  task: boolean;
+  /** The thread is resolved, or the task RESOLVED: no longer open. */
+  resolved: boolean;
+};
+
 export type Snapshot = {
   pr: PullRequest | null;
   branchOnServer: boolean;
   defaultBranch: string | null;
   merge: MergeCheck | null;
   builds: Build[];
+  /** The reviewers' remarks, open and resolved. */
+  comments: PrComment[];
 };
 
 /** What the strip shows for the open folder (`domain::code_host::PrStrip`). */
@@ -74,6 +92,8 @@ export type PrStrip =
       mergeBlocked: string[] | null;
       /** The newest build of the branch's commit — the one shown. */
       latestBuild: Build | null;
+      /** The open remarks: Address comments shows only while it is more than none. */
+      openComments: number;
     };
 
 /**

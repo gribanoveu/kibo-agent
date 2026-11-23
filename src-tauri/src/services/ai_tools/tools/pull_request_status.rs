@@ -86,8 +86,32 @@ fn describe(strip: &PrStrip) -> Result<(String, String), ToolError> {
         }
         (None, None) => format!("#{}", pr.id),
     };
+    comments(&mut text, snapshot);
     builds(&mut text, snapshot);
     Ok((text.trim_end().to_string(), summary))
+}
+
+/// The reviewers' open remarks, with the place each points at: what the
+/// Address comments button sends the agent to work on. A resolved thread or
+/// task is not open and is not here. All of them are listed: the button
+/// carries the first twenty and sends the model here for the rest, so a cut
+/// here would make that promise false.
+fn comments(text: &mut String, snapshot: &Snapshot) {
+    let open: Vec<_> = snapshot.comments.iter().filter(|comment| !comment.resolved).collect();
+    if open.is_empty() {
+        text.push_str("\nOpen review comments: none");
+        return;
+    }
+    text.push_str(&format!("\nOpen review comments ({}):", open.len()));
+    for comment in &open {
+        let place = match (&comment.path, comment.line) {
+            (Some(path), Some(line)) => format!("{path}:{line}"),
+            (Some(path), None) => path.clone(),
+            _ => "general".to_string(),
+        };
+        let kind = if comment.task { "task" } else { "comment" };
+        text.push_str(&format!("\n- {kind} — {place} — {}: {}", comment.author_name, comment.text));
+    }
 }
 
 /// The head commit's builds, newest first — what CI said of the code as it is
@@ -120,6 +144,7 @@ pub(super) fn definition() -> LlmToolDefinition {
         description: "Reads the pull request of a branch on the user's Bitbucket — the folder's checked-out branch unless \
             `branch` names another: title, draft or not, source and target, author, link; each reviewer's decision; \
             whether it can be merged and, if not, the server's reasons (conflicts, missing approvals, failed builds); \
+            the reviewers' open comments and tasks with the file and line each points at; \
             and the builds of the branch's head commit with their state and link. Nothing is changed: approving, \
             merging and creating are the user's buttons under the branch in Overview. Build logs are not here — they \
             are in CI, behind each build's link. A branch that is not pushed, or has no pull request, is said so."
@@ -188,9 +213,40 @@ mod tests {
             branch: "feature/x".to_string(),
             merge_blocked,
             latest_build: None,
-            snapshot: Snapshot { pr, branch_on_server: true, default_branch: Some("master".to_string()), merge, builds },
+            snapshot: Snapshot { pr, branch_on_server: true, default_branch: Some("master".to_string()), merge, builds, comments: Vec::new() },
             can_approve: false,
             approved: false,
+            open_comments: 0,
+        }
+    }
+
+    fn remark(id: u64, task: bool, resolved: bool, path: Option<&str>, line: Option<u64>) -> crate::domain::code_host::Comment {
+        crate::domain::code_host::Comment {
+            id,
+            author: "u_reviewer".to_string(),
+            author_name: "Rita Reviewer".to_string(),
+            text: format!("remark {id}"),
+            path: path.map(str::to_string),
+            line,
+            task,
+            resolved,
+        }
+    }
+
+    /// A strip with remarks, as the service hands it: the open count computed.
+    fn remarked(comments: Vec<crate::domain::code_host::Comment>) -> PrStrip {
+        let PrStrip::Ready { snapshot, .. } = ready(Some(pr(Some(false))), None, Vec::new()) else { unreachable!() };
+        let open_comments = crate::domain::code_host::open_comments(&comments);
+        PrStrip::Ready {
+            server_id: "s".to_string(),
+            repo: "tax-api".to_string(),
+            branch: "feature/x".to_string(),
+            merge_blocked: None,
+            latest_build: None,
+            snapshot: Snapshot { comments, ..snapshot },
+            can_approve: false,
+            approved: false,
+            open_comments,
         }
     }
 
@@ -277,6 +333,7 @@ mod tests {
             snapshot: Snapshot { branch_on_server: false, ..snapshot },
             can_approve: false,
             approved: false,
+            open_comments: 0,
         };
         let (text, summary) = answer(run(Ok(unpushed), None).0);
         assert!(text.contains("is not on the server — either it was never pushed, or no branch is named so there"), "{text}");
@@ -303,6 +360,39 @@ mod tests {
         assert_eq!(text.matches("\n- successful").count(), BUILDS, "{text}");
         assert!(text.contains("job12") && !text.contains("job2 "), "newest kept:\n{text}");
         assert!(text.ends_with("… and 3 more"), "{text}");
+    }
+
+    /// The open remarks with their place and author; a resolved one is not
+    /// open and is not listed; none is said, not hidden.
+    #[test]
+    fn open_remarks_are_read_with_their_place() {
+        let comments = vec![
+            remark(101, false, false, Some("src/main.rs"), Some(34)),
+            remark(201, true, false, None, None),
+            remark(103, false, true, Some("src/main.rs"), Some(10)),
+        ];
+        let (text, _) = answer(run(Ok(remarked(comments)), None).0);
+        assert!(text.contains("Open review comments (2):"), "{text}");
+        assert!(text.contains("- comment — src/main.rs:34 — Rita Reviewer: remark 101"), "{text}");
+        assert!(text.contains("- task — general — Rita Reviewer: remark 201"), "{text}");
+        assert!(!text.contains("remark 103"), "a resolved thread is not open:\n{text}");
+
+        let (text, _) = answer(run(Ok(remarked(Vec::new())), None).0);
+        assert!(text.contains("Open review comments: none"), "{text}");
+        // A pull request with no remarks read says the same as one with none.
+        let (text, _) = answer(run(Ok(ready(Some(pr(Some(false))), None, Vec::new())), None).0);
+        assert!(text.contains("Open review comments: none"), "{text}");
+    }
+
+    #[test]
+    fn every_open_remark_is_listed_for_the_button_s_promise() {
+        // The Address comments button carries the first twenty and sends the
+        // model here for the rest: a cut here would hide them for good.
+        let comments = (0..23).map(|i| remark(i, false, false, Some("src/main.rs"), Some(i))).collect();
+        let (text, _) = answer(run(Ok(remarked(comments)), None).0);
+        assert_eq!(text.matches("\n- comment").count(), 23, "{text}");
+        assert!(text.contains("remark 22"), "the tail the button promised is readable:\n{text}");
+        assert!(!text.contains("… and"), "{text}");
     }
 
     #[test]

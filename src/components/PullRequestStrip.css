@@ -257,6 +257,17 @@
   font-size: var(--fs-sm);
   cursor: pointer;
 }
+/* The agent's tasks — Resolve conflicts, Address comments — a row of their
+   own under the next step, in the same column. */
+.pr-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 28px;
+}
+.pr-tasks .pr-next {
+  margin: 4px 0 2px;
+}
 .pr-next:hover:not(:disabled) {
   background: var(--bg-active);
 }

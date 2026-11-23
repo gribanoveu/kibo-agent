@@ -77,6 +77,8 @@ import { useFolderTrust } from "./hooks/useFolderTrust";
 import { useBranchPicker } from "./hooks/useBranchPicker";
 import { BranchConflictDialog } from "./components/BranchConflictDialog";
 import { useWorktreeRemoval } from "./hooks/useWorktreeRemoval";
+import { usePullRequest } from "./hooks/usePullRequest";
+import { prTasksOf } from "./lib/pullRequestView";
 import { WorktreeRemoveDialog } from "./components/WorktreeRemoveDialog";
 import { RewindDialog } from "./components/RewindDialog";
 import { useRewind } from "./hooks/useRewind";
@@ -208,6 +210,9 @@ export default function App() {
   const branch = useGitBranch(workspace.path, agent.turn.status);
   const worktreeOf = useWorktreeOf(workspace.path);
   const changeTotals = useChangeTotals(workspace.path);
+  // The branch's pull request, read once for the whole window: Overview's strip
+  // and the task buttons under the agent's answer draw the same read (BB-8).
+  const pr = usePullRequest(features.isOn("pull-requests"), workspace.path);
   // A turn keeps its own folder while the window moves (F-8.7): only closing
   // that folder, or switching its branch, waits for it.
   const turnsInFolder = turnsIn(agent.chatActivity, history.folderOf);
@@ -382,6 +387,7 @@ export default function App() {
     onNotify: toast.show,
     commitDraft: { message: commitMessage, onMessage: setCommitMessage },
     pullRequests: features.isOn("pull-requests"),
+    pr,
     processFocus,
     chatId: agent.chatId,
     onOpenAgent: openAgent,
@@ -486,6 +492,8 @@ export default function App() {
             onRewind={(id) => void rewinding.ask(id)}
             onFix={giveBack}
             onOffer={conversation.value === "agent" ? (offer) => void pickOffer(offer) : undefined}
+            prTasks={conversation.value === "agent" ? prTasksOf(pr.strip) : null}
+            onPrTask={giveBack}
             steered={agent.steered}
             onWithdraw={agent.withdraw}
           />

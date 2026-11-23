@@ -1,4 +1,4 @@
-import type { BuildState, Reviewer } from "./pullRequests";
+import type { BuildState, PrComment, PrStrip, PullRequest, Reviewer } from "./pullRequests";
 
 // What the Overview rows say in a word.
 
@@ -48,4 +48,45 @@ const NOT_BITBUCKET = ["github.com", "gitlab.com"];
 export function offersConnect(host: string): boolean {
   const name = host.toLowerCase();
   return !NOT_BITBUCKET.some((public_) => name === public_ || name.endsWith(`.${public_}`));
+}
+
+// ─── The pull request's tasks for the agent (BB-8) ─────────────────────────
+
+/** What the pull request asks of the agent: conflicts to resolve, open remarks to address. */
+export type PrTasks = {
+  pr: PullRequest;
+  conflicted: boolean;
+  /** The open remarks only: a resolved thread or task is not work. */
+  comments: PrComment[];
+};
+
+/** The tasks of a strip's state — `null` when there is nothing to do: no pull
+    request, no conflict and no open remark. A failed build is not a task here:
+    its logs are in CI, and Fix CI is not offered (decision 10). */
+export function prTasksOf(strip: PrStrip | null): PrTasks | null {
+  if (!strip || strip.state !== "ready" || !strip.snapshot.pr) return null;
+  const conflicted = strip.snapshot.merge?.conflicted === true;
+  const comments = strip.snapshot.comments.filter((comment) => !comment.resolved);
+  if (!conflicted && comments.length === 0) return null;
+  return { pr: strip.snapshot.pr, conflicted, comments };
+}
+
+/** What pressing Resolve conflicts puts in the message box: the target named. */
+export function resolveConflictsRequest(pr: PullRequest): string {
+  return `Pull request #${pr.id} has merge conflicts with \`${pr.toBranch}\`. Bring \`${pr.fromBranch}\` up to date with \`${pr.toBranch}\`, resolve the conflicts, run the checks and push the result.`;
+}
+
+/** Most remarks carried into the message; the rest the model reads with the tool. */
+const ADDRESSED = 20;
+
+/** What pressing Address comments puts in the box: each open remark with its
+    place and author, and the review's own rule — fix the real, dismiss the rest. */
+export function addressCommentsRequest(pr: PullRequest, comments: PrComment[]): string {
+  const lines = comments.slice(0, ADDRESSED).map((comment) => {
+    const place = comment.path ? (comment.line != null ? `${comment.path}:${comment.line}` : comment.path) : "general";
+    return `- ${comment.task ? "task" : "comment"} — ${place} — ${comment.authorName}: ${comment.text}`;
+  });
+  const rest = comments.length - lines.length;
+  const more = rest > 0 ? `\n… and ${rest} more — read them with pullRequestStatus.` : "";
+  return `Address the open review comments on pull request #${pr.id}:\n${lines.join("\n")}${more}\nFor each, fix what you recognize as real and say what you dismissed and why.`;
 }

@@ -45,6 +45,8 @@ import { FindingCard, ReviewReport } from "./ReviewCard";
 import { findingOf, reviewOf } from "../lib/finding";
 import { offerOf, offersOf, type Offer } from "../lib/offer";
 import { OfferCards } from "./OfferCards";
+import { PrTaskCards } from "./PrTaskCards";
+import type { PrTasks } from "../lib/pullRequestView";
 import { presentedOf } from "../lib/prototype";
 import { PresentedCard, RestoredCard } from "./PresentedCard";
 import { hasOpen } from "../lib/plan";
@@ -945,6 +947,10 @@ type Props = {
   preview?: PreviewCalls;
   /** Takes what an offer under the last answer offered: a message sent, or the plan opened. */
   onOffer?: (offer: Offer) => void;
+  /** The pull request's tasks under the last answer: conflicts to resolve, open remarks to address (BB-8). */
+  prTasks?: PrTasks | null;
+  /** Puts a pull request task's request into the message box, as `onFix` does. */
+  onPrTask?: (text: string) => void;
   /** Notes sent into the running turn that no round has read yet; one taken
       back goes to the box, with the pictures it carried. */
   steered?: SteeredNote[];
@@ -971,6 +977,8 @@ type TranscriptProps = Pick<
   | "onRewind"
   | "onFix"
   | "onOffer"
+  | "prTasks"
+  | "onPrTask"
   | "steered"
   | "onWithdraw"
   | "onAnswerQuestion"
@@ -1029,6 +1037,8 @@ export function Transcript({
   onRewind,
   onFix,
   onOffer,
+  prTasks = null,
+  onPrTask,
   onAnswerQuestion,
   checklist = [],
   onOpenVersion,
@@ -1088,6 +1098,7 @@ export function Transcript({
         </div>
       ))}
       {onOffer && <OfferCards offers={offers} onPick={onOffer} />}
+      {prTasks && onPrTask && turn.status === "done" && <PrTaskCards tasks={prTasks} onTask={onPrTask} />}
       {steered.length > 0 && (
         <div className="turn">
           <div className="role">You</div>
@@ -1136,6 +1147,8 @@ export function ChatPanel({
   onFix,
   preview,
   onOffer,
+  prTasks,
+  onPrTask,
   onAnswerQuestion,
   steered = [],
   onWithdraw,
@@ -1265,6 +1278,8 @@ export function ChatPanel({
               onFix={onFix}
               preview={preview}
               onOffer={onOffer}
+              prTasks={prTasks}
+              onPrTask={onPrTask}
               checklist={checklist}
               steered={steered}
               onWithdraw={onWithdraw}

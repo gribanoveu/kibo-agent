@@ -8,12 +8,14 @@ import {
   CircleHelp,
   CircleX,
   ExternalLink,
+  GitCompare,
   GitMerge,
   GitPullRequest,
   GitPullRequestCreate,
   GitPullRequestDraft,
   Hammer,
   Loader2,
+  MessagesSquare,
   MoreHorizontal,
   RefreshCw,
   TriangleAlert,
@@ -24,12 +26,12 @@ import { CodeHostConnect } from "./CodeHostConnect";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { Switch } from "./Switch";
 import { openExternal } from "../lib/window";
-import { buildText, offersConnect, readiness, REVIEW_WORD, reviewersInOrder, reviewsAtAGlance } from "../lib/pullRequestView";
+import { addressCommentsRequest, buildText, offersConnect, prTasksOf, readiness, resolveConflictsRequest, REVIEW_WORD, reviewersInOrder, reviewsAtAGlance } from "../lib/pullRequestView";
 import type { Build, BuildState, PrStrip, PullRequest, ReviewStatus } from "../lib/pullRequests";
 import type { PullRequestState } from "../hooks/usePullRequest";
 import "./PullRequestStrip.css";
 
-type Props = PullRequestState & { onNotify: (msg: string) => void };
+type Props = PullRequestState & { onNotify: (msg: string) => void; onTask?: (text: string) => void };
 type Ready = Extract<PrStrip, { state: "ready" }>;
 
 const BUILD_ICON: Record<BuildState, typeof Circle> = {
@@ -114,7 +116,7 @@ export function PullRequestStrip(props: Props) {
   return <ReadyRow {...props} strip={strip} failed={failed} />;
 }
 
-function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, failed }: Props & { strip: Ready; failed: ReactNode }) {
+function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, onTask, failed }: Props & { strip: Ready; failed: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<"merge" | "create" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -164,6 +166,8 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
   }
 
   const reviews = reviewsAtAGlance(pr.reviewers);
+  // The work the pull request asks of the agent: conflicts and open remarks.
+  const tasks = prTasksOf(strip);
   // A draft's next step is Mark ready, never Merge: the button below picks one.
   const canMerge = strip.mergeBlocked === null;
   const blocked = strip.mergeBlocked ?? [];
@@ -245,6 +249,22 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, fa
             <GitMerge size={12} /> Merge
           </button>
         )
+      )}
+      {/* The agent's tasks, each putting its request in the message box — the
+          user reads it and sends, as a review's Fix does. */}
+      {onTask && tasks && (
+        <div className="pr-tasks">
+          {tasks.conflicted && (
+            <button type="button" className="pr-next" onClick={() => onTask(resolveConflictsRequest(pr))}>
+              <GitCompare size={12} /> Resolve conflicts
+            </button>
+          )}
+          {tasks.comments.length > 0 && (
+            <button type="button" className="pr-next" onClick={() => onTask(addressCommentsRequest(pr, tasks.comments))}>
+              <MessagesSquare size={12} /> Address comments
+            </button>
+          )}
+        </div>
       )}
       {failed}
 

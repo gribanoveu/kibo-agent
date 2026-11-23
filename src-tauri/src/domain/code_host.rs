@@ -373,6 +373,9 @@ pub trait CodeHost: Send + Sync {
     fn pull_request(&self, call: &Call, branch: &str) -> Result<Option<PullRequest>, CodeHostError>;
     fn merge_check(&self, call: &Call, id: u64) -> Result<MergeCheck, CodeHostError>;
     fn builds(&self, call: &Call, commit: &str) -> Result<Vec<Build>, CodeHostError>;
+    /// The pull request's remarks: comment threads and tasks, open and
+    /// resolved, replies folded into their thread.
+    fn comments(&self, call: &Call, id: u64) -> Result<Vec<Comment>, CodeHostError>;
     /// `false` takes an approval back; `me` is the reviewer's slug, from [`CodeHost::me`].
     fn approve(&self, call: &Call, pr: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError>;
     fn merge(&self, call: &Call, pr: &PullRequest) -> Result<(), CodeHostError>;
@@ -457,6 +460,33 @@ pub fn latest_build(builds: &[Build]) -> Option<&Build> {
     builds.iter().max_by_key(|build| (build.date_added, build.state == BuildState::InProgress))
 }
 
+/// A reviewer's remark on the pull request: a comment thread or a task
+/// (a blocker comment), with the place it points at when it has one.
+/// Replies are part of their thread, not remarks of their own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Comment {
+    pub id: u64,
+    /// Who the server means by the author: the slug, as reviewers are matched.
+    pub author: String,
+    /// What a person reads; the slug when the server gives none.
+    pub author_name: String,
+    pub text: String,
+    /// The file and line an inline remark is anchored to; a general one has none.
+    pub path: Option<String>,
+    pub line: Option<u64>,
+    /// A task (blocker comment) rather than an ordinary comment.
+    pub task: bool,
+    /// The thread is resolved, or the task RESOLVED: no longer open.
+    pub resolved: bool,
+}
+
+/// The remarks still open: unresolved threads and unresolved tasks, one rule
+/// for both. What the Address comments button counts and the tool lists.
+pub fn open_comments(comments: &[Comment]) -> usize {
+    comments.iter().filter(|comment| !comment.resolved).count()
+}
+
 /// The server's answer to "may this be merged".
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -485,6 +515,9 @@ pub struct Snapshot {
     /// `None` until the strip has asked, which is not the same as "no".
     pub merge: Option<MergeCheck>,
     pub builds: Vec<Build>,
+    /// The reviewers' remarks, open and resolved: a resolution is a change
+    /// the watcher reports, like a build's.
+    pub comments: Vec<Comment>,
 }
 
 /// What the strip shows for the open folder, from nothing to a pull request.
@@ -521,6 +554,9 @@ pub enum PrStrip {
         merge_blocked: Option<Vec<String>>,
         /// [`latest_build`] of the snapshot's builds.
         latest_build: Option<Build>,
+        /// [`open_comments`] of the snapshot's comments: Address comments
+        /// shows only while it is more than none.
+        open_comments: usize,
     },
 }
 
@@ -1004,6 +1040,7 @@ mod tests {
             approved: false,
             merge_blocked: None,
             latest_build: latest.map(|state| build("n", state, None)),
+            open_comments: 0,
         };
         assert!(ready(Some(BuildState::InProgress)).building());
         assert!(!ready(Some(BuildState::Successful)).building());
@@ -1033,8 +1070,9 @@ mod tests {
             approved: false,
             merge_blocked: Some(vec!["v".to_string()]),
             latest_build: snapshot().builds.into_iter().next(),
+            open_comments: 1,
         });
-        for key in ["state", "serverId", "repo", "branch", "snapshot", "canApprove", "approved", "mergeBlocked", "latestBuild"] {
+        for key in ["state", "serverId", "repo", "branch", "snapshot", "canApprove", "approved", "mergeBlocked", "latestBuild", "openComments"] {
             assert!(ready.get(key).is_some(), "{key}: {ready}");
         }
         assert_eq!(ready["state"], "ready");
@@ -1060,7 +1098,30 @@ mod tests {
                 url: "https://server.com/builds/1".to_string(),
                 date_added: Some(1_700_000_000_000),
             }],
+            comments: vec![comment(1, false, false), comment(2, true, false)],
         }
+    }
+
+    fn comment(id: u64, resolved: bool, task: bool) -> Comment {
+        Comment {
+            id,
+            author: "u_reviewer".to_string(),
+            author_name: "Reviewer".to_string(),
+            text: "Move this into the builder".to_string(),
+            path: Some("src/main.rs".to_string()),
+            line: Some(34),
+            task,
+            resolved,
+        }
+    }
+
+    /// One rule for both kinds: a resolved thread and a RESOLVED task are not
+    /// open; an unresolved thread and an OPEN task are.
+    #[test]
+    fn open_comments_counts_the_unresolved_of_both_kinds() {
+        let comments = vec![comment(1, false, false), comment(2, true, false), comment(3, false, true), comment(4, true, true)];
+        assert_eq!(open_comments(&comments), 2);
+        assert_eq!(open_comments(&[]), 0);
     }
 
     /// The watcher's whole contract: an unchanged poll must say nothing, or the
@@ -1085,6 +1146,14 @@ mod tests {
         let mut unblocked = snapshot();
         unblocked.merge = Some(MergeCheck { can_merge: true, conflicted: false, vetoes: Vec::new() });
         assert_ne!(base, unblocked, "the vetoes went away");
+
+        let mut resolved = snapshot();
+        resolved.comments[0].resolved = true;
+        assert_ne!(base, resolved, "a thread was resolved");
+
+        let mut remarked = snapshot();
+        remarked.comments.push(comment(3, false, true));
+        assert_ne!(base, remarked, "a new task arrived");
     }
 
     /// Pushing the branch is a change too: Create PR appears where it was

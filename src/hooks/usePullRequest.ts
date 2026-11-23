@@ -18,11 +18,12 @@ import {
 } from "../lib/pullRequests";
 
 /**
- * The pull request strip of the open folder (docs/62-bitbucket-prs.md), read
- * while it is on screen: when it opens, when the backend's watcher says the
- * server changed, and when `.git` moved in a way the server could know of — a
- * switch of branch or a push; the backend decides that, so staging a file costs
- * the server nothing. A button's outcome arrives the same way, as the event.
+ * The pull request of the open folder (docs/62-bitbucket-prs.md), read once in
+ * App while the feature is on: Overview's strip and the task buttons under the
+ * agent's answer draw the same read. When it opens, when the backend's watcher
+ * says the server changed, and when `.git` moved in a way the server could know
+ * of — a switch of branch or a push; the backend decides that, so staging a file
+ * costs the server nothing. A button's outcome arrives the same way, as the event.
  *
  * A read that fails keeps the last strip: it is drawn grey with the reason.
  */

@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::domain::code_host::{
-    host_of, Build, BuildState, Call, CodeHost, CodeHostError, CodeHostServer, MergeCheck, PullRequest, ReviewStatus,
+    host_of, Build, BuildState, Call, CodeHost, CodeHostError, CodeHostServer, Comment, MergeCheck, PullRequest, ReviewStatus,
     Reviewer,
 };
 use crate::infra::http_agent;
@@ -125,6 +125,103 @@ impl CodeHost for Bitbucket {
                 date_added: build.date_added,
             })
             .collect())
+    }
+
+    fn comments(&self, call: &Call, id: u64) -> Result<Vec<Comment>, CodeHostError> {
+        // The BB-8 probe's finding: `/comments` answers 400 without a `path` —
+        // it reads one file's comments, not the pull request's. The activity
+        // stream carries every comment with its anchor; tasks (blocker
+        // comments) have their own endpoint.
+        let mut latest: HashMap<u64, Activity> = HashMap::new();
+        let mut start = 0usize;
+        // ponytail: ten pages of a hundred events — a pull request with a
+        // longer history loses its oldest comments; past this, read by id.
+        for _ in 0..10 {
+            let page: Values<Activity> =
+                read(&get(call, &format!("{}/pull-requests/{id}/activities?limit=100&start={start}", api(call)))?)?;
+            for activity in page.values {
+                let Some(comment) = activity.comment.as_ref() else { continue };
+                if activity.action != "COMMENTED" {
+                    continue;
+                }
+                // The last event of a comment is its current state: an edit
+                // carries the new text, a delete withdraws it. The stream runs
+                // newest first (the probe's order), and two events may share a
+                // millisecond: the greater event id is the newer one, whatever
+                // order they arrive in.
+                let id = comment.id;
+                if latest.get(&id).is_none_or(|seen| (seen.created_date, seen.id) <= (activity.created_date, activity.id)) {
+                    latest.insert(id, activity);
+                }
+            }
+            if page.is_last_page {
+                break;
+            }
+            let next = page.next_page_start;
+            if next <= start {
+                break;
+            }
+            start = next;
+        }
+        let mut remarks: HashMap<u64, Comment> = latest
+            .into_values()
+            .filter_map(|activity| {
+                if activity.comment_action == "DELETED" {
+                    return None;
+                }
+                let comment = activity.comment?;
+                // PENDING is a reviewer's unpublished draft; a reply is part
+                // of its thread; a task is read from its own endpoint below.
+                if comment.state != "OPEN" || comment.parent.is_some() || comment.severity == "BLOCKER" {
+                    return None;
+                }
+                let (path, line) = match activity.comment_anchor.or(comment.anchor) {
+                    Some(anchor) => (anchor.path, anchor.line),
+                    None => (None, None),
+                };
+                Some((
+                    comment.id,
+                    Comment {
+                        id: comment.id,
+                        author_name: comment.author.shown(),
+                        author: comment.author.slug,
+                        text: comment.text,
+                        path,
+                        line,
+                        task: false,
+                        resolved: comment.thread_resolved,
+                    },
+                ))
+            })
+            .collect();
+        let tasks: Values<CommentJson> = read(&get(call, &format!("{}/pull-requests/{id}/blocker-comments?limit=100", api(call)))?)?;
+        for task in tasks.values {
+            if task.state != "OPEN" && task.state != "RESOLVED" {
+                continue;
+            }
+            let (path, line) = match task.anchor {
+                Some(anchor) => (anchor.path, anchor.line),
+                None => (None, None),
+            };
+            remarks.insert(
+                task.id,
+                Comment {
+                    id: task.id,
+                    author_name: task.author.shown(),
+                    author: task.author.slug,
+                    text: task.text,
+                    path,
+                    line,
+                    task: true,
+                    resolved: task.state == "RESOLVED",
+                },
+            );
+        }
+        // A stable order: the watcher compares snapshots whole, and a hash
+        // map's own would make every read a change.
+        let mut remarks: Vec<Comment> = remarks.into_values().collect();
+        remarks.sort_by_key(|remark| remark.id);
+        Ok(remarks)
     }
 
     fn approve(&self, call: &Call, pr: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError> {
@@ -420,6 +517,15 @@ struct Properties {
 struct Values<T> {
     #[serde(default = "Vec::new")]
     values: Vec<T>,
+    /// A response that does not say reads as the last page: nothing to follow.
+    #[serde(default = "last_page", rename = "isLastPage")]
+    is_last_page: bool,
+    #[serde(default, rename = "nextPageStart")]
+    next_page_start: usize,
+}
+
+fn last_page() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -589,6 +695,58 @@ struct BuildJson {
     url: String,
 }
 
+/// One event of the activity stream: a comment added, edited, replied to or
+/// deleted, with the anchor it was written against (the BB-8 probe's shape).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Activity {
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    created_date: u64,
+    #[serde(default)]
+    comment_action: String,
+    #[serde(default)]
+    comment: Option<CommentJson>,
+    #[serde(default)]
+    comment_anchor: Option<Anchor>,
+}
+
+/// A comment as the server keeps it — in an activity, or a task of the
+/// blocker-comments list. Its `author` is the user itself, not wrapped in
+/// `user` as the pull request's is.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentJson {
+    id: u64,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    author: User,
+    #[serde(default)]
+    severity: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    thread_resolved: bool,
+    /// A reply carries its parent: part of a thread, not a remark of its own.
+    #[serde(default)]
+    parent: Option<Value>,
+    #[serde(default)]
+    anchor: Option<Anchor>,
+}
+
+/// The file and line a remark points at; a general comment has no anchor.
+#[derive(Deserialize)]
+struct Anchor {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    line: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,6 +797,49 @@ mod tests {
         "fromRef":{"displayId":"docs/wowtax-8238"},"toRef":{"displayId":"master"},
         "author":{"user":{"slug":"u_author"}},
         "links":{"self":[{"href":"https://server.com/projects/CORP/repos/tax-api/pull-requests/154"}]}}"#;
+
+    /// The activity stream the BB-8 probe read, with names taken out and in
+    /// the server's order — newest first: comments with anchors and a general
+    /// one, and the shapes a thread can take — a resolved one, a draft, a
+    /// reply, a task, an edit, a delete, and an edit in the same millisecond.
+    const ACTIVITIES: &str = r#"{"size":14,"limit":100,"isLastPage":true,"values":[
+        {"id":14,"createdDate":1300,"action":"COMMENTED","commentAction":"EDITED",
+         "comment":{"id":109,"version":2,"text":"Same-ms edit","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":13,"createdDate":1300,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":109,"text":"First words","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":12,"createdDate":1200,"action":"REVIEWED"},
+        {"id":11,"createdDate":1100,"action":"COMMENTED","commentAction":"DELETED",
+         "comment":{"id":108,"text":"Withdrawn","author":{"slug":"u_reviewer"},"severity":"NORMAL","state":"OPEN"}},
+        {"id":10,"createdDate":1000,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":108,"text":"Withdrawn","author":{"slug":"u_reviewer"},"severity":"NORMAL","state":"OPEN"}},
+        {"id":9,"createdDate":900,"action":"COMMENTED","commentAction":"EDITED",
+         "comment":{"id":107,"version":2,"text":"Edited words","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":8,"createdDate":800,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":107,"text":"First words","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":7,"createdDate":700,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":106,"text":"A task in the stream","author":{"slug":"u_reviewer"},"severity":"BLOCKER","state":"OPEN"}},
+        {"id":6,"createdDate":600,"action":"COMMENTED","commentAction":"REPLIED",
+         "comment":{"id":105,"text":"Agreed","author":{"slug":"u_author"},"severity":"NORMAL","state":"OPEN","parent":{"id":101}}},
+        {"id":5,"createdDate":500,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":104,"text":"A draft thought","author":{"slug":"u_me"},"severity":"NORMAL","state":"PENDING"}},
+        {"id":4,"createdDate":400,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":103,"text":"Done","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":true},
+         "commentAnchor":{"path":"src/main.rs","line":10}},
+        {"id":3,"createdDate":300,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":102,"text":"Why this change?","author":{"slug":"u_author"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":2,"createdDate":200,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":101,"version":1,"text":"Move the build into the builder","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false,"comments":[]},
+         "commentAnchor":{"path":"src/test/java/ExampleTest.java","line":34,"lineType":"ADDED","fileType":"TO","diffType":"EFFECTIVE","orphaned":false}},
+        {"id":1,"createdDate":100,"action":"OPENED"}]}"#;
+
+    /// Tasks were empty on the probed pull request: their shape is the
+    /// documented comment's, as the builds' was in BB-0.
+    const BLOCKERS: &str = r#"{"size":2,"limit":100,"isLastPage":true,"values":[
+        {"id":201,"text":"Add the missing test","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"BLOCKER","state":"OPEN",
+         "anchor":{"path":"src/main.rs","line":10}},
+        {"id":202,"text":"Rename this","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"BLOCKER","state":"RESOLVED"}]}"#;
+
+    const NO_REMARKS: &str = r#"{"size":0,"limit":100,"isLastPage":true,"values":[]}"#;
 
     /// Answers one request with `reply` as written, and hands the request back.
     ///
@@ -809,6 +1010,131 @@ mod tests {
 
         let (none, _, _) = ask(json_reply("200 OK", BUILDS_EMPTY), |call| Bitbucket.builds(call, "94beed9"));
         assert!(none.is_empty());
+    }
+
+    /// The remarks the BB-8 probe's stream carries: an anchored comment with
+    /// its place and author, a general one without, a resolved thread kept
+    /// but flagged; a draft, a reply, a task-in-the-stream and a deleted one
+    /// are not remarks; an edit is the comment's current text. Tasks come
+    /// from their own endpoint, open and resolved.
+    #[test]
+    fn the_remarks_of_the_stream_are_read_with_their_place() {
+        let (base, server) = serve_each(vec![json_reply("200 OK", ACTIVITIES), json_reply("200 OK", BLOCKERS)]);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+        let asked = server.join().unwrap();
+        assert!(asked[0].starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153/activities?limit=100&start=0"), "{}", asked[0]);
+        assert!(asked[1].starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153/blocker-comments"), "{}", asked[1]);
+
+        let ids: Vec<u64> = remarks.iter().map(|r| r.id).collect();
+        assert_eq!(ids, [101, 102, 103, 107, 109, 201, 202], "drafts, replies, stream tasks and deleted ones are not remarks: {remarks:?}");
+        let by_id = |id: u64| remarks.iter().find(|r| r.id == id).unwrap();
+        let anchored = by_id(101);
+        assert_eq!((anchored.path.as_deref(), anchored.line), (Some("src/test/java/ExampleTest.java"), Some(34)));
+        assert_eq!((anchored.author.as_str(), anchored.author_name.as_str()), ("u_reviewer", "Rita Reviewer"));
+        assert_eq!(anchored.text, "Move the build into the builder");
+        assert!(!anchored.task && !anchored.resolved);
+        let general = by_id(102);
+        assert_eq!((general.path.as_deref(), general.line), (None, None), "a general comment has no place");
+        assert_eq!(general.author_name, "u_author", "no display name: the slug is shown");
+        assert!(by_id(103).resolved, "a resolved thread is kept, flagged");
+        assert_eq!(by_id(107).text, "Edited words", "the last event of a comment is its text");
+        assert_eq!(by_id(109).text, "Same-ms edit", "an edit in the same millisecond is still the newer event");
+        let task = by_id(201);
+        assert!(task.task && !task.resolved);
+        assert_eq!((task.path.as_deref(), task.line), (Some("src/main.rs"), Some(10)));
+        assert!(by_id(202).task && by_id(202).resolved, "a RESOLVED task is kept, flagged");
+        assert_eq!(crate::domain::code_host::open_comments(&remarks), 5);
+    }
+
+    /// Two events of one comment in one millisecond: the greater event id is
+    /// the newer one, whichever order the pages deliver them in.
+    #[test]
+    fn events_of_one_millisecond_are_told_apart_by_their_id() {
+        let added = r#"{"id":13,"createdDate":1300,"action":"COMMENTED","commentAction":"ADDED","comment":{"id":109,"text":"First words","author":{"slug":"u_r"},"severity":"NORMAL","state":"OPEN"}}"#;
+        let edited = r#"{"id":14,"createdDate":1300,"action":"COMMENTED","commentAction":"EDITED","comment":{"id":109,"version":2,"text":"Same-ms edit","author":{"slug":"u_r"},"severity":"NORMAL","state":"OPEN"}}"#;
+        for order in [[added, edited], [edited, added]] {
+            let stream = format!(r#"{{"isLastPage":true,"values":[{},{}]}}"#, order[0], order[1]);
+            let (base, server) = serve_each(vec![json_reply("200 OK", &stream), json_reply("200 OK", NO_REMARKS)]);
+            let at = server_at(&base);
+            let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+            let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+            let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+            server.join().unwrap();
+            assert_eq!(remarks.len(), 1);
+            assert_eq!(remarks[0].text, "Same-ms edit", "order {order:?}");
+        }
+    }
+
+    /// The stream is paged: a page that is not the last is followed at its
+    /// `nextPageStart`, and both pages' comments are read.
+    #[test]
+    fn the_stream_is_paged_to_the_last() {
+        let page = |id: u64, last: bool, next: usize| {
+            json_reply("200 OK", &format!(
+                r#"{{"isLastPage":{last},"nextPageStart":{next},"values":[{{"id":{id},"createdDate":{id},"action":"COMMENTED","commentAction":"ADDED","comment":{{"id":{id},"text":"remark {id}","author":{{"slug":"u_r"}},"severity":"NORMAL","state":"OPEN"}}}}]}}"#
+            ))
+        };
+        let (base, server) = serve_each(vec![page(301, false, 100), page(302, true, 200), json_reply("200 OK", NO_REMARKS)]);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+        let asked = server.join().unwrap();
+        assert_eq!(remarks.iter().map(|r| r.id).collect::<Vec<_>>(), [301, 302]);
+        assert!(asked[1].contains("start=100"), "the second page starts where the first said: {}", asked[1]);
+        assert_eq!(asked.len(), 3, "the last page ends the stream");
+    }
+
+    /// A history longer than ten pages stops at the cap: the oldest comments
+    /// are lost, the read still answers (the ponytail's ceiling).
+    #[test]
+    fn a_long_history_stops_at_the_cap() {
+        let page = |i: usize| {
+            json_reply("200 OK", &format!(
+                r#"{{"isLastPage":false,"nextPageStart":{},"values":[{{"id":{},"createdDate":{},"action":"COMMENTED","commentAction":"ADDED","comment":{{"id":{},"text":"remark","author":{{"slug":"u_r"}},"severity":"NORMAL","state":"OPEN"}}}}]}}"#,
+                (i + 1) * 100, i + 1, i + 1, i + 1
+            ))
+        };
+        let mut replies: Vec<String> = (0..10).map(page).collect();
+        replies.push(json_reply("200 OK", NO_REMARKS));
+        let (base, server) = serve_each(replies);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+        let asked = server.join().unwrap();
+        assert_eq!(asked.len(), 11, "ten pages of activities and one of tasks");
+        assert!(asked[9].contains("start=900"), "{}", asked[9]);
+        assert_eq!(remarks.len(), 10);
+        assert!(!remarks.iter().any(|r| r.id == 11), "the eleventh page is not read");
+    }
+
+    /// Two reads of one state are one answer in one order: the watcher
+    /// compares snapshots whole, and a hash map's own order would make every
+    /// poll a change.
+    #[test]
+    fn two_reads_of_one_stream_are_equal() {
+        let read = || {
+            let (base, server) = serve_each(vec![json_reply("200 OK", ACTIVITIES), json_reply("200 OK", BLOCKERS)]);
+            let at = server_at(&base);
+            let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+            let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+            let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+            server.join().unwrap();
+            remarks
+        };
+        assert_eq!(read(), read());
+        // An empty stream and no tasks: no remarks, not an error.
+        let (base, server) = serve_each(vec![json_reply("200 OK", NO_REMARKS), json_reply("200 OK", NO_REMARKS)]);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+        server.join().unwrap();
+        assert!(remarks.is_empty());
     }
 
     #[test]

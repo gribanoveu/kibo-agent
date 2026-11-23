@@ -80,11 +80,12 @@ function ready(over: Partial<Extract<PrStrip, { state: "ready" }>> = {}, snapsho
     serverId: "bb",
     repo: "tax-api",
     branch: "feature/x",
-    snapshot: { pr: pr(), branchOnServer: true, defaultBranch: "master", merge: null, builds: [], ...snapshot },
+    snapshot: { pr: pr(), branchOnServer: true, defaultBranch: "master", merge: null, builds: [], comments: [], ...snapshot },
     canApprove: true,
     approved: false,
     mergeBlocked: null,
     latestBuild: null,
+    openComments: 0,
     ...over,
   };
 }
@@ -93,9 +94,9 @@ const reads = () => calls.filter((c) => c.command === "pull_request").length;
 const asked = (command: string) => calls.filter((c) => c.command === command);
 
 /** What Overview's pane does: the hook while the feature is on, and the row it reads. */
-function Overview({ on = true, workspace = "/repo", notes = [] }: { on?: boolean; workspace?: string; notes?: string[] }) {
+function Overview({ on = true, workspace = "/repo", notes = [], tasks = [] }: { on?: boolean; workspace?: string; notes?: string[]; tasks?: string[] }) {
   const pr = usePullRequest(on, workspace);
-  return on ? <PullRequestStrip {...pr} onNotify={(note) => notes.push(note)} /> : null;
+  return on ? <PullRequestStrip {...pr} onNotify={(note) => notes.push(note)} onTask={(text) => tasks.push(text)} /> : null;
 }
 
 /** Picks `label` from the pull request's "⋯". */
@@ -104,8 +105,8 @@ function fromMenu(label: string) {
   fireEvent.click(screen.getByRole("menuitem", { name: label }));
 }
 
-function panel(on = true, notes: string[] = []) {
-  return render(<Overview on={on} notes={notes} />);
+function panel(on = true, notes: string[] = [], tasks: string[] = []) {
+  return render(<Overview on={on} notes={notes} tasks={tasks} />);
 }
 
 beforeEach(() => {
@@ -554,6 +555,69 @@ describe("the servers in the Pull requests panel", () => {
     expect(asked("code_host_save").map((c) => c.args)).toEqual([
       { server: servers[0], token: null, forFolder: false },
     ]);
+  });
+});
+
+describe("the agent's tasks (BB-8)", () => {
+  const remark = (over: Partial<{ id: number; resolved: boolean; task: boolean; text: string }> = {}) => ({
+    id: 101,
+    author: "u_reviewer",
+    authorName: "Rita Reviewer",
+    text: "Move this into the builder",
+    path: "src/main.rs",
+    line: 34,
+    task: false,
+    resolved: false,
+    ...over,
+  });
+
+  test("a conflict offers Resolve conflicts, and pressing puts the target in the box", async () => {
+    strip = ready({ mergeBlocked: ["conflicts"] }, { merge: { canMerge: false, conflicted: true, vetoes: [] } });
+    const tasks: string[] = [];
+    panel(true, [], tasks);
+    await settle();
+    fireEvent.click(screen.getByText("Resolve conflicts"));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toContain("#153");
+    expect(tasks[0]).toContain("`master`");
+    expect(screen.queryByText("Address comments")).toBeNull();
+  });
+
+  test("open remarks offer Address comments with their place; resolved ones offer nothing", async () => {
+    strip = ready({}, { comments: [remark(), remark({ id: 103, resolved: true })] });
+    const tasks: string[] = [];
+    const { unmount } = panel(true, [], tasks);
+    await settle();
+    fireEvent.click(screen.getByText("Address comments"));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toContain("src/main.rs:34");
+    expect(tasks[0]).toContain("Rita Reviewer");
+    expect(tasks[0]).not.toContain("remark 103");
+    expect(screen.queryByText("Resolve conflicts")).toBeNull();
+    unmount();
+
+    strip = ready({}, { comments: [remark({ resolved: true })] });
+    const { container } = panel();
+    await settle();
+    expect(container.querySelector(".pr-tasks")).toBeNull();
+  });
+
+  test("a failed build alone offers no task: Fix CI is not here", async () => {
+    strip = ready(
+      { mergeBlocked: ["Not all required builds are successful yet"] },
+      { merge: { canMerge: false, conflicted: false, vetoes: ["Not all required builds are successful yet"] }, builds: [{ key: "j", name: "#3", state: "failed", url: "", dateAdded: null }] },
+    );
+    const { container } = panel();
+    await settle();
+    expect(container.querySelector(".pr-tasks")).toBeNull();
+  });
+
+  test("a conflict and open remarks together offer both", async () => {
+    strip = ready({ mergeBlocked: ["conflicts"] }, { merge: { canMerge: false, conflicted: true, vetoes: [] }, comments: [remark()] });
+    panel();
+    await settle();
+    expect(screen.getByText("Resolve conflicts")).toBeTruthy();
+    expect(screen.getByText("Address comments")).toBeTruthy();
   });
 });
 

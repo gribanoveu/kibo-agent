@@ -15,7 +15,7 @@ import { FilesPanel } from "./FilesPanel";
 import { ItemList } from "./ItemList";
 import { OverviewPanel, type OverviewProps } from "./OverviewPanel";
 import { PullRequestStrip } from "./PullRequestStrip";
-import { usePullRequest } from "../hooks/usePullRequest";
+import type { PullRequestState } from "../hooks/usePullRequest";
 import { PlanPanel } from "./PlanPanel";
 import { useRules } from "../hooks/useRules";
 import { useSkills } from "../hooks/useSkills";
@@ -49,6 +49,8 @@ export type PaneContext = {
   commitDraft: { message: string; onMessage: (message: string) => void };
   /** The Catalog's `pull-requests` feature is on: Overview shows the branch's pull request. */
   pullRequests: boolean;
+  /** The branch's pull request, read once in App: Overview's strip and the chat's task buttons draw the same read. */
+  pr: PullRequestState;
   /** The background process a chat row asked to see — `null` for the list; a new object each ask. */
   processFocus: { id: number | null } | null;
   /** Terminal took what was asked for: App lets go of it. */
@@ -413,17 +415,16 @@ function RulesPane({ active, workspace }: PaneContext) {
 
 // ─── Overview ──────────────────────────────────────────────────────────────
 
-/** Reads the processes, helper agents and the branch's pull request itself, as Terminal does, while it is on screen. */
-function OverviewPane({ active, chatId, mcp, overview, workspace, onNotify, pullRequests }: PaneContext) {
+/** Reads the processes and helper agents itself, as Terminal does, while it is on screen; the pull request is App's one read. */
+function OverviewPane({ active, chatId, mcp, overview, onNotify, pullRequests, pr, onAddToChat }: PaneContext) {
   const { processes } = useProcesses(active, chatId);
   const { agents } = useAgents(active, chatId);
-  const pr = usePullRequest(active && pullRequests, workspace);
   return (
     <OverviewPanel
       servers={mcp.view?.servers ?? []}
       processes={processes}
       agents={agents}
-      pullRequest={pullRequests ? <PullRequestStrip {...pr} onNotify={onNotify} /> : null}
+      pullRequest={pullRequests ? <PullRequestStrip {...pr} onNotify={onNotify} onTask={onAddToChat} /> : null}
       {...overview}
     />
   );

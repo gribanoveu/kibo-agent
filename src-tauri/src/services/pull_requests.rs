@@ -16,13 +16,13 @@ use std::time::Duration;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::domain::code_host::{
-    alias_to_remember, approved_by, can_approve, canonical_remote, host_of, latest_build, merge_blocked, server_for, Call, CodeHost,
-    CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, AgentPullRequests, RemoteRepo,
+    alias_to_remember, approved_by, can_approve, canonical_remote, host_of, latest_build, merge_blocked, open_comments, server_for, Call,
+    CodeHost, CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, AgentPullRequests, RemoteRepo,
     Snapshot,
 };
 use crate::infra::{code_host_store, git_head, repository_identity};
 
-/// How often the watcher asks while nothing is running — a read is five
+/// How often the watcher asks while nothing is running — a read is seven
 /// requests of under a second each on the probed server (BB-0, step 4).
 const QUIET: Duration = Duration::from_secs(30);
 /// How often while a build runs: that is when the strip is being watched.
@@ -156,9 +156,9 @@ impl PullRequests {
         };
         let call = target.call();
         let host = self.host.as_ref();
-        // Three rounds rather than five requests in a row: each pair waits on
-        // the round before it and on nothing else. A read costs the slowest of
-        // each pair — the merge check, as a rule — not the sum.
+        // Three rounds rather than seven requests in a row: each round waits
+        // on the one before it and on nothing else. A read costs the slowest of
+        // each round — the merge check, as a rule — not the sum.
         let (default_branch, commit) = both(|| host.default_branch(&call), || host.branch_commit(&call, &target.branch));
         let (default_branch, commit) = (default_branch?, commit?);
         // A branch the server does not have has no pull request either: the
@@ -170,12 +170,12 @@ impl PullRequests {
             }
             None => (None, Vec::new()),
         };
-        let (merge, me) = match &pr {
+        let (merge, comments, me) = match &pr {
             Some(pr) => {
-                let (merge, me) = both(|| host.merge_check(&call, pr.id), || self.me(&call));
-                (Some(merge?), me?)
+                let (merge, comments, me) = three(|| host.merge_check(&call, pr.id), || host.comments(&call, pr.id), || self.me(&call));
+                (Some(merge?), comments?, me?)
             }
-            None => (None, None),
+            None => (None, Vec::new(), None),
         };
         let (can_approve, approved) = match (&pr, &me) {
             (Some(pr), Some(me)) => (can_approve(pr, me), approved_by(pr, me)),
@@ -187,7 +187,8 @@ impl PullRequests {
             branch: target.branch.clone(),
             merge_blocked: merge.as_ref().and_then(merge_blocked),
             latest_build: latest_build(&builds).cloned(),
-            snapshot: Snapshot { pr, branch_on_server: commit.is_some(), default_branch: Some(default_branch), merge, builds },
+            open_comments: open_comments(&comments),
+            snapshot: Snapshot { pr, branch_on_server: commit.is_some(), default_branch: Some(default_branch), merge, builds, comments },
             can_approve,
             approved,
         })
@@ -434,6 +435,21 @@ fn both<A: Send, B>(a: impl FnOnce() -> A + Send, b: impl FnOnce() -> B) -> (A, 
     })
 }
 
+/// [`both`] for three: the merge check, the remarks and the token's user,
+/// none waiting on another.
+fn three<A: Send, B: Send, C>(a: impl FnOnce() -> A + Send, b: impl FnOnce() -> B + Send, c: impl FnOnce() -> C) -> (A, B, C) {
+    std::thread::scope(|scope| {
+        let first = scope.spawn(a);
+        let second = scope.spawn(b);
+        let third = c();
+        (
+            first.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            second.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            third,
+        )
+    })
+}
+
 /// A server as the form sent it, made ready to keep: an id for a new one, the
 /// address without the slash a user may type after it, and an address that is
 /// one. Whether `http` may carry the token is the client's to refuse, per
@@ -494,7 +510,7 @@ fn target(root: &Path, branch: Option<&str>) -> Result<Found, CodeHostError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::code_host::{Build, BuildState, MergeCheck, ReviewStatus, Reviewer};
+    use crate::domain::code_host::{Build, BuildState, Comment, MergeCheck, ReviewStatus, Reviewer};
     use crate::testing::{temp_dir, with_app_dir};
     use std::time::Instant;
 
@@ -508,6 +524,7 @@ mod tests {
         commit: Mutex<Option<String>>,
         pr: Mutex<Option<PullRequest>>,
         builds: Mutex<Vec<Build>>,
+        comments: Mutex<Vec<Comment>>,
         links: Mutex<Vec<String>>,
         me: Mutex<Option<String>>,
         merged: Mutex<Option<CodeHostError>>,
@@ -568,6 +585,10 @@ mod tests {
             self.ask("builds");
             Ok(lock(&self.builds).clone())
         }
+        fn comments(&self, _: &Call, _: u64) -> Result<Vec<Comment>, CodeHostError> {
+            self.ask("comments");
+            Ok(lock(&self.comments).clone())
+        }
         fn approve(&self, _: &Call, _: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError> {
             self.ask(&format!("approve {me} {approved}"));
             Ok(())
@@ -604,6 +625,19 @@ mod tests {
 
     fn build(state: BuildState) -> Build {
         Build { key: "ci".to_string(), name: "build #12".to_string(), state, url: "https://ci.example/12".to_string(), date_added: None }
+    }
+
+    fn remark(id: u64, resolved: bool) -> Comment {
+        Comment {
+            id,
+            author: "u_reviewer".to_string(),
+            author_name: "Rita Reviewer".to_string(),
+            text: "Move this into the builder".to_string(),
+            path: Some("src/main.rs".to_string()),
+            line: Some(34),
+            task: false,
+            resolved,
+        }
     }
 
     /// A repository with `remote` as `origin` and `feature/x` checked out.
@@ -667,9 +701,10 @@ mod tests {
             *lock(&double.commit) = Some("94beed9".to_string());
             *lock(&double.pr) = Some(pull_request(6));
             *lock(&double.builds) = vec![build(BuildState::Successful)];
+            *lock(&double.comments) = vec![remark(101, false), remark(103, true)];
             *lock(&double.me) = Some("u_me".to_string());
 
-            let PrStrip::Ready { server_id, repo: slug, branch, snapshot, can_approve, approved, merge_blocked, latest_build } =
+            let PrStrip::Ready { server_id, repo: slug, branch, snapshot, can_approve, approved, merge_blocked, latest_build, open_comments } =
                 service.strip(&repo("prs-strip-repo", Some(REMOTE))).unwrap()
             else {
                 panic!("not ready")
@@ -679,6 +714,8 @@ mod tests {
             assert!(snapshot.branch_on_server);
             assert_eq!(snapshot.default_branch.as_deref(), Some("master"));
             assert_eq!(snapshot.builds, [build(BuildState::Successful)]);
+            assert_eq!(snapshot.comments, [remark(101, false), remark(103, true)]);
+            assert_eq!(open_comments, 1, "the resolved thread is not open");
             assert!(can_approve && !approved);
             assert_eq!(merge_blocked, Some(vec!["Requires approvals".to_string()]));
             assert_eq!(latest_build, Some(build(BuildState::Successful)));
@@ -686,8 +723,8 @@ mod tests {
     }
 
     /// The pull request and the builds wait on the branch and not on each
-    /// other: in each of its three rounds the two are asked together, and a
-    /// read costs the slower of each pair, not the sum of all six.
+    /// other: in each of its three rounds the reads are asked together, and a
+    /// read costs the slower of each round, not the sum of all seven.
     #[test]
     fn a_read_asks_together_what_does_not_wait_on_each_other() {
         with_app_dir("prs-rounds", || {
@@ -695,14 +732,14 @@ mod tests {
             *lock(&double.commit) = Some("94beed9".to_string());
             *lock(&double.pr) = Some(pull_request(6));
             *lock(&double.me) = Some("u_me".to_string());
-            // Three rounds of 250 ms are 750; any one pair asked in turn is 1000.
-            for call in ["default_branch", "branch_commit", "pull_request", "builds", "merge_check", "me"] {
+            // Three rounds of 250 ms are 750; any one round asked in turn is 1250.
+            for call in ["default_branch", "branch_commit", "pull_request", "builds", "merge_check", "comments", "me"] {
                 lock(&double.slow).insert(call, Duration::from_millis(250));
             }
             let started = Instant::now();
             assert!(matches!(service.strip(&repo("prs-rounds-repo", Some(REMOTE))), Ok(PrStrip::Ready { snapshot: Snapshot { pr: Some(_), .. }, .. })));
-            assert!(started.elapsed() < Duration::from_millis(950), "a pair asked one after the other: {:?}", started.elapsed());
-            assert_eq!((double.asked("builds"), double.asked("merge_check"), double.asked("me")), (1, 1, 1));
+            assert!(started.elapsed() < Duration::from_millis(950), "a round asked one after the other: {:?}", started.elapsed());
+            assert_eq!((double.asked("builds"), double.asked("merge_check"), double.asked("comments"), double.asked("me")), (1, 1, 1, 1));
         });
     }
 
@@ -777,7 +814,7 @@ mod tests {
             };
             assert!(!snapshot.branch_on_server && snapshot.pr.is_none() && snapshot.merge.is_none());
             assert!(merge_blocked.is_none() && !can_approve);
-            for unasked in ["pull_request", "merge_check", "builds", "me"] {
+            for unasked in ["pull_request", "merge_check", "builds", "comments", "me"] {
                 assert_eq!(double.asked(unasked), 0, "{unasked}");
             }
         });
@@ -795,7 +832,7 @@ mod tests {
                 panic!("not ready")
             };
             assert!(snapshot.branch_on_server && snapshot.pr.is_none());
-            assert_eq!((double.asked("builds"), double.asked("me")), (1, 0));
+            assert_eq!((double.asked("builds"), double.asked("me"), double.asked("comments")), (1, 0, 0));
         });
     }
 
@@ -1181,6 +1218,33 @@ mod tests {
             let after = double.total();
             std::thread::sleep(Duration::from_millis(150));
             assert_eq!(double.total(), after, "asked after unwatch");
+        });
+    }
+
+    /// A remark arriving and a thread being resolved are changes the window
+    /// is told of — the Address comments button lives on them.
+    #[test]
+    fn a_new_remark_and_a_resolution_are_changes() {
+        with_app_dir("prs-watch-remarks", || {
+            code_host_store::put(server("https://git.server.com", &[]), Some("t0k".to_string())).unwrap();
+            let (service, double, events) = service(Duration::from_millis(20), Duration::from_millis(20));
+            *lock(&double.commit) = Some("94beed9".to_string());
+            *lock(&double.pr) = Some(pull_request(6));
+            let root = repo("prs-watch-remarks-repo", Some(REMOTE));
+
+            service.strip(&root).unwrap();
+            service.watch(root.clone());
+            assert!(eventually(Duration::from_secs(5), || double.asked("comments") >= 3), "it ticks");
+            assert!(lock(&events).is_empty(), "no remarks yet is what the window has");
+
+            *lock(&double.comments) = vec![remark(101, false)];
+            assert!(eventually(Duration::from_secs(5), || !lock(&events).is_empty()), "a new remark is a change");
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(*lock(&events), [root.display().to_string()], "said once");
+
+            *lock(&double.comments) = vec![remark(101, true)];
+            assert!(eventually(Duration::from_secs(5), || lock(&events).len() >= 2), "a resolution is a change too");
+            service.unwatch(&root);
         });
     }
 
