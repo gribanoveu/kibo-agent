@@ -4,9 +4,9 @@ import type { Block } from "./chatTurnReducer";
 // accepted — its arguments say what and why. It is drawn after the answer,
 // not where the call was made.
 
-export type OfferKind = "review" | "commit" | "worktree" | "pullRequest" | "syncBase" | "cleanup" | "plan";
+export type OfferKind = "review" | "commit" | "worktree" | "pullRequest" | "syncBase" | "cleanup" | "plan" | "message";
 
-export type Offer = { kind: OfferKind; reason: string };
+export type Offer = { kind: OfferKind; reason: string; text?: string };
 
 /** What pressing a commit offer sends. */
 export const COMMIT_REQUEST = "Commit the changes.";
@@ -34,7 +34,8 @@ export function offerOf(block: Block): Offer | null {
       kind !== "pullRequest" &&
       kind !== "syncBase" &&
       kind !== "cleanup" &&
-      kind !== "plan")
+      kind !== "plan" &&
+      kind !== "message")
   ) {
     return null;
   }
@@ -44,15 +45,31 @@ export function offerOf(block: Block): Offer | null {
   } catch {
     return null;
   }
-  return { kind, reason: typeof args.reason === "string" ? args.reason.trim() : "" };
+  const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+  if (kind === "message") {
+    // The suggestion is its text; without it there is nothing to send.
+    const text = typeof args.text === "string" ? args.text.trim() : "";
+    return text ? { kind, reason, text } : null;
+  }
+  return { kind, reason };
 }
 
-/** A turn's offers, one per kind: a kind offered again keeps its place and takes the later reason. */
+/** A turn's offers: one per fixed kind (a kind offered again keeps its place
+    and takes the later reason), and the last two message suggestions — keyed
+    by text, so the same suggestion twice is one card. */
 export function offersOf(blocks: Block[]): Offer[] {
   const byKind = new Map<OfferKind, Offer>();
+  const messages = new Map<string, Offer>();
   for (const block of blocks) {
     const offer = offerOf(block);
-    if (offer) byKind.set(offer.kind, offer);
+    if (!offer) continue;
+    if (offer.kind === "message") {
+      // Delete first: a suggestion offered again is the latest one, even if
+      // its text was already pushed out of the two — Map.set alone would
+      // keep its old place and the press would never show it.
+      messages.delete(offer.text ?? "");
+      messages.set(offer.text ?? "", offer);
+    } else byKind.set(offer.kind, offer);
   }
-  return [...byKind.values()];
+  return [...byKind.values(), ...[...messages.values()].slice(-2)];
 }

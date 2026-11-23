@@ -483,7 +483,7 @@ export default function App() {
             onBranch={agent.branch}
             onRewind={(id) => void rewinding.ask(id)}
             onFix={giveBack}
-            onOffer={conversation.value === "agent" ? (kind) => void pickOffer(kind) : undefined}
+            onOffer={conversation.value === "agent" ? (offer) => void pickOffer(offer) : undefined}
             steered={agent.steered}
             onWithdraw={agent.withdraw}
           />

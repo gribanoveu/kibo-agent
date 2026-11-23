@@ -255,16 +255,22 @@ describe("sending", () => {
 describe("the offers after an answer", () => {
   test("review, commit, pull request and base sync send their own request", async () => {
     const { result, sent } = setup();
-    await act(async () => result.current.pickOffer("review"));
-    await act(async () => result.current.pickOffer("commit"));
-    await act(async () => result.current.pickOffer("pullRequest"));
-    await act(async () => result.current.pickOffer("syncBase"));
+    await act(async () => result.current.pickOffer({ kind: "review", reason: "why" }));
+    await act(async () => result.current.pickOffer({ kind: "commit", reason: "why" }));
+    await act(async () => result.current.pickOffer({ kind: "pullRequest", reason: "why" }));
+    await act(async () => result.current.pickOffer({ kind: "syncBase", reason: "why" }));
     expect(sent.map(([text]) => text)).toEqual([REVIEW_REQUEST, COMMIT_REQUEST, PULL_REQUEST, SYNC_BASE]);
+  });
+
+  test("a message offer sends exactly its text", async () => {
+    const { result, sent } = setup();
+    await act(async () => result.current.pickOffer({ kind: "message", reason: "why", text: "Start OF-1 and stop for review" }));
+    expect(sent.map(([text]) => text)).toEqual(["Start OF-1 and stop for review"]);
   });
 
   test("the plan card opens the Plan tab and sends nothing; the tab's own button picks the writing mode first", async () => {
     const { result, calls, sent } = setup();
-    await act(async () => result.current.pickOffer("plan"));
+    await act(async () => result.current.pickOffer({ kind: "plan", reason: "why" }));
     expect(calls).toEqual(["openPlan"]);
     expect(sent).toEqual([]);
     await act(async () => result.current.implement());
@@ -278,42 +284,42 @@ describe("the offers after an answer", () => {
 
   test("worktree moves the chat and opens its folder beside this one; a failure drops the pending chat", async () => {
     const { result } = setup();
-    await act(async () => result.current.pickOffer("worktree"));
+    await act(async () => result.current.pickOffer({ kind: "worktree", reason: "why" }));
     expect(result.current.pendingChat).toEqual({ id: "c1", path: "/repo-wt" });
     const refused = setup({ openAnswer: false });
-    await act(async () => refused.result.current.pickOffer("worktree"));
+    await act(async () => refused.result.current.pickOffer({ kind: "worktree", reason: "why" }));
     expect(refused.result.current.pendingChat).toBeNull();
     moved.fail = "boom";
     const failing = setup();
-    await act(async () => failing.result.current.pickOffer("worktree"));
+    await act(async () => failing.result.current.pickOffer({ kind: "worktree", reason: "why" }));
     expect(failing.result.current.pendingChat).toBeNull();
     expect(failing.said).toEqual(["Error: boom"]);
     moved.fail = null;
     const noChat = setup({ chatId: null });
-    await act(async () => noChat.result.current.pickOffer("worktree"));
+    await act(async () => noChat.result.current.pickOffer({ kind: "worktree", reason: "why" }));
     expect(noChat.calls).toEqual([]);
   });
 
   test("cleanup opens the main checkout, closes the worktree, then asks the removal dialog", async () => {
     const { result, calls, asked } = setup();
-    await act(async () => result.current.pickOffer("cleanup"));
+    await act(async () => result.current.pickOffer({ kind: "cleanup", reason: "why" }));
     expect(calls).toEqual(["workspace.open:/repo-main", "workspace.close:/repo"]);
     expect(asked).toEqual(["/repo"]);
     // A failed open or close stops before the dialog: an open folder is never removable.
     const refused = setup({ openAnswer: false });
-    await act(async () => refused.result.current.pickOffer("cleanup"));
+    await act(async () => refused.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
     expect(refused.calls).toEqual(["workspace.open:/repo-main"]);
     expect(refused.asked).toEqual([]);
     const closeFail = setup({ closeAnswer: false });
-    await act(async () => closeFail.result.current.pickOffer("cleanup"));
+    await act(async () => closeFail.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
     expect(closeFail.calls).toEqual(["workspace.open:/repo-main", "workspace.close:/repo"]);
     expect(closeFail.asked).toEqual([]);
     const noMain = setup({ worktreeMain: null });
-    await act(async () => noMain.result.current.pickOffer("cleanup"));
+    await act(async () => noMain.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
     expect(noMain.calls).toEqual([]);
     expect(noMain.asked).toEqual([]);
     const noFolder = setup({ path: null });
-    await act(async () => noFolder.result.current.pickOffer("cleanup"));
+    await act(async () => noFolder.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
     expect(noFolder.calls).toEqual([]);
     expect(noFolder.asked).toEqual([]);
   });

@@ -12,11 +12,34 @@ use crate::domain::review;
 use crate::domain::tools::{OfferArgs, OfferKind, ToolDeps, ToolError, ToolResult, ToolScope};
 use crate::infra::{git_branches, git_changes};
 
+/// A suggestion is a phrase or two, not a letter.
+const MESSAGE_MAX: usize = 300;
+
 pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
     if args.reason.trim().is_empty() {
         return Err(ToolError::InvalidArguments {
             tool: "offer".into(),
             reason: "reason is empty — say in a few words why, the user reads it on the button".into(),
+        });
+    }
+    let text = args.text.trim();
+    if args.kind == OfferKind::Message {
+        if text.is_empty() {
+            return Err(ToolError::InvalidArguments {
+                tool: "offer".into(),
+                reason: "text is empty — a message offer sends it when pressed; write the exact message".into(),
+            });
+        }
+        if text.chars().count() > MESSAGE_MAX {
+            return Err(ToolError::InvalidArguments {
+                tool: "offer".into(),
+                reason: format!("text is over {MESSAGE_MAX} characters — a suggestion is a phrase or two, not a letter"),
+            });
+        }
+    } else if !text.is_empty() {
+        return Err(ToolError::InvalidArguments {
+            tool: "offer".into(),
+            reason: "text is only for kind message — a fixed kind sends the app's own message".into(),
         });
     }
     match args.kind {
@@ -81,6 +104,9 @@ pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<Too
                 return Err(ToolError::Command("no plan to show: write it with writePlan first".into()));
             }
         }
+        // Nothing to check beyond the text above: the suggestion is its own
+        // precondition, and the display keeps at most two.
+        OfferKind::Message => {}
     }
     Ok(ToolResult::Offered { kind: args.kind })
 }
@@ -96,13 +122,15 @@ pullRequest: after committing this chat's worktree changes, when the branch is a
 syncBase: when this chat's worktree is behind its recorded base — the step a refused pullRequest names; pressing it asks you to bring the branch up to date from the base with confirmed commands. \
 cleanup: when this chat's worktree is no longer needed — its PR merged or the attempt abandoned — and nothing would be lost: a clean tree, every commit on another branch. Pressing it steps into the main checkout and opens the removal dialog, which removes the worktree with its chats. \
 plan: after writePlan, when the user asked for a plan rather than the work; pressing it opens the Plan tab, where the user reads it and starts implementation, so end your turn there. \
+message: a next step of your own wording, when no fixed kind covers it and the user faces a real choice — text is the exact message sent as the user's next message when pressed, a phrase or two; at most two are shown, a later one replaces the oldest. A ready plan is kind plan, not message; starting a named phase of it can be one. \
 Do not also ask about it in your answer: the button is the question. Calling a kind again replaces its reason."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
-                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "syncBase", "cleanup", "plan"] },
-                "reason": { "type": "string", "description": "Why, in a few words the user reads on the button: what the change touched." }
+                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "syncBase", "cleanup", "plan", "message"] },
+                "reason": { "type": "string", "description": "Why, in a few words the user reads on the button: what the change touched." },
+                "text": { "type": "string", "description": "For kind message only: the exact message sent when pressed, at most 300 characters." }
             },
             "required": ["kind", "reason"]
         }),
@@ -129,7 +157,11 @@ mod tests {
     }
 
     fn args(kind: OfferKind, reason: &str) -> OfferArgs {
-        OfferArgs { kind, reason: reason.into() }
+        OfferArgs { kind, reason: reason.into(), text: String::new() }
+    }
+
+    fn message(text: &str) -> OfferArgs {
+        OfferArgs { kind: OfferKind::Message, reason: "the next step".into(), text: text.into() }
     }
 
     #[test]
@@ -346,9 +378,37 @@ mod tests {
     fn the_schema_lists_every_kind() {
         let schema = definition().parameters;
         let listed = schema["properties"]["kind"]["enum"].as_array().unwrap();
-        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::SyncBase, OfferKind::Cleanup, OfferKind::Plan] {
+        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::SyncBase, OfferKind::Cleanup, OfferKind::Plan, OfferKind::Message] {
             assert!(listed.contains(&serde_json::to_value(kind).unwrap()), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_message_offer_carries_its_text() {
+        let (_dir, scope) = folder("offer-message");
+        assert_eq!(
+            offer(&scope, &message("Start OF-1 and stop for review"), &ToolDeps::default()).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Message }
+        );
+        let empty = offer(&scope, &message("   "), &ToolDeps::default()).unwrap_err();
+        assert!(empty.to_string().contains("text is empty"), "{empty}");
+        // Characters, not bytes: a Russian suggestion of 300 letters fits.
+        let fits = "я".repeat(MESSAGE_MAX);
+        assert!(offer(&scope, &message(&fits), &ToolDeps::default()).is_ok());
+        let long = offer(&scope, &message(&"я".repeat(MESSAGE_MAX + 1)), &ToolDeps::default()).unwrap_err();
+        assert!(long.to_string().contains("over 300"), "{long}");
+    }
+
+    /// A fixed kind sends the app's own message; text on it would say the
+    /// model can rewrite that message, which it cannot.
+    #[test]
+    fn a_fixed_kind_refuses_text() {
+        let (dir, scope) = folder("offer-fixed-text");
+        fs::write(dir.join("a.rs"), "two\n").unwrap();
+        let mut args = args(OfferKind::Commit, "the counter");
+        args.text = "commit it my way".into();
+        let err = offer(&scope, &args, &ToolDeps::default()).unwrap_err();
+        assert!(err.to_string().contains("only for kind message"), "{err}");
     }
 
     #[test]

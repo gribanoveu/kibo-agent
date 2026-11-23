@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { ImagePart } from "../lib/images";
-import { COMMIT_REQUEST, type OfferKind, PULL_REQUEST, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
+import { COMMIT_REQUEST, type Offer, PULL_REQUEST, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
 import { exportChat, moveChatToWorktree } from "../lib/savedChats";
 import { pickSavePath } from "../lib/dialog";
 import { withLanguageReminder, type ReplyLanguage } from "../lib/settings";
@@ -132,7 +132,10 @@ export function useChatRouting({
     agent.send(IMPLEMENT_PLAN, undefined, [], true);
   };
 
-  const pickOffer = async (kind: OfferKind) => {
+  const pickOffer = async (offer: Offer) => {
+    const kind = offer.kind;
+    // The model's own suggestion: pressing sends exactly what it wrote.
+    if (kind === "message") return send(offer.text ?? "");
     if (kind === "review") return send(REVIEW_REQUEST);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);

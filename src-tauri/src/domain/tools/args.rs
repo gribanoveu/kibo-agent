@@ -226,6 +226,8 @@ pub enum OfferKind {
     /// model repeating it from there is parsed, not refused for a round.
     #[serde(alias = "implement")]
     Plan,
+    /// A suggestion in the model's own words: `text` is what pressing sends.
+    Message,
 }
 
 /// `offer` arguments: what, and why — the user sees both on the button.
@@ -234,6 +236,10 @@ pub enum OfferKind {
 pub struct OfferArgs {
     pub kind: OfferKind,
     pub reason: String,
+    /// What a `message` offer sends when pressed — the model's own words.
+    /// Empty for the fixed kinds, whose message is the app's.
+    #[serde(default)]
+    pub text: String,
 }
 
 /// `skill` arguments: a skill by name, or one of its files.

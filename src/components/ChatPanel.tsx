@@ -42,7 +42,7 @@ import {
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard, ReviewReport } from "./ReviewCard";
 import { findingOf, reviewOf } from "../lib/finding";
-import { offerOf, offersOf, type OfferKind } from "../lib/offer";
+import { offerOf, offersOf, type Offer } from "../lib/offer";
 import { OfferCards } from "./OfferCards";
 import { presentedOf } from "../lib/prototype";
 import { PresentedCard, RestoredCard } from "./PresentedCard";
@@ -939,8 +939,8 @@ type Props = {
   onFix?: (text: string) => void;
   /** Previews approval calls in this chat's own checkout. */
   preview?: PreviewCalls;
-  /** Sends what an offer under the last answer offered, as the user's message. */
-  onOffer?: (kind: OfferKind) => void;
+  /** Takes what an offer under the last answer offered: a message sent, or the plan opened. */
+  onOffer?: (offer: Offer) => void;
   /** Notes sent into the running turn that no round has read yet; one taken
       back goes to the box, with the pictures it carried. */
   steered?: SteeredNote[];
