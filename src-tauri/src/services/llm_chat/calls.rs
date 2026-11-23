@@ -298,10 +298,7 @@ pub(super) fn execute_call(
             Place::Folder { parallel, .. } => Some(parallel),
             Place::Chat { .. } => None,
         },
-        worktree_base: match turn.place {
-            Place::Folder { worktree_base, .. } => worktree_base,
-            Place::Chat { .. } => None,
-        },
+        worktree_base: turn.place.worktree_base(),
         chat_head: turn.chat_head,
         waiting: match turn.place {
             Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),

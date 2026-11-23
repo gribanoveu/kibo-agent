@@ -175,8 +175,9 @@ syncBase и cleanup — по образцу существующих видов,
 - `services/ai_tools/tools/offer.rs` — три ветки матча + схема + описание; тесты рядом.
 - `domain/prompt.rs` — worktree-абзац называет базу; абзац Agent — про `message`;
   `TurnContext.worktree_base` (проводка из `Place::Folder` там, где собирается контекст).
-- `domain/tool_call_log.rs` — фикстура Offer не меняется (text, как reason, — слова модели
-  для пользователя); тест `every_tool_is_redacted` обязан остаться зелёным.
+- `domain/tool_call_log.rs` — фикстура Offer — `Message` + `LEAK`: `text` — контент по
+  имени поля, аудит-лог его редактирует (как совпадения `grep`), транскрипт хранит его
+  целиком; `reason` остаётся. Тест `every_tool_is_redacted` зелёный.
 - Фронт: `src/lib/offer.ts` (виды, `text`, `SYNC_BASE`, предел двух, нормализация старого
   `implement`), `OfferCards.tsx` (LOOK, label из text для message, иконки, минус ghost-кнопка),
   `ChatPanel.tsx` (тип `onOffer`, минус `onOpenPlan`), `useChatRouting.ts` (`pickOffer(offer)`,
@@ -251,6 +252,20 @@ delete+set, тест добавлен; low: поле text не упражнял�
 мутации `scripts/mutate.py`. Правки промпта и описания инструмента положен прогон
 `agent_bench` той же моделью; без ключа `AGENT_BENCH_*` этап сдаётся с пометкой «бенч не
 прогнан».
+
+## Ревью PR #118 (2026-11-23)
+
+- **cleanup закрывал папку в обход `folderSwitch.guard`** (medium): процессы и терминалы
+  worktree умирали без вопроса, а ход в соседнем чате того же worktree ронял флоу — окно
+  уже в main, `close` отказал, диалога охранника нет. Теперь `guard(go, undefined, [path])`
+  идёт первым, open(main) → close → ask — внутри его `go`; отказ охранника ничего не
+  трогает. Тест закрепляет `closing` и заблокированный охранник.
+- **docs/43 §Ш6 устарел** — врезка в разделе и правки 6.1/6.3.
+- **docs/59 «Слои» противоречил коду** про фикстуру и редакцию `text` — исправлено.
+- **Мелочи**: `message` без текста явно ничего не шлёт; промпт — «on a branch of its own
+  (started from main)»; `Place::worktree_base()` вместо двух одинаковых `match`.
+- Не тронуто: `-webkit-line-clamp` у `.offer-card-label` — стили по живому виду, ручной
+  проверки в приложении ещё не было.
 
 ## Вне плана
 

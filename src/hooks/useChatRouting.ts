@@ -135,7 +135,10 @@ export function useChatRouting({
   const pickOffer = async (offer: Offer) => {
     const kind = offer.kind;
     // The model's own suggestion: pressing sends exactly what it wrote.
-    if (kind === "message") return send(offer.text ?? "");
+    if (kind === "message") {
+      if (!offer.text) return;
+      return send(offer.text);
+    }
     if (kind === "review") return send(REVIEW_REQUEST);
     if (kind === "commit") return send(COMMIT_REQUEST);
     if (kind === "pullRequest") return send(PULL_REQUEST);
@@ -143,12 +146,20 @@ export function useChatRouting({
     if (kind === "cleanup") {
       const path = workspace.path;
       if (!path || !worktreeMain) return;
-      // An open folder is never removable: open the main checkout, close this
-      // one, and only then let the dialog read what removal would take.
-      if (!(await workspace.open(worktreeMain))) return;
-      if (!(await workspace.close(path))) return;
-      askWorktreeRemoval(path);
-      return;
+      // Closing a worktree stops its processes and terminals, and an open
+      // folder is never removable: the guard asks first — a turn still
+      // working there keeps the window where it is — and then the main
+      // checkout opens, this folder closes, and the removal dialog reads
+      // what is left to take.
+      return folderSwitch.guard(
+        async () => {
+          if (!(await workspace.open(worktreeMain))) return;
+          if (!(await workspace.close(path))) return;
+          askWorktreeRemoval(path);
+        },
+        undefined,
+        [path],
+      );
     }
     // The plan is read before it is implemented: the card only opens the tab.
     if (kind === "plan") return openPlan();

@@ -199,7 +199,7 @@ fn a_worktree_turn_names_the_base_it_started_from() {
 
     for request in h.provider.requests() {
         assert!(
-            request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("on a branch of its own started from main"))),
+            request.messages.iter().any(|m| m.content.as_deref().is_some_and(|c| c.contains("on a branch of its own (started from main)"))),
             "a request went out without naming the worktree's base"
         );
     }

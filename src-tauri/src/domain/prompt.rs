@@ -263,7 +263,7 @@ pub fn context_block(ctx: &TurnContext) -> String {
         );
     }
     if let Some(main) = ctx.worktree_of {
-        let from = ctx.worktree_base.map(|base| format!(" started from {base}")).unwrap_or_default();
+        let from = ctx.worktree_base.map(|base| format!(" (started from {base})")).unwrap_or_default();
         text.push_str(&format!(
             "\n- The open folder is a git worktree of {}, on a branch of its own{from}. That folder is the \
              user's own checkout and may hold work in progress: do not edit files there, run commands \
@@ -804,7 +804,7 @@ mod tests {
         assert!(!text.contains("started from"), "{text}");
 
         let text = context_block(&TurnContext { worktree_of: Some(&main), worktree_base: Some("main"), ..ctx(&workspace) });
-        assert!(text.contains("on a branch of its own started from main"), "{text}");
+        assert!(text.contains("on a branch of its own (started from main)"), "{text}");
     }
 
     /// A mode's paragraph may only name tools that mode offers: telling a mode

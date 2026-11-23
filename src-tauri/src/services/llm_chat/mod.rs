@@ -254,6 +254,15 @@ impl<'a> Place<'a> {
             Place::Chat { .. } => None,
         }
     }
+
+    /// The base this chat's worktree was moved from; `None` in Chat mode and
+    /// for a chat that never moved.
+    pub fn worktree_base(&self) -> Option<&'a str> {
+        match self {
+            Place::Folder { worktree_base, .. } => *worktree_base,
+            Place::Chat { .. } => None,
+        }
+    }
 }
 
 /// Notes typed while a turn is running, waiting for the next round.

@@ -51,13 +51,15 @@ type Over = Partial<{
   closeAnswer: boolean;
   replyLanguage: "auto" | "english" | "russian";
   holdOpens: boolean;
+  guardBlocks: boolean;
 }>;
 
-/** The stores as recording doubles; the guard lets everything through. */
+/** The stores as recording doubles; the guard lets everything through unless `guardBlocks`. */
 function setup(over: Over = {}) {
   const calls: string[] = [];
   const said: string[] = [];
   const asked: string[] = [];
+  const guarded: string[][] = [];
   const sent: [string, string | undefined, unknown[], boolean | undefined][] = [];
   const back: [string, unknown[]][] = [];
   let focused = 0;
@@ -114,9 +116,12 @@ function setup(over: Over = {}) {
     },
   };
   const folderSwitch = {
-    guard: (go: () => void) => {
+    guard: (go: () => void, _onCancel?: () => void, closing: string[] = []) => {
       calls.push("guard");
-      return go();
+      guarded.push(closing);
+      // A guard that keeps its dialog open — a running turn there, say — runs nothing after it.
+      if (over.guardBlocks) return Promise.resolve();
+      return Promise.resolve(go());
     },
   };
   const conversation = {
@@ -150,7 +155,7 @@ function setup(over: Over = {}) {
       for (const land of opens.splice(0, count)) land(opened);
     });
   };
-  return { ...view, calls, said, sent, back, asked, focused: () => focused, left: () => left, landOpens };
+  return { ...view, calls, said, sent, back, asked, guarded, focused: () => focused, left: () => left, landOpens };
 }
 
 describe("picking a chat", () => {
@@ -268,6 +273,12 @@ describe("the offers after an answer", () => {
     expect(sent.map(([text]) => text)).toEqual(["Start OF-1 and stop for review"]);
   });
 
+  test("a message offer without text sends nothing", async () => {
+    const { result, sent } = setup();
+    await act(async () => result.current.pickOffer({ kind: "message", reason: "why" }));
+    expect(sent).toEqual([]);
+  });
+
   test("the plan card opens the Plan tab and sends nothing; the tab's own button picks the writing mode first", async () => {
     const { result, calls, sent } = setup();
     await act(async () => result.current.pickOffer({ kind: "plan", reason: "why" }));
@@ -300,19 +311,27 @@ describe("the offers after an answer", () => {
     expect(noChat.calls).toEqual([]);
   });
 
-  test("cleanup opens the main checkout, closes the worktree, then asks the removal dialog", async () => {
-    const { result, calls, asked } = setup();
+  test("cleanup asks the folder guard first, then opens the main checkout, closes the worktree, and asks the removal dialog", async () => {
+    const { result, calls, asked, guarded } = setup();
     await act(async () => result.current.pickOffer({ kind: "cleanup", reason: "why" }));
-    expect(calls).toEqual(["workspace.open:/repo-main", "workspace.close:/repo"]);
+    // What closes is what the guard reads processes and turns for — an open
+    // folder is never removable, so the main checkout comes first.
+    expect(guarded).toEqual([["/repo"]]);
+    expect(calls).toEqual(["guard", "workspace.open:/repo-main", "workspace.close:/repo"]);
     expect(asked).toEqual(["/repo"]);
+    // A guard held open by a running turn there runs nothing after it.
+    const blocked = setup({ guardBlocks: true });
+    await act(async () => blocked.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
+    expect(blocked.calls).toEqual(["guard"]);
+    expect(blocked.asked).toEqual([]);
     // A failed open or close stops before the dialog: an open folder is never removable.
     const refused = setup({ openAnswer: false });
     await act(async () => refused.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
-    expect(refused.calls).toEqual(["workspace.open:/repo-main"]);
+    expect(refused.calls).toEqual(["guard", "workspace.open:/repo-main"]);
     expect(refused.asked).toEqual([]);
     const closeFail = setup({ closeAnswer: false });
     await act(async () => closeFail.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
-    expect(closeFail.calls).toEqual(["workspace.open:/repo-main", "workspace.close:/repo"]);
+    expect(closeFail.calls).toEqual(["guard", "workspace.open:/repo-main", "workspace.close:/repo"]);
     expect(closeFail.asked).toEqual([]);
     const noMain = setup({ worktreeMain: null });
     await act(async () => noMain.result.current.pickOffer({ kind: "cleanup", reason: "why" }));
