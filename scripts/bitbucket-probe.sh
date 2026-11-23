@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # BB-0 of docs/62-bitbucket-prs.md: what a Bitbucket Data Center server answers,
 # before the app is written against it. Only GET requests: nothing is changed.
+# Steps 13–15 were added for BB-8: the PR's comments, activities and tasks.
 #
 # Run from a clone whose `origin` is on that server:
 #
@@ -240,4 +241,33 @@ if [[ -n ${SLUG_ME:-} ]]; then
   req tokens "$BASE/rest/access-tokens/latest/users/$SLUG_ME" auth
   [[ $CODE == 200 ]] && json '.values[]? | "    \(.name): \(.permissions | join(",")) expires \(.expiryDate // "never")"' tokens
   note "token list: HTTP $CODE (merge and create need REPO_WRITE; read and approve need REPO_READ)"
+fi
+
+# ------------------------------------- 13–15. comments and tasks (BB-8)
+# What the Address comments button will read: open remarks with their place
+# (file, line), their author, and whether they are resolved. Three reads of
+# the same PR, because the server keeps comments in three shapes: the activity
+# stream, the comment list, and blocker comments (tasks).
+if [[ -n ${PR:-} ]]; then
+  step "13. the PR's activities — comments as events"
+  req activities "$API/pull-requests/$PR/activities?limit=100" auth
+  note "activities: HTTP $CODE, $(json '.values | length' activities) item(s); actions: $(json '[.values[]?.action] | unique | join(",")' activities)"
+  json '.values[]? | select(.action == "COMMENTED") | "    comment \(.comment.id) by \(.comment.author.slug): severity=\(.comment.severity // "?") state=\(.comment.state // "?") threadResolved=\(.comment.threadResolved // "?") anchor=\(.commentAnchor.path // .comment.anchor.path // "-"):\(.commentAnchor.line // .comment.anchor.line // "-")"' activities
+  note "activities isLastPage=$(json '.isLastPage // "?"' activities) — pagination is start/limit, as everywhere"
+
+  step "14. the PR's comments — the list with anchors"
+  req comments "$API/pull-requests/$PR/comments?limit=100" auth
+  if [[ $CODE != 200 ]]; then
+    # The documentation lists the filters as required; older servers take them.
+    req comments "$API/pull-requests/$PR/comments?limit=100&anchorState=ALL&state=ALL&diffType=EFFECTIVE" auth
+  fi
+  note "comments: HTTP $CODE, $(json '.values | length' comments) item(s); with anchor=$(json '[.values[]? | select(.anchor != null)] | length' comments), replies=$(json '[.values[]? | select(.parent != null)] | length' comments)"
+  json '.values[]? | "    \(.id) by \(.author.slug): severity=\(.severity // "?") state=\(.state // "?") threadResolved=\(.threadResolved // "?") parent=\(.parent.id // "-") anchor=\(.anchor.path // "-"):\(.anchor.line // "-")"' comments
+
+  step "15. the PR's tasks — blocker comments"
+  req blockers "$API/pull-requests/$PR/blocker-comments?limit=100" auth
+  note "blocker-comments: HTTP $CODE, $(json '.values | length' blockers) item(s); open=$(json '[.values[]? | select(.state == "OPEN")] | length' blockers), resolved=$(json '[.values[]? | select(.state == "RESOLVED")] | length' blockers)"
+  json '.values[]? | "    task \(.id) by \(.author.slug): state=\(.state // "?") anchor=\(.anchor.path // "-"):\(.anchor.line // "-") text=\((.text // "")[0:60])"' blockers
+else
+  note "comments and tasks: not asked — no open PR on this branch (run with a branch that has one)"
 fi
