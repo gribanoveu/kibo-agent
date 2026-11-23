@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-23 The next-step buttons under an answer grow three kinds: update a worktree branch from its base when it falls behind (`syncBase`), remove a worktree nothing would be lost from (`cleanup`, stepping into the main checkout and opening the removal dialog), and the model's own suggestions — up to two short messages it writes itself, sent exactly as written when pressed (`message`); the plan button now opens the Plan tab, where the plan is read and implementation starts
 - 2026-11-22 While a command runs, the folded working line shows the model's own description of what it does (`runCommand`'s `description`), falling back to the command line when there is none
 - 2026-11-22 A Board card's description and comments keep their line breaks as typed: a single newline reads as a new line in the card's panel, not one flowing paragraph
 - 2026-11-22 The Catalog's "Show all" is the last card of a cut section's grid, in the eighth card's place, instead of a link by the heading — it is clear the section shows only part of the list
