@@ -141,6 +141,7 @@ function setup(over: Over = {}) {
       leavePage: () => left++,
       giveBack: (text, images = []) => back.push([text, images]),
       worktreeMain: over.worktreeMain === undefined ? "/repo-main" : over.worktreeMain,
+      openPlan: () => calls.push("openPlan"),
       askWorktreeRemoval: (path) => asked.push(path),
     }),
   );
@@ -261,13 +262,16 @@ describe("the offers after an answer", () => {
     expect(sent.map(([text]) => text)).toEqual([REVIEW_REQUEST, COMMIT_REQUEST, PULL_REQUEST, SYNC_BASE]);
   });
 
-  test("implement picks the writing mode first, and a refusal sends nothing", async () => {
+  test("the plan card opens the Plan tab and sends nothing; the tab's own button picks the writing mode first", async () => {
     const { result, calls, sent } = setup();
-    await act(async () => result.current.pickOffer("implement"));
-    expect(calls).toEqual(["pick:agent"]);
+    await act(async () => result.current.pickOffer("plan"));
+    expect(calls).toEqual(["openPlan"]);
+    expect(sent).toEqual([]);
+    await act(async () => result.current.implement());
+    expect(calls).toEqual(["openPlan", "pick:agent"]);
     expect(sent).toEqual([["Implement the plan above. Work through the checklist in order.", undefined, [], true]]);
     const refused = setup({ modeFail: "not now" });
-    await act(async () => refused.result.current.pickOffer("implement"));
+    await act(async () => refused.result.current.implement());
     expect(refused.sent).toEqual([]);
     expect(refused.said).toEqual(["not now"]);
   });

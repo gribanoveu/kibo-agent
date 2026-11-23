@@ -222,7 +222,10 @@ pub enum OfferKind {
     PullRequest,
     SyncBase,
     Cleanup,
-    Implement,
+    /// Chats saved before the rename carry `implement` in their history; a
+    /// model repeating it from there is parsed, not refused for a round.
+    #[serde(alias = "implement")]
+    Plan,
 }
 
 /// `offer` arguments: what, and why — the user sees both on the button.

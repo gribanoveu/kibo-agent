@@ -161,7 +161,7 @@ You can research, change the repository and run commands.
 
 For a request of three or more steps, keep `todo`: a short outline of them, each ticked off once it is done and checked. When the work needs a plan of its own — a long task, one that reads more than you can keep in view at once — write it with `writePlan`: the plan is the work itself, and what you find goes into it as you go: names, paths, line numbers, decisions.
 
-When the user asks for a plan rather than the work — \"make a plan\", \"how would you do this\", \"plan it first\" — the plan is the whole task. Read what you need, write it with `writePlan`, outline its steps with `todo`, and change nothing: no edits, no command that writes. Then put it to them with `offer`, kind implement, and stop. They read the plan in the Plan tab and may edit it there; pressing the button is what starts the work. In the chat, summarize the plan in a few lines rather than repeating it.
+When the user asks for a plan rather than the work — \"make a plan\", \"how would you do this\", \"plan it first\" — the plan is the whole task. Read what you need, write it with `writePlan`, outline its steps with `todo`, and change nothing: no edits, no command that writes. Then put it to them with `offer`, kind plan, and stop. Pressing it opens the Plan tab, where they read the plan, may edit it, and start the work themselves. In the chat, summarize the plan in a few lines rather than repeating it.
 
 The project instructions (AGENTS.md, CLAUDE.md and the like) say what stays true. Edit them when the user asks, or when a command, convention or layer they describe changes — never to record progress or the state of the work: that goes in the plan, the checklist or the project's own docs.
 
@@ -819,7 +819,7 @@ mod tests {
                 }
             }
         }
-        assert!(mode_instructions(ConversationMode::Agent).contains("`offer`, kind implement"));
+        assert!(mode_instructions(ConversationMode::Agent).contains("`offer`, kind plan"));
         assert!(mode_instructions(ConversationMode::Agent).contains("`writePlan`"));
     }
 

@@ -4,7 +4,7 @@ import type { Block } from "./chatTurnReducer";
 // accepted — its arguments say what and why. It is drawn after the answer,
 // not where the call was made.
 
-export type OfferKind = "review" | "commit" | "worktree" | "pullRequest" | "syncBase" | "cleanup" | "implement";
+export type OfferKind = "review" | "commit" | "worktree" | "pullRequest" | "syncBase" | "cleanup" | "plan";
 
 export type Offer = { kind: OfferKind; reason: string };
 
@@ -24,15 +24,17 @@ export function offerOf(block: Block): Offer | null {
   if (block.kind !== "tool" || block.name !== "offer") return null;
   // A refused or unfinished call has no result to say it was offered.
   const result = block.result as { result?: string; kind?: string } | undefined;
+  // Chats saved before the rename carry `implement`; it is the plan card now.
+  const kind = result?.kind === "implement" ? "plan" : result?.kind;
   if (
     result?.result !== "offered" ||
-    (result.kind !== "review" &&
-      result.kind !== "commit" &&
-      result.kind !== "worktree" &&
-      result.kind !== "pullRequest" &&
-      result.kind !== "syncBase" &&
-      result.kind !== "cleanup" &&
-      result.kind !== "implement")
+    (kind !== "review" &&
+      kind !== "commit" &&
+      kind !== "worktree" &&
+      kind !== "pullRequest" &&
+      kind !== "syncBase" &&
+      kind !== "cleanup" &&
+      kind !== "plan")
   ) {
     return null;
   }
@@ -42,7 +44,7 @@ export function offerOf(block: Block): Offer | null {
   } catch {
     return null;
   }
-  return { kind: result.kind, reason: typeof args.reason === "string" ? args.reason.trim() : "" };
+  return { kind, reason: typeof args.reason === "string" ? args.reason.trim() : "" };
 }
 
 /** A turn's offers, one per kind: a kind offered again keeps its place and takes the later reason. */

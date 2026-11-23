@@ -227,6 +227,7 @@ export default function App() {
     leavePage,
     giveBack,
     worktreeMain: worktreeOf,
+    openPlan: () => openTab("plan"),
     // Declared below; the closure runs on a press, long after this render.
     askWorktreeRemoval: (path) => worktreeRemoval.ask(path),
   });
@@ -471,7 +472,6 @@ export default function App() {
             onToggleIde={toggleIde}
             onOpenPanel={openTab}
             onExport={exportOpenChat}
-            onOpenPlan={() => openTab("plan")}
             checklist={agent.checklist}
             onOpenProcess={openProcess}
             onOpenAgent={openAgent}

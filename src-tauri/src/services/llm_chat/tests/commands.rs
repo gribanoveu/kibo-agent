@@ -203,11 +203,11 @@ fn an_offer_asks_nothing_and_the_turn_ends() {
     assert!(tool_contents(&h.provider.requests()[1]).iter().any(|c| c.starts_with("Offered")));
 }
 
-/// Implement needs a plan, and a turn that wrote one has it for the
+/// The plan offer needs a plan, and a turn that wrote one has it for the
 /// `offer` in the same round: the calls run in the order asked.
 #[test]
 fn a_plan_written_in_the_same_round_can_be_offered() {
-    let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+    let implement = r#"{"kind":"plan","reason":"the parser"}"#;
     let h = harness(
         "offer-implement-same-round",
         vec![asks(vec![wants("p", "writePlan", r##"{"content":"# Plan"}"##), wants("o", "offer", implement)]), text("done")],
@@ -220,7 +220,7 @@ fn a_plan_written_in_the_same_round_can_be_offered() {
 /// an `offer` among them would not see the one this turn wrote.
 #[test]
 fn an_offer_after_a_read_sees_the_plan_this_turn_wrote() {
-    let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+    let implement = r#"{"kind":"plan","reason":"the parser"}"#;
     let h = harness(
         "offer-implement-after-read",
         vec![
@@ -236,7 +236,7 @@ fn an_offer_after_a_read_sees_the_plan_this_turn_wrote() {
 /// The plan the window holds counts, but one emptied there does not.
 #[test]
 fn the_windows_plan_can_be_offered_unless_it_is_blank() {
-    let implement = r#"{"kind":"implement","reason":"the parser"}"#;
+    let implement = r#"{"kind":"plan","reason":"the parser"}"#;
     let said = |label: &str, plan: Option<&str>| {
         let mut h = harness(label, vec![asks(vec![wants("o", "offer", implement)]), text("done")]);
         h.plan = plan.map(str::to_string);

@@ -9,19 +9,16 @@ const LOOK: Record<OfferKind, { label: string; icon: typeof SearchCheck }> = {
   pullRequest: { label: "Create a pull request", icon: GitPullRequest },
   syncBase: { label: "Update from the base branch", icon: RefreshCw },
   cleanup: { label: "Remove the worktree", icon: Trash2 },
-  implement: { label: "Implement the plan", icon: ListChecks },
+  plan: { label: "Open the plan", icon: ListChecks },
 };
 
-/** The next steps the agent offered, after its answer: each a button that sends it as the user's message. */
+/** The next steps the agent offered, after its answer: each a button that takes it — a message sent, or the plan opened. */
 export function OfferCards({
   offers,
   onPick,
-  onOpenPlan,
 }: {
   offers: Offer[];
   onPick: (kind: OfferKind) => void;
-  /** Opens the Plan tab: a plan is read before it is implemented. */
-  onOpenPlan?: () => void;
 }) {
   if (offers.length === 0) return null;
   return (
@@ -44,11 +41,6 @@ export function OfferCards({
           </button>
         );
       })}
-      {onOpenPlan && offers.some((offer) => offer.kind === "implement") && (
-        <button type="button" className="btn btn-ghost offer-cards-plan" onClick={onOpenPlan}>
-          Review the plan
-        </button>
-      )}
     </section>
   );
 }

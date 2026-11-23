@@ -34,6 +34,7 @@ export function useChatRouting({
   leavePage,
   giveBack,
   worktreeMain,
+  openPlan,
   askWorktreeRemoval,
 }: {
   agentMode: boolean;
@@ -50,6 +51,8 @@ export function useChatRouting({
   giveBack: (text: string, images?: ImagePart[]) => void;
   /** The main checkout when the open folder is a worktree of it (`useWorktreeOf`). */
   worktreeMain: string | null;
+  /** Opens the Plan tab: the plan card leads there, implementation starts in it. */
+  openPlan: () => void;
   /** Opens the removal dialog for a worktree the chat has already left. */
   askWorktreeRemoval: (path: string) => void;
 }) {
@@ -125,6 +128,7 @@ export function useChatRouting({
   const implement = async () => {
     const failed = await conversation.pick("agent");
     if (failed) return notify(failed);
+    // Not `send`: that would drop the checklist the plan came with.
     agent.send(IMPLEMENT_PLAN, undefined, [], true);
   };
 
@@ -143,8 +147,8 @@ export function useChatRouting({
       askWorktreeRemoval(path);
       return;
     }
-    // Not `send`: that would drop the checklist the plan came with.
-    if (kind === "implement") return implement();
+    // The plan is read before it is implemented: the card only opens the tab.
+    if (kind === "plan") return openPlan();
     const id = agent.chatId;
     if (!id) return;
     try {

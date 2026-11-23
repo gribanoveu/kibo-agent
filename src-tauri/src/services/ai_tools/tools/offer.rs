@@ -76,9 +76,9 @@ pub fn offer(scope: &ToolScope, args: &OfferArgs, deps: &ToolDeps) -> Result<Too
                 )));
             }
         }
-        OfferKind::Implement => {
+        OfferKind::Plan => {
             if !deps.has_plan {
-                return Err(ToolError::Command("no plan to implement: write it with writePlan first".into()));
+                return Err(ToolError::Command("no plan to show: write it with writePlan first".into()));
             }
         }
     }
@@ -95,13 +95,13 @@ worktree: while another chat is running in this checkout and this task needs fil
 pullRequest: after committing this chat's worktree changes, when the branch is ahead of and not behind its recorded base; pressing it asks you to push and create the PR with confirmed commands. \
 syncBase: when this chat's worktree is behind its recorded base — the step a refused pullRequest names; pressing it asks you to bring the branch up to date from the base with confirmed commands. \
 cleanup: when this chat's worktree is no longer needed — its PR merged or the attempt abandoned — and nothing would be lost: a clean tree, every commit on another branch. Pressing it steps into the main checkout and opens the removal dialog, which removes the worktree with its chats. \
-implement: after writePlan, when the user asked for a plan rather than the work; pressing it asks you to carry the plan out, so end your turn there. \
+plan: after writePlan, when the user asked for a plan rather than the work; pressing it opens the Plan tab, where the user reads it and starts implementation, so end your turn there. \
 Do not also ask about it in your answer: the button is the question. Calling a kind again replaces its reason."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
-                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "syncBase", "cleanup", "implement"] },
+                "kind": { "type": "string", "enum": ["review", "commit", "worktree", "pullRequest", "syncBase", "cleanup", "plan"] },
                 "reason": { "type": "string", "description": "Why, in a few words the user reads on the button: what the change touched." }
             },
             "required": ["kind", "reason"]
@@ -332,12 +332,12 @@ mod tests {
     #[test]
     fn a_plan_is_offered_only_once_there_is_one() {
         let (_dir, scope) = folder("offer-implement");
-        let refused = offer(&scope, &args(OfferKind::Implement, "the parser"), &ToolDeps::default()).unwrap_err();
+        let refused = offer(&scope, &args(OfferKind::Plan, "the parser"), &ToolDeps::default()).unwrap_err();
         assert!(refused.to_string().contains("no plan"), "{refused}");
         let deps = ToolDeps { has_plan: true, ..ToolDeps::default() };
         assert_eq!(
-            offer(&scope, &args(OfferKind::Implement, "the parser"), &deps).unwrap(),
-            ToolResult::Offered { kind: OfferKind::Implement }
+            offer(&scope, &args(OfferKind::Plan, "the parser"), &deps).unwrap(),
+            ToolResult::Offered { kind: OfferKind::Plan }
         );
     }
 
@@ -346,9 +346,16 @@ mod tests {
     fn the_schema_lists_every_kind() {
         let schema = definition().parameters;
         let listed = schema["properties"]["kind"]["enum"].as_array().unwrap();
-        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::SyncBase, OfferKind::Cleanup, OfferKind::Implement] {
+        for kind in [OfferKind::Review, OfferKind::Commit, OfferKind::Worktree, OfferKind::PullRequest, OfferKind::SyncBase, OfferKind::Cleanup, OfferKind::Plan] {
             assert!(listed.contains(&serde_json::to_value(kind).unwrap()), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn the_old_implement_kind_still_parses_as_plan() {
+        let args: OfferArgs = serde_json::from_str(r#"{"kind":"implement","reason":"the parser"}"#).unwrap();
+        assert_eq!(args.kind, OfferKind::Plan);
+        assert_eq!(serde_json::to_value(OfferKind::Plan).unwrap(), "plan");
     }
 
     #[test]

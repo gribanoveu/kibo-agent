@@ -62,22 +62,22 @@ describe("offers in the transcript", () => {
     expect(picked).toEqual(["review"]);
   });
 
-  /// A plan is read before it is implemented; the card says what pressing does, this says where it is.
-  test("an offer to implement leads to the plan as well, and no other does", () => {
-    let opened = 0;
+  /// The plan card opens the Plan tab; implementation starts there, not from the chat.
+  test("a plan offer sends its kind, and the ghost button is gone", () => {
     const picked: OfferKind[] = [];
-    const plan: Block[] = [turn[0], offer("implement", "the parser"), turn[2]];
-    const { unmount } = render(
-      <Transcript turn={state(turn)} onDecide={() => {}} onOffer={() => {}} onOpenPlan={() => opened++} />,
-    );
+    const plan: Block[] = [turn[0], offer("plan", "the parser"), turn[2]];
+    render(<Transcript turn={state(plan)} onDecide={() => {}} onOffer={(kind) => picked.push(kind)} />);
     expect(screen.queryByRole("button", { name: "Review the plan" })).toBeNull();
-    unmount();
-    render(<Transcript turn={state(plan)} onDecide={() => {}} onOffer={(kind) => picked.push(kind)} onOpenPlan={() => opened++} />);
-    fireEvent.click(screen.getByRole("button", { name: "Review the plan" }));
-    expect(opened).toBe(1);
-    expect(picked).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: /Implement the plan/ }));
-    expect(picked).toEqual(["implement"]);
+    fireEvent.click(screen.getByRole("button", { name: /Open the plan/ }));
+    expect(picked).toEqual(["plan"]);
+  });
+
+  /// Chats saved before the rename carry `implement`; the card is the same.
+  test("an old implement block is the plan card", () => {
+    const old = offer("plan", "the parser");
+    old.arguments = JSON.stringify({ kind: "implement", reason: "the parser" });
+    old.result = { result: "offered", kind: "implement" };
+    expect(offerOf(old)).toEqual({ kind: "plan", reason: "the parser" });
   });
 
   test("a base sync offer draws its label and a press sends its kind", () => {
