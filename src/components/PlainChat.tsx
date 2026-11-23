@@ -238,7 +238,7 @@ export function PlainChat({
               </div>
             </div>
           ) : (
-            <div ref={contentRef}>
+            <div ref={contentRef} className="thread-content">
               <Transcript
                 turn={chat.turn}
                 onDecide={chat.decide}

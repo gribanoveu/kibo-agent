@@ -1245,7 +1245,7 @@ export function ChatPanel({
         {groups.length === 0 ? (
           <ChatEmptyState workspace={workspace} onOpenRepo={onOpenRepo} />
         ) : (
-          <div ref={contentRef}>
+          <div ref={contentRef} className="thread-content">
             <Transcript
               turn={turn}
               onDecide={onDecide}
