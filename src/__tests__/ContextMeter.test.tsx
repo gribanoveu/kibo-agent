@@ -143,4 +143,28 @@ describe("the context meter", () => {
     openMeter();
     expect(screen.getByText(/window is not known/)).toBeTruthy();
   });
+
+  /// CU-4: the meter names its source. An anchored total is the provider's
+  /// own count for the last request plus what was added since; until a
+  /// request reports one, the number is an estimate and says so.
+  test("names the provider's count as the source when the total is anchored", () => {
+    meter({ context: { anchored: true, limit: 200_000 } });
+
+    openMeter();
+    expect(screen.getByText("The provider's count for the last request, plus what was added since.")).toBeTruthy();
+    expect(screen.queryByText(/An estimate from the text/)).toBeNull();
+  });
+
+  test("calls an unanchored total an estimate, in the meter and in the overview alike", () => {
+    const opened = meter();
+    openMeter();
+    expect(screen.getByText(/An estimate from the text/)).toBeTruthy();
+    opened.unmount();
+
+    const overview = render(<ContextDetails context={context({ anchored: true })} />);
+    expect(overview.getByText("The provider's count for the last request, plus what was added since.")).toBeTruthy();
+    overview.unmount();
+    const estimated = render(<ContextDetails context={context()} />);
+    expect(estimated.getByText(/An estimate from the text/)).toBeTruthy();
+  });
 });

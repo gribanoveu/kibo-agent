@@ -7,7 +7,8 @@
 //! nothing at all.
 
 use crate::domain::compaction::{self, ContextUsage, RequestFrame, BRANCH_SUMMARY_INSTRUCTIONS, SUMMARY_INSTRUCTIONS};
-use crate::domain::llm::{ChatRequest, LlmError, LlmMessage};
+use crate::domain::llm::{ChatRequest, LlmError, LlmMessage, LlmToolDefinition};
+use crate::domain::request_marker::{Anchor, RequestFingerprint};
 use crate::domain::mcp::McpTools;
 use crate::domain::prompt;
 use crate::domain::tools::ToolName;
@@ -39,27 +40,35 @@ pub struct Compacted {
 /// can outweigh everything else here, and a window that looks 60% free can be
 /// nearly full.
 pub fn request_frame(ctx: &prompt::TurnContext, mcp: &McpTools, web: bool, features: &Features) -> RequestFrame {
+    request_parts(ctx, mcp, web, features).0
+}
+
+/// The frame and the very parts it was measured from — the system messages and
+/// the tool definitions in wire order — so a caller can fingerprint the next
+/// request and tell whether the last one's anchor still holds (docs/60).
+pub fn request_parts(ctx: &prompt::TurnContext, mcp: &McpTools, web: bool, features: &Features) -> (RequestFrame, Vec<LlmMessage>, Vec<LlmToolDefinition>) {
     let skills = prompt::skills_block(ctx.skills).map_or(0, |list| compaction::estimate_tokens(&[LlmMessage::system(list)]));
-    let system = compaction::estimate_tokens(&prompt::system_messages(ctx));
+    let system_messages = prompt::system_messages(ctx);
+    let system = compaction::estimate_tokens(&system_messages);
     // A server's instructions are in the prompt and are the server's cost.
     let said = prompt::mcp_block(ctx.mcp_servers).map_or(0, |text| compaction::estimate_tokens(&[LlmMessage::system(text)]));
     // Before the conversation: a deferred tool its `toolSearch` found is not
     // counted. `toolSearch` is the servers' while any has tools waiting, and
     // the app's own otherwise.
     let servers_search = mcp.has_deferred();
-    let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tool_definitions_for(ctx.mode, mcp, &[], web, features)
-        .into_iter()
-        .partition(|definition| match ToolName::from_wire_name(&definition.name) {
-            Some(ToolName::Mcp) => true,
-            Some(ToolName::ToolSearch) => servers_search,
-            _ => false,
-        });
-    RequestFrame {
+    let tools = tool_definitions_for(ctx.mode, mcp, &[], web, features);
+    let (mcp_tools, built_in): (Vec<_>, Vec<_>) = tools.clone().into_iter().partition(|definition| match ToolName::from_wire_name(&definition.name) {
+        Some(ToolName::Mcp) => true,
+        Some(ToolName::ToolSearch) => servers_search,
+        _ => false,
+    });
+    let frame = RequestFrame {
         instructions: system.saturating_sub(skills).saturating_sub(said),
         skills,
         tools: compaction::estimate_tool_schema_tokens(&built_in),
         mcp: compaction::estimate_tool_schema_tokens(&mcp_tools) + said,
-    }
+    };
+    (frame, system_messages, tools)
 }
 
 /// [`request_frame`] for a chat in `role`: its one system message and its
@@ -87,7 +96,24 @@ pub fn chat_request_frame(
 /// being a meter — but it is the estimate that actually decides, so a reader
 /// watching it fill is watching the thing that will fold their conversation.
 pub fn usage(session: &LlmSession, frame: RequestFrame, history: &[LlmMessage]) -> ContextUsage {
-    ContextUsage::new(frame, history, session.context_limit)
+    anchored_usage(session, frame, history, None, &RequestFingerprint::empty())
+}
+
+/// The meter's number with the provider's anchor (docs/60): the last request's
+/// real count plus the estimate of what was added since, the parts rescaled to
+/// that total. Without a trustworthy anchor — none yet, a rewritten history,
+/// another model — the full estimate, and the parts as estimated.
+pub fn anchored_usage(
+    session: &LlmSession,
+    frame: RequestFrame,
+    history: &[LlmMessage],
+    anchor: Option<&Anchor>,
+    current: &RequestFingerprint,
+) -> ContextUsage {
+    let (total, anchored) = compaction::anchored_tokens(anchor, current, &session.provider_id, &session.model, frame, history);
+    let mut usage = ContextUsage::new(frame, history, session.context_limit).with_total(total);
+    usage.anchored = anchored;
+    usage
 }
 
 /// A pass before the conversation fails rather than after, when the session
@@ -104,7 +130,22 @@ pub fn compact_if_needed(
     force: bool,
     started: &dyn Fn(),
 ) -> Result<Option<Compacted>, LlmError> {
-    let needed = force || compaction::should_compact(ContextUsage::new(frame, history, None).total, session.context_limit);
+    anchored_compact_if_needed(session, frame, history, force, started, None, &RequestFingerprint::empty())
+}
+
+/// The same pass, deciding on the anchored total (docs/60): the trigger fires
+/// at the real share of the window, not at the estimate's under-count of it.
+pub fn anchored_compact_if_needed(
+    session: &LlmSession,
+    frame: RequestFrame,
+    history: &[LlmMessage],
+    force: bool,
+    started: &dyn Fn(),
+    anchor: Option<&Anchor>,
+    current: &RequestFingerprint,
+) -> Result<Option<Compacted>, LlmError> {
+    let (total, _) = compaction::anchored_tokens(anchor, current, &session.provider_id, &session.model, frame, history);
+    let needed = force || compaction::should_compact(total, session.context_limit);
     if !needed {
         return Ok(None);
     }
@@ -720,6 +761,66 @@ mod tests {
             compact_if_needed(&session, frame, &history, false, &|| {}).unwrap().is_some(),
             "the fixed cost of the request was not counted"
         );
+    }
+
+    /// CU-3: the measured prompt is the prompt a turn sends — the shell
+    /// described, not named — or the anchor's system hash never matches
+    /// between turns and the meter falls back to the estimate for good.
+    #[test]
+    fn the_measured_system_part_is_the_one_a_turn_sends() {
+        let root = crate::testing::temp_dir("measured-prompt");
+        let (_, system, _) = crate::services::turn_setup::next_folder_frame(Some(&root), ConversationMode::Agent, None);
+        let shell = crate::infra::shells::for_commands();
+        let described = crate::domain::command_exec::describe_shell(&shell.program, crate::infra::process_runner::probe_shell(&shell).as_ref());
+        let skills = crate::services::skills::enabled_catalog(Some(&root)).unwrap_or_default();
+        let rules = crate::services::project_rules::load(&root);
+        let today = crate::services::llm_chat::today();
+        let sent = prompt::system_messages(&prompt::TurnContext {
+            mode: ConversationMode::Agent,
+            workspace: &root,
+            shell: &described,
+            today: &today,
+            skills: &skills,
+            rules: &rules,
+            worktree_of: None,
+            parallel: None,
+            language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
+            mcp_servers: McpTools::default().notes(),
+        });
+        let hash = |messages: &[LlmMessage]| crate::domain::request_marker::fingerprint(messages, &[], &[]).system;
+        assert_eq!(hash(&system), hash(&sent));
+    }
+
+    /// CU-3: the trigger decides on the anchored total. An estimate that fits
+    /// is not the number anymore: the provider's own count for the same
+    /// history crosses the threshold and folds; a stale anchor falls back to
+    /// the estimate and leaves the conversation alone.
+    #[test]
+    fn the_fold_trigger_decides_on_the_anchored_total() {
+        let provider = Summarizer::saying("a summary");
+        let session = session_with_window(provider.clone(), 100_000);
+        let history = long();
+        let current = crate::domain::request_marker::fingerprint(&[], &[], &history);
+        let anchor = Anchor { prompt_tokens: 95_000, fingerprint: current.clone(), provider_id: "test".into(), model: "m".into() };
+        assert!(compact_if_needed(&session, bare(), &history, false, &|| {}).unwrap().is_none(), "the estimate alone fits");
+        assert!(anchored_compact_if_needed(&session, bare(), &history, false, &|| {}, Some(&anchor), &current).unwrap().is_some(), "the anchored total crosses 90%");
+        let stale = Anchor { fingerprint: crate::domain::request_marker::fingerprint(&[], &[], &conversation(2)), ..anchor.clone() };
+        assert!(anchored_compact_if_needed(&session, bare(), &history, false, &|| {}, Some(&stale), &current).unwrap().is_none(), "a rewritten history falls back to the estimate");
+    }
+
+    /// CU-3: the meter's parts sum to the anchored total, not to the estimate.
+    #[test]
+    fn the_meter_parts_sum_to_the_anchored_total() {
+        let provider = Summarizer::saying("a summary");
+        let session = session_with_window(provider, 100_000);
+        let history = long();
+        let current = crate::domain::request_marker::fingerprint(&[], &[], &history);
+        let anchor = Anchor { prompt_tokens: 95_000, fingerprint: current.clone(), provider_id: "test".into(), model: "m".into() };
+        let usage = anchored_usage(&session, bare(), &history, Some(&anchor), &current);
+        assert_eq!(usage.total, 95_000);
+        assert!(usage.anchored, "the meter names the provider's count as its source");
+        assert_eq!(usage.instructions + usage.skills + usage.tools + usage.mcp + usage.conversation, 95_000);
+        assert!(!anchored_usage(&session, bare(), &history, None, &current).anchored, "no anchor: an estimate, and said so");
     }
 
     /// Asking for it outright skips the threshold — and nothing else. A

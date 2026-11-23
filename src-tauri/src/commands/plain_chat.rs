@@ -118,7 +118,9 @@ pub async fn plain_chat_send<R: Runtime>(
     let running = state.begin(&chat_id, super::chat::parallel_limit(), false)?;
     let session = state.session(&chat_id);
     session.cancel.store(false, Ordering::SeqCst);
-    crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
+    // Counted even if the turn's setup then fails; off the loop, detached —
+    // the counter opens SQLite and waits on its lock (see chat_start).
+    tauri::async_runtime::spawn_blocking(|| crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]));
     run_turn(app, state, session, running, turn_id, chat_id, role, kube, move |chat| plain_chat::start(chat, messages)).await
 }
 
