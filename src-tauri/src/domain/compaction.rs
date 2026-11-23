@@ -200,6 +200,26 @@ impl RequestFrame {
 }
 
 impl ContextUsage {
+    /// Rescales the parts so they sum to `total` — the provider's anchored
+    /// count, which the estimate's parts only approximate in proportion. The
+    /// conversation part absorbs the rounding drift, so the sum is exact and
+    /// the ring, the bar and the rows stay one number (docs/60).
+    pub fn with_total(mut self, total: usize) -> Self {
+        let old = self.total;
+        if old == 0 {
+            self.conversation = total;
+        } else {
+            let scaled = [self.instructions, self.skills, self.tools, self.mcp].iter().map(|part| part * total / old).sum::<usize>();
+            self.instructions = self.instructions * total / old;
+            self.skills = self.skills * total / old;
+            self.tools = self.tools * total / old;
+            self.mcp = self.mcp * total / old;
+            self.conversation = total - scaled;
+        }
+        self.total = total;
+        self
+    }
+
     pub fn new(frame: RequestFrame, history: &[LlmMessage], limit: Option<u32>) -> Self {
         let limit = limit.filter(|limit| *limit > 0);
         let calls: HashMap<&str, &str> = history
@@ -831,6 +851,20 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    /// The parts are proportions of the anchored total: rescaled they sum to
+    /// it exactly, the conversation absorbing the rounding drift.
+    #[test]
+    fn parts_rescaled_to_a_total_sum_to_it() {
+        let usage = ContextUsage::new(RequestFrame { instructions: 100, skills: 30, tools: 50, mcp: 20 }, &[user("go"), assistant("ok")], Some(1_000));
+        let rescaled = usage.with_total(1_000);
+        assert_eq!(rescaled.total, 1_000);
+        assert_eq!(rescaled.instructions + rescaled.skills + rescaled.tools + rescaled.mcp + rescaled.conversation, 1_000);
+        assert!(rescaled.instructions > rescaled.skills, "proportions kept");
+        // An empty estimate puts the whole anchored count in the conversation.
+        let empty = ContextUsage::new(RequestFrame::default(), &[], None).with_total(500);
+        assert_eq!((empty.total, empty.conversation), (500, 500));
     }
 
     #[test]

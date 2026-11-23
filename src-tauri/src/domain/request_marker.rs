@@ -45,6 +45,14 @@ pub fn fingerprint(system: &[LlmMessage], tools: &[LlmToolDefinition], history: 
     }
 }
 
+impl RequestFingerprint {
+    /// A fingerprint of nothing: what a caller with no anchor passes as the
+    /// current request, unused because there is no anchor to compare.
+    pub fn empty() -> Self {
+        RequestFingerprint { system: String::new(), tools: String::new(), messages: Vec::new() }
+    }
+}
+
 fn hash_of<T: Serialize + ?Sized>(value: &T) -> String {
     // These types are strings and JSON values: serialization cannot fail.
     // The fallback is an invariant's belt, not a path — an empty hash would

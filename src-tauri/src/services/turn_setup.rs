@@ -205,9 +205,11 @@ pub fn run_in_folder(
 /// What the next turn in `workspace` will send in front of the conversation:
 /// the prompt parts and tools [`run_in_folder`] gathers, read the same way —
 /// but MCP servers only as they run now, since none is started to be
-/// measured, and the shell by name, since probing it runs it. Without a
+/// measured. The shell is described as a turn describes it (probing it runs
+/// it, off the event loop): a measured prompt that differs from the sent one
+/// would break the anchor's system hash between turns (docs/60). Without a
 /// folder, the prompt a turn there would have.
-pub fn next_folder_frame(workspace: Option<&Path>, mode: ConversationMode, servers: Option<&McpServers>) -> crate::domain::compaction::RequestFrame {
+pub fn next_folder_frame(workspace: Option<&Path>, mode: ConversationMode, servers: Option<&McpServers>) -> (crate::domain::compaction::RequestFrame, Vec<crate::domain::llm::LlmMessage>, Vec<crate::domain::llm::LlmToolDefinition>) {
     let skills = skills::enabled_catalog(workspace).unwrap_or_default();
     let rules = workspace.map(project_rules::load).unwrap_or_default();
     let mcp = match (workspace, servers_for(servers, mode)) {
@@ -216,13 +218,14 @@ pub fn next_folder_frame(workspace: Option<&Path>, mode: ConversationMode, serve
     };
     let worktree_of = workspace.and_then(crate::infra::git_head::worktree_of);
     let shell = crate::infra::shells::for_commands();
+    let shell_described = crate::domain::command_exec::describe_shell(&shell.program, crate::infra::process_runner::probe_shell(&shell).as_ref());
     let today = crate::services::llm_chat::today();
     let features = features::enabled();
-    crate::services::context_compaction::request_frame(
+    crate::services::context_compaction::request_parts(
         &crate::domain::prompt::TurnContext {
             mode,
             workspace: workspace.unwrap_or(Path::new("")),
-            shell: &shell.program,
+            shell: &shell_described,
             today: &today,
             skills: &skills,
             rules: &rules,

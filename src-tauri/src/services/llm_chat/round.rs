@@ -504,16 +504,23 @@ pub(super) fn turn_context<'a>(turn: &'a Turn, scope: &'a ToolScope, mode: Conve
 /// to the meter between turns — the same arithmetic, over the turn's own
 /// history.
 pub(super) fn request_usage(turn: &Turn, history: &[LlmMessage]) -> crate::domain::compaction::ContextUsage {
-    let frame = match turn.place {
+    let (frame, current) = match turn.place {
         Place::Folder { scope, mode, web, .. } => {
             let today = today();
-            context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp, web.is_some(), &turn.features)
+            let frame = context_compaction::request_frame(&turn_context(turn, scope, mode, &today), turn.mcp, web.is_some(), &turn.features);
+            // The same fingerprint the round's marker takes, so the anchor
+            // compares against exactly what is about to be sent.
+            let messages = request_messages(turn, history);
+            let split = messages.len() - history.len();
+            let current = request_marker::fingerprint(&messages[..split], &offered(turn, history), history);
+            (frame, current)
         }
         Place::Chat { role, kube, runbooks, web, .. } => {
-            context_compaction::chat_request_frame(role, kube, runbooks, turn.session.reply_language, web.is_some(), &turn.features)
+            (context_compaction::chat_request_frame(role, kube, runbooks, turn.session.reply_language, web.is_some(), &turn.features), request_marker::RequestFingerprint::empty())
         }
     };
-    context_compaction::usage(turn.session, frame, history)
+    let anchor = turn.markers.and_then(|markers| markers.last_anchor());
+    context_compaction::anchored_usage(turn.session, frame, history, anchor.as_ref(), &current)
 }
 
 pub(super) fn too_long(error: &LlmError) -> bool {
