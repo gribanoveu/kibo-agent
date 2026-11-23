@@ -262,14 +262,17 @@ pub async fn chat_compact<R: Runtime>(
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<CompactedHistory>, String> {
     let workspace = state.chat_prompt_workspace(&chat_id)?;
-    let (frame, system, tools) = next_request_frame(&app, &state, workspace);
-    let anchor = chat_anchor(&state, &chat_id);
-    let current = crate::domain::request_marker::fingerprint(&system, &tools, &messages);
+    let state = Arc::clone(&state);
     let sink = chat_event_sink(&app, turn_id);
     // A summary is an ordinary request to the provider, and a request on the
-    // IPC loop freezes every other command for its duration.
+    // IPC loop freezes every other command for its duration. The measurement
+    // waits too — it probes the shell and reads the marker row — so it all
+    // happens off the loop, as `chat_context_usage` does it.
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve_for(None, Some(&chat_id)).map_err(|e| e.to_string())?;
+        let (frame, system, tools) = next_request_frame(&app, &state, workspace);
+        let anchor = chat_anchor(&state, &chat_id);
+        let current = crate::domain::request_marker::fingerprint(&system, &tools, &messages);
         compact_anchored(&session, frame, &messages, force, sink, anchor.as_ref(), &current)
     })
     .await
