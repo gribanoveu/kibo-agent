@@ -45,6 +45,14 @@ pub fn fingerprint(system: &[LlmMessage], tools: &[LlmToolDefinition], history: 
     }
 }
 
+impl RequestFingerprint {
+    /// A fingerprint of nothing: what a caller with no anchor passes as the
+    /// current request, unused because there is no anchor to compare.
+    pub fn empty() -> Self {
+        RequestFingerprint { system: String::new(), tools: String::new(), messages: Vec::new() }
+    }
+}
+
 fn hash_of<T: Serialize + ?Sized>(value: &T) -> String {
     // These types are strings and JSON values: serialization cannot fail.
     // The fallback is an invariant's belt, not a path — an empty hash would
@@ -117,6 +125,55 @@ pub trait RequestMarkers: Send + Sync {
     /// Remembers the fingerprint and writes the row. Best-effort on disk:
     /// a marker lost is a line of analysis lost, never the turn.
     fn record(&self, record: RequestRecord);
+    /// The last request that reported its cost, as the meter's anchor
+    /// (docs/60). `None` until a request succeeds with usage — a helper's
+    /// turn and a test have none, and their cost is the full estimate.
+    fn last_anchor(&self) -> Option<Anchor>;
+}
+
+/// The last request's real cost and what it carried: the anchor the meter
+/// and the compaction trigger trust while the conversation only grows
+/// (docs/60). Hashes and a number, as the marker is — no content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+    pub prompt_tokens: u32,
+    pub fingerprint: RequestFingerprint,
+    pub provider_id: String,
+    pub model: String,
+}
+
+impl Anchor {
+    /// The anchor of a recorded request, if the provider reported its cost.
+    /// A failed request, or one with no usage, anchors nothing; nor does a
+    /// usage of zeros — a gateway's empty usage object parses to them, and a
+    /// zero anchor would read the whole conversation as free.
+    pub fn of(record: &RequestRecord) -> Option<Anchor> {
+        record.usage.filter(|usage| usage.prompt_tokens > 0).map(|usage| Anchor {
+            prompt_tokens: usage.prompt_tokens,
+            fingerprint: record.fingerprint.clone(),
+            provider_id: record.provider_id.clone(),
+            model: record.model.clone(),
+        })
+    }
+
+    /// Whether the anchor still describes the request about to be sent: the
+    /// same provider and model (another tokenizer counts differently), and a
+    /// prefix that only grew. A rewritten history, a new system part or tool
+    /// set invalidates it — a fold's stale count must not be shown, which is
+    /// pi's post-compaction guard generalized.
+    pub fn holds_for(&self, provider_id: &str, model: &str, current: &RequestFingerprint) -> bool {
+        self.provider_id == provider_id
+            && self.model == model
+            && compare(&self.fingerprint, current) == MissCause::Unchanged
+    }
+
+    /// The messages added after the anchored request — the only part the
+    /// estimate still measures. Clamped: a shorter history cannot hold the
+    /// anchor anyway ([`Anchor::holds_for`] refuses it), but the slice must
+    /// not panic if asked alone.
+    pub fn trailing<'a>(&self, history: &'a [LlmMessage]) -> &'a [LlmMessage] {
+        &history[self.fingerprint.messages.len().min(history.len())..]
+    }
 }
 
 #[cfg(test)]
@@ -179,5 +236,53 @@ mod tests {
         let sys = fingerprint(&[LlmMessage::user("prompt")], &[], &[]);
         assert_ne!(sys.system, fingerprint(&[], &[], &[]).system);
         assert_eq!(sys.messages, Vec::<String>::new());
+    }
+
+    fn record_with_usage(prompt: u32) -> RequestRecord {
+        RequestRecord {
+            round: 1,
+            provider_id: "p".into(),
+            model: "m".into(),
+            usage: Some(ChatUsage { prompt_tokens: prompt, completion_tokens: 2, total_tokens: prompt + 2, cached_tokens: 0 }),
+            fingerprint: fp("s", "t", &["a", "b"]),
+            cause: None,
+        }
+    }
+
+    /// A request that reported no cost anchors nothing: there is no truth to
+    /// hold on to, and the estimate stays the whole number.
+    #[test]
+    fn a_record_without_usage_anchors_nothing() {
+        assert!(Anchor::of(&RequestRecord { usage: None, ..record_with_usage(500) }).is_none());
+        assert_eq!(Anchor::of(&record_with_usage(500)).map(|a| a.prompt_tokens), Some(500));
+        // A gateway's empty usage object parses to zeros: not a cost, not an anchor.
+        assert!(Anchor::of(&record_with_usage(0)).is_none());
+    }
+
+    /// The anchor holds while the conversation only grows under the same
+    /// model; every other change — system, tools, a rewritten history, another
+    /// tokenizer — invalidates it.
+    #[test]
+    fn the_anchor_holds_only_for_a_grown_prefix_under_the_same_model() {
+        let anchor = Anchor::of(&record_with_usage(500)).unwrap();
+        assert!(anchor.holds_for("p", "m", &fp("s", "t", &["a", "b", "c"])));
+        assert!(anchor.holds_for("p", "m", &fp("s", "t", &["a", "b"])));
+        assert!(!anchor.holds_for("p", "m", &fp("s2", "t", &["a", "b", "c"])));
+        assert!(!anchor.holds_for("p", "m", &fp("s", "t2", &["a", "b", "c"])));
+        assert!(!anchor.holds_for("p", "m", &fp("s", "t", &["a", "X", "c"])));
+        assert!(!anchor.holds_for("p", "m", &fp("s", "t", &["a"])));
+        assert!(!anchor.holds_for("p", "m2", &fp("s", "t", &["a", "b", "c"])));
+        assert!(!anchor.holds_for("p2", "m", &fp("s", "t", &["a", "b", "c"])));
+    }
+
+    /// The trailing part is what the estimate measures: the messages after
+    /// the anchored request, and nothing when nothing was added.
+    #[test]
+    fn the_trailing_part_is_what_was_added_after_the_anchor() {
+        let anchor = Anchor::of(&record_with_usage(500)).unwrap();
+        let history = vec![LlmMessage::user("a"), LlmMessage::user("b"), LlmMessage::user("c")];
+        assert_eq!(anchor.trailing(&history), &history[2..]);
+        assert!(anchor.trailing(&history[..2]).is_empty());
+        assert!(anchor.trailing(&history[..1]).is_empty(), "a shorter history clamps, not panics");
     }
 }

@@ -82,7 +82,14 @@ impl crate::domain::request_marker::RequestMarkers for ChatMarkers {
 
     fn record(&self, record: crate::domain::request_marker::RequestRecord) {
         *self.session.last_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record.fingerprint.clone());
+        if let Some(anchor) = crate::domain::request_marker::Anchor::of(&record) {
+            *self.session.last_anchor.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(anchor);
+        }
         crate::infra::tool_call_log::append_request(&self.chat_id, &self.turn_id, &record);
+    }
+
+    fn last_anchor(&self) -> Option<crate::domain::request_marker::Anchor> {
+        self.session.last_anchor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 }
 
@@ -161,7 +168,10 @@ pub async fn chat_start<R: Runtime>(
     // before it starts.
     session.cancel.store(false, Ordering::SeqCst);
     session.begin_turn(state.mode());
-    crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
+    // The prompt is counted even if the turn's setup then fails. The counter
+    // opens SQLite and waits on its lock, so it runs off the loop, detached:
+    // best-effort, and nothing downstream reads it.
+    tauri::async_runtime::spawn_blocking(|| crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]));
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })
@@ -254,14 +264,19 @@ pub async fn chat_compact<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<CompactedHistory>, String> {
-    let workspace = state.chat_prompt_workspace(&chat_id)?;
-    let frame = next_request_frame(&app, &state, workspace);
+    let state = Arc::clone(&state);
     let sink = chat_event_sink(&app, turn_id);
     // A summary is an ordinary request to the provider, and a request on the
-    // IPC loop freezes every other command for its duration.
+    // IPC loop freezes every other command for its duration. The measurement
+    // waits too — it reads the chat record, probes the shell and reads the
+    // marker row — so it all happens off the loop, as `chat_context_usage`.
     tauri::async_runtime::spawn_blocking(move || {
+        let workspace = state.chat_prompt_workspace(&chat_id)?;
         let session = llm_session::resolve_for(None, Some(&chat_id)).map_err(|e| e.to_string())?;
-        compact(&session, frame, &messages, force, sink)
+        let (frame, system, tools) = next_request_frame(&app, &state, workspace);
+        let anchor = chat_anchor(&state, &chat_id);
+        let current = crate::domain::request_marker::fingerprint(&system, &tools, &messages);
+        compact_anchored(&session, frame, &messages, force, sink, anchor.as_ref(), &current)
     })
     .await
     .map_err(|e| format!("the compaction thread failed: {e}"))?
@@ -277,8 +292,22 @@ pub(super) fn compact(
     force: bool,
     sink: ChatEventSink,
 ) -> Result<Option<CompactedHistory>, String> {
+    compact_anchored(session, frame, messages, force, sink, None, &crate::domain::request_marker::RequestFingerprint::empty())
+}
+
+/// The same pass with the provider's anchor: the threshold decides on the
+/// anchored total, so a fold fires at the real share of the window (docs/60).
+pub(super) fn compact_anchored(
+    session: &llm_session::LlmSession,
+    frame: RequestFrame,
+    messages: &[LlmMessage],
+    force: bool,
+    sink: ChatEventSink,
+    anchor: Option<&crate::domain::request_marker::Anchor>,
+    current: &crate::domain::request_marker::RequestFingerprint,
+) -> Result<Option<CompactedHistory>, String> {
     let started = || sink(ChatTurnEvent { seq: 1, round: 0, target_id: None, event: ChatEventPayload::HistoryCompacting });
-    context_compaction::compact_if_needed(session, frame, messages, force, &started)
+    context_compaction::anchored_compact_if_needed(session, frame, messages, force, &started, anchor, current)
         .map(|compacted| compacted.map(|c| CompactedHistory { history: c.history, folded: c.folded }))
         .map_err(|e| e.to_string())
 }
@@ -312,20 +341,35 @@ pub async fn chat_context_usage(
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<ContextUsage, String> {
-    let workspace = state.chat_prompt_workspace(&chat_id)?;
     let state = Arc::clone(&state);
     super::blocking(move || {
+        let workspace = state.chat_prompt_workspace(&chat_id)?;
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state, workspace), &messages))
+        let (frame, system, tools) = next_request_frame(&app, &state, workspace);
+        let anchor = chat_anchor(&state, &chat_id);
+        let current = crate::domain::request_marker::fingerprint(&system, &tools, &messages);
+        Ok::<_, String>(context_compaction::anchored_usage(&session, frame, &messages, anchor.as_ref(), &current))
     })
     .await
 }
 
 /// What the next turn of the open window will send in front of the
 /// conversation ([`turn_setup::next_folder_frame`]), in the mode picked now.
-fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, workspace: Option<PathBuf>) -> RequestFrame {
+fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, workspace: Option<PathBuf>) -> (RequestFrame, Vec<LlmMessage>, Vec<crate::domain::llm::LlmToolDefinition>) {
     let servers = app.try_state::<Arc<McpServers>>();
     turn_setup::next_folder_frame(workspace.as_deref(), state.mode(), servers.as_ref().map(|s| s.as_ref()))
+}
+
+/// The chat's anchor for the meter: the session's last costed request, or the
+/// marker row after a reopen or a restart (docs/60).
+fn chat_anchor(state: &AgentState, chat_id: &str) -> Option<crate::domain::request_marker::Anchor> {
+    state
+        .session(chat_id)
+        .last_anchor
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .or_else(|| crate::infra::tool_call_log::last_anchor(chat_id))
 }
 
 /// Journals the turn `turn_id` for the next-prompt model: its input, built
@@ -776,8 +820,8 @@ mod tests {
             let state = state();
             state.set_workspace_for_test(other.clone());
             let app = tauri::test::mock_app();
-            let other_frame = next_request_frame(app.handle(), &state, Some(other));
-            let own_frame = next_request_frame(app.handle(), &state, Some(own));
+            let other_frame = next_request_frame(app.handle(), &state, Some(other)).0;
+            let own_frame = next_request_frame(app.handle(), &state, Some(own)).0;
             app.manage(state);
             let mut history: Vec<_> = (0..40).map(|i| if i % 2 == 0 { LlmMessage::user(format!("question {i}")) } else { LlmMessage::assistant(format!("answer {i}")) }).collect();
             // Just under the threshold without the saved folder's rules, just
@@ -1112,6 +1156,19 @@ mod tests {
             // Another chat's session remembers nothing of this one.
             let other = ChatMarkers { session: Arc::new(SessionHandle::default()), chat_id: "c2".into(), turn_id: "c2/turn-1".into() };
             assert!(other.previous().is_none());
+            // CU-2: the anchor is the last request that reported its cost, and
+            // it too survives the turn boundary; a request with no usage keeps it.
+            assert!(second.last_anchor().is_none());
+            let costed = RequestRecord {
+                usage: Some(crate::domain::llm::ChatUsage { prompt_tokens: 500, completion_tokens: 2, total_tokens: 502, cached_tokens: 0 }),
+                ..record("s3")
+            };
+            second.record(costed);
+            let third = ChatMarkers { session: Arc::clone(&session), chat_id: "c1".into(), turn_id: "c1/turn-3".into() };
+            assert_eq!(third.last_anchor().map(|a| a.prompt_tokens), Some(500));
+            third.record(record("s4"));
+            assert_eq!(third.last_anchor().map(|a| a.prompt_tokens), Some(500), "a request with no usage keeps the anchor");
+            assert!(other.last_anchor().is_none());
 
             let conn = rusqlite::Connection::open(crate::infra::app_dir::ensure().unwrap().join("tool_calls.db")).unwrap();
             let rows: Vec<(String, String)> = conn
@@ -1121,7 +1178,32 @@ mod tests {
                 .unwrap()
                 .collect::<Result<_, _>>()
                 .unwrap();
-            assert_eq!(rows, vec![("c1".to_string(), "c1/turn-1".to_string()), ("c1".to_string(), "c1/turn-2".to_string())]);
+            assert_eq!(rows, vec![("c1".to_string(), "c1/turn-1".to_string()), ("c1".to_string(), "c1/turn-2".to_string()), ("c1".to_string(), "c1/turn-2".to_string()), ("c1".to_string(), "c1/turn-3".to_string())]);
+        });
+    }
+
+    /// CU-3: the meter's anchor is the session's last costed request, and the
+    /// marker row when the session has none — a reopen or a restart.
+    #[test]
+    fn the_meter_anchor_falls_back_to_the_marker_row() {
+        use crate::domain::llm::ChatUsage;
+        use crate::domain::request_marker::{RequestFingerprint, RequestRecord, RequestMarkers};
+        crate::testing::with_app_dir("cmd-anchor-fallback", || {
+            let state = state();
+            assert!(chat_anchor(&state, "c1").is_none());
+            let record = RequestRecord {
+                round: 1,
+                provider_id: "p".into(),
+                model: "m".into(),
+                usage: Some(ChatUsage { prompt_tokens: 500, completion_tokens: 0, total_tokens: 500, cached_tokens: 0 }),
+                fingerprint: RequestFingerprint { system: "s".into(), tools: "t".into(), messages: vec![] },
+                cause: None,
+            };
+            crate::infra::tool_call_log::append_request("c1", "t1", &record);
+            assert_eq!(chat_anchor(&state, "c1").map(|a| a.prompt_tokens), Some(500));
+            let markers = ChatMarkers { session: state.session("c1"), chat_id: "c1".into(), turn_id: "c1/turn-2".into() };
+            markers.record(RequestRecord { usage: Some(ChatUsage { prompt_tokens: 700, ..record.usage.unwrap() }), ..record.clone() });
+            assert_eq!(chat_anchor(&state, "c1").map(|a| a.prompt_tokens), Some(700), "the session's anchor wins over the row");
         });
     }
 

@@ -13,6 +13,9 @@ impl RequestMarkers for Markers {
     fn record(&self, record: RequestRecord) {
         self.0.lock().unwrap().push(record);
     }
+    fn last_anchor(&self) -> Option<request_marker::Anchor> {
+        self.0.lock().unwrap().iter().rev().find_map(request_marker::Anchor::of)
+    }
 }
 
 fn usage(prompt: u32, cached: u32, completion: u32) -> ChatUsage {
@@ -123,6 +126,41 @@ fn a_fold_between_attempts_is_the_second_rows_cause() {
     assert_eq!(rows[0].usage, None);
     assert!(matches!(rows[1].cause, Some(MissCause::History { .. })), "{:?}", rows[1].cause);
     assert!(rows[1].fingerprint.messages.len() < rows[0].fingerprint.messages.len(), "the fold shortened the history");
+}
+
+/// CU-3: the meter during a turn is anchored: the second round's estimate is
+/// the first round's real count plus the estimate of what the round added,
+/// not a fresh estimate of the whole conversation.
+#[test]
+fn the_second_rounds_estimate_is_anchored_on_the_firsts_usage() {
+    let mut h = harness(
+        "loop-anchored-estimate",
+        vec![
+            Step::Reply(ChatStreamResult {
+                tool_calls: vec![wants("c1", "todo", r#"{"op":"write","tasks":["a"]}"#)],
+                usage: Some(usage(1000, 900, 10)),
+                ..Default::default()
+            }),
+            Step::Reply(ChatStreamResult { text: "done".into(), usage: Some(usage(1200, 0, 5)), ..Default::default() }),
+        ],
+    );
+    let _markers = with_markers(&mut h);
+
+    let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
+    let Ok(ChatStreamOutcome::Done(done)) = outcome else { panic!("{outcome:?}") };
+    let estimates: Vec<usize> = h
+        .events()
+        .iter()
+        .filter_map(|e| match &e.event {
+            ChatEventPayload::ContextEstimate(u) => Some(u.total),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(estimates.len(), 2);
+    // The second round asked with the first round's calls and results joined;
+    // the final assistant text is the round's own answer, not yet in history.
+    let round_two_history = &done.history[..done.history.len() - 1];
+    assert_eq!(estimates[1], 1000 + crate::domain::compaction::estimate_tokens(&round_two_history[1..]));
 }
 
 /// A failed request is a request too: its marker is written with no usage,

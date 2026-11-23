@@ -22,6 +22,7 @@
 
 use super::image::ImagePart;
 use super::llm::{LlmMessage, LlmRole, LlmToolDefinition};
+use super::request_marker::{Anchor, RequestFingerprint};
 use super::tools::{ToolName, TOOL_DENIED_PREFIX, TOOL_ERROR_PREFIX, TOOL_NOT_RUN_PREFIX};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -80,10 +81,11 @@ const CHARS_PER_TOKEN: usize = 4;
 
 /// What the next request will cost, near enough to decide with.
 ///
-/// Four characters to a token is the English rule of thumb. Cyrillic packs
-/// more tokens into the same characters, so this **underestimates** exactly
-/// where a long conversation is most likely to be — which is why the trigger
-/// ratio leaves room rather than sitting at the edge.
+/// A rule of thumb, not a tokenizer: the provider's own count for the last
+/// request is the truth, and the meter will anchor on it (docs/60, CU-2 — not
+/// built yet). Until then this estimate is the whole number, so it counts
+/// reasoning ([`LlmMessage::native_content`]) and weighs scripts by their
+/// UTF-8 bytes: ~4 ASCII characters to a token, ~2 Cyrillic, ~1.3 CJK.
 pub fn estimate_tokens(messages: &[LlmMessage]) -> usize {
     messages.iter().map(estimate_message_tokens).sum()
 }
@@ -91,7 +93,9 @@ pub fn estimate_tokens(messages: &[LlmMessage]) -> usize {
 /// The same rule of thumb, over a bare string.
 ///
 /// Public because the two largest things in a request are not messages: the
-/// system prompt and the tool schemas.
+/// system prompt and the tool schemas. Bytes, not characters: a Cyrillic
+/// character is two of them and a CJK one three, which is roughly how much
+/// tighter those scripts pack into tokens.
 pub fn estimate_text_tokens(text: &str) -> usize {
     text.len().div_ceil(CHARS_PER_TOKEN)
 }
@@ -122,15 +126,30 @@ pub fn estimate_tool_schema_tokens(tools: &[LlmToolDefinition]) -> usize {
 }
 
 fn estimate_message_tokens(message: &LlmMessage) -> usize {
-    let mut chars = message.content.as_deref().map_or(0, str::len);
-    chars += message.tool_call_id.as_deref().map_or(0, str::len);
-    for call in &message.tool_calls {
-        chars += call.name.len() + call.arguments.len() + TOOL_CALL_OVERHEAD_CHARS;
+    // Anthropic keeps a thinking round whole in `native_content` — an array of
+    // blocks sent verbatim INSTEAD of the rebuilt text and calls — so counting
+    // both would charge the round twice. The OpenAI-compatible form is an
+    // object carrying only reasoning, on top of the text and calls that do go
+    // out, and is added rather than substituted.
+    let verbatim = message.native_content.as_ref().is_some_and(serde_json::Value::is_array);
+    let mut units = message.tool_call_id.as_deref().map_or(0, str::len);
+    if !verbatim {
+        units += message.content.as_deref().map_or(0, str::len);
+        for call in &message.tool_calls {
+            units += call.name.len() + call.arguments.len() + TOOL_CALL_OVERHEAD_CHARS;
+        }
+    }
+    // Reasoning rides back to the provider in `native_content`; a count that
+    // skipped it would miss a thinking model's whole inner monologue.
+    if let Some(native) = &message.native_content {
+        if let Ok(json) = serde_json::to_string(native) {
+            units += json.len();
+        }
     }
     // A picture by its size, never by its base64: that would count a
     // screenshot as a quarter of a million tokens.
     let images: usize = message.images.iter().map(ImagePart::estimate_tokens).sum();
-    MESSAGE_OVERHEAD_TOKENS + chars.div_ceil(CHARS_PER_TOKEN) + images
+    MESSAGE_OVERHEAD_TOKENS + units.div_ceil(CHARS_PER_TOKEN) + images
 }
 
 /// What the next request will cost, split the way the window shows it.
@@ -162,6 +181,11 @@ pub struct ContextUsage {
     /// The total at which a pass starts happening on its own. `None` without a
     /// limit, for the same reason.
     pub compacts_at: Option<usize>,
+    /// Whether the total is anchored on the provider's own count for the last
+    /// request (docs/60) rather than estimated from the text: the meter names
+    /// its source, so a reader knows which number they are trusting.
+    #[serde(default)]
+    pub anchored: bool,
 }
 
 /// What goes in front of the conversation on every request, by part — the
@@ -181,6 +205,26 @@ impl RequestFrame {
 }
 
 impl ContextUsage {
+    /// Rescales the parts so they sum to `total` — the provider's anchored
+    /// count, which the estimate's parts only approximate in proportion. The
+    /// conversation part absorbs the rounding drift, so the sum is exact and
+    /// the ring, the bar and the rows stay one number (docs/60).
+    pub fn with_total(mut self, total: usize) -> Self {
+        let old = self.total;
+        if old == 0 {
+            self.conversation = total;
+        } else {
+            let scaled = [self.instructions, self.skills, self.tools, self.mcp].iter().map(|part| part * total / old).sum::<usize>();
+            self.instructions = self.instructions * total / old;
+            self.skills = self.skills * total / old;
+            self.tools = self.tools * total / old;
+            self.mcp = self.mcp * total / old;
+            self.conversation = total - scaled;
+        }
+        self.total = total;
+        self
+    }
+
     pub fn new(frame: RequestFrame, history: &[LlmMessage], limit: Option<u32>) -> Self {
         let limit = limit.filter(|limit| *limit > 0);
         let calls: HashMap<&str, &str> = history
@@ -213,6 +257,7 @@ impl ContextUsage {
             limit,
             compacts_at: limit
                 .map(|limit| (u64::from(limit) * TRIGGER_PERCENT / 100) as usize),
+            anchored: false,
         }
     }
 }
@@ -229,6 +274,27 @@ pub fn should_compact(estimated_tokens: usize, context_limit: Option<u32>) -> bo
         return false;
     };
     estimated_tokens as u64 * 100 >= u64::from(limit) * TRIGGER_PERCENT
+}
+
+/// The next request's cost, anchored on the provider's own count for the last
+/// request plus the estimate of what was added since (docs/60): the estimate's
+/// error is bounded by the tail, not the whole conversation. Without a
+/// trustworthy anchor — none yet, a rewritten history, another model — the
+/// full estimate, as before. `current` is the fingerprint of the request about
+/// to be sent, taken where it is assembled. Returns the total and whether it
+/// is anchored, so the meter names the source the number actually came from.
+pub fn anchored_tokens(
+    anchor: Option<&Anchor>,
+    current: &RequestFingerprint,
+    provider_id: &str,
+    model: &str,
+    frame: RequestFrame,
+    history: &[LlmMessage],
+) -> (usize, bool) {
+    match anchor.filter(|anchor| anchor.holds_for(provider_id, model, current)) {
+        Some(anchor) => (anchor.prompt_tokens as usize + estimate_tokens(anchor.trailing(history)), true),
+        None => (frame.total() + estimate_tokens(history), false),
+    }
 }
 
 /// One pass, as positions in the history: `[..keep_head]` stays, the
@@ -624,6 +690,74 @@ mod tests {
         assert_eq!(rendered, "User: [image 30×20] why red?\n");
     }
 
+    /// Reasoning in `native_content` goes back to the provider, so it is part
+    /// of the request's cost — a count that skipped it would miss a thinking
+    /// model's whole inner monologue.
+    #[test]
+    fn reasoning_in_native_content_is_counted() {
+        let plain = assistant("done");
+        let mut thinking = assistant("done");
+        thinking.native_content = Some(serde_json::json!({ "thinking": "x".repeat(400) }));
+
+        let added = estimate_tokens(&[thinking]) - estimate_tokens(&[plain]);
+        assert!(added >= 100, "400 characters of reasoning added {added} tokens");
+    }
+
+    /// Non-ASCII packs tighter, and the byte count sees it: a Cyrillic
+    /// character is two UTF-8 bytes, so N characters cost about N/2 tokens,
+    /// where a flat four-characters rule would say N/4 and under-count by half.
+    #[test]
+    fn cyrillic_counts_at_two_characters_a_token() {
+        let russian = "привет мир"; // 10 characters, 19 UTF-8 bytes
+        assert_eq!(estimate_text_tokens(russian), 5);
+        assert_eq!(estimate_tokens(&[user(russian)]), MESSAGE_OVERHEAD_TOKENS + 5);
+    }
+
+    /// ASCII keeps the English rule of thumb unchanged.
+    #[test]
+    fn ascii_keeps_four_characters_a_token() {
+        assert_eq!(estimate_text_tokens(&"x".repeat(4_000)), 1_000);
+        assert_eq!(estimate_text_tokens("abcde"), 2);
+    }
+
+    /// CJK is three bytes a character, and the byte count keeps that: ~0.75
+    /// token a character, nearer the real tokenizers than a flat weight of two
+    /// characters per token would be.
+    #[test]
+    fn cjk_counts_by_its_utf8_bytes() {
+        assert_eq!(estimate_text_tokens("你好世界"), 3); // 12 bytes / 4
+    }
+
+    /// An Anthropic thinking round goes back as its verbatim block array, in
+    /// place of the rebuilt text and calls: counting those too would charge
+    /// the round twice and fold the conversation earlier than needed.
+    #[test]
+    fn a_verbatim_native_array_replaces_text_and_calls() {
+        let native = serde_json::json!([
+            { "type": "thinking", "thinking": "hm", "signature": "s" },
+            { "type": "text", "text": "hello" },
+            { "type": "tool_use", "id": "c1", "name": "readFile", "input": { "path": "a" } }
+        ]);
+        let mut message = assistant("hello");
+        message.tool_calls = vec![LlmToolCall { id: "c1".into(), name: "readFile".into(), arguments: "{\"path\":\"a\"}".into() }];
+        message.native_content = Some(native.clone());
+
+        let native_only = MESSAGE_OVERHEAD_TOKENS + serde_json::to_string(&native).unwrap().len().div_ceil(CHARS_PER_TOKEN);
+        assert_eq!(estimate_tokens(&[message]), native_only);
+    }
+
+    /// The OpenAI-compatible form is an object with only the reasoning field:
+    /// the text and calls still go out, so it is added on top of them.
+    #[test]
+    fn an_openai_reasoning_object_adds_on_top() {
+        let native = serde_json::json!({ "reasoning_content": "hm" });
+        let mut message = assistant("hello");
+        message.native_content = Some(native.clone());
+
+        let together = "hello".len() + serde_json::to_string(&native).unwrap().len();
+        assert_eq!(estimate_tokens(&[message]), MESSAGE_OVERHEAD_TOKENS + together.div_ceil(CHARS_PER_TOKEN));
+    }
+
     #[test]
     fn no_schemas_cost_nothing() {
         assert_eq!(estimate_tool_schema_tokens(&[]), 0);
@@ -726,9 +860,55 @@ mod tests {
             .collect()
     }
 
+    /// The parts are proportions of the anchored total: rescaled they sum to
+    /// it exactly, the conversation absorbing the rounding drift.
+    #[test]
+    fn parts_rescaled_to_a_total_sum_to_it() {
+        let usage = ContextUsage::new(RequestFrame { instructions: 100, skills: 30, tools: 50, mcp: 20 }, &[user("go"), assistant("ok")], Some(1_000));
+        let rescaled = usage.with_total(1_000);
+        assert_eq!(rescaled.total, 1_000);
+        assert_eq!(rescaled.instructions + rescaled.skills + rescaled.tools + rescaled.mcp + rescaled.conversation, 1_000);
+        assert!(rescaled.instructions > rescaled.skills, "proportions kept");
+        // An empty estimate puts the whole anchored count in the conversation.
+        let empty = ContextUsage::new(RequestFrame::default(), &[], None).with_total(500);
+        assert_eq!((empty.total, empty.conversation), (500, 500));
+    }
+
     #[test]
     fn an_empty_conversation_costs_nothing() {
         assert_eq!(estimate_tokens(&[]), 0);
+    }
+
+    fn counted_frame() -> RequestFrame {
+        RequestFrame { instructions: 100, skills: 0, tools: 50, mcp: 0 }
+    }
+
+    /// With a trustworthy anchor the number is the provider's own count plus
+    /// the estimate of what was added since — the estimate's error is bounded
+    /// by the tail, not the whole conversation.
+    #[test]
+    fn an_anchored_total_is_the_real_count_plus_the_tail() {
+        let history = vec![user("go"), assistant("ok"), user("next")];
+        let anchor = Anchor { prompt_tokens: 1_000, fingerprint: crate::domain::request_marker::fingerprint(&[], &[], &history[..2]), provider_id: "p".into(), model: "m".into() };
+        let current = crate::domain::request_marker::fingerprint(&[], &[], &history);
+        assert_eq!(anchored_tokens(Some(&anchor), &current, "p", "m", counted_frame(), &history), (1_000 + estimate_tokens(&history[2..]), true));
+        // Nothing added since: exactly the provider's count, no estimate at all.
+        let same = crate::domain::request_marker::fingerprint(&[], &[], &history[..2]);
+        assert_eq!(anchored_tokens(Some(&anchor), &same, "p", "m", counted_frame(), &history[..2]), (1_000, true));
+    }
+
+    /// Without a trustworthy anchor — none yet, a rewritten history, another
+    /// model — the full estimate, as before.
+    #[test]
+    fn without_a_trustworthy_anchor_the_total_is_the_full_estimate() {
+        let history = vec![user("go"), assistant("ok")];
+        let full = counted_frame().total() + estimate_tokens(&history);
+        let current = crate::domain::request_marker::fingerprint(&[], &[], &history);
+        assert_eq!(anchored_tokens(None, &current, "p", "m", counted_frame(), &history), (full, false));
+        let stale = Anchor { prompt_tokens: 1_000, fingerprint: crate::domain::request_marker::fingerprint(&[], &[], &[user("other")]), provider_id: "p".into(), model: "m".into() };
+        assert_eq!(anchored_tokens(Some(&stale), &current, "p", "m", counted_frame(), &history), (full, false));
+        let other_model = Anchor { model: "m2".into(), ..stale.clone() };
+        assert_eq!(anchored_tokens(Some(&other_model), &current, "p", "m", counted_frame(), &history), (full, false));
     }
 
     #[test]

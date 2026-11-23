@@ -185,6 +185,42 @@ fn try_append_request(chat_id: &str, turn_id: &str, record: &RequestRecord) -> R
     Ok(())
 }
 
+/// The chat's last request that reported its cost, as the meter's anchor
+/// after a reopen or a restart (docs/60): hashes and a number from the marker
+/// row, never content. `None` when there is no such row, or its hashes cannot
+/// be read — an unreadable fingerprint must not pass as an empty prefix, which
+/// would compare Unchanged and double the count.
+pub fn last_anchor(chat_id: &str) -> Option<crate::domain::request_marker::Anchor> {
+    let conn = open().ok()?;
+    let (prompt_tokens, provider_id, model, system, tools, hashes) = conn
+        .query_row(
+            "SELECT prompt_tokens, provider_id, model, system_hash, tools_hash, message_hashes FROM requests
+             WHERE chat_id = ?1 AND prompt_tokens IS NOT NULL AND prompt_tokens > 0 ORDER BY ts_ms DESC, id DESC LIMIT 1",
+            params![chat_id],
+            |r| {
+                Ok((
+                    r.get::<_, u32>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .ok()?;
+    Some(crate::domain::request_marker::Anchor {
+        prompt_tokens,
+        provider_id,
+        model,
+        fingerprint: crate::domain::request_marker::RequestFingerprint {
+            system,
+            tools,
+            messages: serde_json::from_str(&hashes).ok()?,
+        },
+    })
+}
+
 fn row(row: &Row) -> rusqlite::Result<ToolCallLogRow> {
     let json = |text: Option<String>| text.and_then(|t| serde_json::from_str(&t).ok());
     let status: String = row.get(10)?;
@@ -482,6 +518,37 @@ mod tests {
             let page = query(&ToolCallLogFilter::default()).unwrap();
             assert_eq!(page.total, 2);
             assert_eq!(page.rows[0].entry.chat_id, "c1");
+        });
+    }
+
+    /// CU-2: the meter's anchor after a reopen is the last request that
+    /// reported its cost — hashes and a number from the row, never content.
+    #[test]
+    fn the_last_anchor_is_the_last_costed_request() {
+        with_app_dir("log-anchor", || {
+            let record = |prompt: Option<u32>| RequestRecord {
+                round: 1,
+                provider_id: "p".into(),
+                model: "m".into(),
+                usage: prompt.map(|p| crate::domain::llm::ChatUsage { prompt_tokens: p, completion_tokens: 2, total_tokens: p + 2, cached_tokens: 0 }),
+                fingerprint: crate::domain::request_marker::RequestFingerprint { system: "s".into(), tools: "t".into(), messages: vec!["a".into(), "b".into()] },
+                cause: None,
+            };
+            assert!(last_anchor("c1").is_none());
+            append_request("c1", "t1", &record(Some(500)));
+            append_request("c1", "t2", &record(None));
+            append_request("c1", "t3", &record(Some(0)));
+            let anchor = last_anchor("c1").expect("the costed row anchors");
+            assert_eq!(anchor.prompt_tokens, 500);
+            assert_eq!(anchor.fingerprint.messages, vec!["a".to_string(), "b".to_string()]);
+            assert_eq!((anchor.provider_id.as_str(), anchor.model.as_str()), ("p", "m"));
+            assert!(last_anchor("c2").is_none());
+            // A row whose hashes cannot be read anchors nothing: an empty
+            // message list would compare Unchanged and double the count.
+            let conn = open().unwrap();
+            conn.execute("UPDATE requests SET message_hashes = 'not json'", []).unwrap();
+            drop(conn);
+            assert!(last_anchor("c1").is_none());
         });
     }
 
