@@ -282,13 +282,13 @@ fn run_task(session: &LlmSession, clusters: &Arc<Clusters>, task: &Task, run: us
     let events = events_seen.lock().unwrap();
     let rounds = events.iter().filter(|e| matches!(e.event, ChatEventPayload::RoundCompleted { .. })).count();
     let (tokens_in, tokens_cached, tokens_out) = events.iter().fold((0u64, 0u64, 0u64), |(i, c, o), e| match &e.event {
-        ChatEventPayload::ContextUsage(u) => (i + u64::from(u.prompt_tokens), c + u64::from(u.cached_tokens), o + u64::from(u.completion_tokens)),
+        ChatEventPayload::ContextUsage { usage: u, .. } => (i + u64::from(u.prompt_tokens), c + u64::from(u.cached_tokens), o + u64::from(u.completion_tokens)),
         _ => (i, c, o),
     });
     let per_round: Vec<(u64, u64, u64)> = events
         .iter()
         .filter_map(|e| match &e.event {
-            ChatEventPayload::ContextUsage(u) => Some((u64::from(u.prompt_tokens), u64::from(u.cached_tokens), u64::from(u.completion_tokens))),
+            ChatEventPayload::ContextUsage { usage: u, .. } => Some((u64::from(u.prompt_tokens), u64::from(u.cached_tokens), u64::from(u.completion_tokens))),
             _ => None,
         })
         .collect();

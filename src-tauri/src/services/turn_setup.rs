@@ -15,6 +15,7 @@ use thiserror::Error;
 use crate::domain::agents::Agents;
 use crate::domain::background::BackgroundProcesses;
 use crate::domain::board::TaskBoard;
+use crate::domain::code_host::AgentPullRequests;
 use crate::domain::mongo::MongoServers;
 use crate::domain::chat_role::ChatRole;
 use crate::domain::conversation_mode::{self, ConversationMode};
@@ -77,12 +78,22 @@ pub struct FolderHandles {
     pub terminals: Option<Arc<dyn UserTerminals>>,
     pub board: Option<Arc<dyn TaskBoard>>,
     pub mongo: Option<Arc<dyn MongoServers>>,
+    pub pull_requests: Option<Arc<dyn AgentPullRequests>>,
+    /// The chat's request markers: its previous fingerprint in memory and
+    /// the row on disk. `None` under a mock runtime, as the rest.
+    pub markers: Option<Arc<dyn crate::domain::request_marker::RequestMarkers>>,
+    /// The turn's journal: history after each completed round, so a crash
+    /// does not take the turn's work. `None` under a mock runtime.
+    pub journal: Option<Arc<dyn crate::domain::turn_journal::TurnJournal>>,
 }
 
 /// What a turn in a folder is, from the window and the agent's state.
 pub struct FolderTurn<'a> {
     /// The chat the turn's tokens are counted under (`llm_session::resolve_for`).
     pub chat_id: &'a str,
+    /// The turn's id on the event channel — named in the call log and the
+    /// request markers, so a row can be found by the turn that wrote it.
+    pub turn_id: &'a str,
     pub workspace: &'a Path,
     pub mode: ConversationMode,
     pub approval: ApprovalPolicy,
@@ -119,7 +130,12 @@ pub fn run_in_folder(
     let skills = skills::enabled_catalog(Some(workspace)).unwrap_or_default();
     let rules = project_rules::load(workspace);
     let record = crate::infra::tool_call_log::recorder();
-    let log_call = |entry: ToolCallLogEntry| record(&entry);
+    let (chat_id, turn_id) = (folder.chat_id.to_string(), folder.turn_id.to_string());
+    let log_call = move |mut entry: ToolCallLogEntry| {
+        entry.chat_id = chat_id.clone();
+        entry.turn_id = turn_id.clone();
+        record(&entry);
+    };
     let hooks = crate::infra::hooks::load()
         .map(|config| Hooks::new(config, Arc::new(crate::infra::hooks::run)))
         .map_err(|error| TurnSetupError::Hooks {
@@ -141,6 +157,7 @@ pub fn run_in_folder(
     let features = features::enabled();
     let board = app.board.filter(|_| features.is_on(Feature::Board));
     let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
+    let pull_requests = app.pull_requests.filter(|_| features.is_on(Feature::PullRequests));
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
     let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
     let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), parallel });
@@ -167,6 +184,8 @@ pub fn run_in_folder(
         rules: &rules,
         frozen: Some(&frozen),
         log_call: &log_call,
+        markers: app.markers.as_deref(),
+        journal: app.journal.as_deref(),
         plan: folder.plan,
         worktree_of: worktree_of.as_deref(),
         chat_head: chat_head.as_deref(),
@@ -179,6 +198,7 @@ pub fn run_in_folder(
         questions: app.questions,
         board,
         mongo,
+        pull_requests,
         deepseek,
         features,
         fork: false,
@@ -189,9 +209,11 @@ pub fn run_in_folder(
 /// What the next turn in `workspace` will send in front of the conversation:
 /// the prompt parts and tools [`run_in_folder`] gathers, read the same way —
 /// but MCP servers only as they run now, since none is started to be
-/// measured, and the shell by name, since probing it runs it. Without a
+/// measured. The shell is described as a turn describes it (probing it runs
+/// it, off the event loop): a measured prompt that differs from the sent one
+/// would break the anchor's system hash between turns (docs/60). Without a
 /// folder, the prompt a turn there would have.
-pub fn next_folder_frame(workspace: Option<&Path>, mode: ConversationMode, servers: Option<&McpServers>) -> crate::domain::compaction::RequestFrame {
+pub fn next_folder_frame(workspace: Option<&Path>, mode: ConversationMode, servers: Option<&McpServers>) -> (crate::domain::compaction::RequestFrame, Vec<crate::domain::llm::LlmMessage>, Vec<crate::domain::llm::LlmToolDefinition>) {
     let skills = skills::enabled_catalog(workspace).unwrap_or_default();
     let rules = workspace.map(project_rules::load).unwrap_or_default();
     let mcp = match (workspace, servers_for(servers, mode)) {
@@ -200,17 +222,20 @@ pub fn next_folder_frame(workspace: Option<&Path>, mode: ConversationMode, serve
     };
     let worktree_of = workspace.and_then(crate::infra::git_head::worktree_of);
     let shell = crate::infra::shells::for_commands();
+    let shell_described = crate::domain::command_exec::describe_shell(&shell.program, crate::infra::process_runner::probe_shell(&shell).as_ref());
     let today = crate::services::llm_chat::today();
     let features = features::enabled();
-    crate::services::context_compaction::request_frame(
+    crate::services::context_compaction::request_parts(
         &crate::domain::prompt::TurnContext {
             mode,
             workspace: workspace.unwrap_or(Path::new("")),
-            shell: &shell.program,
+            shell: &shell_described,
             today: &today,
             skills: &skills,
             rules: &rules,
             worktree_of: worktree_of.as_deref(),
+            // Per-chat, and this frame is no chat's: the turn names its own base.
+            worktree_base: None,
             parallel: None,
             // Read like the rest of the frame: as the next turn will read it.
             language: crate::infra::settings_store::load().ok().and_then(|s| s.llm.reply_language.name()),
@@ -240,6 +265,8 @@ fn frozen_for(chat_id: &str, workspace: &Path, now: Frozen) -> Arc<Frozen> {
 pub struct ChatTurnInput<'a> {
     /// The chat the turn is of: a role that works in a folder finds its folder by it.
     pub chat_id: String,
+    /// The turn's id on the event channel, named in the call log.
+    pub turn_id: String,
     pub role: ChatRole,
     pub kube: Option<KubePin>,
     pub clusters: Arc<Clusters>,
@@ -282,7 +309,12 @@ pub fn run_in_chat(
         _ => None,
     };
     let record = crate::infra::tool_call_log::recorder();
-    let log_call = |entry: ToolCallLogEntry| record(&entry);
+    let (chat_id, turn_id) = (chat.chat_id.clone(), chat.turn_id.clone());
+    let log_call = move |mut entry: ToolCallLogEntry| {
+        entry.chat_id = chat_id.clone();
+        entry.turn_id = turn_id.clone();
+        record(&entry);
+    };
     // Read each turn: a runbook the user just wrote is there for this answer.
     let runbooks = crate::domain::runbooks::merged(crate::infra::runbooks_store::own());
     let web = web_search::web_for(WebSearchPlace::Chat, &chat.embeddings)?;
@@ -380,6 +412,7 @@ mod tests {
                 .unwrap();
                 let chat = ChatTurnInput {
                     chat_id: "board-chat".into(),
+                    turn_id: "t1".into(),
                     role: ChatRole::Assistant,
                     kube: None,
                     clusters: Arc::new(Clusters::default()),
@@ -439,6 +472,7 @@ mod tests {
             let handed = |role: ChatRole| {
                 let chat = ChatTurnInput {
                     chat_id: id.into(),
+                    turn_id: "t1".into(),
                     role,
                     kube: None,
                     clusters: Arc::new(Clusters::default()),
@@ -475,6 +509,62 @@ mod tests {
         });
     }
 
+    /// TJ-3: the call log names the chat and turn — the loop's own entry
+    /// carries neither, the wiring here fills them in, and a row can be
+    /// found by the turn that wrote it.
+    #[test]
+    fn the_call_log_names_the_chat_and_turn() {
+        crate::testing::with_app_dir("turn-setup-log-ids", || {
+            crate::testing::spending_provider("ok", 10, 2);
+            let events: ChatEventSink = Arc::new(|_| {});
+            let (no, none, zero) = (|| false, Vec::new, || 0);
+            let dir = temp_dir("turn-setup-log-ids-root");
+            let folder = FolderTurn {
+                chat_id: "c9",
+                turn_id: "c9/turn-3",
+                workspace: &dir,
+                mode: ConversationMode::Agent,
+                approval: ApprovalPolicy::default(),
+                plan: None,
+                events: &events,
+                cancelled: &no,
+                take_steering: &none,
+                notes_typed: &zero,
+                parallel: &Vec::<String>::new,
+                worktree_base: None,
+            };
+            run_in_folder(folder, FolderHandles::default(), |turn| {
+                (turn.log_call)(ToolCallLogEntry {
+                    ts_ms: crate::infra::tool_call_log::now_ms(),
+                    repo_root: String::new(),
+                    chat_id: String::new(),
+                    turn_id: String::new(),
+                    round: 1,
+                    provider_id: "p".into(),
+                    model: "m".into(),
+                    tool: "readFile".into(),
+                    args: serde_json::json!({}),
+                    status: crate::domain::tool_call_log::CallStatus::Ok,
+                    error: None,
+                    result: None,
+                    duration_ms: 0,
+                });
+                Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
+                    result: Default::default(),
+                    todos: Vec::new(),
+                    history: Vec::new(),
+                    limit_reached: None,
+                }))
+            })
+            .unwrap();
+
+            let page = crate::infra::tool_call_log::query(&crate::domain::tool_call_log::ToolCallLogFilter::default()).unwrap();
+            assert_eq!(page.total, 1);
+            assert_eq!(page.rows[0].entry.chat_id, "c9");
+            assert_eq!(page.rows[0].entry.turn_id, "c9/turn-3");
+        });
+    }
+
     /// A turn asks through the session it was put together with, so what the
     /// model spends there — the turn's rounds, its helpers', its checks' —
     /// counts under the turn's chat, in a folder and in Chat mode alike.
@@ -499,6 +589,7 @@ mod tests {
             let dir = temp_dir("turn-setup-spent-root");
             let folder = FolderTurn {
                 chat_id: "folder-chat",
+                turn_id: "t1",
                 workspace: &dir,
                 mode: ConversationMode::Analyst,
                 approval: ApprovalPolicy::default(),
@@ -527,6 +618,7 @@ mod tests {
             }
             let chat = ChatTurnInput {
                 chat_id: "plain-chat".into(),
+                turn_id: "t1".into(),
                 role: ChatRole::Assistant,
                 kube: None,
                 clusters: Arc::new(Clusters::default()),
@@ -597,6 +689,7 @@ mod tests {
             for chat in ["marked", "unmarked"] {
                 let folder = FolderTurn {
                     chat_id: chat,
+                    turn_id: "t1",
                     workspace: &dir,
                     mode: ConversationMode::Agent,
                     approval: ApprovalPolicy::default(),
@@ -648,9 +741,11 @@ mod tests {
                 let mut settings = crate::infra::settings_store::load().unwrap();
                 settings.features.insert("board".into(), on);
                 settings.features.insert("mongodb".into(), on);
+                settings.features.insert("pull-requests".into(), on);
                 crate::infra::settings_store::save(&settings).unwrap();
                 let folder = FolderTurn {
                     chat_id: "c1",
+                    turn_id: "t1",
                     workspace: &dir,
                     mode: ConversationMode::Analyst,
                     approval: ApprovalPolicy::default(),
@@ -660,17 +755,32 @@ mod tests {
                     take_steering: &none,
                     notes_typed: &zero,
                     parallel: &Vec::<String>::new,
-                worktree_base: None,
+                    worktree_base: None,
                 };
                 let board: Arc<dyn TaskBoard> = Arc::new(crate::infra::board_store::Board::new(None, Arc::new(|_| {})));
                 let mut seen = None;
-                run_in_folder(folder, FolderHandles { board: Some(board), mongo: Some(Arc::new(crate::services::mongo::Servers(Arc::default()))), ..Default::default() }, |turn| {
+                struct NoPullRequests;
+                impl AgentPullRequests for NoPullRequests {
+                    fn status(&self, _: &Path, _: Option<&str>) -> Result<crate::domain::code_host::PrStrip, crate::domain::code_host::CodeHostError> {
+                        Ok(crate::domain::code_host::PrStrip::NoRemote)
+                    }
+                    fn create(&self, _: &Path, _: &str, _: &str, _: Option<&str>, _: bool) -> Result<crate::domain::code_host::PullRequest, crate::domain::code_host::CodeHostError> {
+                        Err(crate::domain::code_host::CodeHostError::NoRemote)
+                    }
+                }
+                let handles = FolderHandles {
+                    board: Some(board),
+                    mongo: Some(Arc::new(crate::services::mongo::Servers(Arc::default()))),
+                    pull_requests: Some(Arc::new(NoPullRequests)),
+                    ..Default::default()
+                };
+                run_in_folder(folder, handles, |turn| {
                     assert_eq!(turn.session.provider_id, "local");
                     assert_eq!(turn.approval.git_aliases.get("pf").map(String::as_str), Some("push --force"));
                     assert_eq!(turn.plan, Some("the plan"));
                     assert!(turn.frozen.is_some_and(|f| f.rules[..] == *turn.rules), "the folder's turn is frozen");
                     assert!(matches!(turn.place, Place::Folder { mode: ConversationMode::Analyst, web: None, .. }));
-                    seen = Some((turn.board.is_some(), turn.mongo.is_some()));
+                    seen = Some((turn.board.is_some(), turn.mongo.is_some(), turn.pull_requests.is_some()));
                     Ok(ChatStreamOutcome::Done(crate::domain::turn::ChatDone {
                         result: Default::default(),
                         todos: Vec::new(),
@@ -680,8 +790,8 @@ mod tests {
                 })
                 .map(|_| seen.expect("run was called"))
             };
-            assert_eq!(turn(false).unwrap(), (false, false), "the board and MongoDB are off until their features are");
-            assert_eq!(turn(true).unwrap(), (true, true));
+            assert_eq!(turn(false).unwrap(), (false, false, false), "the board, MongoDB and pull requests are off until their features are");
+            assert_eq!(turn(true).unwrap(), (true, true, true));
 
             std::fs::write(crate::infra::hooks::path().unwrap(), "{ not json").unwrap();
             let refused = turn(true).expect_err("hooks that do not parse").to_string();

@@ -68,7 +68,7 @@ export function BoardCardSheet({ card, tags, dictate, error, onChange, onClose }
         label="Description"
         value={card.note ?? ""}
         multiline
-        view={(note) => (note ? <Markdown text={note} streaming={false} /> : <span className="board-sheet-placeholder">Add a description…</span>)}
+        view={(note) => (note ? <Markdown text={note} streaming={false} breaks /> : <span className="board-sheet-placeholder">Add a description…</span>)}
         onSave={(note) => edit({ note })}
       />
 
@@ -324,7 +324,7 @@ function Comments({ card, dictate, comments, onAdd, onRemove }: CommentsProps) {
               </button>
             </div>
             <div className="board-sheet-comment-text">
-              <Markdown text={comment.text} streaming={false} />
+              <Markdown text={comment.text} streaming={false} breaks />
             </div>
           </li>
         ))}

@@ -196,13 +196,28 @@ describe("the board page", () => {
     expect(sheet.getByText("Add a description…")).toBeTruthy();
   });
 
+  test("a description's line breaks stay line breaks in the sheet, as typed", async () => {
+    stored = [{ id: "T1", title: "Lines", note: "first line\nsecond line", column: "todo" }];
+    render(<BoardPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(column("To do").getByText("Lines"));
+    const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
+    const view = sheet.getByRole("button", { name: "Edit description" });
+    expect(view.querySelectorAll("br")).toHaveLength(1);
+    expect(view.textContent).toBe("first line\nsecond line");
+    // Clicked into, the box holds the lines as they were typed.
+    fireEvent.click(view);
+    expect((sheet.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("first line\nsecond line");
+  });
+
   test("the sheet moves a card by its status, removes it, and closes with it", async () => {
     render(<BoardPage openPane={() => {}} />);
     await settle();
     fireEvent.click(column("To do").getByLabelText("Open"));
     const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
     fireEvent.click(sheet.getByRole("button", { name: "To do" }));
-    fireEvent.click(sheet.getByRole("option", { name: "Doing" }));
+    // The menu is drawn in the viewport, out of the sheet's own subtree.
+    fireEvent.click(screen.getByRole("option", { name: "Doing" }));
     await settle();
     expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "move", id: "T1", column: "doing" } } });
     expect(column("Doing").getByText("File the memory request")).toBeTruthy();

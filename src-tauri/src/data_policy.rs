@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 /// user gave a URL (the SDK's client and the module that points it at that
 /// URL), the cluster of a kubeconfig the user added, and the web search the
 /// user turned on — Tavily, or their SearXNG and the pages it finds — the
-/// catalogs the page lists, asked for their index, and the MongoDB servers of
-/// the connections the user saved on that page. Anything
+/// catalogs the page lists, asked for their index, the MongoDB servers of
+/// the connections the user saved on that page, and the Bitbucket server of
+/// a repository the user pointed it at. Anything
 /// else that opens a connection is a new place data can go, and the policy
 /// document has to say so before this list does.
 const NETWORK_ALLOWED: &[&str] = &[
@@ -28,6 +29,7 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/deepseek_web.rs",
     "src/infra/catalog_http.rs",
     "src/infra/mongo_client.rs",
+    "src/infra/bitbucket_client.rs",
 ];
 
 /// What opening a connection looks like in Rust here.
@@ -39,12 +41,12 @@ const RUST_NETWORK: &[&str] =
 const WINDOW_NETWORK: &[&str] = &["fetch(", "XMLHttpRequest", "new WebSocket", "sendBeacon", "new EventSource"];
 
 /// Crates and packages that exist to send data somewhere — HTTP clients
-/// besides the one the provider uses, and telemetry. `reqwest` is in the
-/// build all the same, under the MCP SDK (`rmcp`), which this list does not
-/// see: it reads the manifest, not the graph. What holds there is the fence
-/// above — `rmcp::` outside the two MCP modules fails.
+/// besides the one the provider uses, and telemetry. `reqwest` is declared
+/// for the MCP transport's client (`infra::mcp_http`): redirects off, so the
+/// entry's headers reach its URL only. Where it may be used is held by the
+/// fence above — `reqwest::` outside the allowed modules fails.
 const RUST_DENIED: &[&str] = &[
-    "reqwest", "hyper", "isahc", "attohttpc", "surf", "curl", "tungstenite", "tokio-tungstenite", "sentry",
+    "hyper", "isahc", "attohttpc", "surf", "curl", "tungstenite", "tokio-tungstenite", "sentry",
     "opentelemetry", "posthog", "tauri-plugin-http", "tauri-plugin-websocket", "tauri-plugin-upload",
 ];
 const JS_DENIED: &[&str] = &[

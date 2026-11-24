@@ -16,7 +16,7 @@
 //! the other's.
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, Runtime, State};
@@ -28,7 +28,7 @@ use crate::domain::tools::{CodeSearchFn, Task, ToolPreview, ToolScope};
 use crate::domain::next_prompt::{self};
 use crate::domain::turn::{
     ChatEventPayload, ChatEventSink, ChatStreamOutcome, ChatTurnEvent, PendingApproval, PendingToolCall, SteeringNote,
-    ToolCallDecision,
+    ToolCallDecision, TurnFailure, TurnRecovery,
 };
 use crate::services::ai_tools::preview;
 use crate::services::llm_chat::{self, Turn, TurnError};
@@ -38,12 +38,107 @@ use crate::services::mcp_servers::McpServers;
 use crate::domain::mcp::McpAnswer;
 use crate::infra::background::Processes;
 use crate::services::llm_session;
-use crate::services::turn_setup::{self, FolderHandles, FolderTurn};
+use crate::services::turn_setup::{self, FolderHandles, FolderTurn, TurnSetupError};
 use crate::services::workspace_index::WorkspaceIndex;
 
 use super::chat_events::chat_event_sink;
 
 use super::agent_state::{AgentState, SessionHandle, RunningTurn};
+
+/// What a start or a resume refuses with: a plain message (admission, a
+/// closed folder), or a turn that failed with work to keep. Untagged, so
+/// the window reads a string as before and an object as [`TurnFailure`].
+#[derive(Debug, serde::Serialize)]
+#[serde(untagged)]
+pub enum ChatTurnError {
+    Message(String),
+    Failed(TurnFailure),
+}
+
+impl ChatTurnError {
+    /// The message a window shows, whichever kind this is.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Message(message) => message,
+            Self::Failed(failure) => &failure.message,
+        }
+    }
+}
+
+/// The chat's request markers: the previous fingerprint lives in the
+/// session, across turns; the row goes to the call log's database, hashes
+/// and numbers only. The adapter is the one place that knows the chat and
+/// the turn — the loop knows neither.
+struct ChatMarkers {
+    session: Arc<SessionHandle>,
+    chat_id: String,
+    turn_id: String,
+}
+
+impl crate::domain::request_marker::RequestMarkers for ChatMarkers {
+    fn previous(&self) -> Option<crate::domain::request_marker::RequestFingerprint> {
+        self.session.last_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    fn record(&self, record: crate::domain::request_marker::RequestRecord) {
+        *self.session.last_request.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(record.fingerprint.clone());
+        if let Some(anchor) = crate::domain::request_marker::Anchor::of(&record) {
+            *self.session.last_anchor.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(anchor);
+        }
+        crate::infra::tool_call_log::append_request(&self.chat_id, &self.turn_id, &record);
+    }
+
+    fn last_anchor(&self) -> Option<crate::domain::request_marker::Anchor> {
+        self.session.last_anchor.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+}
+
+/// The turn's journal on disk: the history's tail after each completed
+/// round, the whole of it after a rewrite. Best-effort — a row that cannot
+/// be written costs crash protection, never the turn. `len` is the count
+/// of messages already journaled, read back on a resume so the tail is
+/// counted from where the pause left it.
+struct ChatJournal {
+    chat_id: String,
+    turn_id: String,
+    len: AtomicUsize,
+}
+
+impl ChatJournal {
+    /// The count is read from the store: a resume picks the tail up from
+    /// where the pause left it, not from zero. A store that cannot be read
+    /// gives no journal at all for this turn — counting from zero would
+    /// journal the whole history as a tail and duplicate it on recovery.
+    fn new(chat_id: String, turn_id: String) -> Option<Self> {
+        let count = crate::infra::chat_store::journal_message_count(&chat_id, &turn_id).ok()?;
+        Some(Self { chat_id, turn_id, len: AtomicUsize::new(count) })
+    }
+}
+
+impl crate::domain::turn_journal::TurnJournal for ChatJournal {
+    fn len(&self) -> usize {
+        self.len.load(Ordering::SeqCst)
+    }
+
+    fn append(&self, messages: &[LlmMessage]) {
+        if messages.is_empty() {
+            return;
+        }
+        // A row that cannot be serialized is not written and not counted:
+        // a null body the replay would skip must not move the tail past it.
+        let Ok(body) = serde_json::to_value(messages) else { return };
+        if crate::infra::chat_store::journal_append(&self.chat_id, &self.turn_id, "append", &body, messages.len()).is_ok() {
+            self.len.fetch_add(messages.len(), Ordering::SeqCst);
+        }
+    }
+
+    fn snapshot(&self, history: &[LlmMessage]) {
+        let Ok(body) = serde_json::to_value(history) else { return };
+        if crate::infra::chat_store::journal_append(&self.chat_id, &self.turn_id, "snapshot", &body, history.len()).is_ok() {
+            self.len.store(history.len(), Ordering::SeqCst);
+        }
+    }
+}
 
 /// Starts a fresh turn and resolves when it ends, pauses, or is stopped.
 ///
@@ -59,21 +154,24 @@ pub async fn chat_start<R: Runtime>(
     todos: Vec<Task>,
     plan: Option<String>,
     workspace: Option<String>,
-) -> Result<ChatStreamOutcome, String> {
+) -> Result<ChatStreamOutcome, ChatTurnError> {
     let state = state.inner().clone();
-    let (workspace, worktree_base) = state.chat_workspace_in(&chat_id, workspace.as_deref())?;
+    let (workspace, worktree_base) = state.chat_workspace_in(&chat_id, workspace.as_deref()).map_err(ChatTurnError::Message)?;
     let session = state.session(&chat_id);
     // Admission before anything about the session is touched: a refused
     // start must leave the running turn's stop flag and journal alone.
-    let running = state.begin_running(&chat_id, parallel_limit(), &workspace)?;
-    state.still_open(&workspace)?;
+    let running = state.begin_running(&chat_id, parallel_limit(), &workspace).map_err(ChatTurnError::Message)?;
+    state.still_open(&workspace).map_err(ChatTurnError::Message)?;
     // An unsaved chat stays in this folder when the window moves to another.
     session.home.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(|| workspace.clone());
     // A stray stop from a turn that already finished must not end this one
     // before it starts.
     session.cancel.store(false, Ordering::SeqCst);
     session.begin_turn(state.mode());
-    crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]);
+    // The prompt is counted even if the turn's setup then fails. The counter
+    // opens SQLite and waits on its lock, so it runs off the loop, detached:
+    // best-effort, and nothing downstream reads it.
+    tauri::async_runtime::spawn_blocking(|| crate::infra::daily_metrics::record(&[(crate::domain::metrics::Metric::Prompts, "", 1)]));
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::stream(turn, messages, todos)
     })
@@ -91,18 +189,18 @@ pub async fn chat_resume<R: Runtime>(
     checkpoint: PendingApproval,
     decisions: Vec<ToolCallDecision>,
     plan: Option<String>,
-) -> Result<ChatStreamOutcome, String> {
+) -> Result<ChatStreamOutcome, ChatTurnError> {
     let state = state.inner().clone();
-    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id).map_err(ChatTurnError::Message)?;
     let session = state.session(&chat_id);
-    let running = state.begin_resume(&chat_id, parallel_limit(), &workspace)?;
+    let running = state.begin_resume(&chat_id, parallel_limit(), &workspace).map_err(ChatTurnError::Message)?;
     if let Err(closed) = state.still_open(&workspace) {
         // `begin_resume` took the card's pause: given back while the turn
         // still counts as running, so no fresh start slips in between and
         // orphans the card.
         session.paused.store(true, std::sync::atomic::Ordering::SeqCst);
         drop(running);
-        return Err(closed);
+        return Err(ChatTurnError::Message(closed));
     }
     run_off_the_event_loop(app, state, session, running, turn_id, chat_id, workspace, worktree_base, plan, move |turn| {
         llm_chat::resume(turn, checkpoint, decisions)
@@ -120,7 +218,7 @@ pub async fn chat_preview(
     calls: Vec<PendingToolCall>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<ToolPreview>, String> {
-    let (workspace, _) = state.chat_workspace(&chat_id)?;
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let calls: Vec<LlmToolCall> = calls
         .into_iter()
         .map(|call| LlmToolCall {
@@ -132,7 +230,7 @@ pub async fn chat_preview(
     // Reads the files the calls would change, and diffs them.
     super::blocking(move || {
         let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
-        Ok::<_, String>(preview::preview_round(&scope, &calls))
+        Ok::<_, String>(preview::preview_round(&scope, &calls, worktree_base.as_deref()))
     })
     .await
 }
@@ -166,14 +264,19 @@ pub async fn chat_compact<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Option<CompactedHistory>, String> {
-    let workspace = state.chat_prompt_workspace(&chat_id)?;
-    let frame = next_request_frame(&app, &state, workspace);
+    let state = Arc::clone(&state);
     let sink = chat_event_sink(&app, turn_id);
     // A summary is an ordinary request to the provider, and a request on the
-    // IPC loop freezes every other command for its duration.
+    // IPC loop freezes every other command for its duration. The measurement
+    // waits too — it reads the chat record, probes the shell and reads the
+    // marker row — so it all happens off the loop, as `chat_context_usage`.
     tauri::async_runtime::spawn_blocking(move || {
+        let workspace = state.chat_prompt_workspace(&chat_id)?;
         let session = llm_session::resolve_for(None, Some(&chat_id)).map_err(|e| e.to_string())?;
-        compact(&session, frame, &messages, force, sink)
+        let (frame, system, tools) = next_request_frame(&app, &state, workspace);
+        let anchor = chat_anchor(&state, &chat_id);
+        let current = crate::domain::request_marker::fingerprint(&system, &tools, &messages);
+        compact_anchored(&session, frame, &messages, force, sink, anchor.as_ref(), &current)
     })
     .await
     .map_err(|e| format!("the compaction thread failed: {e}"))?
@@ -189,8 +292,22 @@ pub(super) fn compact(
     force: bool,
     sink: ChatEventSink,
 ) -> Result<Option<CompactedHistory>, String> {
+    compact_anchored(session, frame, messages, force, sink, None, &crate::domain::request_marker::RequestFingerprint::empty())
+}
+
+/// The same pass with the provider's anchor: the threshold decides on the
+/// anchored total, so a fold fires at the real share of the window (docs/60).
+pub(super) fn compact_anchored(
+    session: &llm_session::LlmSession,
+    frame: RequestFrame,
+    messages: &[LlmMessage],
+    force: bool,
+    sink: ChatEventSink,
+    anchor: Option<&crate::domain::request_marker::Anchor>,
+    current: &crate::domain::request_marker::RequestFingerprint,
+) -> Result<Option<CompactedHistory>, String> {
     let started = || sink(ChatTurnEvent { seq: 1, round: 0, target_id: None, event: ChatEventPayload::HistoryCompacting });
-    context_compaction::compact_if_needed(session, frame, messages, force, &started)
+    context_compaction::anchored_compact_if_needed(session, frame, messages, force, &started, anchor, current)
         .map(|compacted| compacted.map(|c| CompactedHistory { history: c.history, folded: c.folded }))
         .map_err(|e| e.to_string())
 }
@@ -224,20 +341,35 @@ pub async fn chat_context_usage(
     app: AppHandle,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<ContextUsage, String> {
-    let workspace = state.chat_prompt_workspace(&chat_id)?;
     let state = Arc::clone(&state);
     super::blocking(move || {
+        let workspace = state.chat_prompt_workspace(&chat_id)?;
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
-        Ok::<_, String>(context_compaction::usage(&session, next_request_frame(&app, &state, workspace), &messages))
+        let (frame, system, tools) = next_request_frame(&app, &state, workspace);
+        let anchor = chat_anchor(&state, &chat_id);
+        let current = crate::domain::request_marker::fingerprint(&system, &tools, &messages);
+        Ok::<_, String>(context_compaction::anchored_usage(&session, frame, &messages, anchor.as_ref(), &current))
     })
     .await
 }
 
 /// What the next turn of the open window will send in front of the
 /// conversation ([`turn_setup::next_folder_frame`]), in the mode picked now.
-fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, workspace: Option<PathBuf>) -> RequestFrame {
+fn next_request_frame<R: Runtime>(app: &AppHandle<R>, state: &AgentState, workspace: Option<PathBuf>) -> (RequestFrame, Vec<LlmMessage>, Vec<crate::domain::llm::LlmToolDefinition>) {
     let servers = app.try_state::<Arc<McpServers>>();
     turn_setup::next_folder_frame(workspace.as_deref(), state.mode(), servers.as_ref().map(|s| s.as_ref()))
+}
+
+/// The chat's anchor for the meter: the session's last costed request, or the
+/// marker row after a reopen or a restart (docs/60).
+fn chat_anchor(state: &AgentState, chat_id: &str) -> Option<crate::domain::request_marker::Anchor> {
+    state
+        .session(chat_id)
+        .last_anchor
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .or_else(|| crate::infra::tool_call_log::last_anchor(chat_id))
 }
 
 /// Journals the turn `turn_id` for the next-prompt model: its input, built
@@ -391,12 +523,12 @@ async fn run_off_the_event_loop<R, F>(
     worktree_base: Option<String>,
     plan: Option<String>,
     run: F,
-) -> Result<ChatStreamOutcome, String>
+) -> Result<ChatStreamOutcome, ChatTurnError>
 where
     R: Runtime,
     F: FnOnce(&Turn) -> Result<ChatStreamOutcome, TurnError> + Send + 'static,
 {
-    let approval = state.approval(&workspace)?;
+    let approval = state.approval(&workspace).map_err(ChatTurnError::Message)?;
     let mode = state.mode();
     let _running = running;
     let (processes, agents) = chats_own(
@@ -418,10 +550,23 @@ where
             .try_state::<Arc<crate::infra::board_store::Board>>()
             .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
         mongo: mongo_servers_of(&app),
+        pull_requests: app
+            .try_state::<Arc<crate::services::pull_requests::PullRequests>>()
+            .map(|prs| Arc::clone(&prs) as Arc<dyn crate::domain::code_host::AgentPullRequests>),
+        markers: Some(Arc::new(ChatMarkers {
+            session: Arc::clone(&session),
+            chat_id: chat_id.clone(),
+            turn_id: turn_id.clone(),
+        })),
+        // Built on the turn's thread below: its count is read from the store.
+        journal: None,
     };
 
     tauri::async_runtime::spawn_blocking(move || {
-        let handles = FolderHandles { search: searcher_of(&app, &workspace), ..handles };
+        // Built here, off the event loop: its count is read from the store.
+        let journal: Option<Arc<dyn crate::domain::turn_journal::TurnJournal>> =
+            ChatJournal::new(chat_id.clone(), turn_id.clone()).map(|j| Arc::new(j) as Arc<dyn crate::domain::turn_journal::TurnJournal>);
+        let handles = FolderHandles { search: searcher_of(&app, &workspace), journal, ..handles };
         let emit = chat_event_sink(&app, turn_id.clone());
         let observed = Arc::clone(&session);
         let events: ChatEventSink = Arc::new(move |event: ChatTurnEvent| {
@@ -434,6 +579,7 @@ where
         let parallel = || state.parallel_chats(&chat_id, &workspace);
         let folder = FolderTurn {
             chat_id: &chat_id,
+            turn_id: &turn_id,
             workspace: &workspace,
             mode,
             approval,
@@ -445,13 +591,23 @@ where
             parallel: &parallel,
             worktree_base: worktree_base.as_deref(),
         };
-        let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| e.to_string())?;
+        let outcome = turn_setup::run_in_folder(folder, handles, run).map_err(|e| match e {
+            // The one failure that keeps the turn's work: the window saves
+            // this history, checklist and plan as it saves a finished turn.
+            TurnSetupError::Turn(TurnError::Failed { error, history, todos, plan }) => {
+                ChatTurnError::Failed(TurnFailure {
+                    message: error.to_string(),
+                    recovery: Some(TurnRecovery { history, todos, plan }),
+                })
+            }
+            other => ChatTurnError::Message(other.to_string()),
+        })?;
         session.paused.store(matches!(&outcome, ChatStreamOutcome::PendingApproval(_)), Ordering::SeqCst);
         session.end_turn(turn_id, &outcome);
         Ok(outcome)
     })
     .await
-    .map_err(|e| format!("the turn thread failed: {e}"))?
+    .map_err(|e| ChatTurnError::Message(format!("the turn thread failed: {e}")))?
 }
 
 #[cfg(test)]
@@ -483,7 +639,7 @@ mod tests {
                 None,
                 None,
             ));
-            assert!(matches!(&started, Err(e) if e.contains("not an open folder")), "{started:?}");
+            assert!(matches!(&started, Err(e) if e.message().contains("not an open folder")), "{started:?}");
             let checkpoint = PendingApproval {
                 history: vec![LlmMessage::user("hi")],
                 round: 1,
@@ -502,7 +658,7 @@ mod tests {
                 Vec::new(),
                 None,
             ));
-            assert!(matches!(&resumed, Err(e) if e.contains("not an open folder")), "{resumed:?}");
+            assert!(matches!(&resumed, Err(e) if e.message().contains("not an open folder")), "{resumed:?}");
             assert!(state.root_is_idle(&closed), "the refused turn left its mark");
         });
     }
@@ -594,6 +750,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             ))
             .unwrap();
             assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, own.display().to_string());
@@ -666,8 +823,8 @@ mod tests {
             let state = state();
             state.set_workspace_for_test(other.clone());
             let app = tauri::test::mock_app();
-            let other_frame = next_request_frame(app.handle(), &state, Some(other));
-            let own_frame = next_request_frame(app.handle(), &state, Some(own));
+            let other_frame = next_request_frame(app.handle(), &state, Some(other)).0;
+            let own_frame = next_request_frame(app.handle(), &state, Some(own)).0;
             app.manage(state);
             let mut history: Vec<_> = (0..40).map(|i| if i % 2 == 0 { LlmMessage::user(format!("question {i}")) } else { LlmMessage::assistant(format!("answer {i}")) }).collect();
             // Just under the threshold without the saved folder's rules, just
@@ -799,6 +956,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             ))
             .unwrap();
             assert_eq!(crate::infra::chat_store::load("c1").unwrap().workspace, a.display().to_string(), "filed under A");
@@ -830,6 +988,7 @@ mod tests {
                 None,
                 None,
                 typed_in.clone(),
+                None,
             ))
             .unwrap();
             assert_eq!(crate::infra::chat_store::load("n1").unwrap().workspace, a.display().to_string(), "saved under A");
@@ -853,7 +1012,7 @@ mod tests {
 
             assert!(state.unregister_if_idle(&a));
             let refused = start("n3", typed_in).expect_err("A is closed");
-            assert!(refused.contains("not an open folder"), "{refused}");
+            assert!(refused.message().contains("not an open folder"), "{refused:?}");
         });
     }
 
@@ -957,6 +1116,146 @@ mod tests {
         });
     }
 
+    /// TJ-4: the journal adapter counts from the store — a resume appends
+    /// the tail from where the pause left it — and its writes land as rows.
+    #[test]
+    fn the_journal_adapter_counts_from_the_store_and_writes_rows() {
+        use crate::domain::turn_journal::TurnJournal;
+        crate::testing::with_app_dir("cmd-journal-adapter", || {
+            let msg = |text: &str| serde_json::to_value(vec![LlmMessage::user(text)]).unwrap();
+            crate::infra::chat_store::journal_append("c1", "t1", "snapshot", &msg("go"), 1).unwrap();
+            crate::infra::chat_store::journal_append("c1", "t1", "append", &msg("a"), 1).unwrap();
+            crate::infra::chat_store::journal_append("c1", "t1", "append", &msg("b"), 1).unwrap();
+
+            let journal = ChatJournal::new("c1".into(), "t1".into()).expect("the store reads");
+            assert_eq!(journal.len(), 3, "the pause left three messages journaled");
+            journal.append(&[LlmMessage::user("next")]);
+            assert_eq!(journal.len(), 4);
+            assert_eq!(crate::infra::chat_store::journal_message_count("c1", "t1").unwrap(), 4);
+            journal.snapshot(&[LlmMessage::user("folded")]);
+            assert_eq!(journal.len(), 1);
+            assert_eq!(crate::infra::chat_store::journal_message_count("c1", "t1").unwrap(), 1);
+        });
+    }
+
+    /// TJ-3: the adapter keeps the fingerprint across turns — the next
+    /// turn's first request compares with the last turn's last — and the
+    /// row lands on disk under the chat and turn that wrote it.
+    #[test]
+    fn the_chat_markers_remember_across_turns_and_write_the_row() {
+        use crate::domain::request_marker::{RequestFingerprint, RequestRecord, RequestMarkers};
+        crate::testing::with_app_dir("cmd-markers", || {
+            let session = Arc::new(SessionHandle::default());
+            let fp = |system: &str| RequestFingerprint { system: system.into(), tools: "t".into(), messages: vec![] };
+            let record = |system: &str| RequestRecord { round: 1, provider_id: "p".into(), model: "m".into(), usage: None, fingerprint: fp(system), cause: None };
+            let first = ChatMarkers { session: Arc::clone(&session), chat_id: "c1".into(), turn_id: "c1/turn-1".into() };
+            assert!(first.previous().is_none());
+            first.record(record("s1"));
+            // A new turn of the same chat compares with the previous turn's last.
+            let second = ChatMarkers { session: Arc::clone(&session), chat_id: "c1".into(), turn_id: "c1/turn-2".into() };
+            assert_eq!(second.previous(), Some(fp("s1")));
+            second.record(record("s2"));
+            assert_eq!(second.previous(), Some(fp("s2")));
+            // Another chat's session remembers nothing of this one.
+            let other = ChatMarkers { session: Arc::new(SessionHandle::default()), chat_id: "c2".into(), turn_id: "c2/turn-1".into() };
+            assert!(other.previous().is_none());
+            // CU-2: the anchor is the last request that reported its cost, and
+            // it too survives the turn boundary; a request with no usage keeps it.
+            assert!(second.last_anchor().is_none());
+            let costed = RequestRecord {
+                usage: Some(crate::domain::llm::ChatUsage { prompt_tokens: 500, completion_tokens: 2, total_tokens: 502, cached_tokens: 0 }),
+                ..record("s3")
+            };
+            second.record(costed);
+            let third = ChatMarkers { session: Arc::clone(&session), chat_id: "c1".into(), turn_id: "c1/turn-3".into() };
+            assert_eq!(third.last_anchor().map(|a| a.prompt_tokens), Some(500));
+            third.record(record("s4"));
+            assert_eq!(third.last_anchor().map(|a| a.prompt_tokens), Some(500), "a request with no usage keeps the anchor");
+            assert!(other.last_anchor().is_none());
+
+            let conn = rusqlite::Connection::open(crate::infra::app_dir::ensure().unwrap().join("tool_calls.db")).unwrap();
+            let rows: Vec<(String, String)> = conn
+                .prepare("SELECT chat_id, turn_id FROM requests ORDER BY id")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(rows, vec![("c1".to_string(), "c1/turn-1".to_string()), ("c1".to_string(), "c1/turn-2".to_string()), ("c1".to_string(), "c1/turn-2".to_string()), ("c1".to_string(), "c1/turn-3".to_string())]);
+        });
+    }
+
+    /// CU-3: the meter's anchor is the session's last costed request, and the
+    /// marker row when the session has none — a reopen or a restart.
+    #[test]
+    fn the_meter_anchor_falls_back_to_the_marker_row() {
+        use crate::domain::llm::ChatUsage;
+        use crate::domain::request_marker::{RequestFingerprint, RequestRecord, RequestMarkers};
+        crate::testing::with_app_dir("cmd-anchor-fallback", || {
+            let state = state();
+            assert!(chat_anchor(&state, "c1").is_none());
+            let record = RequestRecord {
+                round: 1,
+                provider_id: "p".into(),
+                model: "m".into(),
+                usage: Some(ChatUsage { prompt_tokens: 500, completion_tokens: 0, total_tokens: 500, cached_tokens: 0 }),
+                fingerprint: RequestFingerprint { system: "s".into(), tools: "t".into(), messages: vec![] },
+                cause: None,
+            };
+            crate::infra::tool_call_log::append_request("c1", "t1", &record);
+            assert_eq!(chat_anchor(&state, "c1").map(|a| a.prompt_tokens), Some(500));
+            let markers = ChatMarkers { session: state.session("c1"), chat_id: "c1".into(), turn_id: "c1/turn-2".into() };
+            markers.record(RequestRecord { usage: Some(ChatUsage { prompt_tokens: 700, ..record.usage.unwrap() }), ..record.clone() });
+            assert_eq!(chat_anchor(&state, "c1").map(|a| a.prompt_tokens), Some(700), "the session's anchor wins over the row");
+        });
+    }
+
+    /// TJ-2: a failed turn's work crosses the wire as an object — the
+    /// message and the history to save — not as a bare string, which the
+    /// window would show and drop.
+    #[test]
+    fn a_failed_turns_work_crosses_the_wire() {
+        crate::testing::with_app_dir("cmd-turn-failed-wire", || {
+            crate::testing::spending_provider("unused", 10, 2);
+            let state = state();
+            let folder = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-turn-failed-wire")).unwrap();
+            state.register_open(folder.clone());
+            state.set_workspace_for_test(folder.clone());
+            let app = tauri::test::mock_app();
+            app.manage(Arc::clone(&state));
+            let running = state.begin_running("c1", 3, &folder).expect("the turn runs");
+
+            let outcome = tauri::async_runtime::block_on(run_off_the_event_loop(
+                app.handle().clone(),
+                Arc::clone(&state),
+                state.session("c1"),
+                running,
+                "t1".into(),
+                "c1".into(),
+                folder.clone(),
+                None,
+                None,
+                move |_| {
+                    Err(TurnError::Failed {
+                        error: crate::domain::llm::LlmError::Provider("peer closed connection".into()),
+                        history: vec![LlmMessage::user("go")],
+                        todos: Vec::new(),
+                        plan: Some("the plan".into()),
+                    })
+                },
+            ));
+
+            let Err(err) = outcome else { panic!("expected a failure: {outcome:?}") };
+            assert!(err.message().contains("peer closed connection"), "{err:?}");
+            let wire = serde_json::to_value(&err).expect("serializes");
+            assert_eq!(wire["recovery"]["history"][0]["content"], "go");
+            assert_eq!(wire["recovery"]["plan"], "the plan");
+            // A refusal with nothing to keep stays a plain string.
+            let plain = ChatTurnError::Message("already running".into());
+            assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!("already running"));
+        });
+    }
+
     /// F-8.5: a turn runs under the "always allow" of its own folder — not
     /// the active one's — and under the app's one Auto.
     #[test]
@@ -1056,7 +1355,7 @@ mod tests {
                 None,
             ))
             .expect_err("a closed folder resumes nothing");
-            assert!(refused.contains("not an open folder"), "{refused}");
+            assert!(refused.message().contains("not an open folder"), "{refused:?}");
             let still = state.begin_running("c1", 3, &root).expect_err("the card still waits");
             assert!(still.contains("waiting for approval"), "{still}");
             drop(state.begin_resume("c1", 3, &root).expect("the card resumes its own turn"));
@@ -1186,6 +1485,7 @@ mod tests {
             None,
             None,
         ))
+        .map_err(|e| e.message().to_string())
     }
 
     /// A start — or a resume — that is expected to refuse, waited on with a
@@ -1261,6 +1561,7 @@ mod tests {
                         None,
                         move |turn| llm_chat::resume(turn, checkpoint, vec![ToolCallDecision { id: "w1".into(), approved: true, reason: None }]),
                     ))
+                    .map_err(|e| e.message().to_string())
                 });
                 assert!(resumed.contains("already running"), "{resumed}");
 
@@ -1319,6 +1620,7 @@ mod tests {
                 vec![LlmMessage::user("hi")],
                 serde_json::json!([]),
                 Vec::new(),
+                None,
                 None,
                 None,
                 None,

@@ -1,8 +1,8 @@
 //! An MCP server reached at a URL: the Streamable HTTP transport.
 //!
 //! The transport and the protocol over it are `rmcp`'s (`infra::mcp_rmcp`),
-//! on its own `reqwest` client; this module says where to connect and with which headers,
-//! and puts the transport's failures into the app's words.
+//! on a `reqwest` client this module builds; it says where to connect and with
+//! which headers, and puts the transport's failures into the app's words.
 //!
 //! Left out on purpose: OAuth (a 401 says so) and the
 //! old HTTP+SSE transport.
@@ -45,14 +45,24 @@ pub fn start(config: &McpServerConfig, cancelled: &dyn Fn() -> bool) -> Result<R
     let transport = StreamableHttpClientTransportConfig::with_uri(url)
         .custom_headers(headers)
         .reinit_on_expired_session(false);
+    // The entry's headers are a token, as a rule, and were given for this
+    // address: a redirect is an answer that is not success, never a second
+    // request carrying them somewhere else. rmcp's default client follows
+    // same-origin 307/308, so the client is ours and follows none.
+    // No idle pool, as the SDK's own client: an SSE stream is dropped once
+    // the answer arrives, and reusing a connection whose body was not read
+    // to the end stalls ~40 ms on Linux (TCP Delayed ACK).
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| McpError::NotStarted(e.to_string()))?;
 
     // Why the conversation ended, for every call after it.
     let ended: Arc<Mutex<Option<McpError>>> = Arc::default();
     let said = Arc::clone(&ended);
     RmcpClient::connect(
-        // The SDK's own HTTP client: it follows no redirect, so the
-        // entry's headers — a token, as a rule — reach this URL only.
-        || Ok(StreamableHttpClientTransport::from_config(transport)),
+        || Ok(StreamableHttpClientTransport::with_client(client, transport)),
         timeout,
         cancelled,
         Box::new(move |failure| describe(failure, &said)),
@@ -77,13 +87,18 @@ fn describe(failure: Failure<'_>, ended: &Mutex<Option<McpError>>) -> McpError {
 
 /// The status and the start of the body of a non-2xx answer, read back out
 /// of the transport's own wording — it keeps them nowhere else. A challenge
-/// for a sign-in loses its body to the SDK, which keeps the challenge instead.
+/// for a sign-in loses its body to the SDK, which keeps the challenge instead;
+/// a 429/5xx without a JSON-RPC error loses its body to the SDK by design.
 fn refusal(text: &str) -> Option<McpError> {
     if text.contains("Auth required") {
         return Some(McpError::Http { status: 401, body: String::new() });
     }
     if text.contains("Insufficient scope") {
         return Some(McpError::Http { status: 403, body: String::new() });
+    }
+    // rmcp 3.11 reports those as bare status metadata: "HTTP 500", no body.
+    if let Some(status) = text.strip_prefix("HTTP ").and_then(|s| s.get(..3)).and_then(|s| s.parse().ok()) {
+        return Some(McpError::Http { status, body: String::new() });
     }
     let (_, answer) = text.split_once("unexpected server response: HTTP ")?;
     let status = answer.get(..3)?.parse().ok()?;
@@ -441,7 +456,8 @@ mod tests {
         assert!(matches!(start(&entry, &|| false), Err(McpError::NotStarted(m)) if m.contains("x-token")));
     }
 
-    /// One refused call is that call's failure, not the server's.
+    /// One refused call is that call's failure, not the server's. A non-JSON
+    /// 5xx keeps no body: the SDK drops it by design, the status is what remains.
     #[test]
     fn an_error_status_fails_the_call_and_keeps_the_session() {
         let (url, _log) = serve(|request| match request.body["method"].as_str() {
@@ -450,9 +466,42 @@ mod tests {
         });
         let server = start(&config(&url, 5), &|| false).unwrap();
         let err = server.call_tool("search", json!({}), &|| false).unwrap_err();
-        assert_eq!(err, McpError::Http { status: 500, body: "x".repeat(ERROR_BODY_CHARS) }, "the body is cut");
+        assert_eq!(err, McpError::Http { status: 500, body: String::new() });
         assert!(server.is_alive());
         assert_eq!(server.list_tools().unwrap().len(), 1);
+    }
+
+    /// A 5xx that answers with a JSON-RPC error keeps the server's own words:
+    /// the SDK reads those even where it drops a plain body.
+    #[test]
+    fn a_json_rpc_error_in_a_5xx_keeps_the_servers_code() {
+        let (url, _log) = serve(|request| match request.body["method"].as_str() {
+            Some("tools/call") => Answer {
+                status: 500,
+                headers: vec![("Content-Type", "application/json".into())],
+                body: json!({ "jsonrpc": "2.0", "id": request.body["id"], "error": { "code": -32000, "message": "backend down" } }).to_string(),
+            },
+            _ => well_behaved(request),
+        });
+        let server = start(&config(&url, 5), &|| false).unwrap();
+        assert_eq!(
+            server.call_tool("search", json!({}), &|| false),
+            Err(McpError::Server { code: -32000, message: "backend down".into() })
+        );
+        assert!(server.is_alive());
+    }
+
+    /// A 4xx keeps its body, and a long one is cut to what explains it.
+    #[test]
+    fn a_long_error_body_is_cut_to_what_explains_it() {
+        let (url, _log) = serve(|request| match request.body["method"].as_str() {
+            Some("tools/call") => status(400, &"y".repeat(5000)),
+            _ => well_behaved(request),
+        });
+        let server = start(&config(&url, 5), &|| false).unwrap();
+        let err = server.call_tool("search", json!({}), &|| false).unwrap_err();
+        assert_eq!(err, McpError::Http { status: 400, body: "y".repeat(ERROR_BODY_CHARS) }, "the body is cut");
+        assert!(server.is_alive());
     }
 
     /// The server forgot the session: this call fails, the server counts as

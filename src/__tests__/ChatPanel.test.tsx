@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 import { ChatPanel, Preview, Transcript, formatDuration, formatTokens } from "../components/ChatPanel";
 import { emptyTurn, type Block, type TurnState } from "../lib/chatTurnReducer";
 import type { AgentInfo } from "../lib/agents";
+import type { PrTasks } from "../lib/pullRequestView";
 
 // The transcript's own rules: who a block belongs to, and what the approval
 // card sends back. Both are decided here rather than by the backend, so both
@@ -44,6 +45,14 @@ describe("the checklist while the agent works", () => {
     expect(ticker.querySelectorAll("li")).toHaveLength(3);
     expect(ticker.querySelector("[aria-current]")?.textContent).toBe("fix the parser");
     expect(ticker.compareDocumentPosition(screen.getByRole("timer")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /// A title cut to the column's width still says where the work stands.
+  test("counts what is done out of the whole list", () => {
+    withList({ status: "running", runningSince: Date.now() });
+    const count = screen.getByTitle("1 of 3 done");
+    expect(count.textContent).toBe("1/3");
+    expect(count.closest(".task-ticker")).toBeTruthy();
   });
 
   test("is not there once nothing on it is open", () => {
@@ -379,17 +388,17 @@ describe("how long the agent worked", () => {
       render(<ChatPanel workspace="/tmp/p" turn={turnState} onDecide={() => {}} onOpenRepo={() => {}} runningProcesses={ids} onOpenProcess={(id) => opened.push(id)} />);
 
     const live = running(state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 }), [3]);
-    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·1 process running");
+    expect(screen.getByRole("timer").textContent).toBe("Working… 5s·1 process");
     live.unmount();
 
     running(state(turn, { status: "done" }), [4, 2]);
-    fireEvent.click(screen.getByRole("button", { name: "2 processes running" }));
+    fireEvent.click(screen.getByRole("button", { name: "2 processes" }));
     expect(opened).toEqual([4]);
   });
 
   test("says nothing of processes when none runs", () => {
     panel(state(turn, { status: "done" }));
-    expect(screen.queryByText(/running/)).toBeNull();
+    expect(screen.queryByText(/process/)).toBeNull();
   });
 
   /// The subagents' own meter: their tokens are not the chat's context, and
@@ -1237,5 +1246,65 @@ describe("the folded run's summed diff", () => {
     both.unmount();
     const alone = panel(state([diff]));
     expect(alone.container.querySelector(".tool-run-stat")).toBeNull();
+  });
+});
+
+describe("the pull request's tasks under the answer (BB-8)", () => {
+  const tasks: PrTasks = {
+    pr: {
+      id: 153,
+      title: "Fix the tax profile",
+      version: 7,
+      author: "u_author",
+      authorName: "Anna Author",
+      fromBranch: "feature/x",
+      toBranch: "master",
+      reviewers: [],
+      url: "https://bitbucket.example/153",
+      draft: false,
+    },
+    conflicted: true,
+    comments: [{ id: 101, author: "u_reviewer", authorName: "Rita Reviewer", text: "Move this into the builder", path: "src/main.rs", line: 34, task: false, resolved: false }],
+  };
+  const withTasks = (over: Partial<TurnState>, prTasks: PrTasks | null = tasks) => {
+    const said: string[] = [];
+    render(
+      <ChatPanel
+        workspace="/tmp/project"
+        turn={state([{ kind: "user", id: "u0", text: "fix it" }, { kind: "message", id: "m1", round: 1, text: "done" }], over)}
+        onDecide={() => {}}
+        onOpenRepo={() => {}}
+        prTasks={prTasks}
+        onPrTask={(text) => said.push(text)}
+      />,
+    );
+    return said;
+  };
+
+  test("a finished answer shows the tasks; pressing puts the request in the box, sends nothing", () => {
+    const said = withTasks({ status: "done" });
+    fireEvent.click(screen.getByText("Resolve conflicts"));
+    fireEvent.click(screen.getByText("Address comments"));
+    expect(said).toHaveLength(2);
+    expect(said[0]).toContain("`master`");
+    expect(said[1]).toContain("src/main.rs:34");
+    expect(said[1]).toContain("Rita Reviewer");
+  });
+
+  test("a running turn shows none, and no tasks shows no cards", () => {
+    withTasks({ status: "running", runningSince: Date.now() });
+    expect(screen.queryByLabelText("Pull request next steps")).toBeNull();
+  });
+
+  test("nothing to do draws nothing", () => {
+    withTasks({ status: "done" }, null);
+    expect(screen.queryByLabelText("Pull request next steps")).toBeNull();
+  });
+
+  test("only the conflict, only the remarks: each button keeps to its own state", () => {
+    const conflictOnly = withTasks({ status: "done" }, { ...tasks, comments: [] });
+    expect(screen.getByText("Resolve conflicts")).toBeTruthy();
+    expect(screen.queryByText("Address comments")).toBeNull();
+    expect(conflictOnly).toEqual([]);
   });
 });

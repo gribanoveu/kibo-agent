@@ -70,6 +70,30 @@ pub enum BoardOp {
     Edit,
 }
 
+/// `pullRequestStatus`: the branch whose pull request is read; none is the
+/// folder's checked-out one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestStatusArgs {
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub branch: Option<String>,
+}
+
+/// `pullRequestCreate`: what the new pull request says. The branch is the
+/// folder's; an empty `target` is the worktree's base, else the default branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestCreateArgs {
+    pub title: String,
+    /// The pull request's description — `body`, as `gh pr create` names it.
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub body: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_text")]
+    pub target: Option<String>,
+    #[serde(default, deserialize_with = "crate::domain::flexible_args::opt_bool")]
+    pub draft: Option<bool>,
+}
+
 /// `mongo`. Flat like `board`'s: which fields go with which `op` is the
 /// tool's to check. The query texts are mongosh's, read as the page reads
 /// them; an object sent instead of text is taken as its JSON.
@@ -210,8 +234,9 @@ pub struct WritePlanArgs {
     pub content: String,
 }
 
-/// What `offer` can put to the user. Closed: free text would end up as a
-/// button under every answer.
+/// What `offer` can put to the user. The set is closed — a new kind is a new
+/// variant — but one of them, `Message`, carries the model's own text, kept
+/// short and shown at most twice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum OfferKind {
@@ -220,7 +245,14 @@ pub enum OfferKind {
     Commit,
     Worktree,
     PullRequest,
-    Implement,
+    SyncBase,
+    Cleanup,
+    /// Chats saved before the rename carry `implement` in their history; a
+    /// model repeating it from there is parsed, not refused for a round.
+    #[serde(alias = "implement")]
+    Plan,
+    /// A suggestion in the model's own words: `text` is what pressing sends.
+    Message,
 }
 
 /// `offer` arguments: what, and why — the user sees both on the button.
@@ -229,6 +261,10 @@ pub enum OfferKind {
 pub struct OfferArgs {
     pub kind: OfferKind,
     pub reason: String,
+    /// What a `message` offer sends when pressed — the model's own words.
+    /// Empty for the fixed kinds, whose message is the app's.
+    #[serde(default)]
+    pub text: String,
 }
 
 /// `skill` arguments: a skill by name, or one of its files.

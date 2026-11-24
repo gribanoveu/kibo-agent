@@ -1,0 +1,379 @@
+/* The pull request under the branch in Overview's Changes card: rows the
+   size of the card's own, details indented under the row's icon. */
+.pr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pr-row:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.pr-row:disabled {
+  cursor: default;
+}
+.pr-row > svg {
+  flex: none;
+  color: var(--text-faint);
+}
+.pr-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.pr-quiet .pr-name {
+  color: var(--text-dim);
+}
+.pr-stale .pr-row,
+.pr-stale .pr-more,
+.pr-stale .pr-next,
+.pr-stale .pr-menu {
+  opacity: 0.55;
+}
+/* "1/2 approved" — a button: who holds the pull request up is a click away. */
+.pr-glance {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.pr-glance:hover,
+.pr-glance[aria-expanded="true"] {
+  color: var(--text);
+}
+/* The reviewers, pinned to that line: portaled to the viewport, so the panel's
+   own scroll neither clips it nor carries it away — as the "⋯" menu is. */
+.pr-reviewers-pop {
+  z-index: 30;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 6px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--fs-xs);
+}
+
+.pr-failed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 28px;
+  font-size: var(--fs-xs);
+  color: var(--amber);
+}
+.pr-failed > svg {
+  flex: none;
+}
+.pr-failed-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-icon-btn {
+  display: inline-flex;
+  flex: none;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.pr-icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.pr-more {
+  display: grid;
+  gap: 6px;
+  padding: 2px 6px 6px 28px;
+  font-size: var(--fs-xs);
+}
+.pr-meta {
+  color: var(--text-faint);
+}
+.pr-reviewers,
+.pr-vetoes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* One reviewer a line: icon, name, and the status in words at the end. */
+.pr-reviewers {
+  display: grid;
+  gap: 3px;
+}
+.pr-reviewers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-dim);
+}
+.pr-reviewers li > svg {
+  flex: none;
+}
+.pr-reviewer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-reviewer-status {
+  flex: none;
+  color: var(--text-faint);
+}
+.pr-reviewers li.needsWork .pr-reviewer-status {
+  color: var(--amber);
+}
+.pr-reviewers li.approved .pr-reviewer-status {
+  color: var(--green);
+}
+.pr-reviewers-more {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font: inherit;
+  cursor: pointer;
+}
+.pr-reviewers-more:hover {
+  color: var(--text);
+}
+.pr-reviewers li.approved svg {
+  color: var(--green);
+}
+.pr-reviewers li.needsWork svg {
+  color: var(--amber);
+}
+.pr-reviewers li.unapproved svg {
+  color: var(--text-faint);
+}
+.pr-vetoes li {
+  color: var(--amber);
+}
+
+/* The pull request: title over "repo #id", the "⋯" at the title's right and
+   whether it can go in under it — both in the column of the build row's icon. */
+.pr-card {
+  position: relative;
+}
+.pr-head {
+  align-items: flex-start;
+}
+.pr-head > svg {
+  margin-top: 3px;
+}
+/* Two lines a step apart: the title, then its number, its approvals and whether
+   it can go in. */
+.pr-lines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 8px;
+}
+/* Room for the "⋯" pinned over the title's end. */
+.pr-head .pr-name {
+  padding-right: 18px;
+  /* A button of its own, in a column: it takes its line, not the leftover. */
+  flex: none;
+}
+/* The head is not one button any more — only its title opens it — so it does
+   not answer the pointer like one, and the row's hover highlight stays off. */
+.pr-head,
+.pr-head:hover:not(:disabled) {
+  background: none;
+  cursor: default;
+}
+/* The title, a button in its own right: the "N/M approved" under it is another,
+   and one button may not hold another. */
+.pr-head-toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pr-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+/* No taller than the text beside it: the line keeps the title's rhythm. */
+.pr-draft {
+  padding: 0 4px;
+  /* A drawn edge rather than a border: a border's two pixels would heighten the line. */
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-2xs);
+  line-height: 1.3;
+  color: var(--text-dim);
+}
+/* The end of the line under the title: the size and colour of the approvals
+   beside it, and it runs to the line's end, where the icon waits. */
+.pr-status {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.pr-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The icon of whether it can go in, at the end of that line — the column the
+   build's icon sits in, as it was three lines ago. */
+.pr-ready-box {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 12px;
+  margin-left: auto;
+}
+.pr-menu {
+  position: absolute;
+  top: -2px;
+  right: -1px;
+}
+.pr-ready.ready {
+  color: var(--green);
+}
+.pr-ready.blocked {
+  color: var(--amber);
+}
+.pr-ready.draft {
+  color: var(--text-faint);
+}
+/* The one next step — Mark ready, Merge — under the title, where it is read. */
+.pr-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 0 2px 28px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+/* The next step and the way to the pull request's page, a row of their own
+   under the card, in the column the title's text starts in. */
+.pr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 28px;
+}
+.pr-actions .pr-next {
+  margin: 6px 0 2px;
+}
+/* The agent's tasks — Resolve conflicts, Address comments — a row of their
+   own under the next step, in the same column. */
+.pr-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 28px;
+}
+.pr-tasks .pr-next {
+  margin: 4px 0 2px;
+}
+.pr-next:hover:not(:disabled) {
+  background: var(--bg-active);
+}
+.pr-next:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The branch picker in the create dialog: the field a text input was, at the
+   form's own size and colour. */
+.pr-create-into .chip {
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 9px;
+  background: var(--bg-field);
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+.pr-create-into .chip:hover,
+.pr-create-into .chip.open {
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
+  color: var(--text);
+}
+.pr-create-draft {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.pr-spin,
+.pr-build.inProgress {
+  animation: pr-spin 0.8s linear infinite;
+}
+@keyframes pr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.pr-build.successful {
+  color: var(--green);
+}
+.pr-build.failed {
+  color: var(--red);
+}
+.pr-build.inProgress {
+  color: var(--amber);
+}
+.pr-build.unknown {
+  color: var(--text-faint);
+}
+.pr-confirm {
+  margin: 0;
+  line-height: 1.5;
+}

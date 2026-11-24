@@ -294,14 +294,12 @@ pub(super) fn execute_call(
         history,
         board: turn.board.clone(),
         mongo: turn.mongo.clone(),
+        pull_requests: turn.pull_requests.clone(),
         parallel: match turn.place {
             Place::Folder { parallel, .. } => Some(parallel),
             Place::Chat { .. } => None,
         },
-        worktree_base: match turn.place {
-            Place::Folder { worktree_base, .. } => worktree_base,
-            Place::Chat { .. } => None,
-        },
+        worktree_base: turn.place.worktree_base(),
         chat_head: turn.chat_head,
         waiting: match turn.place {
             Place::Folder { mode, web, .. } => waiting_tools(mode, web.is_some(), &turn.features),
@@ -543,6 +541,9 @@ pub(super) fn log_call(
         ts_ms: crate::infra::tool_call_log::now_ms(),
         // Empty for a chat, which works in no folder.
         repo_root: turn.place.scope().map(|scope| scope.root().display().to_string()).unwrap_or_default(),
+        // The adapter that wires `log_call` names the chat and turn.
+        chat_id: String::new(),
+        turn_id: String::new(),
         round,
         provider_id: turn.session.provider_id.clone(),
         model: turn.session.model.clone(),

@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS runs (
   PRIMARY KEY (kind, id)
 );
 CREATE INDEX IF NOT EXISTS runs_chat ON runs(chat_id, kind, id);
+CREATE TABLE IF NOT EXISTS turn_journal (
+  chat_id   TEXT NOT NULL,
+  turn_id   TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  kind      TEXT NOT NULL,
+  body      TEXT NOT NULL,
+  msg_count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (chat_id, seq)
+);
 ";
 
 pub(crate) fn store(e: rusqlite::Error) -> ChatError {
@@ -274,6 +283,71 @@ pub fn load(id: &str) -> Result<ChatRecord, ChatError> {
     chat_record::parse(&body.ok_or_else(|| ChatError::NotFound(id.to_string()))?)
 }
 
+/// One row of a turn's journal (`domain::turn_journal`): the history's
+/// tail or whole, or the window's transcript. `seq` is handed out by the
+/// insert itself: one `INSERT … SELECT MAX(seq)+1` is a single statement,
+/// and SQLite lets one writer at a time, so two writers never share a
+/// number.
+pub fn journal_append(chat_id: &str, turn_id: &str, kind: &str, body: &Value, msg_count: usize) -> Result<(), ChatError> {
+    chat_record::check_id(chat_id)?;
+    open()?
+        .execute(
+            "INSERT INTO turn_journal (chat_id, turn_id, seq, kind, body, msg_count)
+             VALUES (?1, ?2, (SELECT COALESCE(MAX(seq), 0) + 1 FROM turn_journal WHERE chat_id = ?1), ?3, ?4, ?5)",
+            params![chat_id, turn_id, kind, body.to_string(), msg_count as i64],
+        )
+        .map_err(store)?;
+    Ok(())
+}
+
+/// The chat's journal in the order it was written, parsed. A row that does
+/// not parse is skipped: a damaged line costs what it carried, not the
+/// recovery.
+pub fn journal_entries(chat_id: &str) -> Result<Vec<crate::domain::turn_journal::JournalEntry>, ChatError> {
+    chat_record::check_id(chat_id)?;
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT kind, body FROM turn_journal WHERE chat_id = ?1 ORDER BY seq")
+        .map_err(store)?;
+    let rows = stmt
+        .query_map([chat_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(store)?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let (kind, body) = row.map_err(store)?;
+        if let Ok(value) = serde_json::from_str::<Value>(&body) {
+            if let Some(entry) = crate::domain::turn_journal::JournalEntry::parse(&kind, &value) {
+                entries.push(entry);
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// How many messages of one turn's history its journal already holds: the
+/// last snapshot's count plus the appends after it. A resume counts the
+/// tail to append from here.
+pub fn journal_message_count(chat_id: &str, turn_id: &str) -> Result<usize, ChatError> {
+    chat_record::check_id(chat_id)?;
+    let conn = open()?;
+    let mut stmt = conn
+        .prepare("SELECT kind, msg_count FROM turn_journal WHERE chat_id = ?1 AND turn_id = ?2 ORDER BY seq")
+        .map_err(store)?;
+    let rows = stmt
+        .query_map(params![chat_id, turn_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(store)?;
+    let mut count = 0i64;
+    for row in rows {
+        let (kind, n) = row.map_err(store)?;
+        match kind.as_str() {
+            "snapshot" => count = n,
+            "append" => count += n,
+            _ => {}
+        }
+    }
+    Ok(count.max(0) as usize)
+}
+
 /// Whether a chat with this id is stored, readable or not.
 pub fn exists(id: &str) -> Result<bool, ChatError> {
     chat_record::check_id(id)?;
@@ -307,7 +381,9 @@ pub fn head_at_start(id: &str) -> Result<Option<String>, ChatError> {
         .map_err(store)
 }
 
-/// Writes the conversation whole, keeping the moment it started.
+/// Writes the conversation whole, keeping the moment it started, and folds
+/// the turn's journal away — this is the save that ends a turn (or recovers
+/// one). A save mid-turn goes through [`save_keep_journal`].
 ///
 /// Whole because a conversation is edited from both ends — a compaction
 /// rewrites the middle, a retry replaces the tail — so an append log would
@@ -322,6 +398,59 @@ pub fn save(
     plan: Option<&str>,
     branched_from: Option<&str>,
     git_branch: Option<&str>,
+) -> Result<ChatSummary, ChatError> {
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, true, None)
+}
+
+/// As [`save`], but the journal folds for one turn only: the turn this
+/// save ends. The next turn may already have started — the queue sends it
+/// without waiting for this save — and its base snapshot must survive a
+/// delete that is still in flight. `None` folds every turn's rows, as a
+/// recovery does.
+#[allow(clippy::too_many_arguments)]
+pub fn save_turn(
+    id: &str,
+    workspace: &str,
+    messages: &[LlmMessage],
+    blocks: &Value,
+    todos: &[Task],
+    plan: Option<&str>,
+    branched_from: Option<&str>,
+    git_branch: Option<&str>,
+    turn_id: Option<&str>,
+) -> Result<ChatSummary, ChatError> {
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, true, turn_id)
+}
+
+/// As [`save`], but the journal stays: a save that does not end the turn
+/// (a plan edited while it pauses for approval) must leave it alone — the
+/// resume counts its tail from it, and a recovery replays it.
+#[allow(clippy::too_many_arguments)]
+pub fn save_keep_journal(
+    id: &str,
+    workspace: &str,
+    messages: &[LlmMessage],
+    blocks: &Value,
+    todos: &[Task],
+    plan: Option<&str>,
+    branched_from: Option<&str>,
+    git_branch: Option<&str>,
+) -> Result<ChatSummary, ChatError> {
+    save_impl(id, workspace, messages, blocks, todos, plan, branched_from, git_branch, false, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_impl(
+    id: &str,
+    workspace: &str,
+    messages: &[LlmMessage],
+    blocks: &Value,
+    todos: &[Task],
+    plan: Option<&str>,
+    branched_from: Option<&str>,
+    git_branch: Option<&str>,
+    fold_journal: bool,
+    fold_turn: Option<&str>,
 ) -> Result<ChatSummary, ChatError> {
     let _write = write_lock();
     // An existing chat keeps its checkout: a save already in flight when the
@@ -347,24 +476,31 @@ pub fn save(
     };
     #[cfg(test)]
     std::thread::yield_now();
-    upsert(ChatRecord {
-        schema_version: CHAT_SCHEMA_VERSION,
-        id: id.to_string(),
-        workspace,
-        title: chat_record::derive_title(messages, blocks),
-        created_at: 0,
-        updated_at: 0,
-        messages: messages.to_vec(),
-        blocks: blocks.clone(),
-        todos: todos.to_vec(),
-        plan: plan.map(str::to_string),
-        branched_from: branched_from.map(str::to_string),
-        role: None,
-        kube: None,
-        worktree_base,
-        git_branch,
-        head_at_start,
-    })
+    upsert(
+        ChatRecord {
+            schema_version: CHAT_SCHEMA_VERSION,
+            id: id.to_string(),
+            workspace,
+            title: chat_record::derive_title(messages, blocks),
+            created_at: 0,
+            updated_at: 0,
+            messages: messages.to_vec(),
+            blocks: blocks.clone(),
+            todos: todos.to_vec(),
+            plan: plan.map(str::to_string),
+            branched_from: branched_from.map(str::to_string),
+            role: None,
+            kube: None,
+            worktree_base,
+            git_branch,
+            head_at_start,
+        },
+        // A turn-ending save folds the journal into this record and deletes
+        // it in the same transaction — a crash between the two would leave
+        // a finished turn to be "recovered" over its own saved result.
+        fold_journal,
+        fold_turn,
+    )
 }
 
 /// A Chat mode conversation, filed under no folder. `blocks` is its
@@ -395,7 +531,7 @@ pub fn save_plain(
         worktree_base: None,
         git_branch: None,
         head_at_start: None,
-    })
+    }, false, None)
 }
 
 /// Moves only the chat's own record; the worktree has already been made.
@@ -407,13 +543,17 @@ pub fn relocate(id: &str, workspace: &str, base: &str) -> Result<ChatSummary, Ch
     record.workspace = workspace.to_string();
     record.worktree_base = Some(base.to_string());
     record.git_branch = crate::infra::git_head::current_branch(Path::new(workspace));
-    upsert(record)
+    // A move is not a turn ending: a running turn's journal stays.
+    upsert(record, false, None)
 }
 
 /// Writes `record`, stamped now and keeping the moment it was first saved.
-fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
+/// `fold_journal` deletes the chat's turn journal in the same transaction —
+/// true only for a save that ends a turn (or recovers one); `fold_turn`
+/// scopes the delete to one turn, `None` taking every turn's rows.
+fn upsert(mut record: ChatRecord, fold_journal: bool, fold_turn: Option<&str>) -> Result<ChatSummary, ChatError> {
     chat_record::check_id(&record.id)?;
-    let conn = open()?;
+    let mut conn = open()?;
     let stored: Option<(i64, bool, Option<String>, bool, Option<String>)> = conn
         .query_row("SELECT created_at, archived, generated_title, pinned, group_id FROM chats WHERE id = ?1", params![record.id], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
@@ -435,7 +575,8 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
     // is written only by the INSERT half — the conflict branch deliberately
     // leaves it: a chat's start is its first save's, however often the chat
     // is saved afterwards.
-    conn.execute(
+    let tx = conn.transaction().map_err(store)?;
+    tx.execute(
         "INSERT INTO chats
            (id, workspace, schema_version, title, created_at, updated_at, branched_from, body, role, git_branch, generated_title, head_at_start)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, (SELECT generated_title FROM chats WHERE id = ?7), ?11)
@@ -464,6 +605,15 @@ fn upsert(mut record: ChatRecord) -> Result<ChatSummary, ChatError> {
         ],
     )
     .map_err(store)?;
+    if fold_journal {
+        match fold_turn {
+            Some(turn) => tx
+                .execute("DELETE FROM turn_journal WHERE chat_id = ?1 AND turn_id = ?2", params![record.id, turn])
+                .map_err(store)?,
+            None => tx.execute("DELETE FROM turn_journal WHERE chat_id = ?1", [&record.id]).map_err(store)?,
+        };
+    }
+    tx.commit().map_err(store)?;
     let mut summary = ChatSummary { archived, pinned, group, ..ChatSummary::from(&record) };
     if let Some(title) = generated {
         summary.title = title;
@@ -666,6 +816,7 @@ pub fn delete(id: &str) -> Result<(), ChatError> {
     chat_record::check_id(id)?;
     let conn = open()?;
     conn.execute("DELETE FROM runs WHERE chat_id = ?1", params![id]).map_err(store)?;
+    conn.execute("DELETE FROM turn_journal WHERE chat_id = ?1", params![id]).map_err(store)?;
     match conn.execute("DELETE FROM chats WHERE id = ?1", params![id]).map_err(store)? {
         0 => Err(ChatError::NotFound(id.to_string())),
         _ => Ok(()),
@@ -676,6 +827,8 @@ pub fn delete(id: &str) -> Result<(), ChatError> {
 pub fn delete_in(workspace: &str) -> Result<usize, ChatError> {
     let conn = open()?;
     conn.execute("DELETE FROM runs WHERE chat_id IN (SELECT id FROM chats WHERE workspace = ?1)", params![workspace])
+        .map_err(store)?;
+    conn.execute("DELETE FROM turn_journal WHERE chat_id IN (SELECT id FROM chats WHERE workspace = ?1)", params![workspace])
         .map_err(store)?;
     conn.execute("DELETE FROM chats WHERE workspace = ?1", params![workspace]).map_err(store)
 }
@@ -1522,6 +1675,71 @@ mod tests {
             commit_to(&repo, None);
             save_one("one", &root, "after the folder's first commit");
             assert_eq!(head_at_start("one").unwrap(), None, "still none: only the first save writes");
+        });
+    }
+
+    /// TJ-4: the journal rows come back in the order they were written,
+    /// and the message count is the last snapshot plus the appends after it.
+    #[test]
+    fn journal_rows_come_back_in_order_and_count_their_messages() {
+        with_app_dir("chat-journal-rows", || {
+            save_one("one", "/repo", "go");
+            let msg = |text: &str| serde_json::to_value(vec![LlmMessage::user(text)]).unwrap();
+            journal_append("one", "t1", "snapshot", &msg("go"), 1).unwrap();
+            journal_append("one", "t1", "append", &msg("a"), 1).unwrap();
+            journal_append("one", "t1", "blocks", &serde_json::json!({"blocks": [], "todos": [], "plan": null}), 0).unwrap();
+            journal_append("one", "t1", "append", &msg("b"), 1).unwrap();
+            journal_append("one", "t2", "snapshot", &msg("fresh"), 1).unwrap();
+
+            let entries = journal_entries("one").unwrap();
+            assert_eq!(entries.len(), 5);
+            assert!(matches!(entries[0], crate::domain::turn_journal::JournalEntry::Snapshot(_)));
+            assert!(matches!(entries[2], crate::domain::turn_journal::JournalEntry::Blocks { .. }));
+            assert_eq!(journal_message_count("one", "t1").unwrap(), 3);
+            assert_eq!(journal_message_count("one", "t2").unwrap(), 1, "another turn's rows are its own");
+            // A damaged row is skipped, not fatal.
+            open().unwrap().execute("UPDATE turn_journal SET body = '{ not json' WHERE seq = 2", []).unwrap();
+            assert_eq!(journal_entries("one").unwrap().len(), 4);
+        });
+    }
+
+    /// The turn's save folds the journal away in the same transaction; a
+    /// move (relocate) is not a turn ending and leaves it. Deleting the
+    /// chat takes its journal with it.
+    #[test]
+    fn a_save_folds_the_journal_and_a_move_does_not() {
+        with_app_dir("chat-journal-fold", || {
+            save_one("one", "/repo", "go");
+            let msg = serde_json::to_value(vec![LlmMessage::user("go")]).unwrap();
+            journal_append("one", "t1", "snapshot", &msg, 1).unwrap();
+
+            relocate("one", "/repo-wt", "main").unwrap();
+            assert_eq!(journal_entries("one").unwrap().len(), 1, "a move leaves the journal");
+
+            save_one("one", "/repo-wt", "done");
+            assert!(journal_entries("one").unwrap().is_empty(), "the save folded it");
+
+            journal_append("one", "t2", "snapshot", &msg, 1).unwrap();
+            delete("one").unwrap();
+            assert!(journal_entries("one").unwrap().is_empty(), "a deleted chat's journal goes with it");
+        });
+    }
+
+    /// A turn's save folds only its own rows: the next turn's base, already
+    /// written, is not this turn's to delete.
+    #[test]
+    fn a_turns_save_folds_only_its_own_journal() {
+        with_app_dir("chat-journal-turn-fold", || {
+            save_one("one", "/repo", "go");
+            let msg = serde_json::to_value(vec![LlmMessage::user("go")]).unwrap();
+            journal_append("one", "t1", "snapshot", &msg, 1).unwrap();
+            journal_append("one", "t2", "snapshot", &msg, 1).unwrap();
+            save_turn("one", "/repo", &[LlmMessage::user("done")], &serde_json::json!([]), &[], None, None, None, Some("t1")).unwrap();
+            assert_eq!(journal_message_count("one", "t1").unwrap(), 0);
+            assert_eq!(journal_message_count("one", "t2").unwrap(), 1, "the next turn's base survives");
+            // Without a turn, every row goes — as a recovery folds them.
+            save_turn("one", "/repo", &[LlmMessage::user("done")], &serde_json::json!([]), &[], None, None, None, None).unwrap();
+            assert!(journal_entries("one").unwrap().is_empty());
         });
     }
 

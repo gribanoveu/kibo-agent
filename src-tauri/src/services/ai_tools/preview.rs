@@ -19,7 +19,9 @@ use super::parse::parse_tool_call;
 use super::resolve::{resolve_existing, resolve_writable};
 use super::tools::edit_file::apply_edits;
 
-pub fn preview_tool_call(scope: &ToolScope, call: &LlmToolCall) -> ToolPreview {
+/// `worktree_base`: the branch this chat's worktree was cut from — where a
+/// pull request goes unless the call names another.
+pub fn preview_tool_call(scope: &ToolScope, call: &LlmToolCall, worktree_base: Option<&str>) -> ToolPreview {
     let parsed = match parse_tool_call(call) {
         Ok(parsed) => parsed,
         Err(e) => return ToolPreview::Failed { reason: e.to_string() },
@@ -75,6 +77,9 @@ pub fn preview_tool_call(scope: &ToolScope, call: &LlmToolCall) -> ToolPreview {
             }
         }
 
+        // Where the pull request goes and what it says, from the folder alone.
+        ToolCall::PullRequestCreate(args) => super::tools::pull_request_create::preview(scope, &args, worktree_base),
+
         // Where that terminal is now is the user's doing, not a path of ours.
 
         // A rename, a new directory, a read: the arguments already say it.
@@ -90,8 +95,8 @@ fn diff_preview(path: String, before: &str, after: &str) -> ToolPreview {
 }
 
 /// Exposed for the command layer, which has a whole paused round to describe.
-pub fn preview_round(scope: &ToolScope, calls: &[LlmToolCall]) -> Vec<ToolPreview> {
-    calls.iter().map(|call| preview_tool_call(scope, call)).collect()
+pub fn preview_round(scope: &ToolScope, calls: &[LlmToolCall], worktree_base: Option<&str>) -> Vec<ToolPreview> {
+    calls.iter().map(|call| preview_tool_call(scope, call, worktree_base)).collect()
 }
 
 #[cfg(test)]
@@ -111,7 +116,7 @@ mod tests {
 
     fn preview(root: &Path, name: &str, arguments: &str) -> ToolPreview {
         let scope = ToolScope::new(root).expect("scope");
-        preview_tool_call(&scope, &call(name, arguments))
+        preview_tool_call(&scope, &call(name, arguments), None)
     }
 
     fn diff(preview: ToolPreview) -> FileDiffStats {
@@ -291,6 +296,7 @@ mod tests {
                 call("readFile", r#"{"path":"a.rs"}"#),
                 call("writeFile", r#"{"path":"a.rs","content":"y\n"}"#),
             ],
+            None,
         );
 
         assert_eq!(shown.len(), 2);

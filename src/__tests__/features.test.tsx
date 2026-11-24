@@ -13,6 +13,7 @@ mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     if (command === "catalog_list") return Promise.resolve([]);
+    if (command === "code_hosts") return Promise.resolve([]);
     if (command === "features_list") return Promise.resolve([structuredClone(board)]);
     if (command === "features_set") {
       board = { ...board, on: args!.on as boolean };
@@ -93,6 +94,8 @@ describe("features on the catalog page", () => {
     expect(screen.getByLabelText("On")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    // Bitbucket's servers belong to Pull requests' panel, not to every feature that is on.
+    expect(screen.queryByRole("region", { name: "Bitbucket servers" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
     await settle();
     expect(calls.at(-1)).toEqual({ command: "features_set", args: { id: "board", on: false } });
@@ -110,6 +113,22 @@ describe("features on the catalog page", () => {
     expect(calls.at(-1)).toEqual({ command: "features_set_tools", args: { id: "board", on: false } });
     expect(tools().getAttribute("aria-checked")).toBe("false");
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
+  });
+
+  test("Pull requests takes its servers in its own panel, once it is on", async () => {
+    board = { ...board, id: "pull-requests", name: "Pull requests", tools: [], places: [], data: "code_hosts.enc" };
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(within(screen.getByRole("region", { name: "Features" })).getByRole("button", { name: "Pull requests" }));
+    await settle();
+    expect(screen.queryByRole("region", { name: "Bitbucket servers" })).toBeNull();
+
+    fireEvent.click(screen.getByText("Turn on"));
+    await settle();
+    const servers = within(screen.getByRole("region", { name: "Bitbucket servers" }));
+    expect(servers.getByText(/None yet/)).toBeTruthy();
+    fireEvent.click(servers.getByText("Add server"));
+    expect(screen.getByRole("dialog", { name: "Connect Bitbucket" })).toBeTruthy();
   });
 
   test("the layout feature's optional system switch is saved from its panel", async () => {

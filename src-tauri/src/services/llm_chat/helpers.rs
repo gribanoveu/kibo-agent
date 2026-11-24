@@ -80,7 +80,7 @@ pub(super) fn run_helper(
                         chunk: format!("{text}\n"),
                     });
                 }
-                ChatEventPayload::ContextUsage(usage) => {
+                ChatEventPayload::ContextUsage { usage, .. } => {
                     agents.spent(id, &usage, now());
                     // The subagents' share of the chat's session total, counted
                     // where the round reports it — the same spend `Counted` keeps
@@ -161,9 +161,13 @@ pub(super) fn run_helper(
         board: None,
         // A fork reads the databases the calling turn may; a helper has no feature on, and is not offered it.
         mongo: turn.mongo.clone(),
+        // A read, like the databases: a fork asks what the calling turn may.
+        pull_requests: turn.pull_requests.clone(),
         deepseek: None,
         features,
         fork: fork.is_some(),
+        markers: None,
+        journal: None,
     };
     let outcome = stream(&helper, messages, Vec::new());
     Ok((agents, id, outcome))

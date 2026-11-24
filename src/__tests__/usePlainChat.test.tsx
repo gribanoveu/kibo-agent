@@ -318,14 +318,58 @@ describe("room in the window", () => {
     await act(async () => {
       await result.current.send("hi");
     });
-    let folded = true;
+    let folded: true | string | null = true;
     await act(async () => {
       folded = await result.current.compact();
     });
-    expect(folded).toBe(false);
+    expect(folded).toBeNull();
     expect(called("plain_chat_compact").map((c) => c.args.force)).toEqual([true]);
     // Its summary is the chat's spending, as the turn's is.
     expect(called("plain_chat_compact")[0].args.chatId).toBe(called("plain_chat_send")[0].args.chatId);
+  });
+
+  test("a fold that failed comes back with its reason", async () => {
+    results.plain_chat_send = done;
+    results.plain_chat_compact = () => new Error("provider said no");
+    const { result } = renderHook(() => usePlainChat());
+    await act(async () => {
+      await result.current.send("hi");
+    });
+    let folded: true | string | null = true;
+    await act(async () => {
+      folded = await result.current.compact();
+    });
+    expect(folded).toContain("provider said no");
+    expect(result.current.error).toContain("provider said no");
+  });
+
+  test("a fold is not asked for under a running turn", async () => {
+    results.plain_chat_send = () => new Promise(() => {});
+    const { result } = renderHook(() => usePlainChat());
+    act(() => void result.current.send("hi"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    let folded: true | string | null = true;
+    await act(async () => {
+      folded = await result.current.compact();
+    });
+    expect(folded).toBeNull();
+    expect(called("plain_chat_compact")).toEqual([]);
+  });
+
+  /// The button may be pressed the moment a turn starts: the handler still
+  /// holds the previous render's compact, whose busy flag is behind.
+  test("a fold asked through a stale render is refused by the session itself", async () => {
+    results.plain_chat_send = () => new Promise(() => {});
+    const { result } = renderHook(() => usePlainChat());
+    const compactBefore = result.current.compact;
+    act(() => void result.current.send("hi"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    let folded: true | string | null = true;
+    await act(async () => {
+      folded = await compactBefore();
+    });
+    expect(folded).toBeNull();
+    expect(called("plain_chat_compact")).toEqual([]);
   });
 
   test("a compaction finished in the background is saved without reopening the chat", async () => {

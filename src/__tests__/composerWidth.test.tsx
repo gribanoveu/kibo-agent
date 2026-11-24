@@ -126,10 +126,27 @@ const thereAndBack = async () => {
   await waitFor(() => expect(input.style.height).toBe("30px"));
 };
 
+/** A narrow column's taller box: the cap comes from the stylesheet, so the
+    box stops where CSS says and scrolls past it, not at a constant. */
+const capped = async () => {
+  const input = box();
+  fireEvent.change(input, { target: { value: "a message longer than the box" } });
+  input.style.maxHeight = "80px";
+  metrics(input, { clientWidth: 300, scrollHeight: 200 });
+  widthChange();
+  await waitFor(() => expect(input.style.height).toBe("80px"));
+  expect(input.style.overflowY).toBe("auto");
+};
+
 describe("the agent's box follows the column's width", () => {
   test("a wrapped line is re-measured in and out of IDE layout", async () => {
     render(agentBox());
     await thereAndBack();
+  });
+
+  test("stops at the stylesheet's cap, not a number of its own", async () => {
+    render(agentBox());
+    await capped();
   });
 });
 
@@ -137,5 +154,10 @@ describe("Chat mode's box follows the column's width", () => {
   test("a wrapped line is re-measured in and out of IDE layout", async () => {
     render(chatBox("width-chat"));
     await thereAndBack();
+  });
+
+  test("stops at the stylesheet's cap, not a number of its own", async () => {
+    render(chatBox("width-chat-cap"));
+    await capped();
   });
 });

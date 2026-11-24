@@ -49,6 +49,9 @@ impl ApprovalPolicy {
             ToolCall::Mcp(args) => {
                 call.is_risky() && !self.skip_all && !self.always_allowed_mcp.contains(&args.name)
             }
+            // Others are notified of it, as of a push: one "always allow"
+            // given for a draft is not given for every one after.
+            ToolCall::PullRequestCreate(_) => !self.skip_all,
             _ => self.requires_approval(call.name(), call.is_risky()),
         }
     }
@@ -63,6 +66,7 @@ impl ApprovalPolicy {
                     _ => None,
                 }
             }
+            ToolCall::PullRequestCreate(_) => Some("opens a pull request its reviewers are notified of".to_string()),
             _ => None,
         }
     }

@@ -42,6 +42,8 @@ pub const CONTENT_FIELDS: &[&str] = &[
     "output",
     // skill
     "instructions",
+    // pullRequestCreate's description
+    "body",
 ];
 
 pub const REDACTED: &str = "<redacted>";
@@ -77,6 +79,13 @@ pub struct ToolCallLogEntry {
     /// Unix milliseconds.
     pub ts_ms: i64,
     pub repo_root: String,
+    /// The chat and turn the call belongs to. The loop knows neither — the
+    /// adapter that wires `log_call` fills them in. Empty in a row written
+    /// before they were kept, and in a test's own entry.
+    #[serde(default)]
+    pub chat_id: String,
+    #[serde(default)]
+    pub turn_id: String,
     pub round: u32,
     pub provider_id: String,
     pub model: String,
@@ -301,10 +310,12 @@ mod tests {
                 Some(ToolCall::Remember(crate::domain::tools::RememberArgs { fact: "bench needs --release".into() })),
                 ToolResult::Remembered { already: false },
             ),
-            // The reason is the model's own words, shown on the button.
+            // The reason is the model's own words, shown on the button, and
+            // stays. The suggestion's text is content by field name — the
+            // audit log redacts it as grep's matches; the transcript keeps it.
             ToolName::Offer => (
-                Some(ToolCall::Offer(crate::domain::tools::OfferArgs { kind: crate::domain::tools::OfferKind::Review, reason: "the lock".into() })),
-                ToolResult::Offered { kind: crate::domain::tools::OfferKind::Review },
+                Some(ToolCall::Offer(crate::domain::tools::OfferArgs { kind: crate::domain::tools::OfferKind::Message, reason: "the lock".into(), text: LEAK.into() })),
+                ToolResult::Offered { kind: crate::domain::tools::OfferKind::Message },
             ),
             ToolName::ReportFinding => (
                 None,
@@ -405,6 +416,22 @@ mod tests {
             ToolName::Mongo => (
                 Some(ToolCall::Mongo(crate::domain::tools::MongoArgs { op: crate::domain::tools::MongoOp::Find, filter: Some("{ paid: true }".into()), ..Default::default() })),
                 ToolResult::Mongo { text: LEAK.into(), summary: "3 documents".into() },
+            ),
+            // The branch asked about stays; the pull request read goes as `text`.
+            ToolName::PullRequestStatus => (
+                Some(ToolCall::PullRequestStatus(crate::domain::tools::PullRequestStatusArgs { branch: Some("release/1.2".into()) })),
+                ToolResult::PullRequest { text: LEAK.into(), summary: "#153 blocked".into() },
+            ),
+            // Where it went and under what title stay; the body is the model's
+            // prose about the code, as an edit's content is.
+            ToolName::PullRequestCreate => (
+                Some(ToolCall::PullRequestCreate(crate::domain::tools::PullRequestCreateArgs {
+                    title: "Fix it".into(),
+                    body: Some(LEAK.into()),
+                    target: Some("master".into()),
+                    draft: None,
+                })),
+                ToolResult::PullRequestCreated { id: 154, title: "Fix it".into(), from: "feature/x".into(), to: "master".into(), url: "https://u".into(), draft: false },
             ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (

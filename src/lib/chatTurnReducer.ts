@@ -1,4 +1,4 @@
-import type { ChatUsage, Checkpoint, ContextUsage, FileChange, Outcome, PendingToolCall, TurnEvent } from "./chat";
+import type { ChatUsage, Checkpoint, ContextUsage, FileChange, MissCause, Outcome, PendingToolCall, TurnEvent } from "./chat";
 import type { ImagePart } from "./images";
 import type { McpAnswer, McpQuestion } from "./mcp";
 import type { ProcessInfo } from "./processes";
@@ -510,7 +510,7 @@ function applyEvent(state: TurnState, event: TurnEvent, now: number, model?: str
 
     case "contextUsage": {
       const { promptTokens, cachedTokens = 0 } = event.payload;
-      const miss = cacheMiss(state.cache, event.payload, model);
+      const miss = cacheMiss(state.cache, event.payload, model, event.payload.cause);
       const next = {
         ...state,
         usage: event.payload,
@@ -542,19 +542,37 @@ const MISS_WORTH_SAYING = 20_000;
  * named only when it was seen: a model switch, or a pause past the cache's
  * life. A provider that never reported its cache is not judged by a zero.
  */
-function cacheMiss(cache: TurnState["cache"], usage: ChatUsage, model?: string): string | null {
+function cacheMiss(cache: TurnState["cache"], usage: ChatUsage, model?: string, cause?: MissCause): string | null {
   const cached = usage.cachedTokens ?? 0;
   if (!cache.last || !(cache.reported || cached > 0)) return null;
   const missed = Math.min(cache.last.promptTokens, usage.promptTokens) - cached;
   if (missed < MISS_WORTH_SAYING) return null;
   const idle = (cache.sentAt ?? cache.last.endedAt) - cache.last.endedAt;
+  // What the window saw itself comes first — a model switch, a long pause;
+  // the backend's marker names the rest, down to "nothing changed on our
+  // side", which is the provider losing the cache.
   const why =
     model !== cache.last.model
       ? " after the model switch"
       : idle >= CACHE_TTL_MS
         ? ` after ${Math.round(idle / 60_000)} min idle`
-        : "";
+        : cause
+          ? ` ${causeText(cause)}`
+          : "";
   return `Cache miss${why} — ~${Math.round(missed / 1000)}k tokens of the prompt were sent again at full price`;
+}
+
+function causeText(cause: MissCause): string {
+  switch (cause.kind) {
+    case "system":
+      return "after the system prompt changed";
+    case "tools":
+      return "after the tool set changed";
+    case "history":
+      return `after history changed at message ${cause.from + 1} of ${cause.of}`;
+    case "unchanged":
+      return "(nothing changed on our side — the provider dropped the cache)";
+  }
 }
 
 function appendText(

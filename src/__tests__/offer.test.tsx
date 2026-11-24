@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { Transcript } from "../components/ChatPanel";
 import { emptyTurn, type Block, type TurnState } from "../lib/chatTurnReducer";
-import { offerOf, offersOf, type OfferKind } from "../lib/offer";
+import { offerOf, offersOf, type Offer, type OfferKind } from "../lib/offer";
 
 type Tool = Extract<Block, { kind: "tool" }>;
 
@@ -19,6 +19,13 @@ const offer = (kind: OfferKind, reason: string, over: Partial<Tool> = {}): Tool 
 });
 
 const state = (blocks: Block[], over: Partial<TurnState> = {}): TurnState => ({ ...emptyTurn(), status: "done", blocks, ...over });
+
+/// A message offer: the model's own suggestion, its text what pressing sends.
+const suggestion = (text: string, reason = "the choice"): Tool => ({
+  ...offer("message", reason),
+  id: `o-message-${text}`,
+  arguments: JSON.stringify({ kind: "message", reason, text }),
+});
 
 describe("an offer is an offer call the backend accepted", () => {
   test("its kind and reason", () => {
@@ -40,6 +47,28 @@ describe("an offer is an offer call the backend accepted", () => {
       { kind: "commit", reason: "done" },
     ]);
   });
+
+  test("a message offer is its text; without text it is none", () => {
+    expect(offerOf(suggestion("Start OF-1 and stop for review"))).toEqual({
+      kind: "message",
+      reason: "the choice",
+      text: "Start OF-1 and stop for review",
+    });
+    expect(offerOf(suggestion("   "))).toBeNull();
+  });
+
+  test("two suggestions stand; a third replaces the oldest; the same text is one", () => {
+    const blocks = [suggestion("one"), suggestion("two"), suggestion("three")];
+    expect(offersOf(blocks).map((o) => o.text)).toEqual(["two", "three"]);
+    expect(offersOf([suggestion("one"), suggestion("one", "later")])).toEqual([
+      { kind: "message", reason: "later", text: "one" },
+    ]);
+    // A text pushed out and offered again is the latest, not a silent loss.
+    expect(offersOf([...blocks, suggestion("one", "again")]).map((o) => o.text)).toEqual(["three", "one"]);
+    // Fixed kinds keep their own places beside the suggestions.
+    const mixed = [offer("review", "x"), suggestion("one"), offer("commit", "y"), suggestion("two")];
+    expect(offersOf(mixed).map((o) => o.kind)).toEqual(["review", "commit", "message", "message"]);
+  });
 });
 
 describe("offers in the transcript", () => {
@@ -51,7 +80,7 @@ describe("offers in the transcript", () => {
 
   test("drawn after the answer, not where the call was; a press sends the kind", () => {
     const picked: OfferKind[] = [];
-    render(<Transcript turn={state(turn)} onDecide={() => {}} onOffer={(kind) => picked.push(kind)} />);
+    render(<Transcript turn={state(turn)} onDecide={() => {}} onOffer={(o) => picked.push(o.kind)} />);
     const answer = screen.getByText("Done: the counter takes the lock.");
     const card = screen.getByRole("button", { name: /Run a subagent for review/ });
     expect(answer.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -62,28 +91,55 @@ describe("offers in the transcript", () => {
     expect(picked).toEqual(["review"]);
   });
 
-  /// A plan is read before it is implemented; the card says what pressing does, this says where it is.
-  test("an offer to implement leads to the plan as well, and no other does", () => {
-    let opened = 0;
+  /// The plan card opens the Plan tab; implementation starts there, not from the chat.
+  test("a plan offer sends its kind, and the ghost button is gone", () => {
     const picked: OfferKind[] = [];
-    const plan: Block[] = [turn[0], offer("implement", "the parser"), turn[2]];
-    const { unmount } = render(
-      <Transcript turn={state(turn)} onDecide={() => {}} onOffer={() => {}} onOpenPlan={() => opened++} />,
-    );
+    const plan: Block[] = [turn[0], offer("plan", "the parser"), turn[2]];
+    render(<Transcript turn={state(plan)} onDecide={() => {}} onOffer={(o) => picked.push(o.kind)} />);
     expect(screen.queryByRole("button", { name: "Review the plan" })).toBeNull();
-    unmount();
-    render(<Transcript turn={state(plan)} onDecide={() => {}} onOffer={(kind) => picked.push(kind)} onOpenPlan={() => opened++} />);
-    fireEvent.click(screen.getByRole("button", { name: "Review the plan" }));
-    expect(opened).toBe(1);
-    expect(picked).toEqual([]);
-    fireEvent.click(screen.getByRole("button", { name: /Implement the plan/ }));
-    expect(picked).toEqual(["implement"]);
+    fireEvent.click(screen.getByRole("button", { name: /Open the plan/ }));
+    expect(picked).toEqual(["plan"]);
+  });
+
+  /// Chats saved before the rename carry `implement`; the card is the same.
+  test("an old implement block is the plan card", () => {
+    const old = offer("plan", "the parser");
+    old.arguments = JSON.stringify({ kind: "implement", reason: "the parser" });
+    old.result = { result: "offered", kind: "implement" };
+    expect(offerOf(old)).toEqual({ kind: "plan", reason: "the parser" });
+  });
+
+  test("a base sync offer draws its label and a press sends its kind", () => {
+    const picked: OfferKind[] = [];
+    const blocks: Block[] = [turn[0], offer("syncBase", "the base moved"), turn[2]];
+    render(<Transcript turn={state(blocks)} onDecide={() => {}} onOffer={(o) => picked.push(o.kind)} />);
+    expect(screen.getByText("the base moved")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Update from the base branch/ }));
+    expect(picked).toEqual(["syncBase"]);
+  });
+
+  test("a cleanup offer draws its label and a press sends its kind", () => {
+    const picked: OfferKind[] = [];
+    const blocks: Block[] = [turn[0], offer("cleanup", "the PR is merged"), turn[2]];
+    render(<Transcript turn={state(blocks)} onDecide={() => {}} onOffer={(o) => picked.push(o.kind)} />);
+    expect(screen.getByText("the PR is merged")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Remove the worktree/ }));
+    expect(picked).toEqual(["cleanup"]);
   });
 
   /// A notice after the answer — a hook, a cache miss — is not the end of the turn's offers.
   test("still there after a notice that follows the answer", () => {
     render(<Transcript turn={state([...turn, { kind: "notice", id: "n1", text: "Cache missed" }])} onDecide={() => {}} onOffer={() => {}} />);
     expect(screen.getByRole("button", { name: /Run a subagent for review/ })).toBeTruthy();
+  });
+
+  test("a message card shows its text and a press sends the whole offer", () => {
+    const picked: Offer[] = [];
+    const blocks: Block[] = [turn[0], suggestion("Start OF-1 and stop for review", "the first phase"), turn[2]];
+    render(<Transcript turn={state(blocks)} onDecide={() => {}} onOffer={(o) => picked.push(o)} />);
+    expect(screen.getByText("the first phase")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Start OF-1 and stop for review/ }));
+    expect(picked).toEqual([{ kind: "message", reason: "the first phase", text: "Start OF-1 and stop for review" }]);
   });
 
   test("none while the turn runs, after the user's next message, or with nowhere to send them", () => {

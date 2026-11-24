@@ -32,6 +32,8 @@ const ACCOUNTED = new Set([
   "board",
   // MongoDB, read.
   "mongo",
+  // The branch's pull request on the code host, read.
+  "pullRequestStatus",
   // A version kept beside a Prototype chat's folder: history, which stays.
   "present",
   "skill",

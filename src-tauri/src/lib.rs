@@ -203,6 +203,12 @@ pub fn run() {
                 }),
                 commands::mcp::mcp_event_sink(app.handle()),
             )));
+            // The pull request strip's server reads and its watcher. Here
+            // because what changes goes out through the app.
+            app.manage(std::sync::Arc::new(services::pull_requests::PullRequests::new(
+                std::sync::Arc::new(infra::bitbucket_client::Bitbucket),
+                commands::pull_requests::pull_request_event_sink(app.handle()),
+            )));
             // Every `explore` run, for the Agents tab; the record outlives the run.
             app.manage(std::sync::Arc::new(domain::agents::Agents::with_log(
                 commands::agents::agent_event_sink(app.handle()),
@@ -313,6 +319,7 @@ pub fn run() {
             commands::chat_history::chat_list,
             commands::chat_history::chat_load,
             commands::chat_history::chat_save,
+            commands::chat_history::chat_journal_blocks,
             commands::chat_history::chat_move_to_worktree,
             commands::chat_history::chat_generate_title,
             commands::chat_history::chat_set_archived,
@@ -420,6 +427,19 @@ pub fn run() {
             commands::features::features_set_layout_switch,
             commands::features::features_delete_data,
             commands::keyboard_layout::keyboard_layout_set,
+            commands::pull_requests::code_hosts,
+            commands::pull_requests::code_host_save,
+            commands::pull_requests::code_host_delete,
+            commands::pull_requests::code_host_detect,
+            commands::pull_requests::pull_request,
+            commands::pull_requests::pull_request_create,
+            commands::pull_requests::pull_request_approve,
+            commands::pull_requests::pull_request_merge,
+            commands::pull_requests::pull_request_set_draft,
+            commands::pull_requests::pull_request_last,
+            commands::pull_requests::pull_request_git_changed,
+            commands::pull_requests::pull_request_watch,
+            commands::pull_requests::pull_request_unwatch,
             commands::mongo::mongo_connections,
             commands::mongo::mongo_connection_save,
             commands::mongo::mongo_connection_delete,

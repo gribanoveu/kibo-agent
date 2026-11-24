@@ -330,6 +330,42 @@ fn a_resume_whose_history_lost_the_tool_call_round_is_refused() {
     assert!(matches!(err, TurnError::BadResume(_)), "{err}");
 }
 
+/// TJ-2: a resume whose next request fails keeps the work too. The decided
+/// calls ran and are answered in the history the error carries — the window
+/// drops the card on it, and deciding the card again would run them twice.
+#[test]
+fn a_failed_resume_hands_back_the_decided_calls_work() {
+    let mut h = harness(
+        "loop-resume-fail",
+        vec![
+            asks(vec![wants("w1", "writeFile", r#"{"path":"a.rs","content":"x"}"#)]),
+            Step::Fail(LlmError::Provider("peer closed connection".to_string())),
+        ],
+    );
+    h.approval = asking();
+
+    let paused = h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![]));
+    let ChatStreamOutcome::PendingApproval(pending) = paused.expect("pauses") else {
+        panic!("expected a pause");
+    };
+
+    let err = h
+        .run(|turn| resume(turn, pending, vec![ToolCallDecision { id: "w1".to_string(), approved: true, reason: None }]))
+        .expect_err("the next round fails");
+
+    let TurnError::Failed { history, .. } = err else {
+        panic!("expected Failed: {err}")
+    };
+    assert!(h.root.join("a.rs").exists(), "the decided call ran");
+    // Every call of the round is answered in the history: nothing is left
+    // dangling, and nothing is left for the card to re-run.
+    let asked = history.iter().rposition(|m| m.role == LlmRole::Assistant && !m.tool_calls.is_empty()).expect("the round");
+    let answered: Vec<&str> = history[asked + 1..].iter().filter_map(|m| m.tool_call_id.as_deref()).collect();
+    for call in &history[asked].tool_calls {
+        assert!(answered.contains(&call.id.as_str()), "{} unanswered", call.id);
+    }
+}
+
 /// One turn, one stream of numbers: a listener that reconnects after the
 /// pause cannot order anything if resuming starts again from zero.
 #[test]
@@ -359,4 +395,40 @@ fn the_event_stream_continues_across_a_pause() {
 
     let seqs: Vec<u64> = h.events().iter().map(|e| e.seq).collect();
     assert_eq!(seqs, (1..=seqs.len() as u64).collect::<Vec<_>>());
+}
+
+/// A pull request is opened only once the user agrees on its card: the round
+/// pauses with the call needing an answer, and the server is not asked.
+#[test]
+fn a_pull_request_waits_for_the_user() {
+    use crate::domain::code_host::{AgentPullRequests, CodeHostError, PrStrip, PullRequest};
+    #[derive(Default)]
+    struct Counting(Mutex<usize>);
+    impl AgentPullRequests for Counting {
+        fn status(&self, _: &std::path::Path, _: Option<&str>) -> Result<PrStrip, CodeHostError> {
+            Err(CodeHostError::NoRemote)
+        }
+        fn create(&self, _: &std::path::Path, _: &str, _: &str, _: Option<&str>, _: bool) -> Result<PullRequest, CodeHostError> {
+            *self.0.lock().unwrap() += 1;
+            Err(CodeHostError::NoRemote)
+        }
+    }
+    let mut h = harness(
+        "loop-pr-create",
+        vec![
+            asks(vec![wants("s1", "toolSearch", r#"{"query":"pull request"}"#)]),
+            asks(vec![wants("p1", "pullRequestCreate", r#"{"title":"Fix it"}"#)]),
+        ],
+    );
+    h.approval = asking();
+    h.features = crate::domain::features::Features::all();
+    let prs = Arc::new(Counting::default());
+    h.pull_requests = Some(prs.clone());
+
+    let outcome = h.run(|turn| stream(turn, vec![LlmMessage::user("open a PR")], vec![]));
+    let ChatStreamOutcome::PendingApproval(pending) = outcome.expect("pauses") else {
+        panic!("expected a pause");
+    };
+    assert_eq!(pending.calls.iter().map(|c| (c.name.as_str(), c.requires_confirmation)).collect::<Vec<_>>(), [("pullRequestCreate", true)]);
+    assert_eq!(*prs.0.lock().unwrap(), 0, "nothing sent before the answer");
 }

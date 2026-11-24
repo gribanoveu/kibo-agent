@@ -12,6 +12,40 @@ fn a_read_names_its_path_then_its_paths() {
     assert!(names(r#"{"pattern":"x"}"#).is_empty());
 }
 
+/// Qwen sends a nullable array as a JSON string now and then
+/// (`"paths": "[\"a\", \"b\"]"`). Every field that goes through the list
+/// coercion reads it as the list; a plain string is still one item, and a
+/// non-string array is refused naming the field, not swallowed as one.
+#[test]
+fn a_list_field_takes_a_list_written_as_a_string() {
+    let read: ReadFileArgs = serde_json::from_str(r#"{"paths":"[\"a.rs\", \"b.rs\"]"}"#).unwrap();
+    assert_eq!(read.paths, Some(vec!["a.rs".into(), "b.rs".into()]));
+    let read: ReadFileArgs = serde_json::from_str(r#"{"paths":"a.rs"}"#).unwrap();
+    assert_eq!(read.paths, Some(vec!["a.rs".into()]));
+
+    let search: SemanticSearchArgs = serde_json::from_str(
+        r#"{"query":"q","fts":"[\"tokens\", \"tok/s\"]","queries":"[\"other wording\"]"}"#,
+    )
+    .unwrap();
+    assert_eq!(search.fts, Some(vec!["tokens".into(), "tok/s".into()]));
+    assert_eq!(search.queries, Some(vec!["other wording".into()]));
+
+    let list: KubeListArgs =
+        serde_json::from_str(r#"{"kind":"pods","fields":"[\"metadata.name\", \"status.phase\"]"}"#).unwrap();
+    assert_eq!(list.fields, Some(vec!["metadata.name".into(), "status.phase".into()]));
+    let get: KubeGetArgs =
+        serde_json::from_str(r#"{"kind":"pod","name":"p","sections":"[\"spec\", \"status\"]"}"#).unwrap();
+    assert_eq!(get.sections, Some(vec!["spec".into(), "status".into()]));
+    let history: KubeFieldHistoryArgs =
+        serde_json::from_str(r#"{"kind":"deploy","name":"d","paths":"[\"spec.replicas\"]"}"#).unwrap();
+    assert_eq!(history.paths, Some(vec!["spec.replicas".into()]));
+
+    // The field's name in the error is added by the parser's path tracking;
+    // `parse.rs` holds that end (`a_string_array_of_non_strings_names_its_field`).
+    let err = serde_json::from_str::<ReadFileArgs>(r#"{"paths":"[1, 2]"}"#).unwrap_err().to_string();
+    assert!(err.contains("list of strings"), "{err}");
+}
+
 /// The reads ride in the approval checkpoint through the webview, where
 /// every JSON number is a double. What comes back must still vouch for
 /// the file it was taken from, or an approved edit is refused as stale.
@@ -87,14 +121,14 @@ fn reads_survive_the_trip_through_javascript() {
 #[test]
 fn what_waits_for_tool_search_is_these() {
     let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-    assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo]);
+    assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::PullRequestStatus, ToolName::PullRequestCreate]);
 }
 
 #[test]
 fn all_is_complete() {
     assert_eq!(
         ToolName::ALL.len(),
-        50,
+        52,
         "a variant was added or removed — update ALL and this count together"
     );
     let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -171,6 +205,8 @@ fn exactly_the_writing_tools_are_mutating() {
             ToolName::Move,
             // Unknown, so assumed.
             ToolName::Mcp,
+            // A pull request on the server, which notifies its reviewers.
+            ToolName::PullRequestCreate,
         ])
     );
 }
@@ -214,6 +250,25 @@ fn a_command_that_reaches_the_network_asks_even_when_commands_are_allowed() {
 
     policy.skip_all = true;
     assert!(!policy.requires_approval_for(&run("curl https://x.io")));
+}
+
+/// A pull request notifies its reviewers, so "always allow" given once is
+/// not given for every one after; Auto still means not asking.
+#[test]
+fn a_pull_request_asks_even_when_allowed_always() {
+    let call = ToolCall::PullRequestCreate(PullRequestCreateArgs {
+        title: "t".into(),
+        body: None,
+        target: None,
+        draft: None,
+    });
+    let mut policy = ApprovalPolicy::default();
+    policy.allow_always("pullRequestCreate").unwrap();
+    assert!(policy.requires_approval_for(&call));
+    assert!(policy.approval_reason(&call).unwrap().contains("notified"));
+
+    policy.skip_all = true;
+    assert!(!policy.requires_approval_for(&call));
 }
 
 /// The turn's aliases are the ones the gate reads with.

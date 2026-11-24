@@ -158,7 +158,7 @@ describe("making room before a turn", () => {
     };
     const { result } = renderHook(() => useAgentTurn());
 
-    let pass: Promise<boolean> = Promise.resolve(false);
+    let pass: Promise<true | string | null> = Promise.resolve(null);
     act(() => {
       pass = result.current.compact(true);
     });
@@ -183,7 +183,7 @@ describe("making room before a turn", () => {
     const { result } = renderHook(() => useAgentTurn());
 
     await act(async () => {
-      expect(await result.current.compact(true)).toBe(false);
+      expect(await result.current.compact(true)).toContain("provider said no");
     });
     expect(result.current.turn.blocks).toEqual([{ kind: "compaction", id: "compaction:0", status: "failed" }]);
     expect(result.current.error).toContain("provider said no");
@@ -216,11 +216,11 @@ describe("making room before a turn", () => {
       await result.current.send("write it");
     });
 
-    let folded: boolean | undefined;
+    let folded: true | string | null | undefined;
     await act(async () => {
       folded = await result.current.compact(true);
     });
-    expect(folded).toBe(false);
+    expect(folded).toBeNull();
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([]);
   });
 
@@ -230,12 +230,12 @@ describe("making room before a turn", () => {
     results.chat_compact = null;
     const { result } = renderHook(() => useAgentTurn());
 
-    let folded: boolean | undefined;
+    let folded: true | string | null | undefined;
     await act(async () => {
       folded = await result.current.compact(true);
     });
 
-    expect(folded).toBe(false);
+    expect(folded).toBeNull();
     expect(calls.filter((call) => call.command === "chat_compact")).toEqual([
       { command: "chat_compact", args: { messages: [], force: true, turnId: expect.stringMatching(/\/compact-1$/), chatId: expect.any(String) } },
     ]);
@@ -979,6 +979,179 @@ describe("a turn that fails to start", () => {
   });
 });
 
+describe("the turn journal", () => {
+  /// TJ-4: each round's end journals the turn's blocks — the half only the
+  /// window knows — and the write is queued before the save that folds it.
+  test("each round's end journals the turn's blocks, before the save that folds them", async () => {
+    let end: () => void = () => {};
+    results.chat_start = (args: Record<string, unknown>) => new Promise((resolve) => (end = () => resolve(done("ok")(args))));
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("go"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const started = calls.find((c) => c.command === "chat_start")!;
+    const turnId = started.args.turnId as string;
+    const chatId = started.args.chatId as string;
+
+    act(() => emit({ turnId, seq: 1, round: 1, type: "roundCompleted", payload: { text: "working" } }));
+    await waitFor(() => expect(calls.some((c) => c.command === "chat_journal_blocks")).toBe(true));
+    const journaled = calls.find((c) => c.command === "chat_journal_blocks")!;
+    expect(journaled.args.id).toBe(chatId);
+    expect(journaled.args.turnId).toBe(turnId);
+    expect(journaled.args.from).toBe(0);
+    expect((journaled.args.blocks as Block[]).map((b) => b.kind)).toEqual(["user", "message"]);
+
+    await act(async () => end());
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    const commands = calls.map((c) => c.command);
+    expect(commands.indexOf("chat_journal_blocks")).toBeLessThan(commands.lastIndexOf("chat_save"));
+    // The save names the turn it ends: only that turn's journal folds, and
+    // the next turn's base — already written — survives the delete.
+    expect(saved().at(-1)!.args.turnId).toBe(turnId);
+  });
+
+  /// In a chat with earlier turns the journal carries only this turn's
+  /// slice, and `from` says where it joins the saved transcript — the
+  /// recovery splices the earlier turns back in front of it.
+  test("the slice joins the saved transcript where the turn began", async () => {
+    const savedBlocks: Block[] = [
+      { kind: "user", id: "user:0", text: "first" },
+      { kind: "message", id: "message:1:1", round: 1, text: "answered" },
+    ];
+    results.chat_load = { id: "kept", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: savedBlocks, todos: [], plan: null };
+    let end: () => void = () => {};
+    results.chat_start = (args: Record<string, unknown>) => new Promise((resolve) => (end = () => resolve(done("ok")(args))));
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.open("kept"));
+    act(() => void result.current.send("second"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const turnId = calls.find((c) => c.command === "chat_start")!.args.turnId as string;
+
+    act(() => emit({ turnId, seq: 1, round: 1, type: "roundCompleted", payload: { text: "working" } }));
+    await waitFor(() => expect(calls.some((c) => c.command === "chat_journal_blocks")).toBe(true));
+    const journaled = calls.find((c) => c.command === "chat_journal_blocks")!;
+    expect(journaled.args.from).toBe(savedBlocks.length);
+    expect((journaled.args.blocks as Block[])[0]).toMatchObject({ kind: "user", text: "second" });
+
+    await act(async () => end());
+    await waitFor(() => expect(result.current.turn.status).toBe("done"));
+  });
+
+  /// Best-effort: a journal write that fails costs crash protection, not
+  /// the turn — the turn ends and saves as it always did.
+  test("a journal write that fails does not fail the turn", async () => {
+    results.chat_journal_blocks = new Error("disk full");
+    let end: () => void = () => {};
+    results.chat_start = (args: Record<string, unknown>) => new Promise((resolve) => (end = () => resolve(done("ok")(args))));
+    const { result } = renderHook(() => useAgentTurn());
+    act(() => void result.current.send("go"));
+    await waitFor(() => expect(result.current.turn.status).toBe("running"));
+    const turnId = calls.find((c) => c.command === "chat_start")!.args.turnId as string;
+
+    act(() => emit({ turnId, seq: 1, round: 1, type: "roundCompleted", payload: { text: "working" } }));
+    await act(async () => end());
+    await waitFor(() => expect(result.current.turn.status).toBe("done"));
+    expect(result.current.error).toBeNull();
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+  });
+});
+
+describe("a turn that fails after doing work", () => {
+  const recovery = {
+    history: [
+      { role: "user", content: "fix it" },
+      { role: "assistant", content: null, toolCalls: [{ id: "r1", name: "readFile", arguments: '{"path":"a.rs"}' }] },
+      { role: "tool", content: "fn one() {}", toolCallId: "r1" },
+    ],
+    todos: [{ id: "t1", title: "read", status: "completed" }],
+    plan: "# The plan",
+  };
+
+  /// TJ-2: the failure carries the history as of the last completed round.
+  /// It is saved as a finished turn is, and the next message is sent with it
+  /// — the model knows what it read, not only what the user asked.
+  test("the work it did is saved, and the next message is sent with it", async () => {
+    results.chat_start = () => Promise.reject({ message: "peer closed connection", recovery });
+    const { result } = renderHook(() => useAgentTurn());
+
+    await act(async () => {
+      await result.current.send("fix it");
+    });
+
+    expect(result.current.turn.status).toBe("done");
+    const notice = result.current.turn.blocks.find((b) => b.kind === "notice");
+    expect(notice && "text" in notice && notice.text).toBe("The turn failed: peer closed connection");
+    expect(result.current.error).toBe("peer closed connection");
+    await waitFor(() => expect(saved().length).toBeGreaterThanOrEqual(1));
+    const last = saved().at(-1)!;
+    expect(last.args.messages).toEqual(recovery.history);
+    expect(last.args.todos).toEqual(recovery.todos);
+    expect(last.args.plan).toBe("# The plan");
+
+    results.chat_start = done("back");
+    await act(async () => {
+      await result.current.send("continue");
+    });
+    expect(calls.filter((c) => c.command === "chat_start")[1]?.args.messages).toEqual([
+      ...recovery.history,
+      { role: "user", content: "continue" },
+    ]);
+  });
+
+  /// The turn wrote no plan: the window's own plan stands, not erased by
+  /// the recovery's `null`.
+  test("a recovery without a plan keeps the window's plan", async () => {
+    results.chat_load = { id: "kept", title: "t", createdAt: 1, updatedAt: 2, messages: [], blocks: [], todos: [], plan: "# Kept" };
+    results.chat_start = () => Promise.reject({ message: "peer closed connection", recovery: { ...recovery, plan: null } });
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.open("kept"));
+    await act(async () => result.current.send("fix it"));
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    expect(saved().at(-1)!.args.plan).toBe("# Kept");
+  });
+
+  /// A failure with nothing to keep — a refused start — leaves the history
+  /// as it was: the user's message, not a reconstruction.
+  test("a plain refusal keeps what was sent, as before", async () => {
+    results.chat_start = new Error("provider said 401");
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => {
+      await result.current.send("hello");
+    });
+    await waitFor(() => expect(saved().length).toBeGreaterThanOrEqual(1));
+    expect(saved().at(-1)!.args.messages).toEqual([{ role: "user", content: "hello" }]);
+  });
+
+  /// A resume that fails mid-turn keeps the work and drops the card: the
+  /// calls it asked about already ran, and deciding them again would run
+  /// them twice.
+  test("a resume that fails keeps the work and drops the card", async () => {
+    results.chat_start = {
+      status: "pendingApproval",
+      value: {
+        history: [],
+        round: 1,
+        budgetUsed: 1,
+        eventSeq: 3,
+        calls: [{ id: "w1", name: "writeFile", arguments: "{}", requiresConfirmation: true }],
+        todos: [],
+        reads: {},
+      },
+    };
+    results.chat_resume = () => Promise.reject({ message: "peer closed connection", recovery });
+    const { result } = renderHook(() => useAgentTurn());
+    await act(async () => result.current.send("write it"));
+    expect(result.current.turn.status).toBe("awaitingApproval");
+
+    await act(async () => result.current.decide([{ id: "w1", approved: true }]));
+
+    expect(result.current.turn.status).toBe("done");
+    const notice = result.current.turn.blocks.find((b) => b.kind === "notice");
+    expect(notice && "text" in notice && notice.text).toBe("The turn failed: peer closed connection");
+    await waitFor(() => expect(saved().length).toBeGreaterThan(0));
+    expect(saved().at(-1)!.args.messages).toEqual(recovery.history);
+  });
+});
+
 describe("what the next message is sent with", () => {
   /// The model answers a follow-up from what it read, not from what it
   /// happened to repeat in its answer.
@@ -1619,7 +1792,7 @@ describe("parallel sessions", () => {
     };
     const { result } = renderHook(() => useAgentTurn());
     await act(async () => result.current.open("a"));
-    let compacting = Promise.resolve(false);
+    let compacting: Promise<true | string | null> = Promise.resolve(null);
     act(() => {
       compacting = result.current.compact(true);
     });

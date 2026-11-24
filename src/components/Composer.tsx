@@ -168,10 +168,13 @@ export function Composer({
   const grow = () => {
     const el = area.current;
     if (!el) return;
+    // The cap is the stylesheet's — a narrow column gets a taller box — not a
+    // number kept in step with it here.
+    const cap = parseFloat(getComputedStyle(el).maxHeight) || 120;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
-    el.style.overflowY = el.scrollHeight > 120 ? "auto" : "hidden";
+    el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
   };
 
   // Another chat's draft was put in the box during the render, so the box has
@@ -335,6 +338,7 @@ export function Composer({
           {queued.map((item) => queueRow(item))}
         </ul>
       )}
+      {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
       <section className={`composer${attachments.dragging ? " dropping" : ""}`} ref={box}>
         {attachments.dragging && (
           <div className="composer-drop" aria-hidden="true">
@@ -451,7 +455,6 @@ export function Composer({
         </div>
         {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
       </section>
-      {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
       <div className="composer-strip">
         {tab}
         <ComposerSettings

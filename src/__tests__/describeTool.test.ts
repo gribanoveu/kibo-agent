@@ -32,6 +32,24 @@ describe("what each call shows", () => {
     expect(done).toMatchObject({ name: "Prototype", arg: "Coffee shop", meta: "version 3", detail: "index.html" });
   });
 
+  test("a pull request read names its branch; one created shows its number, branches and link", () => {
+    const read = (args: string) => describeTool(tool({ name: "pullRequestStatus", arguments: args, result: { result: "pullRequest", text: "Pull request #153", summary: "#153 blocked" } }));
+    expect(read('{"branch":"release/1.2"}')).toMatchObject({ name: "Pull request", arg: "release/1.2", meta: "#153 blocked", detail: "Pull request #153" });
+    expect(read('{"branch":"  "}')).toMatchObject({ arg: "current branch" });
+    expect(read("{}")).toMatchObject({ arg: "current branch" });
+
+    const asked = describeTool(tool({ name: "pullRequestCreate", arguments: '{"title":"Fix it","draft":true}', status: "running" }));
+    expect(asked).toMatchObject({ name: "Create pull request", arg: "Fix it", meta: "draft" });
+    const made = describeTool(
+      tool({
+        name: "pullRequestCreate",
+        arguments: '{"title":"Fix it"}',
+        result: { result: "pullRequestCreated", id: 154, title: "Fix it", from: "feature/x", to: "master", url: "https://git/pr/154", draft: false },
+      }),
+    );
+    expect(made).toMatchObject({ name: "Create pull request", arg: "Fix it", meta: "#154", detail: "feature/x → master\nhttps://git/pr/154" });
+  });
+
   test("a board call names the card it is about, and an edit shows the note it wrote", () => {
     const board = (args: string) => describeTool(tool({ name: "board", arguments: args, result: { cards: [{}, {}] } }));
     expect(board('{"op":"add","title":"Renew cert"}')).toMatchObject({ name: "Board", arg: "Renew cert", meta: "2 cards" });
@@ -794,6 +812,16 @@ describe("a call under way, in words", () => {
   test("says what it is doing to what", () => {
     expect(describeActive(tool({ name: "readFile", arguments: '{"path":"a.rs"}' }))).toBe("Reading a.rs");
     expect(describeActive(tool({ name: "runCommand", arguments: '{"command":"cargo test"}' }))).toMatch(/^Running cargo test/);
+  });
+
+  test("a command described by the line's own words shows them, not the command", () => {
+    const described = tool({ name: "runCommand", arguments: '{"command":"bun test","description":"Run the frontend tests"}' });
+    expect(describeActive(described)).toBe("Run the frontend tests");
+    // Background and moved-to-background are the same call, said the same way.
+    const background = tool({ name: "runCommand", arguments: '{"command":"bun run tauri dev","description":"Start the dev server","background":true}' });
+    expect(describeActive(background)).toBe("Start the dev server");
+    // An empty description is none: the command line stays.
+    expect(describeActive(tool({ name: "runCommand", arguments: '{"command":"cargo test","description":""}' }))).toMatch(/^Running cargo test/);
   });
 });
 

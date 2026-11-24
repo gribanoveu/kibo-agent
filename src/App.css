@@ -70,6 +70,12 @@
 .main {
   /* What it opens over the chat (AgentSheet) is placed against it. */
   position: relative;
+  /* "Narrow" is this column, not the window: the panels beside it give way
+     first. The dock, the Working line and the checklist answer its width
+     (`@container` in Composer.css, PlainChat.css, ChatPanel.css). Its width
+     comes from the flex row, never from its contents, so containing it here
+     changes no layout. */
+  container-type: inline-size;
   flex: 1;
   min-width: 400px;
   display: flex;

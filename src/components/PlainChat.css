@@ -32,11 +32,6 @@
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-.plain-welcome p {
-  font-size: var(--fs-sm);
-  line-height: 1.6;
-  color: var(--text-faint);
-}
 /* One per row, whatever their length: the block's height is what keeps the
    empty chat's parts in place. */
 .plain-suggest {
@@ -75,7 +70,12 @@
 .plain-composer-wrap {
   /* The settings panel hangs from here. */
   position: relative;
-  margin-top: 2px;
+  /* As the agent's box (Composer.css): two percent of the reading width wider
+     than the text on each side, plus the box's own 14px side margins twice,
+     centred. Narrower than the cap, the wrap is the panel's full width. */
+  width: 100%;
+  max-width: calc(var(--thread-width) * 1.04 + 28px);
+  margin: 2px auto 0;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -289,4 +289,30 @@
   color: var(--text-dim);
   font-size: var(--fs-md);
   pointer-events: none;
+}
+
+/* The agent's box, and for the same reason (Composer.css): a narrow column
+   gives the text a row of its own and the buttons a row under it. */
+@container (max-width: 500px) {
+  .plain-composer {
+    margin: 0 8px;
+    padding: 6px;
+  }
+  .plain-composer-bar {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .plain-composer-bar > textarea {
+    flex: 1 1 100%;
+    order: -1;
+    max-height: min(240px, 34vh);
+    /* Off the box's edge, as the wide box keeps it (Composer.css). */
+    margin-left: 6px;
+  }
+  .plain-composer-bar > .plain-send {
+    margin-left: auto;
+  }
+  .plain-tab {
+    margin: 6px 8px 10px;
+  }
 }

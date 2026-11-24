@@ -17,6 +17,7 @@ import {
   FolderTree,
   FoldVertical,
   GitBranch,
+  GitPullRequest,
   Info,
   Globe,
   ListTodo,
@@ -42,8 +43,10 @@ import {
 import { ChatEmptyState } from "./ChatEmptyState";
 import { FindingCard, ReviewReport } from "./ReviewCard";
 import { findingOf, reviewOf } from "../lib/finding";
-import { offerOf, offersOf, type OfferKind } from "../lib/offer";
+import { offerOf, offersOf, type Offer } from "../lib/offer";
 import { OfferCards } from "./OfferCards";
+import { PrTaskCards } from "./PrTaskCards";
+import type { PrTasks } from "../lib/pullRequestView";
 import { presentedOf } from "../lib/prototype";
 import { PresentedCard, RestoredCard } from "./PresentedCard";
 import { hasOpen } from "../lib/plan";
@@ -98,6 +101,8 @@ const TOOL_ICON: Record<string, typeof FileText> = {
   Explore: Telescope,
   Board: SquareKanban,
   MongoDB: Database,
+  "Pull request": GitPullRequest,
+  "Create pull request": GitPullRequest,
   Prototype: AppWindow,
 };
 
@@ -540,7 +545,8 @@ export function Preview({ preview }: { preview?: ToolPreview }) {
   }
 
   if (preview.kind === "change") {
-    // Where first: the cluster is what a wrong approval costs most.
+    // Where first: the cluster, or the server and repository, is what a
+    // wrong approval costs most.
     return (
       <div className="approval-change">
         <div className={`approval-change-place${preview.production ? " production" : ""}`}>
@@ -648,13 +654,14 @@ export function formatTokens(n: number): string {
 }
 
 /**
- * "· 2 processes running" beside the clock: background processes outlive the
- * turn, and without this a server left running is out of sight. A click
- * opens the newest in the Terminal tab.
+ * "· 2 processes" beside the clock: background processes outlive the turn, and
+ * without this a server left running is out of sight. A click opens the newest
+ * in the Terminal tab. "Running" is the clock's own word — at the chat's
+ * minimum width the line has no room to say it twice.
  */
 function RunningProcesses({ ids, onOpen }: { ids: number[]; onOpen?: (id: number) => void }) {
   if (ids.length === 0) return null;
-  const label = `${ids.length} ${ids.length === 1 ? "process" : "processes"} running`;
+  const label = `${ids.length} ${ids.length === 1 ? "process" : "processes"}`;
   return (
     <>
       <span className="turn-clock-sep">·</span>
@@ -669,13 +676,15 @@ function RunningProcesses({ ids, onOpen }: { ids: number[]; onOpen?: (id: number
   );
 }
 
-/** "· 48 tok/s" beside the clock; nothing until there is a rate. */
+/** "· 48 tok/s" beside the clock; nothing until there is a rate. The separator
+    wears the same class: a narrow column drops the speed, and a lone "·" left
+    behind would read as a missing fact. */
 function Speed({ rate, prefix = "" }: { rate: number | null; prefix?: string }) {
   if (rate === null) return null;
   return (
     <>
-      <span className="turn-clock-sep">·</span>
-      <span className="turn-clock-time">
+      <span className="turn-clock-sep turn-clock-speed">·</span>
+      <span className="turn-clock-time turn-clock-speed">
         {prefix}
         {Math.round(rate)} tok/s
       </span>
@@ -915,8 +924,6 @@ type Props = {
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
   onOpenRepo: () => void;
-  /** Opens the Plan tab, where the plan is read and edited before it is implemented. */
-  onOpenPlan?: () => void;
   /** The agent's checklist, drawn above the clock while a turn runs. */
   checklist?: Task[];
   /** Opens the Terminal tab on a background process a call started. */
@@ -938,8 +945,12 @@ type Props = {
   onFix?: (text: string) => void;
   /** Previews approval calls in this chat's own checkout. */
   preview?: PreviewCalls;
-  /** Sends what an offer under the last answer offered, as the user's message. */
-  onOffer?: (kind: OfferKind) => void;
+  /** Takes what an offer under the last answer offered: a message sent, or the plan opened. */
+  onOffer?: (offer: Offer) => void;
+  /** The pull request's tasks under the last answer: conflicts to resolve, open remarks to address (BB-8). */
+  prTasks?: PrTasks | null;
+  /** Puts a pull request task's request into the message box, as `onFix` does. */
+  onPrTask?: (text: string) => void;
   /** Notes sent into the running turn that no round has read yet; one taken
       back goes to the box, with the pictures it carried. */
   steered?: SteeredNote[];
@@ -966,7 +977,8 @@ type TranscriptProps = Pick<
   | "onRewind"
   | "onFix"
   | "onOffer"
-  | "onOpenPlan"
+  | "prTasks"
+  | "onPrTask"
   | "steered"
   | "onWithdraw"
   | "onAnswerQuestion"
@@ -1025,7 +1037,8 @@ export function Transcript({
   onRewind,
   onFix,
   onOffer,
-  onOpenPlan,
+  prTasks = null,
+  onPrTask,
   onAnswerQuestion,
   checklist = [],
   onOpenVersion,
@@ -1084,7 +1097,8 @@ export function Transcript({
           )}
         </div>
       ))}
-      {onOffer && <OfferCards offers={offers} onPick={onOffer} onOpenPlan={onOpenPlan} />}
+      {onOffer && <OfferCards offers={offers} onPick={onOffer} />}
+      {prTasks && onPrTask && turn.status === "done" && <PrTaskCards tasks={prTasks} onTask={onPrTask} />}
       {steered.length > 0 && (
         <div className="turn">
           <div className="role">You</div>
@@ -1122,7 +1136,6 @@ export function ChatPanel({
   onDecide,
   onOpenRepo,
   checklist = [],
-  onOpenPlan,
   onOpenProcess,
   onOpenAgent,
   runningProcesses = [],
@@ -1134,6 +1147,8 @@ export function ChatPanel({
   onFix,
   preview,
   onOffer,
+  prTasks,
+  onPrTask,
   onAnswerQuestion,
   steered = [],
   onWithdraw,
@@ -1247,7 +1262,7 @@ export function ChatPanel({
         {groups.length === 0 ? (
           <ChatEmptyState workspace={workspace} onOpenRepo={onOpenRepo} />
         ) : (
-          <div ref={contentRef}>
+          <div ref={contentRef} className="thread-content">
             <Transcript
               turn={turn}
               onDecide={onDecide}
@@ -1263,7 +1278,8 @@ export function ChatPanel({
               onFix={onFix}
               preview={preview}
               onOffer={onOffer}
-              onOpenPlan={onOpenPlan}
+              prTasks={prTasks}
+              onPrTask={onPrTask}
               checklist={checklist}
               steered={steered}
               onWithdraw={onWithdraw}
@@ -1468,14 +1484,17 @@ const TASK_MARK: Record<Task["status"], { icon: typeof Circle; label: string }> 
 
 /**
  * The agent's checklist above the clock while it works — the Plan tab may be
- * closed, and this is where the eye already is. Three rows show; a longer list
- * scrolls itself so the task under way sits in the middle. Nothing once no
- * task is open: a finished or dropped list is not news.
+ * closed, and this is where the eye already is. Three rows show (two in a
+ * narrow column); a longer list scrolls itself so the task under way sits in
+ * the middle, and the count beside it says how far along the whole list is —
+ * a title cut short still reads as progress. Nothing once no task is open: a
+ * finished or dropped list is not news.
  */
 function TaskTicker({ checklist }: { checklist: Task[] }) {
   const list = useRef<HTMLUListElement>(null);
   const at = checklist.findIndex((task) => task.status === "inProgress");
   const current = at >= 0 ? at : Math.max(0, checklist.findIndex((task) => task.status === "pending"));
+  const done = checklist.filter((task) => task.status === "completed").length;
   useEffect(() => {
     const box = list.current;
     const row = box?.children[current] as HTMLElement | undefined;
@@ -1498,6 +1517,9 @@ function TaskTicker({ checklist }: { checklist: Task[] }) {
           );
         })}
       </ul>
+      <span className="task-ticker-count" title={`${done} of ${checklist.length} done`}>
+        {done}/{checklist.length}
+      </span>
     </div>
   );
 }

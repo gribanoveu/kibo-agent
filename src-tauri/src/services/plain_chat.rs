@@ -148,9 +148,13 @@ fn in_place<T>(chat: &ChatTurn, run: impl FnOnce(&Turn) -> T) -> T {
         questions: None,
         board: chat.board.clone(),
         mongo: chat.mongo.clone(),
+        // A chat has no folder, so no branch to read a pull request of.
+        pull_requests: None,
         deepseek: chat.deepseek.clone(),
         features: chat.features.clone(),
         fork: false,
+        markers: None,
+        journal: None,
     };
     run(&turn)
 }

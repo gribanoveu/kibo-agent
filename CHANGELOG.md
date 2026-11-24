@@ -2,7 +2,28 @@
 
 ## Unreleased
 
+- 2026-11-24 A menu opens over the panel or dialog it belongs to instead of being cut off by its edge — the branch list in Create pull request, whose last entries were half shown — no narrower than the field it hangs from, so filtering its options does not resize it, and closes when whatever holds its trigger scrolls or the window is resized
+- 2026-11-24 The chat thread no longer moves while a message is typed into the box for the next one: the box grows a line and the thread with it shrinks, and the follow-the-end scroll used to treat that as the answer growing — what was being read jumped up a line per line typed, with the agent at rest; the end still follows the answer as it streams and comes back when the message is sent
+- 2026-11-24 The Create pull request dialog offers the branch to go into as a list of this folder's own branches — the default branch first, the branch the pull request comes from left out — with a field for one the folder has not read, taken as it is typed and narrowing the list to what matches, and saying when nothing does; Escape closes that list first and the dialog after it
+- 2026-11-24 The pull request row in Overview is its title over one line — "1/1 approved · Ready to merge" — with whether it can go in at the end of that line instead of on its own, and the number and the repository name, which only cut that line short, moved into its tooltip
+- 2026-11-24 "N/M approved" on the pull request row in Overview is a button: the reviewers and their decisions open in a popover pinned to it, in the order of who holds the pull request up, instead of inside the row's own expansion — which now keeps the author, the target branch and the reasons it cannot be merged
+- 2026-11-24 The pull request row in Overview keeps Open beside Merge — one word, the server and the number in its tooltip, so the two stand in one row even in a narrow panel — out of the ⋯ menu, which now holds only what changes the pull request and is not drawn at all when it has nothing of that left
+- 2026-11-23 Work the review of your Bitbucket pull request from the chat: Resolve conflicts and Address comments buttons on the PR row in Overview and under the agent's answer put a ready request into the message box — the open remarks with their file, line and author, resolved ones left out; the agent reads all of them with `pullRequestStatus`
+- 2026-11-23 On a wide monitor the conversation, in Agent and Chat modes alike, keeps a reading width (750px) and stays centred in the panel, instead of stretching across its whole width; the message box, its queue and the line under it stay centred with it, two percent of the text's width wider on each side
+- 2026-11-23 The next-step buttons under an answer grow three kinds: update a worktree branch from its base when it falls behind (`syncBase`), remove a worktree nothing would be lost from (`cleanup`, stepping into the main checkout and opening the removal dialog), and the model's own suggestions — up to two short messages it writes itself, sent exactly as written when pressed (`message`); the plan button now opens the Plan tab, where the plan is read and implementation starts
+- 2026-11-23 The chat thread keeps following a streaming answer under load: a scroll event reading an older position (WebKit's scrolling thread commits lag the stick) no longer passes for the user scrolling away, which stopped the auto-scroll until the next manual scroll; scrolling up to read still lets go at once, and scrolling back to the end picks it up again
+- 2026-11-23 The context meter shows the provider's own count for the last request plus what was added since, instead of a characters-based estimate that under-counted Russian text and a thinking model's reasoning; the panel names which source the number is from, and auto-compaction folds at the real share of the window rather than late
+- 2026-11-22 While a command runs, the folded working line shows the model's own description of what it does (`runCommand`'s `description`), falling back to the command line when there is none
+- 2026-11-22 A Board card's description and comments keep their line breaks as typed: a single newline reads as a new line in the card's panel, not one flowing paragraph
+- 2026-11-22 The Catalog's "Show all" is the last card of a cut section's grid, in the eighth card's place, instead of a link by the heading — it is clear the section shows only part of the list
+- 2026-11-22 The empty chat screens in Agent and Chat drop their description paragraphs: the greeting, the suggestions and the Enter hint stay
+- 2026-11-22 The wrong-layout hint sits above the message box instead of under it
+- 2026-11-21 A turn's work survives a crash or a closed window: reopening the chat restores its history and transcript with an "interrupted" note, and a provider failure mid-turn keeps the work too; a cache miss now says what changed — the system prompt, the tool set, a message of the history, or the provider losing the cache; a tool list sent as a JSON string (`todo.ids`, `readFile.paths`, `semanticSearch.fts`) is read as the list instead of failing or searching for the brackets
+- 2026-11-21 A narrow chat column (the IDE layout's, or one dragged thin): the message box takes the whole width with its buttons on a row under it and grows taller instead of scrolling inside itself, the Working line keeps time, tokens and processes on one line, and the checklist shows two rows with a done/total count beside them
 - 2026-11-21 A file link with lines in an answer (`a.ts:42`, `a.ts:42-50`, `#L42-L50`) opens the file scrolled to those lines and lights them for a moment, in the tab the file already has
+- 2026-11-21 Let the agent open the pull request of its branch on your Bitbucket — you approve it on a card that shows the server, the branches, the title and the description
+- 2026-11-21 Ask the agent about the pull request of a branch: it reads the reviewers, the builds and why it cannot be merged from your Bitbucket, and changes nothing
+- 2026-11-19 See the pull request of the branch you are on, from your Bitbucket Data Center, under the branch in Overview — whether it can be merged and why not, the latest build, its reviewers — and Create (as a draft too), Mark ready, Convert to draft, Approve or Unapprove, Merge and Open it from there; turn on Pull requests in Catalog and add the server and its token in its panel
 
 ## v0.14.0 — 2026-11-20
 
@@ -70,6 +91,7 @@
 - 2026-11-08 The Catalog shows eight cards of each kind under All before "Show all", which opens that kind's tab with the whole list; MCP servers sit right under Skills
 - 2026-11-08 A feature's card in the Catalog carries its own icon: the Meetings page's sound wave for Meeting notes, two people for Voice memory, the library for the knowledge base and a microphone for Voice input, instead of the generic puzzle piece
 - 2026-11-08 Chat with DeepSeek search on and the search in Settings off no longer answers that search is unavailable: what the model is told of it follows the tools it is given
+- 2026-11-07 A server installed from the Catalog can bring the config file it reads beside itself: Kibana's exact-index server gets `.kibo/kibana-sources.json` written into the open folder, and a file already there is left as it is
 
 ## v0.12.0 — 2026-11-07
 

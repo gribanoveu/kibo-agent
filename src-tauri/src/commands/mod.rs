@@ -30,6 +30,7 @@ pub mod board;
 pub mod dictation;
 pub mod meeting;
 pub mod mongo;
+pub mod pull_requests;
 pub mod features;
 pub mod keyboard_layout;
 pub mod terminal;
