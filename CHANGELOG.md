@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-24 A background process that ends in the chat keeps its command to three lines, the rest behind "Show more" — a script started in the background no longer fills the thread with a wall of text
 - 2026-11-24 A Bitbucket server whose name does not resolve — a DNS or a VPN that is down — leaves the branch in Overview to itself instead of printing `io: failed to lookup address information…` under it, as any other server that cannot be reached
 - 2026-11-24 The certificate a Bitbucket server presents is shown by name — who it is issued to, who issued it, until when, and whether it is self-signed or expired — with its SHA-256 fingerprint on one line and a Copy button to compare it with the one your IT gives; the root of the chain is offered even when the server sends it out of order
 - 2026-11-24 Adding a Bitbucket server whose certificate is not trusted: "Fetch certificate" takes it from the server over a handshake that sends no token and asks for nothing, shows its SHA-256 fingerprint to compare with the one your IT gives you, and puts it in the form only when you accept it — Check and Save stay yours

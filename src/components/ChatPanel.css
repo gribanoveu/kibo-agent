@@ -116,6 +116,16 @@
    what it was for, the command and the folder under it, how it ended in the
    badge's colour, amber for a failure — that opens the Terminal tab. News,
    not an object: no box around it. */
+/* The row and its Show more under it, so a long command is not the whole
+   notice. */
+.process-ended-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  max-width: 100%;
+}
 .process-ended {
   --state: var(--text-faint);
   display: flex;
@@ -169,9 +179,18 @@
   color: var(--text-dim);
   min-width: 0;
   /* A long command wraps (keeping its own line breaks) instead of being
-     cut off at the column's edge. */
+     cut off at the column's edge — and stops at three lines, the rest behind
+     Show more. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+/* Opened by its Show more: the whole line, however long. */
+.process-ended.open .process-ended-command {
+  display: block;
 }
 /* With no description the command is the title. */
 .process-ended-command.solo {
@@ -215,6 +234,19 @@
   flex: none;
   margin-left: auto;
   color: var(--text-faint);
+}
+/* Under a command longer than its three lines. */
+.process-ended-more {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.process-ended-more:hover {
+  color: var(--text);
 }
 
 /* A helper run — a review, an explore — as a card like the background process

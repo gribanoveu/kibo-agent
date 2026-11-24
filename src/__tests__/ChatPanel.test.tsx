@@ -901,11 +901,11 @@ describe("a review while it runs", () => {
 });
 
 describe("a background process that ended", () => {
-  const ended = (code: number, description?: string) =>
+  const ended = (code: number, description?: string, command = "cargo build") =>
     ({
       kind: "processEnded",
       id: "ended:0",
-      process: { id: 4, command: "cargo build", description, cwd: "src-tauri", state: { state: "exited", code } },
+      process: { id: 4, command, description, cwd: "src-tauri", state: { state: "exited", code } },
     }) as Block;
 
   test("is a two-line row — the command, the folder and how it ended — that opens the Terminal tab", () => {
@@ -948,6 +948,51 @@ describe("a background process that ended", () => {
     const command = container.querySelector(".process-ended-command");
     expect(command?.textContent).toBe("cargo build");
     expect(command?.className).not.toContain("solo");
+  });
+
+  /// A script started in the background is a wall of text: the row keeps its
+  /// first three lines, and Show more opens the rest where it stands.
+  test("a command past three lines is cut, with Show more to open it in place", () => {
+    // happy-dom lays nothing out: a command says it is cut when it holds more than one line.
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("process-ended-command") && this.textContent!.includes("\n") ? 100 : 0;
+      },
+    });
+    try {
+      const script = "cp src/a.tsx /tmp/a.bak\nperl -pi -e 's/x/y/' src/a.tsx\nbun test -t 'one' >/tmp/a.log\ntail -3 /tmp/a.log";
+      const { container } = render(
+        <ChatPanel
+          workspace="/tmp/project"
+          turn={state([ended(0, undefined, script)])}
+          onDecide={() => {}}
+          onOpenRepo={() => {}}
+          onOpenProcess={() => {}}
+        />,
+      );
+      const card = container.querySelector(".process-ended")!;
+      const more = screen.getByRole("button", { name: "Show more" });
+      expect(more.getAttribute("aria-expanded")).toBe("false");
+      expect(card.className).not.toContain("open");
+
+      fireEvent.click(more);
+      expect(card.className).toContain("open");
+      const less = screen.getByRole("button", { name: "Show less" });
+      expect(less.getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.click(less);
+      expect(card.className).not.toContain("open");
+    } finally {
+      if (height) Object.defineProperty(HTMLElement.prototype, "scrollHeight", height);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+    }
+  });
+
+  test("a command that fits has no Show more", () => {
+    panel(state([ended(0)]));
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
   });
 
   test("a clean exit is not drawn as a failure", () => {

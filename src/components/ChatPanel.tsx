@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   AppWindow,
@@ -115,41 +115,70 @@ type OpenAgent = (agent: AgentFocus) => void;
  * A background process that ended, as the model was told of it: what it was
  * for first, the command and the folder under it, how it ended in the badge.
  * A quiet row, not a card — it is news, not an object. Opens the process in
- * the Terminal tab, where its output is.
+ * the Terminal tab, where its output is. A command of more than three lines is
+ * cut, the rest behind "Show more": a script started in the background would
+ * otherwise fill the transcript.
  */
 function ProcessEndedCard({ process, onOpen }: { process: ProcessInfo; onOpen?: OpenProcess }) {
   const state = process.state;
   const tone = state.state === "exited" && state.code !== 0 ? "failed" : state.state === "stopped" ? "stopped" : "ended";
+  const command = useRef<HTMLElement>(null);
+  const [cut, setCut] = useState(false);
+  const [open, setOpen] = useState(false);
+  // Measured while cut, and again as the panel's width changes: the same
+  // command takes more lines in a narrow chat than in a wide one.
+  useLayoutEffect(() => {
+    const el = command.current;
+    if (!el || open) return;
+    const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [process.command, open]);
   return (
-    <button
-      type="button"
-      className={`process-ended ${tone}`}
-      title={onOpen ? "Show in Terminal" : undefined}
-      disabled={!onOpen}
-      onClick={() => onOpen?.(process.id)}
-    >
-      <span className="process-ended-eyebrow">
-        Background process
-        <span className="process-ended-exit">{processStatus(state)}</span>
-      </span>
-      <span className="process-ended-head">
-        {/* The title is the model's words when there are any; otherwise the line itself. */}
-        {process.description ? (
-          <span className="process-ended-name">{process.description}</span>
-        ) : (
-          <code className="process-ended-command solo">{process.command}</code>
-        )}
-        {onOpen && <ArrowUpRight className="process-ended-open" size={13} aria-hidden />}
-      </span>
-      {process.description && <code className="process-ended-command">{process.command}</code>}
-      <span className="process-ended-detail">
-        <span className="process-ended-num">#{process.id}</span>
-        <span className="process-ended-cwd">
-          <Folder size={11} aria-hidden />
-          {process.cwd === "." ? "project root" : process.cwd}
+    <div className="process-ended-wrap">
+      <button
+        type="button"
+        className={`process-ended ${tone}${open ? " open" : ""}`}
+        title={onOpen ? "Show in Terminal" : undefined}
+        disabled={!onOpen}
+        onClick={() => onOpen?.(process.id)}
+      >
+        <span className="process-ended-eyebrow">
+          Background process
+          <span className="process-ended-exit">{processStatus(state)}</span>
         </span>
-      </span>
-    </button>
+        <span className="process-ended-head">
+          {/* The title is the model's words when there are any; otherwise the line itself. */}
+          {process.description ? (
+            <span className="process-ended-name">{process.description}</span>
+          ) : (
+            <code ref={command} className="process-ended-command solo">
+              {process.command}
+            </code>
+          )}
+          {onOpen && <ArrowUpRight className="process-ended-open" size={13} aria-hidden />}
+        </span>
+        {process.description && (
+          <code ref={command} className="process-ended-command">
+            {process.command}
+          </code>
+        )}
+        <span className="process-ended-detail">
+          <span className="process-ended-num">#{process.id}</span>
+          <span className="process-ended-cwd">
+            <Folder size={11} aria-hidden />
+            {process.cwd === "." ? "project root" : process.cwd}
+          </span>
+        </span>
+      </button>
+      {(cut || open) && (
+        <button type="button" className="process-ended-more" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
   );
 }
 
