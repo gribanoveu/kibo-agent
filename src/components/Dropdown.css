@@ -44,10 +44,9 @@
   color: var(--text-dim);
 }
 
+/* Placed by the component, in the viewport coordinates: the menu is portaled
+   out of a scrolling panel or a dialog's body, so its own edge cannot cut it. */
 .dropdown-menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
   min-width: 220px;
   max-width: 360px;
   /* A provider can serve dozens of models. */
@@ -57,7 +56,9 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 4px;
-  z-index: 30;
+  /* Over a dialog's backdrop (100), under a toast (110): a menu opened from a
+     dialog must not hide the message that answers it. */
+  z-index: 105;
   box-shadow: var(--shadow-popover);
 }
 .dropdown-heading {
@@ -89,14 +90,6 @@
   font-size: var(--fs-xs);
   line-height: 1.45;
   color: var(--text-faint);
-}
-.dropdown-menu.right {
-  left: auto;
-  right: 0;
-}
-.dropdown-menu.below {
-  top: calc(100% + 6px);
-  bottom: auto;
 }
 .dropdown-item {
   display: flex;

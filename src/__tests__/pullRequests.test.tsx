@@ -488,6 +488,23 @@ describe("the buttons", () => {
     expect(screen.queryByRole("dialog", { name: "Create pull request" })).toBeNull();
   });
 
+  test("the branch list narrows to what is typed in its box", async () => {
+    strip = ready({}, { pr: null });
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Create pull request…"));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "master" }));
+    const names = () => screen.queryAllByRole("option").map((option) => option.querySelector(".dropdown-item-label")?.textContent);
+
+    fireEvent.change(screen.getByLabelText("Another branch"), { target: { value: "DEV" } });
+    expect(names()).toEqual(["develop"]);
+
+    fireEvent.change(screen.getByLabelText("Another branch"), { target: { value: "nope" } });
+    expect(names()).toEqual([]);
+    expect(screen.getByText("Nothing matches “nope”")).toBeTruthy();
+  });
+
   test("Create can open it as a draft", async () => {
     strip = ready({}, { pr: null });
     const notes: string[] = [];

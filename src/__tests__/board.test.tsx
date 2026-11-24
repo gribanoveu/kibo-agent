@@ -216,7 +216,8 @@ describe("the board page", () => {
     fireEvent.click(column("To do").getByLabelText("Open"));
     const sheet = within(screen.getByRole("complementary", { name: "T1 details" }));
     fireEvent.click(sheet.getByRole("button", { name: "To do" }));
-    fireEvent.click(sheet.getByRole("option", { name: "Doing" }));
+    // The menu is drawn in the viewport, out of the sheet's own subtree.
+    fireEvent.click(screen.getByRole("option", { name: "Doing" }));
     await settle();
     expect(calls.at(-1)).toEqual({ command: "board_change", args: { change: { op: "move", id: "T1", column: "doing" } } });
     expect(column("Doing").getByText("File the memory request")).toBeTruthy();
