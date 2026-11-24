@@ -404,12 +404,15 @@ function FeatureDetails({
           {feature.tools.length > 0 && (
             <p className="catalog-detail-note">
               {/* Only a feature with a page in PAGES can promise one: Bitbucket adds a row
-                  in Overview, not a sidebar entry. */}
-              {feature.on
-                ? "The model gets its tools from your next message."
-                : hasPage
+                  in Overview, not a sidebar entry. And tools the switch on the Tools tab
+                  turned off are not promised either. */}
+              {!feature.on
+                ? hasPage
                   ? "Off: the model gets no tools from it, and its page leaves the sidebar."
-                  : "Off: the model gets no tools from it."}
+                  : "Off: the model gets no tools from it."
+                : feature.toolsOn
+                  ? "The model gets its tools from your next message."
+                  : "On, but the model gets no tools: they are switched off on the Tools tab."}
             </p>
           )}
           {!feature.on && feature.hasData && (

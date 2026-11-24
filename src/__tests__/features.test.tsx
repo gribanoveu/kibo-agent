@@ -195,6 +195,16 @@ describe("features on the catalog page", () => {
     expect(screen.getByText("Off: the model gets no tools from it.")).toBeTruthy();
   });
 
+  test("the note does not promise tools the switch on the Tools tab turned off", async () => {
+    board = { ...board, on: true, toolsOn: false };
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    // On, and the model still gets nothing: said where the state is, not contradicted there.
+    expect(screen.queryByText("The model gets its tools from your next message.")).toBeNull();
+    expect(screen.getByText("On, but the model gets no tools: they are switched off on the Tools tab.")).toBeTruthy();
+  });
+
   test("the panel says what the feature is until the user chooses", async () => {
     board = { ...board, defaultOn: true, on: true };
     render(<CatalogPage openPane={() => {}} />);
