@@ -206,7 +206,8 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, sound: Sound, progres
             let windows = meeting::windows_over(&words);
             let total = windows.len();
             let (windows, embeddings) = embed(&extractor, &samples, windows, (0, total), progress);
-            let labels = labels_by_diarization(models, &samples, &windows, threads).unwrap_or_else(|| meeting::spectral(&embeddings));
+            let labels = voices_told_apart(labels_by_diarization(models, &samples, &windows, threads))
+                .unwrap_or_else(|| meeting::spectral(&embeddings));
             let voices = meeting::centroids(&embeddings, &labels);
             (meeting::utterances(&words, &segments_of(windows, labels)), voices)
         }
@@ -513,6 +514,15 @@ fn labels_by_diarization(models: &Path, samples: &[f32], windows: &[(f32, f32)],
     Some(meeting::labels_over(windows, &segments))
 }
 
+/// A diarization that heard one voice where a meeting cannot have one is a
+/// threshold that fell over the cliff `DIARIZATION_THRESHOLD` sits on, so the
+/// words' clustering answers instead (`None`). One person is no sign of trouble
+/// on a call: its second track is regularly one other voice.
+fn voices_told_apart(labels: Option<Vec<usize>>) -> Option<Vec<usize>> {
+    let labels = labels?;
+    labels.iter().any(|&label| label > 0).then_some(labels)
+}
+
 /// The segmentation model, when the bundle carries it: a build without it
 /// groups the voices by their embeddings, which `domain::meeting` does. Its
 /// absence is answered here, before sherpa is asked to load a file that is
@@ -545,6 +555,19 @@ mod tests {
         assert_eq!(diarization_model(&dir), None, "a bundle without it has no diarization");
         std::fs::write(dir.join(DIARIZATION_MODEL), "").unwrap();
         assert_eq!(diarization_model(&dir), Some(dir.join(DIARIZATION_MODEL)));
+    }
+
+    /// A meeting is not a monologue: one voice there means the threshold fell
+    /// over, and the words cluster the voices as they did before.
+    #[test]
+    fn a_recording_of_a_room_with_one_voice_is_clustered_by_the_words() {
+        assert_eq!(voices_told_apart(Some(vec![0, 0, 0])), None);
+        assert_eq!(voices_told_apart(None), None, "no diarization stays none");
+    }
+
+    #[test]
+    fn voices_the_diarization_did_hear_are_kept() {
+        assert_eq!(voices_told_apart(Some(vec![0, 1, 1, 0])), Some(vec![0, 1, 1, 0]));
     }
 
     #[test]
