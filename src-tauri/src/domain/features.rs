@@ -59,7 +59,7 @@ impl Feature {
                 name: "Board",
                 description: "Cards for later: ask the model to remind you of something and it lands on the Board page, \
                     in To do, Doing and Done.",
-                enabled_by_default: false,
+                enabled_by_default: true,
                 tools: &[ToolName::Board],
                 data: Some("board.db"),
             },
@@ -129,7 +129,7 @@ impl Feature {
                 name: "Keyboard layout correction",
                 description: "The message boxes notice Russian or English typed in the other keyboard layout, including the wrong words in mixed prose, and offer the likely text. \
                     Nothing changes until you click Fix or press Cmd/Ctrl+F; ordinary Undo restores what you typed. On macOS and Windows, an optional switch also selects the corrected text's dominant installed layout.",
-                enabled_by_default: false,
+                enabled_by_default: true,
                 tools: &[],
                 data: None,
             },
@@ -143,7 +143,7 @@ impl Feature {
                     on screen, every 10 while a build runs. The agent reads the same — the pull request, its reviewers, builds \
                     and why it cannot merge — and opens a pull request from the branch once you approve it on its card; \
                     merging and approving stay yours.",
-                enabled_by_default: false,
+                enabled_by_default: true,
                 tools: &[ToolName::PullRequestStatus, ToolName::PullRequestCreate],
                 data: Some("code_hosts.enc"),
             },
@@ -239,18 +239,21 @@ mod tests {
     #[test]
     fn a_feature_not_chosen_is_its_default_and_a_choice_wins_either_way() {
         let chosen = |pairs: &[(&str, bool)]| pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect::<BTreeMap<_, _>>();
-        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Board), "the board is off until chosen");
+        // On until the user says otherwise, decided 2026-11-24.
+        assert!(Features::from_settings(&chosen(&[])).is_on(Feature::Board), "the board is on until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::ProviderBalance), "a live call per answer, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::DeepseekSearch), "paid per call, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::MeetingNotes), "experimental, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::VoiceMemory), "voice prints, off until chosen");
         assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::Mongodb), "a network client, off until chosen");
-        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::LayoutCorrection), "an opt-in writing aid");
-        assert!(!Features::from_settings(&chosen(&[])).is_on(Feature::PullRequests), "a token sent to a server, off until chosen");
+        assert!(Features::from_settings(&chosen(&[])).is_on(Feature::LayoutCorrection), "written into the box, on until chosen");
+        assert!(Features::from_settings(&chosen(&[])).is_on(Feature::PullRequests), "a token sent to a server, on until chosen");
         assert!(Features::from_settings(&chosen(&[("board", true)])).is_on(Feature::Board));
         assert!(!Features::from_settings(&chosen(&[("board", false)])).is_on(Feature::Board));
-        // An id from another build changes nothing here.
-        assert_eq!(Features::from_settings(&chosen(&[("timer", true)])), Features::default());
+        // A choice to turn it off wins over a default that is on.
+        assert!(!Features::from_settings(&chosen(&[("pull-requests", false)])).is_on(Feature::PullRequests));
+        // An id from another build changes nothing here: no more than no choice at all.
+        assert_eq!(Features::from_settings(&chosen(&[("timer", true)])), Features::from_settings(&chosen(&[])));
     }
 
     #[test]
