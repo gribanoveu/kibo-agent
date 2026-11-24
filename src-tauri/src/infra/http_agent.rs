@@ -29,6 +29,22 @@ use ureq::unversioned::transport::{
 #[error("tls configuration error: {0}")]
 pub struct TlsError(pub String);
 
+/// What went wrong taking a server's certificate: nothing answered at the
+/// address, or something did and the handshake or the certificate itself
+/// failed. The two read very differently to the user — only the second is
+/// about a certificate, and only it is worth a CA to paste — so they are kept
+/// apart here as well.
+#[derive(Debug, Error)]
+pub enum FetchCertError {
+    /// Nothing answered: the address does not name a host, the name does not
+    /// resolve, nothing listens, the socket times out.
+    #[error("{0}")]
+    Unreachable(String),
+    /// Something answered, and the handshake or the certificate failed.
+    #[error("{0}")]
+    Tls(String),
+}
+
 /// Builds an agent, optionally trusting specific certificates.
 ///
 /// When `trusted_cert_pem` is `Some`, those certificates **replace** the trust
@@ -306,30 +322,32 @@ fn dates(validity: &x509_parser::certificate::Validity, now: i64) -> (String, bo
 /// shows its fingerprint and asks the user before it is kept.
 ///
 /// The root of the chain is what is offered ([`root_of`]); trusting it is what
-/// [`build_agent`] already knows how to do.
-pub fn fetch_cert(base: &str) -> Result<crate::domain::code_host::FetchedCert, TlsError> {
-    let (host, port) = host_and_port(base)?;
+/// [`build_agent`] already knows how to do. A failure says what went wrong at
+/// [`FetchCertError`]'s two levels: nothing reached, or a certificate in doubt.
+pub fn fetch_cert(base: &str) -> Result<crate::domain::code_host::FetchedCert, FetchCertError> {
+    let (host, port) = host_and_port(base).map_err(|e| FetchCertError::Unreachable(e.0))?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let chain = Arc::new(Mutex::new(Vec::<CertificateDer<'static>>::new()));
     let config = ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
-        .map_err(|e| TlsError(e.to_string()))?
+        .map_err(|e| FetchCertError::Tls(e.to_string()))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(Capture { chain: chain.clone(), provider }))
         .with_no_client_auth();
-    let name = ServerName::try_from(host.clone()).map_err(|_| TlsError(format!("{host} is not a server name")))?;
+    let name = ServerName::try_from(host.clone())
+        .map_err(|_| FetchCertError::Unreachable(format!("{host} is not a server name")))?;
 
-    let mut socket = connect(&host, port)?;
-    socket.set_read_timeout(Some(FETCH_TIMEOUT)).map_err(|e| TlsError(e.to_string()))?;
-    socket.set_write_timeout(Some(FETCH_TIMEOUT)).map_err(|e| TlsError(e.to_string()))?;
-    let mut conn = ClientConnection::new(Arc::new(config), name).map_err(|e| TlsError(e.to_string()))?;
-    conn.complete_io(&mut socket).map_err(|e| TlsError(e.to_string()))?;
+    let mut socket = connect(&host, port).map_err(|e| FetchCertError::Unreachable(e.0))?;
+    socket.set_read_timeout(Some(FETCH_TIMEOUT)).map_err(|e| FetchCertError::Unreachable(e.to_string()))?;
+    socket.set_write_timeout(Some(FETCH_TIMEOUT)).map_err(|e| FetchCertError::Unreachable(e.to_string()))?;
+    let mut conn = ClientConnection::new(Arc::new(config), name).map_err(|e| FetchCertError::Tls(e.to_string()))?;
+    conn.complete_io(&mut socket).map_err(|e| FetchCertError::Tls(e.to_string()))?;
     conn.send_close_notify();
     let _ = conn.complete_io(&mut socket);
 
     let chain = chain.lock().unwrap_or_else(PoisonError::into_inner);
-    let cert = root_of(&chain).ok_or_else(|| TlsError("the server presented no certificate".to_string()))?;
-    described(cert, chain.len())
+    let cert = root_of(&chain).ok_or_else(|| FetchCertError::Tls("the server presented no certificate".to_string()))?;
+    described(cert, chain.len()).map_err(|e| FetchCertError::Tls(e.0))
 }
 
 /// The host and port of an https address, 443 when it names none.
@@ -691,10 +709,13 @@ gxvaf8JES4ZQc67yzeks3IKB5uhP+V2w2QD5KrA=\n\
         assert_eq!(heard.recv_timeout(Duration::from_secs(10)).expect("the server read"), 0, "a request was sent");
     }
 
+    /// Nothing reached is the address's fault, not a certificate's: the user is
+    /// sent where the fix is. Port 1 is nothing listening on this machine.
     #[test]
-    fn an_address_with_no_host_is_refused() {
-        assert!(fetch_cert("https://").is_err());
-        assert!(fetch_cert("not an address").is_err());
+    fn an_address_that_reaches_nothing_is_not_a_certificate_problem() {
+        for address in ["https://", "not an address", "https://127.0.0.1:1"] {
+            assert!(matches!(fetch_cert(address), Err(FetchCertError::Unreachable(_))), "{address}");
+        }
     }
 
     /// BB-11: a name is what the user recognises; the hex is what they compare.

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, ShieldAlert } from "lucide-react";
 import { Modal } from "./Modal";
 import { Certificate } from "./Certificate";
@@ -39,6 +39,11 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
   const [fetched, setFetched] = useState<FetchedCert | null>(null);
   const [busy, setBusy] = useState<"check" | "save" | "fetch" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The address the answer being awaited was asked about. The field stays
+  // editable while a check or a handshake runs, and an answer about another
+  // host is not this one's — a certificate least of all: taking it would trust
+  // one host's key for another's.
+  const asked = useRef<string | null>(null);
 
   // A form opened again starts from the server it is opened for.
   useEffect(() => {
@@ -49,30 +54,40 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
     setDetected(null);
     setFetched(null);
     setError(null);
+    asked.current = null;
     // Only on opening: a parent's new object for the same server must not wipe what is being typed.
   }, [open]);
 
   const draft = (): CodeHostServer => ({ ...server, baseUrl: baseUrl.trim(), trustedCertPem: cert.trim() ? cert : null });
 
   const check = async () => {
+    const address = baseUrl.trim();
+    asked.current = address;
     setBusy("check");
     setFetched(null);
     try {
-      setDetected({ ok: true, text: await onDetect(draft()) });
+      const text = await onDetect(draft());
+      if (asked.current === address) setDetected({ ok: true, text });
     } catch (e) {
-      setDetected({ ok: false, text: String(e) });
+      if (asked.current === address) setDetected({ ok: false, text: String(e) });
     } finally {
       setBusy(null);
     }
   };
 
   const fetch = async () => {
+    const address = baseUrl.trim();
+    asked.current = address;
     setBusy("fetch");
     try {
-      setFetched(await onFetch(baseUrl.trim()));
+      const certificate = await onFetch(address);
+      // The address was edited while the handshake ran: this certificate is not
+      // the one the field now names.
+      if (asked.current !== address) return;
+      setFetched(certificate);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      if (asked.current === address) setError(String(e));
     } finally {
       setBusy(null);
     }
@@ -120,8 +135,11 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
               setBaseUrl(e.target.value);
               setDetected(null);
               // A certificate belongs to the address it was fetched from: left
-              // here, it could be accepted for another host.
+              // here, it could be accepted for another host. An answer still on
+              // its way is dropped the same way, by no longer being awaited for
+              // this text.
               setFetched(null);
+              asked.current = null;
             }}
           />
           <button type="button" className="btn btn-ghost" disabled={!baseUrl.trim() || busy !== null} onClick={check}>
@@ -174,7 +192,10 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
               title="openssl s_client -showcerts -connect host:443"
             >
               <ShieldAlert size={14} /> Shown over a connection you do not trust yet — compare the fingerprint with your IT's.
-              {fetched.chain > 1 && ` The server sent ${fetched.chain} certificates; this is its root.`}
+              {fetched.chain > 1 &&
+                (fetched.selfSigned
+                  ? ` The server sent ${fetched.chain} certificates; this is its root.`
+                  : ` The server sent ${fetched.chain} certificates and none is a root; this is the last one it sent.`)}
             </p>
             <div className="code-host-fetched-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setFetched(null)}>

@@ -32,6 +32,15 @@ let fetchedCert = {
 let clipped: string[] = [];
 /** What `pull_request_last` hands back: the backend's last read, or a promise to hold it. */
 let lastStrip: PrStrip | null | Promise<PrStrip | null> = null;
+/** A call the test can hold open, so the address is edited while it runs. */
+let held: { command: string; wait: Promise<void>; release: () => void } | null = null;
+const hold = (command: string) => {
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => (release = resolve));
+  held = { command, wait, release };
+  return () => release();
+};
+const waited = (command: string) => (held?.command === command ? held.wait : Promise.resolve());
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
@@ -48,8 +57,9 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "pull_request_git_changed") return Promise.resolve(gitMoved);
     if (command === "pull_request_last") return lastStrip instanceof Promise ? lastStrip : Promise.resolve(structuredClone(lastStrip));
     if (command === "code_host_save") return Promise.resolve([]);
-    if (command === "code_host_detect") return detectFails ? Promise.reject(detectFails) : Promise.resolve("Bitbucket 8.19.26");
-    if (command === "code_host_fetch_cert") return Promise.resolve(structuredClone(fetchedCert));
+    if (command === "code_host_detect")
+      return waited("code_host_detect").then(() => (detectFails ? Promise.reject(detectFails) : "Bitbucket 8.19.26"));
+    if (command === "code_host_fetch_cert") return waited("code_host_fetch_cert").then(() => structuredClone(fetchedCert));
     if (command === "code_hosts") return Promise.resolve(structuredClone(servers));
     if (command === "code_host_delete") {
       servers = servers.filter((s) => s.id !== args?.id);
@@ -137,6 +147,7 @@ function panel(on = true, notes: string[] = [], tasks: string[] = []) {
 beforeEach(() => {
   strip = ready();
   lastStrip = null;
+  held = null;
   gitMoved = false;
   detectFails = null;
   clipped = [];
@@ -800,6 +811,75 @@ describe("connecting a server", () => {
     fireEvent.change(screen.getByLabelText("Address"), { target: { value: "https://other.example" } });
     expect(screen.queryByText(fetchedCert.fingerprint)).toBeNull();
     expect(screen.queryByText("Use this certificate")).toBeNull();
+  });
+
+  test("a handshake still running for the old address answers for nothing", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+
+    // The handshake for https://git.example is still on its way when the address is edited.
+    const release = hold("code_host_fetch_cert");
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    fireEvent.change(screen.getByLabelText("Address"), { target: { value: "https://other.example" } });
+    release();
+    await settle();
+
+    // It is not the new host's certificate: shown would be trust in the wrong key.
+    expect(screen.queryByText(fetchedCert.fingerprint)).toBeNull();
+    expect(screen.queryByText("Use this certificate")).toBeNull();
+  });
+
+  test("an answer to Check about the old address is not read as the new one's", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+
+    const release = hold("code_host_detect");
+    fireEvent.click(screen.getByText("Check"));
+    fireEvent.change(screen.getByLabelText("Address"), { target: { value: "https://other.example" } });
+    release();
+    await settle();
+
+    expect(screen.queryByText("Bitbucket 8.19.26")).toBeNull();
+  });
+
+  test("a chain with no root among it does not call the last certificate one", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    fetchedCert = { ...fetchedCert, chain: 3, selfSigned: false };
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+
+    // What is offered is the last it sent, and the user is told so plainly:
+    // this is the line they decide what to trust by.
+    expect(screen.queryByText(/this is its root/)).toBeNull();
+    expect(screen.getByText(/none is a root; this is the last one it sent/)).toBeTruthy();
+  });
+
+  test("a root at the end of a longer chain is named as one", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    fetchedCert = { ...fetchedCert, chain: 3, selfSigned: true, issuer: fetchedCert.subject };
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+
+    expect(screen.getByText(/this is its root/)).toBeTruthy();
   });
 
   test("a fetched certificate declined leaves the form as it was", async () => {

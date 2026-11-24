@@ -304,11 +304,20 @@ impl PullRequests {
     ///
     /// https only: an `http` address has no certificate to fetch.
     pub fn fetch_cert(base_url: &str) -> Result<FetchedCert, CodeHostError> {
-        let base = base_url.trim().trim_end_matches('/');
-        if !base.starts_with("https://") {
-            return Err(CodeHostError::Insecure(base.to_string()));
+        use crate::infra::http_agent::FetchCertError;
+        // What the user typed, kept whole: the refusal quotes it back, and a bare
+        // `https://` is an address with no host — not a shorter spelling of itself.
+        let typed = base_url.trim();
+        if !typed.starts_with("https://") {
+            return Err(CodeHostError::Insecure(typed.to_string()));
         }
-        crate::infra::http_agent::fetch_cert(base).map_err(|e| CodeHostError::Tls(e.0))
+        // A mistyped address, a name that does not resolve, a connection refused:
+        // nothing about a certificate is wrong there, and sending the user to a CA
+        // would send them to fix the wrong thing.
+        crate::infra::http_agent::fetch_cert(typed).map_err(|e| match e {
+            FetchCertError::Unreachable(why) => CodeHostError::Unreachable(why),
+            FetchCertError::Tls(why) => CodeHostError::Tls(why),
+        })
     }
 
     /// Saves a server; with `root`, the folder the connect form was opened for,
@@ -535,6 +544,19 @@ mod tests {
     fn fetching_a_certificate_needs_https() {
         for address in ["http://git.corp.example", "git.corp.example", "", "  "] {
             assert!(matches!(PullRequests::fetch_cert(address), Err(CodeHostError::Insecure(_))), "{address}");
+        }
+        // The refusal quotes what was typed, not a shortened spelling of it.
+        let refusal = PullRequests::fetch_cert("http://git.corp.example/").expect_err("http is refused").to_string();
+        assert!(refusal.starts_with("http://git.corp.example/ is not https"), "{refusal}");
+    }
+
+    /// An address that reaches nothing is the address's problem: the user is not
+    /// told to paste a CA for a host they mistyped. A bare `https://` names no
+    /// host; port 1 is nothing listening.
+    #[test]
+    fn a_fetch_that_reaches_nothing_is_not_a_certificate_problem() {
+        for address in ["https://", "https://127.0.0.1:1"] {
+            assert!(matches!(PullRequests::fetch_cert(address), Err(CodeHostError::Unreachable(_))), "{address}");
         }
     }
 
