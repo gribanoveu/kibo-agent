@@ -60,13 +60,23 @@
 .code-host-fingerprint {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
 }
 .code-host-fingerprint code {
+  flex: 1 1 14rem;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-dim);
   overflow-wrap: anywhere;
+}
+/* The copy button keeps its own line rather than being squeezed into a column
+   of letters next to the fingerprint. */
+.code-host-fingerprint .copy-action {
+  flex: 0 0 auto;
+  margin-left: 0;
+  white-space: nowrap;
 }
 .code-host-caution {
   display: flex;

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2, ShieldAlert } from "lucide-react";
 import { Modal } from "./Modal";
 import { Certificate } from "./Certificate";
-import { useCopied } from "../hooks/useCopied";
+import { CopyAction } from "./CopyAction";
 import type { CodeHostServer, FetchedCert } from "../lib/pullRequests";
 import "./CodeHostConnect.css";
 
@@ -37,7 +37,6 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
   const [token, setToken] = useState("");
   const [detected, setDetected] = useState<{ ok: boolean; text: string } | null>(null);
   const [fetched, setFetched] = useState<FetchedCert | null>(null);
-  const { copied, copy } = useCopied();
   const [busy, setBusy] = useState<"check" | "save" | "fetch" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -167,9 +166,7 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
               <dt>SHA-256</dt>
               <dd className="code-host-fingerprint">
                 <code>{fetched.fingerprint}</code>
-                <button type="button" className="btn btn-ghost" onClick={() => copy(fetched.fingerprint)}>
-                  {copied ? "Copied" : "Copy"}
-                </button>
+                <CopyAction text={fetched.fingerprint} />
               </dd>
             </dl>
             <p
