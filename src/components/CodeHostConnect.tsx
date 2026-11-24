@@ -173,7 +173,7 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
               className="modal-note code-host-caution"
               title="openssl s_client -showcerts -connect host:443"
             >
-              <ShieldAlert size={12} /> Shown over a connection you do not trust yet — compare the fingerprint with your IT's.
+              <ShieldAlert size={14} /> Shown over a connection you do not trust yet — compare the fingerprint with your IT's.
               {fetched.chain > 1 && ` The server sent ${fetched.chain} certificates; this is its root.`}
             </p>
             <div className="code-host-fetched-actions">

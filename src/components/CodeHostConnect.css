@@ -84,11 +84,21 @@
   gap: 6px;
   margin-top: 8px;
 }
+/* The icon keeps its size: as a flex item beside a long line it would otherwise
+   be squeezed to a dot. */
+.code-host-caution svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
 .code-host-fetched-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
   margin-top: 8px;
+}
+.code-host-fetched-actions .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 @keyframes code-host-spin {
   to {
