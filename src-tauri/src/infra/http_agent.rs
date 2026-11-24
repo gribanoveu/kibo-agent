@@ -758,11 +758,19 @@ gxvaf8JES4ZQc67yzeks3IKB5uhP+V2w2QD5KrA=\n\
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
             for mut socket in listener.incoming().flatten() {
+                // The hello is read before the answer is written. A socket closed
+                // with it still unread is reset rather than closed, and Windows
+                // hands that reset to the client's read before the plaintext is
+                // seen — the same server reads as `Unreachable` there and as
+                // `Tls` on macOS. Drained, the close is a plain one.
+                let mut hello = [0u8; 4096];
+                let _ = socket.read(&mut hello);
                 let _ = socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n");
                 let _ = socket.flush();
             }
         });
-        assert!(matches!(fetch_cert(&format!("https://127.0.0.1:{port}")), Err(FetchCertError::Tls(_))));
+        let result = fetch_cert(&format!("https://127.0.0.1:{port}"));
+        assert!(matches!(result, Err(FetchCertError::Tls(_))), "{result:?}");
     }
 
     /// BB-11: a name is what the user recognises; the hex is what they compare.
