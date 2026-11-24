@@ -17,7 +17,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::domain::code_host::{
     alias_to_remember, approved_by, can_approve, canonical_remote, host_of, latest_build, merge_blocked, open_comments, server_for, Call,
-    CodeHost, CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, AgentPullRequests, RemoteRepo,
+    CodeHost, CodeHostError, CodeHostServer, FetchedCert, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, AgentPullRequests, RemoteRepo,
     Snapshot,
 };
 use crate::infra::{code_host_store, git_head, repository_identity};
@@ -297,6 +297,29 @@ impl PullRequests {
         self.host.identify(server)
     }
 
+    /// The certificate the address presents, for the connect form to show and
+    /// ask about (`docs/62-bitbucket-prs.md`, BB-10): one handshake, no request
+    /// and no token. What comes back is not kept here — the user confirms its
+    /// fingerprint first, and only then does it go in with the server.
+    ///
+    /// https only: an `http` address has no certificate to fetch.
+    pub fn fetch_cert(base_url: &str) -> Result<FetchedCert, CodeHostError> {
+        use crate::infra::http_agent::FetchCertError;
+        // What the user typed, kept whole: the refusal quotes it back, and a bare
+        // `https://` is an address with no host — not a shorter spelling of itself.
+        let typed = base_url.trim();
+        if !typed.starts_with("https://") {
+            return Err(CodeHostError::Insecure(typed.to_string()));
+        }
+        // A mistyped address, a name that does not resolve, a connection refused:
+        // nothing about a certificate is wrong there, and sending the user to a CA
+        // would send them to fix the wrong thing.
+        crate::infra::http_agent::fetch_cert(typed).map_err(|e| match e {
+            FetchCertError::Unreachable(why) => CodeHostError::Unreachable(why),
+            FetchCertError::Tls(why) => CodeHostError::Tls(why),
+        })
+    }
+
     /// Saves a server; with `root`, the folder the connect form was opened for,
     /// first proves the folder's repository is on it — one of its clone links
     /// is the remote — and learns the remote's host as the server's alias
@@ -514,6 +537,28 @@ mod tests {
     use crate::testing::{temp_dir, with_app_dir};
     use std::sync::Condvar;
     use std::time::Instant;
+
+    /// BB-10: a certificate comes over TLS or there is none to fetch, so an
+    /// `http` address is refused before anything is dialled.
+    #[test]
+    fn fetching_a_certificate_needs_https() {
+        for address in ["http://git.corp.example", "git.corp.example", "", "  "] {
+            assert!(matches!(PullRequests::fetch_cert(address), Err(CodeHostError::Insecure(_))), "{address}");
+        }
+        // The refusal quotes what was typed, not a shortened spelling of it.
+        let refusal = PullRequests::fetch_cert("http://git.corp.example/").expect_err("http is refused").to_string();
+        assert!(refusal.starts_with("http://git.corp.example/ is not https"), "{refusal}");
+    }
+
+    /// An address that reaches nothing is the address's problem: the user is not
+    /// told to paste a CA for a host they mistyped. A bare `https://` names no
+    /// host; port 1 is nothing listening.
+    #[test]
+    fn a_fetch_that_reaches_nothing_is_not_a_certificate_problem() {
+        for address in ["https://", "https://127.0.0.1:1"] {
+            assert!(matches!(PullRequests::fetch_cert(address), Err(CodeHostError::Unreachable(_))), "{address}");
+        }
+    }
 
     const REMOTE: &str = "ssh://git@git.server.com/corp/tax-api.git";
 

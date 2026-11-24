@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::commands::agent_state::AgentState;
-use crate::domain::code_host::{CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink};
+use crate::domain::code_host::{CodeHostServer, FetchedCert, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink};
 use crate::infra::code_host_store;
 use crate::services::pull_requests::PullRequests;
 
@@ -65,6 +65,13 @@ pub async fn code_host_delete(id: String, prs: Prs<'_>) -> Result<Vec<CodeHostSe
 pub async fn code_host_detect(server: CodeHostServer, prs: Prs<'_>) -> Result<String, String> {
     let prs = prs.inner().clone();
     blocking(move || PullRequests::identify(&prs, &server)).await
+}
+
+/// The certificate the address presents, taken without a token and without
+/// trusting it (BB-10): the form shows its fingerprint and asks.
+#[tauri::command]
+pub async fn code_host_fetch_cert(base_url: String) -> Result<FetchedCert, String> {
+    blocking(move || PullRequests::fetch_cert(&base_url)).await
 }
 
 #[tauri::command]

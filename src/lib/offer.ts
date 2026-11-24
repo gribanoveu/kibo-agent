@@ -15,7 +15,7 @@ export const REVIEW_REQUEST =
   "Review the change with the `review` tool and show the findings, then fix what you recognize as real and say what you dismissed and why. Do not change files beyond those fixes.";
 /** A PR is requested, never pushed by the offer button itself. */
 export const PULL_REQUEST = "Create a pull request from this worktree branch into its recorded base. Push and create it with confirmed commands.";
-/** The same with Pull requests on: the app's own tool opens it on the user's server, through its card. */
+/** The same with Bitbucket on: the app's own tool opens it on the user's server, through its card. */
 export const PULL_REQUEST_ON_SERVER =
   "Create a pull request from this worktree branch into its recorded base. Push the branch with a confirmed command, then open the pull request with `pullRequestCreate` (find it with `toolSearch`) — not `gh` or `curl`. If it says no server is configured for this remote, create it with confirmed commands instead.";
 /** What pressing a syncBase offer sends: the worktree branch is behind its recorded base. */
