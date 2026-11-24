@@ -68,8 +68,10 @@ function BuildIcon({ state }: { state: BuildState }) {
  * (docs/62-bitbucket-prs.md, decision 5): its title, "repo #id" and the
  * reviews under it, a dot for whether it can go in, the "⋯" of what else can
  * be done, and a row of buttons under it — the next step (Mark ready on a draft,
- * Merge while the server allows it) and Open in Bitbucket, the pull request's
- * own page. Clicked, it opens into its reviewers and why it
+ * Merge while the server allows it) and Open, that pull request's page in the
+ * browser, its label kept to one word and the server and number in its
+ * tooltip: the two fit a narrow panel this way. Clicked, it opens into its
+ * reviewers and why it
  * cannot be merged. A button shows only when it can do something — Approve
  * while the token's user may, Create once the branch is pushed, has none and
  * is not the default branch — and a folder that
@@ -273,7 +275,7 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, on
           title={`Open ${strip.repo} #${pr.id} in Bitbucket`}
           onClick={() => void openExternal(pr.url)}
         >
-          <ExternalLink size={12} /> Open in Bitbucket
+          <ExternalLink size={12} /> Open
         </button>
       </div>
       {/* The agent's tasks, each putting its request in the message box — the

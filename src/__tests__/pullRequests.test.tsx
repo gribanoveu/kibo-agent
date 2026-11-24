@@ -228,7 +228,7 @@ describe("the strip's states", () => {
     await settle();
     expect(screen.getByLabelText("pull request")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Merge" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Open in Bitbucket/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
     fireEvent.click(screen.getByTitle("More"));
     expect(screen.queryByRole("menuitem", { name: /Convert to draft/ })).toBeNull();
   });
@@ -239,7 +239,7 @@ describe("the strip's states", () => {
     await settle();
     expect(screen.queryByTitle("More")).toBeNull();
     expect(screen.getByRole("button", { name: "Mark ready" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Open in Bitbucket/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
   });
 
   test("the latest build is a row of its own: what it is doing, with its icon", async () => {
@@ -516,7 +516,10 @@ describe("the buttons", () => {
   test("Open opens the pull request's page in the browser", async () => {
     panel();
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: /Open in Bitbucket/ }));
+    const open = screen.getByRole("button", { name: "Open" });
+    // The label is one word so it stands beside Merge; the server and the number are the tooltip.
+    expect(open.title).toBe("Open tax-api #153 in Bitbucket");
+    fireEvent.click(open);
     await settle();
     expect(opened).toEqual([pr().url]);
   });
