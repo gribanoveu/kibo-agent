@@ -17,7 +17,19 @@ let servers: CodeHostServer[] = [];
 /** What Check refuses with, as a server behind its own CA does. */
 let detectFails: string | null = null;
 /** What the fetch handshake brings back (BB-10). */
-let fetchedCert = { pem: "-----BEGIN CERTIFICATE-----\nMIIBfetched\n-----END CERTIFICATE-----\n", fingerprint: "7C:AD:15:73", chain: 1 };
+let fetchedCert = {
+  pem: "-----BEGIN CERTIFICATE-----\nMIIBfetched\n-----END CERTIFICATE-----\n",
+  fingerprint: "7C:AD:15:73",
+  chain: 1,
+  subject: "git.example",
+  issuer: "Example Corp CA",
+  selfSigned: false,
+  validUntil: "2027-03-12",
+  expired: false,
+  notYetValid: false,
+};
+/** What the Copy button put on the clipboard. */
+let clipped: string[] = [];
 /** What `pull_request_last` hands back: the backend's last read, or a promise to hold it. */
 let lastStrip: PrStrip | null | Promise<PrStrip | null> = null;
 
@@ -127,7 +139,18 @@ beforeEach(() => {
   lastStrip = null;
   gitMoved = false;
   detectFails = null;
-  fetchedCert = { pem: "-----BEGIN CERTIFICATE-----\nMIIBfetched\n-----END CERTIFICATE-----\n", fingerprint: "7C:AD:15:73", chain: 1 };
+  clipped = [];
+  fetchedCert = {
+    pem: "-----BEGIN CERTIFICATE-----\nMIIBfetched\n-----END CERTIFICATE-----\n",
+    fingerprint: "7C:AD:15:73",
+    chain: 1,
+    subject: "git.example",
+    issuer: "Example Corp CA",
+    selfSigned: false,
+    validUntil: "2027-03-12",
+    expired: false,
+    notYetValid: false,
+  };
   calls = [];
   opened = [];
   mergeFails = null;
@@ -659,7 +682,7 @@ describe("connecting a server", () => {
     await settle();
     expect(asked("code_host_fetch_cert").map((c) => c.args)).toEqual([{ baseUrl: "https://git.example" }]);
     expect(screen.getByText(fetchedCert.fingerprint)).toBeTruthy();
-    expect(screen.getByText(/anyone on the path could have shown it/)).toBeTruthy();
+    expect(screen.getByText(/Shown over a connection you do not trust yet/)).toBeTruthy();
     // Shown is not trusted: nothing has gone to the server.
     expect(asked("code_host_save")).toEqual([]);
 
@@ -671,6 +694,73 @@ describe("connecting a server", () => {
     await settle();
     const [sent] = asked("code_host_save").map((c) => c.args as { server: { trustedCertPem: string } });
     expect(sent.server.trustedCertPem).toBe(fetchedCert.pem);
+  });
+
+  test("the fetched certificate says who it names, who issued it and until when", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted — the server in Catalog → Bitbucket needs its CA as a PEM: UnknownIssuer";
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    // The refusal said shortly, the server's own words a hover away.
+    expect(screen.getByText("The server's certificate is not trusted yet.")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+    expect(screen.getByText("Certificate from git.example")).toBeTruthy();
+    expect(screen.getByText("git.example")).toBeTruthy();
+    expect(screen.getByText("Example Corp CA")).toBeTruthy();
+    expect(screen.getByText("2027-03-12")).toBeTruthy();
+    expect(screen.queryByText("Self-signed")).toBeNull();
+  });
+
+  test("a self-signed certificate says so, and an expired one is marked", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    fetchedCert = { ...fetchedCert, issuer: fetchedCert.subject, selfSigned: true, expired: true };
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+    expect(screen.getByText("Self-signed")).toBeTruthy();
+    expect(screen.getByText(/— expired/)).toBeTruthy();
+  });
+
+  test("a certificate whose first day has not come says so, and is not called expired", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    fetchedCert = { ...fetchedCert, notYetValid: true };
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+    expect(screen.getByText(/— not valid yet/)).toBeTruthy();
+    expect(screen.queryByText(/— expired/)).toBeNull();
+  });
+
+  test("the fingerprint can be copied, to compare it with the one IT gives", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => void clipped.push(text) }, configurable: true });
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+    fireEvent.click(screen.getByText("Copy"));
+    await settle();
+    expect(clipped).toEqual([fetchedCert.fingerprint]);
+    expect(screen.getByText("Copied")).toBeTruthy();
   });
 
   test("a token typed in the form is not on the wire while the certificate is fetched", async () => {

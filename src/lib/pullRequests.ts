@@ -140,6 +140,17 @@ export type FetchedCert = {
   fingerprint: string;
   /** How many certificates it sent. */
   chain: number;
+  /** Who it names (its common name). */
+  subject: string;
+  /** Who issued it — the same as `subject` when self-signed. */
+  issuer: string;
+  selfSigned: boolean;
+  /** The last day it is valid, `YYYY-MM-DD`. */
+  validUntil: string;
+  /** Whether it is past its last day. */
+  expired: boolean;
+  /** Whether its first day has not come yet. */
+  notYetValid: boolean;
 };
 
 /**

@@ -285,6 +285,17 @@ pub struct FetchedCert {
     pub fingerprint: String,
     /// How many certificates the server sent, the one above counted.
     pub chain: usize,
+    /// Who it names: its common name, or the whole subject when it has none.
+    pub subject: String,
+    /// Who issued it — the same as `subject` when it is self-signed.
+    pub issuer: String,
+    pub self_signed: bool,
+    /// The last day it is valid, `YYYY-MM-DD`.
+    pub valid_until: String,
+    /// Whether it is past its last day.
+    pub expired: bool,
+    /// Whether its first day has not come yet — this clock ahead of the issuer's.
+    pub not_yet_valid: bool,
 }
 
 /// The host of a base address, lowercase and without the port; an IPv6

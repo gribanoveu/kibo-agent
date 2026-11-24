@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, ShieldAlert } from "lucide-react";
 import { Modal } from "./Modal";
 import { Certificate } from "./Certificate";
+import { useCopied } from "../hooks/useCopied";
 import type { CodeHostServer, FetchedCert } from "../lib/pullRequests";
 import "./CodeHostConnect.css";
 
@@ -20,6 +21,11 @@ type Props = {
   onFetch: (baseUrl: string) => Promise<FetchedCert>;
 };
 
+const NEW_HOST = /^(https?:\/\/)?([^/]+)/;
+
+/** The host of what is typed, for the block's heading; the text itself when it is not an address yet. */
+const hostOf = (url: string) => url.trim().match(NEW_HOST)?.[2] ?? url.trim();
+
 /**
  * Adds or edits a Bitbucket Data Center server: its address, the certificate
  * it is trusted by (before Check, which goes through it), and an HTTP access
@@ -31,6 +37,7 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
   const [token, setToken] = useState("");
   const [detected, setDetected] = useState<{ ok: boolean; text: string } | null>(null);
   const [fetched, setFetched] = useState<FetchedCert | null>(null);
+  const { copied, copy } = useCopied();
   const [busy, setBusy] = useState<"check" | "save" | "fetch" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,7 +130,15 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
             Check
           </button>
         </div>
-        {detected && <p className={`modal-note${detected.ok ? " code-host-ok" : " code-host-error"}`}>{detected.text}</p>}
+        {detected && (
+          <p className={`modal-note${detected.ok ? " code-host-ok" : " code-host-error"}`} title={detected.text}>
+            {/* The refusal names the Catalog panel the user is already in, and rustls'
+                own words; the short line is what they need, the whole text a hover away. */}
+            {!detected.ok && detected.text.includes("certificate is not trusted")
+              ? "The server's certificate is not trusted yet."
+              : detected.text}
+          </p>
+        )}
         {/* Only where Check failed: a certificate is what a refused handshake is about. */}
         {detected && !detected.ok && !fetched && (
           <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={fetch}>
@@ -133,16 +148,36 @@ export function CodeHostConnect({ open, server, forFolder, onClose, onSave, onDe
         )}
         {fetched && (
           <div className="code-host-fetched">
-            <p className="modal-note">
-              {fetched.chain > 1
-                ? `The server sent ${fetched.chain} certificates; this is the one above the rest.`
-                : "The server's own certificate."}{" "}
-              SHA-256:
-            </p>
-            <code className="code-host-fingerprint">{fetched.fingerprint}</code>
-            <p className="modal-note">
-              It came over the connection you do not trust yet, so anyone on the path could have shown it. Compare it with
-              the fingerprint your IT gives you, or with `openssl s_client -showcerts -connect host:443`, before trusting it.
+            <h4 className="code-host-fetched-title">Certificate from {hostOf(baseUrl)}</h4>
+            <dl className="code-host-facts">
+              <dt>Issued to</dt>
+              <dd>{fetched.subject}</dd>
+              <dt>Issued by</dt>
+              <dd>
+                {fetched.issuer}
+                {fetched.selfSigned && <span className="code-host-badge">Self-signed</span>}
+              </dd>
+              <dt>Valid until</dt>
+              <dd className={fetched.expired || fetched.notYetValid ? "code-host-error" : undefined}>
+                {fetched.validUntil}
+                {fetched.expired && " — expired"}
+                {fetched.notYetValid && " — not valid yet"}
+                
+              </dd>
+              <dt>SHA-256</dt>
+              <dd className="code-host-fingerprint">
+                <code>{fetched.fingerprint}</code>
+                <button type="button" className="btn btn-ghost" onClick={() => copy(fetched.fingerprint)}>
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              </dd>
+            </dl>
+            <p
+              className="modal-note code-host-caution"
+              title="openssl s_client -showcerts -connect host:443"
+            >
+              <ShieldAlert size={12} /> Shown over a connection you do not trust yet — compare the fingerprint with your IT's.
+              {fetched.chain > 1 && ` The server sent ${fetched.chain} certificates; this is its root.`}
             </p>
             <div className="code-host-fetched-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setFetched(null)}>

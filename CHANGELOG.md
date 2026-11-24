@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-24 The certificate a Bitbucket server presents is shown by name — who it is issued to, who issued it, until when, and whether it is self-signed or expired — with its SHA-256 fingerprint on one line and a Copy button to compare it with the one your IT gives; the root of the chain is offered even when the server sends it out of order
 - 2026-11-24 Adding a Bitbucket server whose certificate is not trusted: "Fetch certificate" takes it from the server over a handshake that sends no token and asks for nothing, shows its SHA-256 fingerprint to compare with the one your IT gives you, and puts it in the form only when you accept it — Check and Save stay yours
 - 2026-11-24 A feature's panel in the Catalog opens with one line about what it is and a switch that shows whether it is on — the long description, the file it keeps and what the build defaults to are behind "More about …", so turning a feature on or off is the first thing on screen rather than the last
 - 2026-11-24 Board, Bitbucket and Keyboard layout correction are on in a fresh install — no choosing needed — and any of them turns off in the Catalog, where the panel now says whether a feature is on until you choose otherwise
