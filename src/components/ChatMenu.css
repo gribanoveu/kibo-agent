@@ -61,6 +61,15 @@
   right: 0;
   border-top: 1px solid var(--border-soft);
 }
+/* A line above the first row separates nothing: it is a gap under the menu's
+   own edge, which is what an item asking for one at the top of the list read
+   as. Where a submenu's Back row is drawn first, the line still separates. */
+.chat-menu-item:first-child.divided {
+  margin-top: 0;
+}
+.chat-menu-item:first-child.divided::before {
+  display: none;
+}
 .chat-menu-item:disabled {
   color: var(--text-faint);
   cursor: default;
