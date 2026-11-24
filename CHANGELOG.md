@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-24 The Catalog's feature panel has two tabs — Settings and Tools — where the tools a feature gives the model, and where they are offered, are read apart from turning it on and off, and a feature that gives no tools says so instead of showing an empty list; the pull request feature is called Bitbucket there, and the panel says whether a feature is on until you choose otherwise
 - 2026-11-24 A menu opens over the panel or dialog it belongs to instead of being cut off by its edge — the branch list in Create pull request, whose last entries were half shown — no narrower than the field it hangs from, so filtering its options does not resize it, and closes when whatever holds its trigger scrolls or the window is resized
 - 2026-11-24 The chat thread no longer moves while a message is typed into the box for the next one: the box grows a line and the thread with it shrinks, and the follow-the-end scroll used to treat that as the answer growing — what was being read jumped up a line per line typed, with the agent at rest; the end still follows the answer as it streams and comes back when the message is sent
 - 2026-11-24 The Create pull request dialog offers the branch to go into as a list of this folder's own branches — the default branch first, the branch the pull request comes from left out — with a field for one the folder has not read, taken as it is typed and narrowing the list to what matches, and saying when nothing does; Escape closes that list first and the dialog after it
