@@ -324,6 +324,24 @@
   opacity: 0.5;
   cursor: default;
 }
+/* The branch picker in the create dialog: the field a text input was, at the
+   form's own size and colour. */
+.pr-create-into .chip {
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 9px;
+  background: var(--bg-field);
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+.pr-create-into .chip:hover,
+.pr-create-into .chip.open {
+  border-color: var(--border-box-focus);
+  background: var(--bg-panel);
+  color: var(--text);
+}
 .pr-create-draft {
   display: flex;
   align-items: center;

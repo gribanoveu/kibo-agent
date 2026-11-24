@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-24 The Create pull request dialog offers the branch to go into as a list of this folder's own branches — the default branch first, the branch the pull request comes from left out — with a field for one the folder has not read, taken as it is typed; Escape closes that list first and the dialog after it
 - 2026-11-24 The pull request row in Overview is its title over one line — "1/1 approved · Ready to merge" — with whether it can go in at the end of that line instead of on its own, and the number and the repository name, which only cut that line short, moved into its tooltip
 - 2026-11-24 "N/M approved" on the pull request row in Overview is a button: the reviewers and their decisions open in a popover pinned to it, in the order of who holds the pull request up, instead of inside the row's own expansion — which now keeps the author, the target branch and the reasons it cannot be merged
 - 2026-11-24 The pull request row in Overview keeps Open in Bitbucket beside Merge, out of the ⋯ menu, which now holds only what changes the pull request and is not drawn at all when it has nothing of that left

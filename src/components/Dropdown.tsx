@@ -32,8 +32,12 @@ type Props = {
   /** Called as the menu opens — for options that are fetched only when wanted. */
   onOpen?: () => void;
   /** A box above the options for a value not among them — a namespace the
-      user may work in but not list. Enter picks what was typed. */
-  custom?: { placeholder: string; onEnter: (value: string) => void };
+      user may work in but not list. Enter picks what was typed.
+
+      `onType` says the same of every keystroke, for a caller that may be
+      confirmed while this menu is open: a dialog's own button is pressed
+      without Enter, and text left only in the box would be lost. */
+  custom?: { placeholder: string; onEnter: (value: string) => void; onType?: (value: string) => void };
   /** A line under the heading about the options themselves — why some are missing. */
   note?: string;
   /** Shown but not changeable: the menu does not open, and `title` says why. */
@@ -101,6 +105,7 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
               autoFocus
               placeholder={custom.placeholder}
               aria-label={custom.placeholder}
+              onChange={(e) => custom.onType?.(e.currentTarget.value)}
               // A form field's Enter, as in every settings form here — not a shortcut.
               onKeyDown={(e) => {
                 const typed = e.currentTarget.value.trim();

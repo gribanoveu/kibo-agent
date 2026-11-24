@@ -21,6 +21,13 @@ mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
     if (command === "git_changes") return Promise.resolve({ staged: [], unstaged: [] });
+    if (command === "git_branches")
+      return Promise.resolve([
+        { name: "develop", remote: false },
+        { name: "feature/x", remote: false },
+        { name: "master", remote: false },
+        { name: "origin/release/1.2", remote: true },
+      ]);
     if (command === "pull_request") return strip instanceof Promise ? strip : Promise.resolve(structuredClone(strip));
     if (command === "pull_request_git_changed") return Promise.resolve(gitMoved);
     if (command === "pull_request_last") return lastStrip instanceof Promise ? lastStrip : Promise.resolve(structuredClone(lastStrip));
@@ -411,19 +418,74 @@ describe("the buttons", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  test("Create asks first, into the default branch unless another is typed", async () => {
+  test("Create asks first, into the default branch, and offers the folder's own branches", async () => {
     strip = ready({}, { pr: null });
     panel();
     await settle();
     fireEvent.click(screen.getByText("Create pull request…"));
+    await settle();
     expect(asked("pull_request_create")).toEqual([]);
-    expect((screen.getByLabelText("Into") as HTMLInputElement).value).toBe("master");
+    // The default branch is the one shown, and it leads the list.
+    expect(screen.getByRole("button", { name: "master" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "master" }));
+    const labels = () => screen.getAllByRole("option").map((option) => option.querySelector(".dropdown-item-label")?.textContent);
+    expect(labels()).toEqual(["master", "develop"]);
+    // The branch it comes from is not a place to go into, and a remote-only one is not read here.
+    expect(screen.queryByText("feature/x")).toBeNull();
+    expect(screen.queryByText("origin/release/1.2")).toBeNull();
 
+    fireEvent.click(screen.getByRole("option", { name: /develop/ }));
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Fix it" } });
-    fireEvent.change(screen.getByLabelText("Into"), { target: { value: "  " } });
     fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
     await settle();
-    expect(asked("pull_request_create").map((c) => c.args)).toEqual([{ title: "Fix it", to: null, draft: false }]);
+    expect(asked("pull_request_create").map((c) => c.args)).toEqual([{ title: "Fix it", to: "develop", draft: false }]);
+  });
+
+  test("a branch the folder has not read can still be typed into", async () => {
+    strip = ready({}, { pr: null });
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Create pull request…"));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "master" }));
+    const typed = screen.getByLabelText("Another branch");
+    fireEvent.change(typed, { target: { value: "  release/1.2 " } });
+    fireEvent.keyDown(typed, { code: "Enter", key: "Enter" });
+    fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
+    await settle();
+    expect(asked("pull_request_create").map((c) => c.args)).toEqual([{ title: "", to: "release/1.2", draft: false }]);
+  });
+
+  test("a branch typed in the menu is the one created into, even without Enter", async () => {
+    strip = ready({}, { pr: null });
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Create pull request…"));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "master" }));
+    // Typed, then Create is pressed while the menu is still open: the text is the
+    // answer, not something waiting for a key.
+    fireEvent.change(screen.getByLabelText("Another branch"), { target: { value: "release/1.2" } });
+    fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
+    await settle();
+    expect(asked("pull_request_create").map((c) => c.args)).toEqual([{ title: "", to: "release/1.2", draft: false }]);
+  });
+
+  test("Escape takes the open branch menu first, and the dialog only after it", async () => {
+    strip = ready({}, { pr: null });
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Create pull request…"));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "master" }));
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.getByRole("dialog", { name: "Create pull request" })).toBeTruthy();
+
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Create pull request" })).toBeNull();
   });
 
   test("Create can open it as a draft", async () => {

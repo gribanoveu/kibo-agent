@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { onGitChanged } from "../lib/git";
+import { gitBranches, onGitChanged, type BranchRef } from "../lib/git";
 import {
   codeHostDetect,
   codeHostSave,
@@ -31,6 +31,10 @@ export function usePullRequest(on: boolean, workspace: string | null) {
   const [strip, setStrip] = useState<PrStrip | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
+  /** The folder's own branches, with the folder they were read for: an answer
+      that lands after another folder is opened is not that folder's list. */
+  const [found, setFound] = useState<{ workspace: string | null; branches: BranchRef[] }>({ workspace: null, branches: [] });
+  const branches = found.workspace === workspace ? found.branches : [];
   const reload = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -80,6 +84,16 @@ export function usePullRequest(on: boolean, workspace: string | null) {
   }, [on, workspace]);
 
   const refresh = useCallback(() => reload.current(), []);
+  /** Where a pull request can go: asked when that dialog opens, not kept — a branch
+      made a minute ago is in neither this list nor the server's. A folder that will
+      not list its branches leaves the field to be typed in. */
+  const loadBranches = useCallback(() => {
+    const asked = workspace;
+    gitBranches(asked).then(
+      (next) => setFound({ workspace: asked, branches: next }),
+      () => setFound({ workspace: asked, branches: [] }),
+    );
+  }, [workspace]);
   const connect = useCallback((server: CodeHostServer, token: string | null) => codeHostSave(server, token, true), []);
 
   return {
@@ -87,6 +101,8 @@ export function usePullRequest(on: boolean, workspace: string | null) {
     error,
     reading,
     refresh,
+    branches,
+    loadBranches,
     connect,
     detect: codeHostDetect,
     create: pullRequestCreate,

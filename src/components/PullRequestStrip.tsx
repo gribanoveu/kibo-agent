@@ -25,8 +25,10 @@ import {
 import { Modal } from "./Modal";
 import { CodeHostConnect } from "./CodeHostConnect";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
+import { Dropdown } from "./Dropdown";
 import { Switch } from "./Switch";
 import { matches } from "../lib/shortcuts";
+import type { BranchRef } from "../lib/git";
 import { openExternal } from "../lib/window";
 import { addressCommentsRequest, buildText, offersConnect, prTasksOf, readiness, resolveConflictsRequest, REVIEW_WORD, reviewersInOrder, reviewsAtAGlance } from "../lib/pullRequestView";
 import type { Build, BuildState, PrStrip, PullRequest, ReviewStatus } from "../lib/pullRequests";
@@ -119,7 +121,7 @@ export function PullRequestStrip(props: Props) {
   return <ReadyRow {...props} strip={strip} failed={failed} />;
 }
 
-function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, onTask, failed }: Props & { strip: Ready; failed: ReactNode }) {
+function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, onTask, branches, loadBranches, failed }: Props & { strip: Ready; failed: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<"merge" | "create" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -160,6 +162,8 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, on
           open={confirm === "create"}
           branch={branch}
           target={snapshot.defaultBranch ?? ""}
+          branches={branches}
+          onLoadBranches={loadBranches}
           busy={busy}
           onClose={() => setConfirm(null)}
           onCreate={(title, to, draft) => void run(() => create(title, to, draft), draft ? "Draft pull request created" : "Pull request created")}
@@ -472,10 +476,24 @@ function BuildRow({ build }: { build: Build }) {
   );
 }
 
+/**
+ * The branches a pull request can go into: this folder's own, the default one
+ * first — it is where a pull request goes — and never the branch it comes from,
+ * a pull request into itself being nothing. The default stays listed even where
+ * only its remote side is known: the server has that branch either way.
+ */
+function intoBranches(branches: BranchRef[], target: string, from: string): { value: string; hint?: string }[] {
+  const local = branches.filter((branch) => !branch.remote).map((branch) => branch.name);
+  const rest = local.filter((name) => name !== target && name !== from).map((value) => ({ value }));
+  return target && target !== from ? [{ value: target, hint: "default" }, ...rest] : rest;
+}
+
 function CreateDialog({
   open,
   branch,
   target,
+  branches,
+  onLoadBranches,
   busy,
   onClose,
   onCreate,
@@ -483,6 +501,8 @@ function CreateDialog({
   open: boolean;
   branch: string;
   target: string;
+  branches: BranchRef[];
+  onLoadBranches: () => void;
   busy: boolean;
   onClose: () => void;
   onCreate: (title: string, to: string | null, draft: boolean) => void;
@@ -490,6 +510,11 @@ function CreateDialog({
   const [title, setTitle] = useState("");
   const [to, setTo] = useState(target);
   const [draft, setDraft] = useState(false);
+  // Read when the dialog opens: the branches asked for are the folder's at this
+  // moment, not whatever it had when the strip was drawn.
+  useEffect(() => {
+    if (open) onLoadBranches();
+  }, [open, onLoadBranches]);
   return (
     <Modal
       title="Create pull request"
@@ -511,8 +536,21 @@ function CreateDialog({
         <input id="pr-title" value={title} placeholder={branch} onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="modal-field">
-        <label htmlFor="pr-target">Into</label>
-        <input id="pr-target" value={to} placeholder={target} spellCheck={false} onChange={(e) => setTo(e.target.value)} />
+        <label>Into</label>
+        {/* The branches this folder has, the default one first — and a branch not
+            read here can still be typed, the server being the one that knows. */}
+        <div className="pr-create-into">
+          <Dropdown
+            label={to}
+            title="The branch the pull request goes into"
+            options={intoBranches(branches, target, branch)}
+            value={to}
+            onPick={setTo}
+            below
+            custom={{ placeholder: "Another branch", onEnter: setTo, onType: setTo }}
+            emptyLabel="No branch read yet"
+          />
+        </div>
       </div>
       <label className="pr-create-draft">
         <span>As a draft — reviewers see it, nothing merges it until it is marked ready</span>
