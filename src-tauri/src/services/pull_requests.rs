@@ -512,6 +512,7 @@ mod tests {
     use super::*;
     use crate::domain::code_host::{Build, BuildState, Comment, MergeCheck, ReviewStatus, Reviewer};
     use crate::testing::{temp_dir, with_app_dir};
+    use std::sync::Condvar;
     use std::time::Instant;
 
     const REMOTE: &str = "ssh://git@git.server.com/corp/tax-api.git";
@@ -528,18 +529,52 @@ mod tests {
         links: Mutex<Vec<String>>,
         me: Mutex<Option<String>>,
         merged: Mutex<Option<CodeHostError>>,
-        /// How long a call takes to answer, by name: a read in flight, or
-        /// a slow server whose rounds are timed.
+        /// How long a call takes to answer, by name: a read in flight, or a
+        /// server slow to answer.
         slow: Mutex<HashMap<&'static str, Duration>>,
         /// What the default branch answers instead: a server that does not.
         down: Mutex<Option<CodeHostError>>,
         /// The branch each pull request was asked for.
         branches: Mutex<Vec<String>>,
+        /// The calls a round holds together, and which of them were in flight
+        /// at the same time.
+        together: Mutex<Together>,
+        /// A call that joined its round, or left it.
+        woken: Condvar,
+    }
+
+    /// How long a call waits for the rest of its round to reach it. A read asked
+    /// together meets at once and never spends it; one asked in turn spends it
+    /// on every call, and is caught by it. This is the one thing here that is
+    /// timed: a partner later than this is read as a round asked in turn.
+    const PARTNER_WAIT: Duration = Duration::from_secs(2);
+
+    /// Which calls a round holds together, and which of them were in flight at
+    /// the same time. A double with no rounds answers at once.
+    #[derive(Default)]
+    struct Together {
+        rounds: Vec<Vec<String>>,
+        /// The calls of the read's rounds that have arrived, kept until every
+        /// call of the read has gone: the first of a round can answer and leave
+        /// before the second looks again.
+        arrived: Vec<String>,
+        in_flight: Vec<String>,
+        overlapped: Vec<(String, String)>,
+    }
+
+    /// Two calls, in one order whichever way round they met.
+    fn pair(one: &str, other: &str) -> (String, String) {
+        if one <= other {
+            (one.to_string(), other.to_string())
+        } else {
+            (other.to_string(), one.to_string())
+        }
     }
 
     impl Double {
         fn ask(&self, what: &str) {
             lock(&self.asked).push(what.to_string());
+            self.together(what);
             let slow = lock(&self.slow).get(what).copied();
             std::thread::sleep(slow.unwrap_or_default());
         }
@@ -548,6 +583,57 @@ mod tests {
         }
         fn total(&self) -> usize {
             lock(&self.asked).len()
+        }
+        /// The rounds the service is to ask together: a call waits for the rest
+        /// of its round before it answers.
+        fn rounds(&self, rounds: &[&[&str]]) {
+            lock(&self.together).rounds = rounds
+                .iter()
+                .map(|round| round.iter().map(|name| name.to_string()).collect())
+                .collect();
+        }
+        /// Which pairs of calls were in flight at the same time.
+        fn overlapped(&self) -> Vec<(String, String)> {
+            lock(&self.together).overlapped.clone()
+        }
+        /// Holds `what` in flight until the rest of its round has arrived,
+        /// noting every pair that was in flight at the same time. A round asked
+        /// together passes at once, however slow the machine; one asked in turn
+        /// waits out [`PARTNER_WAIT`] for a partner that never comes, and is
+        /// caught by what it noted. No clock is compared against a threshold —
+        /// the only way a read asked together can be misread is a partner held
+        /// up for longer than [`PARTNER_WAIT`].
+        fn together(&self, what: &str) {
+            let mut held = lock(&self.together);
+            let Some(round) = held
+                .rounds
+                .iter()
+                .find(|round| round.iter().any(|name| name.as_str() == what))
+                .cloned()
+            else {
+                return;
+            };
+            held.in_flight.push(what.to_string());
+            held.arrived.push(what.to_string());
+            for other in held.in_flight.clone() {
+                if other != what {
+                    held.overlapped.push(pair(&other, what));
+                }
+            }
+            self.woken.notify_all();
+            let deadline = Instant::now() + PARTNER_WAIT;
+            while !round.iter().all(|name| held.arrived.contains(name)) {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                held = self.woken.wait_timeout(held, left).unwrap_or_else(PoisonError::into_inner).0;
+            }
+            held.in_flight.retain(|name| name.as_str() != what);
+            if held.in_flight.is_empty() {
+                held.arrived.clear();
+            }
+            self.woken.notify_all();
         }
     }
 
@@ -722,9 +808,12 @@ mod tests {
         });
     }
 
-    /// The pull request and the builds wait on the branch and not on each
-    /// other: in each of its three rounds the reads are asked together, and a
-    /// read costs the slower of each round, not the sum of all seven.
+    /// The pull request, the builds and the remarks wait on the branch and not
+    /// on each other: every call of a round is in flight beside the rest of it,
+    /// which a round asked in turn never is. The round holds its calls until
+    /// they meet and the test reads what met, instead of comparing a clock
+    /// against a threshold — a slow runner only lengthens the wait for a
+    /// partner, and nothing about the read changes.
     #[test]
     fn a_read_asks_together_what_does_not_wait_on_each_other() {
         with_app_dir("prs-rounds", || {
@@ -732,13 +821,22 @@ mod tests {
             *lock(&double.commit) = Some("94beed9".to_string());
             *lock(&double.pr) = Some(pull_request(6));
             *lock(&double.me) = Some("u_me".to_string());
-            // Three rounds of 250 ms are 750; any one round asked in turn is 1250.
-            for call in ["default_branch", "branch_commit", "pull_request", "builds", "merge_check", "comments", "me"] {
-                lock(&double.slow).insert(call, Duration::from_millis(250));
-            }
-            let started = Instant::now();
+            let rounds: &[&[&str]] = &[
+                &["default_branch", "branch_commit"],
+                &["pull_request", "builds"],
+                &["merge_check", "comments", "me"],
+            ];
+            double.rounds(rounds);
             assert!(matches!(service.strip(&repo("prs-rounds-repo", Some(REMOTE))), Ok(PrStrip::Ready { snapshot: Snapshot { pr: Some(_), .. }, .. })));
-            assert!(started.elapsed() < Duration::from_millis(950), "a round asked one after the other: {:?}", started.elapsed());
+
+            let met = double.overlapped();
+            for round in rounds {
+                for (at, one) in round.iter().enumerate() {
+                    for other in &round[at + 1..] {
+                        assert!(met.contains(&pair(one, other)), "{one} answered without {other} in flight: {met:?}");
+                    }
+                }
+            }
             assert_eq!((double.asked("builds"), double.asked("merge_check"), double.asked("comments"), double.asked("me")), (1, 1, 1, 1));
         });
     }
