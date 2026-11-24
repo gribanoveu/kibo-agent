@@ -65,6 +65,7 @@ beforeEach(() => {
     name: "Board",
     description: "Cards for later",
     on: false,
+    defaultOn: false,
     tools: [{ name: "board", description: "When the user asks you to remind them…" }],
     toolsOn: true,
     layoutSwitchOn: false,
@@ -152,6 +153,20 @@ describe("features on the catalog page", () => {
     expect(tools().getAttribute("aria-checked")).toBe("false");
     fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
+  });
+
+  test("the panel says what the feature is until the user chooses", async () => {
+    board = { ...board, defaultOn: true, on: true };
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    expect(screen.getByText("On — until you choose otherwise")).toBeTruthy();
+
+    // A feature whose build says off: turned on here, the default still reads off.
+    board = { ...board, defaultOn: false };
+    act(() => listeners.forEach((handler) => handler()));
+    await settle();
+    expect(screen.getByText("Off — as it ships")).toBeTruthy();
   });
 
   test("a switch that fails says so on the tab it was thrown from", async () => {

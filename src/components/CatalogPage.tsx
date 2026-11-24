@@ -425,6 +425,9 @@ function FeatureDetails({
           <dl className="catalog-detail-facts">
             <dt>Source</dt>
             <dd>Built into the app</dd>
+            {/* What it is until the user decides — the answer to "why is this on?" */}
+            <dt>Default</dt>
+            <dd>{feature.defaultOn ? "On — until you choose otherwise" : "Off — as it ships"}</dd>
             {feature.data && (
               <>
                 <dt>Keeps</dt>

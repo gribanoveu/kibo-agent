@@ -10,6 +10,8 @@ export type FeatureView = {
   name: string;
   description: string;
   on: boolean;
+  /** What the build says it should be until the user chooses (`enabled_by_default`). */
+  defaultOn: boolean;
   /** What the model is given, as it is told. */
   tools: { name: string; description: string }[];
   /** Whether the model gets them while the feature is on. */

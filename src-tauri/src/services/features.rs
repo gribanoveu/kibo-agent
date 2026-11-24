@@ -21,6 +21,9 @@ pub struct FeatureView {
     pub name: String,
     pub description: String,
     pub on: bool,
+    /// What the build says it should be until the user chooses — the manifest's
+    /// `enabled_by_default`, shown in the sheet so a feature that came on is not a mystery.
+    pub default_on: bool,
     /// What the model is given, as it is told.
     pub tools: Vec<FeatureTool>,
     /// Whether the model gets them while the feature is on.
@@ -122,6 +125,7 @@ fn views(settings: &AppSettings, app_dir: Option<&Path>) -> Vec<FeatureView> {
                 name: manifest.name.to_string(),
                 description: manifest.description.to_string(),
                 on: on.is_on(feature),
+                default_on: manifest.enabled_by_default,
                 tools,
                 tools_on: settings.feature_tools.is_enabled(manifest.id),
                 layout_switch_on: settings.layout_correction_switch,
@@ -162,6 +166,9 @@ mod tests {
         let off = views(&AppSettings::default(), Some(&dir));
         let board = &off[0];
         assert_eq!((board.id.as_str(), board.on, board.has_data), ("board", false, false));
+        // The default is the manifest's, and what a feature with no choice stored is.
+        assert_eq!(board.default_on, Feature::Board.manifest().enabled_by_default);
+        assert!(Feature::ALL.iter().zip(off.iter()).all(|(feature, view)| view.default_on == feature.manifest().enabled_by_default));
         assert_eq!(board.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["board"]);
         assert!(board.tools[0].description.contains("remind"), "{}", board.tools[0].description);
         assert_eq!(board.places, ["Assistant chat", "Agent", "Analyst"]);
