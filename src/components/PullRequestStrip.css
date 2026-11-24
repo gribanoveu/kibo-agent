@@ -42,13 +42,37 @@
 .pr-stale .pr-menu {
   opacity: 0.55;
 }
+/* "1/2 approved" — a button: who holds the pull request up is a click away. */
 .pr-glance {
   display: inline-flex;
   flex: none;
   align-items: center;
   gap: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
   font-size: var(--fs-xs);
   color: var(--text-faint);
+  cursor: pointer;
+}
+.pr-glance:hover,
+.pr-glance[aria-expanded="true"] {
+  color: var(--text);
+}
+/* The reviewers, pinned to that line: portaled to the viewport, so the panel's
+   own scroll neither clips it nor carries it away — as the "⋯" menu is. */
+.pr-reviewers-pop {
+  z-index: 30;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 6px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--fs-xs);
 }
 
 .pr-failed {
@@ -166,35 +190,48 @@
 .pr-head > svg {
   margin-top: 3px;
 }
-/* Three lines a step apart: the title, where it lives, whether it can go in. */
+/* Two lines a step apart: the title, then its number, its approvals and whether
+   it can go in. */
 .pr-lines {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-width: 0;
-  gap: 4px;
+  gap: 8px;
 }
 /* Room for the "⋯" pinned over the title's end. */
 .pr-head .pr-name {
   padding-right: 18px;
+  /* A button of its own, in a column: it takes its line, not the leftover. */
+  flex: none;
+}
+/* The head is not one button any more — only its title opens it — so it does
+   not answer the pointer like one, and the row's hover highlight stays off. */
+.pr-head,
+.pr-head:hover:not(:disabled) {
+  background: none;
+  cursor: default;
+}
+/* The title, a button in its own right: the "N/M approved" under it is another,
+   and one button may not hold another. */
+.pr-head-toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 .pr-sub {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
   font-size: var(--fs-xs);
   color: var(--text-faint);
   white-space: nowrap;
-}
-.pr-where {
-  display: flex;
-  min-width: 0;
-}
-.pr-repo {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 /* No taller than the text beside it: the line keeps the title's rhythm. */
 .pr-draft {
@@ -206,21 +243,22 @@
   line-height: 1.3;
   color: var(--text-dim);
 }
+/* The end of the line under the title: the size and colour of the approvals
+   beside it, and it runs to the line's end, where the icon waits. */
 .pr-status {
   display: flex;
+  flex: 1;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
-  /* The size and colour of "Build passed": the two lines say the same kind of thing. */
-  font-size: var(--fs-sm);
-  color: var(--text-dim);
 }
 .pr-status-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* As wide as the build's icon, at the row's end: the two icons share a column. */
+/* The icon of whether it can go in, at the end of that line — the column the
+   build's icon sits in, as it was three lines ago. */
 .pr-ready-box {
   display: inline-flex;
   flex: none;
@@ -256,6 +294,17 @@
   font: inherit;
   font-size: var(--fs-sm);
   cursor: pointer;
+}
+/* The next step and the way to the pull request's page, a row of their own
+   under the card, in the column the title's text starts in. */
+.pr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 28px;
+}
+.pr-actions .pr-next {
+  margin: 6px 0 2px;
 }
 /* The agent's tasks — Resolve conflicts, Address comments — a row of their
    own under the next step, in the same column. */

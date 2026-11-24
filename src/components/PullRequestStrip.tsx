@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   Check,
   Circle,
@@ -25,6 +26,7 @@ import { Modal } from "./Modal";
 import { CodeHostConnect } from "./CodeHostConnect";
 import { ChatMenu, type ChatMenuItem } from "./ChatMenu";
 import { Switch } from "./Switch";
+import { matches } from "../lib/shortcuts";
 import { openExternal } from "../lib/window";
 import { addressCommentsRequest, buildText, offersConnect, prTasksOf, readiness, resolveConflictsRequest, REVIEW_WORD, reviewersInOrder, reviewsAtAGlance } from "../lib/pullRequestView";
 import type { Build, BuildState, PrStrip, PullRequest, ReviewStatus } from "../lib/pullRequests";
@@ -63,8 +65,9 @@ function BuildIcon({ state }: { state: BuildState }) {
  * The branch's pull request, under the branch in Overview's Changes card
  * (docs/62-bitbucket-prs.md, decision 5): its title, "repo #id" and the
  * reviews under it, a dot for whether it can go in, the "⋯" of what else can
- * be done, and one button for the next step — Mark ready on a draft, Merge
- * while the server allows it. Clicked, it opens into its reviewers and why it
+ * be done, and a row of buttons under it — the next step (Mark ready on a draft,
+ * Merge while the server allows it) and Open in Bitbucket, the pull request's
+ * own page. Clicked, it opens into its reviewers and why it
  * cannot be merged. A button shows only when it can do something — Approve
  * while the token's user may, Create once the branch is pushed, has none and
  * is not the default branch — and a folder that
@@ -177,7 +180,6 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, on
   const ReadyIcon = READY_ICON[ready.kind];
   const Icon = draft ? GitPullRequestDraft : GitPullRequest;
   const menu: ChatMenuItem[] = [
-    { id: "open", label: "Open in Bitbucket", icon: <ExternalLink size={14} />, onSelect: () => void openExternal(pr.url) },
     ...(mayApprove
       ? [
           {
@@ -208,48 +210,68 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, on
     <div className={error ? "pr-stale" : undefined}>
       {build}
       <div className="pr-card">
-        <button type="button" className="pr-row pr-head" aria-expanded={open} title={pr.title} onClick={() => setOpen(!open)}>
+        <div className="pr-row pr-head">
           <Icon size={14} aria-label={draft ? "draft pull request" : "pull request"} />
           <span className="pr-lines">
-            <span className="pr-name">{pr.title}</span>
-            <span className="pr-sub">
-              {/* A long repository name gives way first; the number stays. */}
-              <span className="pr-where" title={`${strip.repo} #${pr.id}`}>
-                <span className="pr-repo">{strip.repo}</span>
-                <span>&nbsp;#{pr.id}</span>
-              </span>
+            {/* The head is not one button: "N/M approved" on the line under the
+                title is a button of its own, and a button may not hold one. */}
+            <button type="button" className="pr-name pr-head-toggle" aria-expanded={open} title={pr.title} onClick={() => setOpen(!open)}>
+              {pr.title}
+            </button>
+            <span className="pr-sub" title={`${strip.repo} #${pr.id}`}>
+              {/* Neither the number nor the repository is in the line — both only
+                  cut it short — they wait under the pointer, as the folder is open. */}
               {draft && <span className="pr-draft">Draft</span>}
-              {reviews && <span aria-hidden>·</span>}
               {reviews && (
-                <span className="pr-glance" title={`${pr.reviewers.filter((r) => r.status === "approved").length} of ${pr.reviewers.length} reviewers approved`}>
-                  {reviews}
-                </span>
+                <>
+                  {/* A separator only where something stands before it. */}
+                  {draft && <span aria-hidden>·</span>}
+                  <ReviewsPopover reviewers={pr.reviewers} glance={reviews} />
+                </>
               )}
-            </span>
-            {/* A line of its own, its icon in the column of the build's above. */}
-            <span className="pr-status" title={ready.text}>
-              <span className="pr-status-text">{ready.label}</span>
-              <span className="pr-ready-box">
-                <ReadyIcon size={12} className={`pr-ready ${ready.kind}`} role="img" aria-label={ready.text} />
+              {(draft || reviews) && <span aria-hidden>·</span>}
+              {/* Whether it can go in, at the end of the same line: the head is
+                  the title and one line under it. */}
+              <span className="pr-status" title={ready.text}>
+                <span className="pr-status-text">{ready.label}</span>
+                <span className="pr-ready-box">
+                  <ReadyIcon size={12} className={`pr-ready ${ready.kind}`} role="img" aria-label={ready.text} />
+                </span>
               </span>
             </span>
           </span>
-        </button>
-        <div className="pr-menu">
-          <ChatMenu items={menu} icon={<MoreHorizontal size={15} />} />
         </div>
+        {/* Nothing left to do in here — a draft on a server before approvals —
+            leaves no "⋯" at all. */}
+        {menu.length > 0 && (
+          <div className="pr-menu">
+            <ChatMenu items={menu} icon={<MoreHorizontal size={15} />} />
+          </div>
+        )}
       </div>
-      {draft ? (
-        <button type="button" className="pr-next" disabled={busy} onClick={() => void run(() => setDraft(pr.id, pr.version, false), "Marked ready for review")}>
-          Mark ready
-        </button>
-      ) : (
-        canMerge && (
-          <button type="button" className="pr-next" disabled={busy} onClick={() => setConfirm("merge")}>
-            <GitMerge size={12} /> Merge
+      {/* The next step and the way to the pull request's page, side by side: a
+          link to the page is not something the "⋯" should hide. */}
+      <div className="pr-actions">
+        {draft ? (
+          <button type="button" className="pr-next" disabled={busy} onClick={() => void run(() => setDraft(pr.id, pr.version, false), "Marked ready for review")}>
+            Mark ready
           </button>
-        )
-      )}
+        ) : (
+          canMerge && (
+            <button type="button" className="pr-next" disabled={busy} onClick={() => setConfirm("merge")}>
+              <GitMerge size={12} /> Merge
+            </button>
+          )
+        )}
+        <button
+          type="button"
+          className="pr-next"
+          title={`Open ${strip.repo} #${pr.id} in Bitbucket`}
+          onClick={() => void openExternal(pr.url)}
+        >
+          <ExternalLink size={12} /> Open in Bitbucket
+        </button>
+      </div>
       {/* The agent's tasks, each putting its request in the message box — the
           user reads it and sends, as a review's Fix does. */}
       {onTask && tasks && (
@@ -273,7 +295,6 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, on
           <div className="pr-meta">
             <span title={pr.author}>{pr.authorName}</span> → {pr.toBranch}
           </div>
-          {pr.reviewers.length > 0 && <Reviewers reviewers={pr.reviewers} />}
           {blocked.length > 0 && (
             <ul className="pr-vetoes" aria-label="Why it cannot be merged">
               {blocked.map((veto) => (
@@ -308,8 +329,102 @@ function ReadyRow({ strip, error, create, approve, merge, setDraft, onNotify, on
   );
 }
 
-/** Past this many, the rest wait behind "N more". */
+/** The reviewers' names past this many wait behind "N more". */
 const REVIEWERS_SHOWN = 5;
+
+/**
+ * "1/2 approved" — a button, and the reviewers themselves in a popover pinned
+ * to it: the count does not say who holds the pull request up, and the list is
+ * wanted without opening the whole row for it.
+ *
+ * Portaled to the viewport like the "⋯" menu, and for the same reason: the
+ * card sits in a panel that scrolls, which would clip it and carry it away.
+ */
+function ReviewsPopover({ reviewers, glance }: { reviewers: PullRequest["reviewers"]; glance: string }) {
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const popover = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const close = useCallback(() => {
+    setOpen(false);
+    setPos(null);
+  }, []);
+
+  // Below the line, flipped above when the window's lower edge is nearer,
+  // never past its right.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const button = trigger.current?.getBoundingClientRect();
+    const box = popover.current?.getBoundingClientRect();
+    if (!button || !box) return;
+    const below = button.bottom + 6;
+    const top = below + box.height > window.innerHeight - 8 && button.top - 6 - box.height >= 8 ? button.top - 6 - box.height : below;
+    const left = Math.max(8, Math.min(button.left, window.innerWidth - box.width - 8));
+    setPos((was) => (was && Math.abs(was.top - top) < 0.5 && Math.abs(was.left - left) < 0.5 ? was : { top, left }));
+  });
+
+  // Dismissed as every other popup here is — an outside press or Escape. A
+  // scroll of what holds the trigger closes it: the trigger has moved.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!trigger.current?.contains(e.target as Node) && !popover.current?.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (!matches(e, "close")) return;
+      e.preventDefault();
+      close();
+    };
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && trigger.current && e.target.contains(trigger.current)) close();
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open, close]);
+
+  const approved = reviewers.filter((reviewer) => reviewer.status === "approved").length;
+  return (
+    <>
+      <button
+        type="button"
+        ref={trigger}
+        className="pr-glance"
+        title={`${approved} of ${reviewers.length} reviewers approved`}
+        aria-label={`Reviewers — ${approved} of ${reviewers.length} approved`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => {
+          if (open) {
+            close();
+            return;
+          }
+          // Somewhere on screen at once: the popover places itself once drawn.
+          const button = trigger.current?.getBoundingClientRect();
+          setPos(button ? { top: button.bottom + 6, left: button.left } : null);
+          setOpen(true);
+        }}
+      >
+        {glance}
+      </button>
+      {open &&
+        pos &&
+        createPortal(
+          <div ref={popover} className="pr-reviewers-pop" role="dialog" aria-label="Reviewers" style={{ position: "fixed", top: pos.top, left: pos.left }}>
+            <Reviewers reviewers={reviewers} />
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
 
 /** One reviewer a line, who holds it up first, the status in words at the end; the login under the pointer. */
 function Reviewers({ reviewers }: { reviewers: PullRequest["reviewers"] }) {

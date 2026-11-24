@@ -173,12 +173,15 @@ describe("the strip's states", () => {
     expect(screen.queryByText("Create pull request…")).toBeNull();
   });
 
-  test("a pull request is its title over its repository and number, its reviews, and a dot for whether it can go in", async () => {
+  test("a pull request is its title over one line: its approvals and whether it can go in", async () => {
     panel();
     await settle();
     expect(screen.getByText("Fix the tax profile")).toBeTruthy();
-    expect(screen.getByText("#153")).toBeTruthy();
-    expect(screen.getByText("tax-api").closest("[title]")?.getAttribute("title")).toBe("tax-api #153");
+    // Neither the number nor the repository is in the line: both are the folder's own, and
+    // they only cut it short — they wait under the pointer.
+    expect(screen.queryByText("#153")).toBeNull();
+    expect(screen.queryByText("tax-api")).toBeNull();
+    expect(screen.getByText("0/1 approved").closest(".pr-sub")?.getAttribute("title")).toBe("tax-api #153");
     expect(screen.getByText("0/1 approved")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Ready to merge" })).toBeTruthy();
     expect(screen.getByText("Merge")).toBeTruthy();
@@ -218,9 +221,18 @@ describe("the strip's states", () => {
     await settle();
     expect(screen.getByLabelText("pull request")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Merge" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Open in Bitbucket/ })).toBeTruthy();
     fireEvent.click(screen.getByTitle("More"));
-    expect(screen.getByRole("menuitem", { name: /Open in Bitbucket/ })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: /Convert to draft/ })).toBeNull();
+  });
+
+  test("a menu with nothing left in it shows no ⋯, and Open stays beside Mark ready", async () => {
+    strip = ready({ canApprove: false }, { pr: pr({ draft: true }) });
+    panel();
+    await settle();
+    expect(screen.queryByTitle("More")).toBeNull();
+    expect(screen.getByRole("button", { name: "Mark ready" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Open in Bitbucket/ })).toBeTruthy();
   });
 
   test("the latest build is a row of its own: what it is doing, with its icon", async () => {
@@ -260,7 +272,7 @@ describe("the strip's states", () => {
     strip = ready({ mergeBlocked: ["Requires 2 approvals", "conflicts"] });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
+    fireEvent.click(screen.getByText("Fix the tax profile"));
     expect(screen.queryByText("Merge")).toBeNull();
     expect(screen.getByRole("img", { name: "Cannot merge yet: Requires 2 approvals; conflicts" })).toBeTruthy();
     // The line says it short; the reasons are under the pointer and in the list.
@@ -269,16 +281,34 @@ describe("the strip's states", () => {
     expect(screen.getByText("conflicts")).toBeTruthy();
   });
 
-  test("the author and reviewers are shown by name, the login under the pointer", async () => {
+  test("the author is shown by name with the login under the pointer, the reviewers a click away", async () => {
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
+    fireEvent.click(screen.getByText("Fix the tax profile"));
+    expect(screen.getByText("Anna Author").title).toBe("u_author");
+    expect(screen.queryByText(/u_author/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Reviewers/ }));
     const reviewer = screen.getByText("Me Myself").closest("li")!;
     expect(reviewer.title).toBe("u_me");
     expect(reviewer.textContent).toBe("Me Myselfnot yet");
     expect(screen.queryByText("u_me")).toBeNull();
-    expect(screen.getByText("Anna Author").title).toBe("u_author");
-    expect(screen.queryByText(/u_author/)).toBeNull();
+  });
+
+  test("the reviewers open in a popover from that line, and an outside press or Escape closes it", async () => {
+    panel();
+    await settle();
+    const trigger = () => screen.getByRole("button", { name: /^Reviewers/ });
+    fireEvent.click(trigger());
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("dialog", { name: "Reviewers" })).toBeTruthy();
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("dialog", { name: "Reviewers" })).toBeNull();
+
+    fireEvent.click(trigger());
+    fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Reviewers" })).toBeNull();
   });
 
   test("reviewers are a line each, who holds it up first, and a long list folds after five", async () => {
@@ -286,7 +316,7 @@ describe("the strip's states", () => {
     strip = ready({}, { pr: pr({ reviewers: [r("a", "approved"), r("b", "unapproved"), r("c", "needsWork"), r("d", "approved"), r("e", "unapproved"), r("f", "approved"), r("g", "approved")] }) });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
+    fireEvent.click(screen.getByRole("button", { name: /^Reviewers/ }));
     const names = () => [...screen.getByRole("list", { name: "Reviewers" }).querySelectorAll(".pr-reviewer-name")].map((n) => n.textContent);
     expect(names()).toEqual(["C", "B", "E", "A", "D"]);
     fireEvent.click(screen.getByText("2 more"));
@@ -298,7 +328,7 @@ describe("the strip's states", () => {
     strip = ready({}, { pr: pr({ reviewers: ["a", "b", "c", "d", "e", "f"].map(r) }) });
     panel();
     await settle();
-    fireEvent.click(screen.getByText("#153"));
+    fireEvent.click(screen.getByRole("button", { name: /^Reviewers/ }));
     expect(screen.getByRole("list", { name: "Reviewers" }).querySelectorAll(".pr-reviewer-name")).toHaveLength(6);
     expect(screen.queryByText(/more$/)).toBeNull();
   });
@@ -359,7 +389,7 @@ describe("the strip's states", () => {
     strip = Promise.reject("the server did not answer");
     emit("pull-requests:changed", { root: "/repo" });
     await settle();
-    expect(screen.getByText("#153")).toBeTruthy();
+    expect(screen.getByText("Fix the tax profile")).toBeTruthy();
     expect(container.querySelector(".pr-stale")).toBeTruthy();
     expect(screen.getByText("the server did not answer")).toBeTruthy();
   });
@@ -370,7 +400,6 @@ describe("the buttons", () => {
     const notes: string[] = [];
     panel(true, notes);
     await settle();
-    fireEvent.click(screen.getByText("#153"));
     fireEvent.click(screen.getByText("Merge").closest("button")!);
     expect(asked("pull_request_merge")).toEqual([]);
 
@@ -415,7 +444,6 @@ describe("the buttons", () => {
     const notes: string[] = [];
     panel(true, notes);
     await settle();
-    fireEvent.click(screen.getByText("#153"));
     fireEvent.click(screen.getByText("Merge").closest("button")!);
     fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
     await settle();
@@ -426,7 +454,7 @@ describe("the buttons", () => {
   test("Open opens the pull request's page in the browser", async () => {
     panel();
     await settle();
-    fromMenu("Open in Bitbucket");
+    fireEvent.click(screen.getByRole("button", { name: /Open in Bitbucket/ }));
     await settle();
     expect(opened).toEqual([pr().url]);
   });
