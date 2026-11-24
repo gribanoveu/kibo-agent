@@ -144,27 +144,23 @@ describe("the context meter", () => {
     expect(screen.getByText(/window is not known/)).toBeTruthy();
   });
 
-  /// CU-4: the meter names its source. An anchored total is the provider's
-  /// own count for the last request plus what was added since; until a
-  /// request reports one, the number is an estimate and says so.
-  test("names the provider's count as the source when the total is anchored", () => {
-    meter({ context: { anchored: true, limit: 200_000 } });
-
+  /// The panel says what the window holds and nothing about how the total
+  /// was arrived at: a note naming the source read as an explanation of the
+  /// number already above it, and it was dropped from the meter and the
+  /// overview alike.
+  test("says nothing about where the total came from, anchored or not", () => {
+    const opened = meter({ context: { anchored: true, limit: 200_000 } });
     openMeter();
-    expect(screen.getByText("The provider's count for the last request, plus what was added since.")).toBeTruthy();
-    expect(screen.queryByText(/An estimate from the text/)).toBeNull();
-  });
-
-  test("calls an unanchored total an estimate, in the meter and in the overview alike", () => {
-    const opened = meter();
-    openMeter();
-    expect(screen.getByText(/An estimate from the text/)).toBeTruthy();
+    expect(screen.queryByText(/provider's count/)).toBeNull();
+    expect(screen.queryByText(/estimate from the text/)).toBeNull();
+    // The rows are what is said, and an anchored total does not change them.
+    expect(screen.getByText("Conversation")).toBeTruthy();
     opened.unmount();
 
-    const overview = render(<ContextDetails context={context({ anchored: true })} />);
-    expect(overview.getByText("The provider's count for the last request, plus what was added since.")).toBeTruthy();
+    const overview = render(<ContextDetails context={context()} />);
+    expect(overview.queryByText(/estimate from the text/)).toBeNull();
     overview.unmount();
-    const estimated = render(<ContextDetails context={context()} />);
-    expect(estimated.getByText(/An estimate from the text/)).toBeTruthy();
+    const anchored = render(<ContextDetails context={context({ anchored: true })} />);
+    expect(anchored.queryByText(/provider's count/)).toBeNull();
   });
 });
