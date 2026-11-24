@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 /// user gave a URL (the SDK's client and the module that points it at that
 /// URL), the cluster of a kubeconfig the user added, and the web search the
 /// user turned on — Tavily, or their SearXNG and the pages it finds — the
-/// catalogs the page lists, asked for their index, and the MongoDB servers of
-/// the connections the user saved on that page. Anything
+/// catalogs the page lists, asked for their index, the MongoDB servers of
+/// the connections the user saved on that page, and the Bitbucket server of
+/// a repository the user pointed it at. Anything
 /// else that opens a connection is a new place data can go, and the policy
 /// document has to say so before this list does.
 const NETWORK_ALLOWED: &[&str] = &[
@@ -28,6 +29,7 @@ const NETWORK_ALLOWED: &[&str] = &[
     "src/infra/deepseek_web.rs",
     "src/infra/catalog_http.rs",
     "src/infra/mongo_client.rs",
+    "src/infra/bitbucket_client.rs",
 ];
 
 /// What opening a connection looks like in Rust here.

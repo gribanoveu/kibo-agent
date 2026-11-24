@@ -103,6 +103,32 @@ test("a typed value is picked on Enter, and an empty box picks nothing", () => {
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
+test("typing in the box narrows the options, and says when nothing matches", () => {
+  render(
+    <Dropdown
+      label="namespace"
+      options={[{ value: "orders" }, { value: "payments" }, { value: "orders-archive" }]}
+      value="orders"
+      onPick={() => {}}
+      custom={{ placeholder: "Another namespace", onEnter: () => {} }}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /namespace/ }));
+  const names = () => screen.queryAllByRole("option").map((option) => option.querySelector(".dropdown-item-label")?.textContent);
+  expect(names()).toEqual(["orders", "payments", "orders-archive"]);
+
+  fireEvent.change(screen.getByLabelText("Another namespace"), { target: { value: "ARCH" } });
+  expect(names()).toEqual(["orders-archive"]);
+
+  fireEvent.change(screen.getByLabelText("Another namespace"), { target: { value: "zzz" } });
+  expect(names()).toEqual([]);
+  expect(screen.getByText("Nothing matches “zzz”")).toBeTruthy();
+
+  // The box emptied, the whole list is back.
+  fireEvent.change(screen.getByLabelText("Another namespace"), { target: { value: "" } });
+  expect(names()).toEqual(["orders", "payments", "orders-archive"]);
+});
+
 test("a locked one does not open", () => {
   render(<Dropdown label="role" options={OPTIONS} value="main" onPick={() => {}} locked />);
   fireEvent.click(screen.getByRole("button", { name: /role/ }));

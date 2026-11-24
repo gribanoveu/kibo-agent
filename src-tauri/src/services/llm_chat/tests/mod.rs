@@ -211,6 +211,8 @@ struct Harness {
     /// The turn's journal; `None` leaves the history unjournaled.
     journal: Option<Arc<dyn crate::domain::turn_journal::TurnJournal>>,
     features: Features,
+    /// What `pullRequestStatus` reads through; `None` as with the feature off.
+    pull_requests: Option<Arc<dyn crate::domain::code_host::AgentPullRequests>>,
     parallel: Vec<String>,
     parallel_calls: Arc<Mutex<usize>>,
 }
@@ -269,6 +271,7 @@ fn harness(label: &str, steps: Vec<Step>) -> Harness {
         markers: None,
         journal: None,
         features: Features::default(),
+        pull_requests: None,
         parallel: Vec::new(),
         parallel_calls: Arc::new(Mutex::new(0)),
     }
@@ -337,6 +340,7 @@ impl Harness {
             questions: self.questions.clone(),
             board: None,
             mongo: None,
+            pull_requests: self.pull_requests.clone(),
             deepseek: None,
             features: self.features.clone(),
             fork: false,

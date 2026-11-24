@@ -294,6 +294,7 @@ pub(super) fn execute_call(
         history,
         board: turn.board.clone(),
         mongo: turn.mongo.clone(),
+        pull_requests: turn.pull_requests.clone(),
         parallel: match turn.place {
             Place::Folder { parallel, .. } => Some(parallel),
             Place::Chat { .. } => None,

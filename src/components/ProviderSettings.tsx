@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, Circle, CircleDot, FileUp, Plus, RefreshCw, Search, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Circle, CircleDot, Plus, RefreshCw, Search, X } from "lucide-react";
 import type { KeyStore, LlmSettings, ProviderConfig, ProviderKind } from "../lib/settings";
-import { certificateCount, EFFORTS, filterBy, filterModels, freeName, pemFromBytes } from "../lib/providerForm";
+import { EFFORTS, filterBy, filterModels, freeName } from "../lib/providerForm";
+import { Certificate } from "./Certificate";
 import { builtinSourceOf, isBuiltIn, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
 import "./ProviderSettings.css";
 import "./Segmented.css";
@@ -696,91 +697,5 @@ function Slider({
         </button>
       </div>
     </div>
-  );
-}
-
-/**
- * A certificate to trust for this provider: a gateway behind a corporate CA,
- * or a self-signed server. Loaded from a file or pasted; shown as a count, and
- * as text only when asked.
- */
-function Certificate({
-  pem,
-  source,
-  onChange,
-}: {
-  pem: string;
-  /** The built-in provider this certificate came with, when it is one of its own. */
-  source?: string;
-  onChange: (pem: string) => void;
-}) {
-  const file = useRef<HTMLInputElement>(null);
-  const [open, setOpen] = useState(false);
-  const [readError, setReadError] = useState<string | null>(null);
-  const count = certificateCount(pem);
-
-  const load = async (chosen: File | undefined) => {
-    if (!chosen) return;
-    try {
-      onChange(pemFromBytes(new Uint8Array(await chosen.arrayBuffer())));
-      setReadError(null);
-    } catch (e) {
-      setReadError(`${chosen.name} could not be read: ${e}`);
-    }
-  };
-
-  return (
-    <section className="provider-card">
-      <div className="provider-card-head">
-        <h4 className="provider-card-title">Certificate</h4>
-        <div className="provider-cert-actions">
-          <button type="button" className="btn btn-ghost" onClick={() => file.current?.click()}>
-            <FileUp size={12} />
-            {pem.trim() ? "Replace…" : "Load file…"}
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={() => setOpen(!open)}>
-            {open ? "Hide" : pem.trim() ? "Show" : "Paste"}
-          </button>
-          {pem.trim() && (
-            <button type="button" className="btn btn-ghost" onClick={() => onChange("")}>
-              Remove
-            </button>
-          )}
-        </div>
-        <input
-          ref={file}
-          type="file"
-          hidden
-          accept=".pem,.crt,.cer,.der"
-          onChange={(e) => {
-            load(e.target.files?.[0]);
-            e.target.value = "";
-          }}
-        />
-      </div>
-      <p className={`provider-cert-state${pem.trim() ? " set" : ""}`}>
-        {pem.trim()
-          ? count
-            ? source
-              ? `${count} certificate${count === 1 ? "" : "s"} — the one ${source} comes with, trusted instead of the public roots`
-              : `${count} certificate${count === 1 ? "" : "s"} — trusted instead of the public roots`
-            : "No certificate found in this text"
-          : "None — the server is checked against the public roots"}
-      </p>
-      {open && (
-        <textarea
-          className="provider-cert"
-          rows={6}
-          spellCheck={false}
-          value={pem}
-          placeholder={"-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----"}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      )}
-      {readError && <p className="modal-note provider-error">{readError}</p>}
-      <p className="modal-note">
-        The server's own certificate, if it is self-signed, or the CA that issued it. A chain can be pasted whole.
-      </p>
-    </section>
   );
 }

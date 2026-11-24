@@ -1,0 +1,61 @@
+.cert-card {
+  padding: 12px 14px 4px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.cert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.cert-title {
+  margin: 0;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-box-hint);
+}
+.cert-actions {
+  display: flex;
+  gap: 6px;
+}
+.cert-card .btn {
+  padding: 4px 9px;
+  font-size: var(--fs-xs);
+}
+.cert-state {
+  margin-bottom: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+.cert-state.set {
+  color: var(--text);
+}
+.cert-text {
+  display: block;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+.cert-text:focus {
+  border-color: var(--text-faint);
+}
+.cert-card > .modal-note:last-child {
+  margin-bottom: 10px;
+}
+.cert-error {
+  color: var(--red);
+}

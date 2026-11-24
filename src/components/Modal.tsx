@@ -20,7 +20,10 @@ export function Modal({ title, open, onClose, children, footer, wide, full }: Pr
   const pressedOutside = useRef(false);
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => matches(e, "close") && onClose();
+    // A menu open in the dialog takes this Escape first, and says so by
+    // handling the event: the dialog takes the next one (Dropdown's is in the
+    // capture phase, so it always runs first).
+    const onKey = (e: KeyboardEvent) => matches(e, "close") && !e.defaultPrevented && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);

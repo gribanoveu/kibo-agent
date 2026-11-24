@@ -57,6 +57,7 @@ pub mod terminal;
 pub mod command_risk;
 pub mod git_changes;
 pub mod git_branches;
+pub mod code_host;
 pub mod commit_message;
 pub mod file_tree;
 pub mod file_write;

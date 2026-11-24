@@ -12,12 +12,22 @@ use git2::Repository;
 /// A repository with no commits yet still has a branch — HEAD names it
 /// before anything is on it — so that case reads the name from HEAD itself.
 pub fn current_branch(root: &Path) -> Option<String> {
+    checked_out_branch(root).or_else(|| {
+        let repo = Repository::discover(root).ok()?;
+        // Bound before returning: the head borrows `repo`.
+        let short = repo.head().ok()?.target().map(|id| id.to_string().chars().take(7).collect());
+        short
+    })
+}
+
+/// The branch checked out, and only a branch: `None` for a detached HEAD,
+/// where [`current_branch`] shows the short commit id instead, and outside a
+/// repository. A pull request comes from a branch.
+pub fn checked_out_branch(root: &Path) -> Option<String> {
     let repo = Repository::discover(root).ok()?;
-    // Bound before returning: the references borrow `repo`, and a tail
-    // expression's temporaries would outlive it.
     let branch = match repo.head() {
         Ok(head) if head.is_branch() => head.shorthand().ok().map(String::from),
-        Ok(head) => head.target().map(|id| id.to_string().chars().take(7).collect()),
+        Ok(_) => None,
         Err(_) => {
             let head = repo.find_reference("HEAD").ok()?;
             let target = head.symbolic_target().ok()??;
@@ -37,6 +47,24 @@ pub fn current_commit(root: &Path) -> Option<String> {
     // outlive it, as in `current_branch`.
     let commit = repo.head().ok()?.target().map(|id| id.to_string());
     commit
+}
+
+/// What of the repository a server could have heard about: the branch
+/// checked out and where each remote's copy of it points — a push or a fetch
+/// moves those. Staging, a local commit or an editor's `git status` move
+/// nothing here. `None` outside a repository and on a detached HEAD.
+pub fn pushed_state(root: &Path) -> Option<(String, Vec<String>)> {
+    let branch = checked_out_branch(root)?;
+    let repo = Repository::discover(root).ok()?;
+    let remotes: Vec<String> = repo
+        .references_glob(&format!("refs/remotes/*/{branch}"))
+        .ok()?
+        .flatten()
+        .filter_map(|r| Some(format!("{} {}", r.name().ok()?, r.target()?)))
+        .collect();
+    // ponytail: in git's order, which packing the refs may change — one
+    // needless read of the server then; sort here if that ever shows.
+    Some((branch, remotes))
 }
 
 /// The main working tree of the repository `root` is a linked worktree of;
@@ -63,6 +91,61 @@ mod tests {
         let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
         let sig = Signature::now("Test", "test@example.com").unwrap();
         repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap()
+    }
+
+    /// The strip reads the server again only for what the server could know:
+    /// a switch of branch or a push, not a commit or a staged file.
+    #[test]
+    fn what_was_pushed_moves_with_a_push_and_a_switch_only() {
+        let dir = temp_dir("git-head-pushed");
+        let repo = Repository::init(&dir).unwrap();
+        let first = commit(&repo);
+        let branch = checked_out_branch(&dir).unwrap();
+        let start = pushed_state(&dir).unwrap();
+        assert_eq!(start, (branch.clone(), vec![]));
+
+        repo.reference(&format!("refs/remotes/origin/{branch}"), first, true, "push").unwrap();
+        repo.reference("refs/remotes/origin/other", first, true, "another branch").unwrap();
+        let pushed = pushed_state(&dir).unwrap();
+        assert_eq!(pushed.1, [format!("refs/remotes/origin/{branch} {first}")]);
+
+        let sig = Signature::now("Test", "test@example.com").unwrap();
+        let tree = repo.find_commit(first).unwrap().tree().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "local", &tree, &[&repo.find_commit(first).unwrap()]).unwrap();
+        std::fs::write(dir.join("a.txt"), "a").unwrap();
+        repo.index().unwrap().add_path(Path::new("a.txt")).unwrap();
+        assert_eq!(pushed_state(&dir), Some(pushed.clone()), "a commit and a staged file are not news to the server");
+
+        // A second push moves the ref that is already there.
+        let local = repo.head().unwrap().target().unwrap();
+        repo.reference(&format!("refs/remotes/origin/{branch}"), local, true, "push again").unwrap();
+        assert_eq!(pushed_state(&dir).unwrap().1, [format!("refs/remotes/origin/{branch} {local}")]);
+
+        repo.branch("feature/y", &repo.find_commit(first).unwrap(), false).unwrap();
+        repo.set_head("refs/heads/feature/y").unwrap();
+        assert_eq!(pushed_state(&dir), Some(("feature/y".to_string(), vec![])));
+
+        repo.set_head_detached(first).unwrap();
+        assert_eq!(pushed_state(&dir), None);
+    }
+
+    /// A pull request comes from a branch: a detached HEAD has none, where the
+    /// header shows the short commit id.
+    #[test]
+    fn a_detached_head_checks_out_no_branch() {
+        let dir = temp_dir("git-head-checked-out");
+        let repo = Repository::init(&dir).unwrap();
+        assert!(checked_out_branch(&dir).is_some(), "an unborn branch is still a branch");
+        let id = commit(&repo);
+        let branch = checked_out_branch(&dir).unwrap();
+        assert_eq!(Some(branch.clone()), current_branch(&dir));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        assert_eq!(checked_out_branch(&dir.join("sub")), Some(branch), "a subfolder is in the repository");
+
+        repo.set_head_detached(id).unwrap();
+        assert_eq!(checked_out_branch(&dir), None);
+        assert!(current_branch(&dir).is_some(), "the header still shows the commit");
+        assert_eq!(checked_out_branch(&temp_dir("git-head-checked-out-plain")), None);
     }
 
     #[test]

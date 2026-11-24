@@ -14,6 +14,8 @@ import { ChangesPanel } from "./ChangesPanel";
 import { FilesPanel } from "./FilesPanel";
 import { ItemList } from "./ItemList";
 import { OverviewPanel, type OverviewProps } from "./OverviewPanel";
+import { PullRequestStrip } from "./PullRequestStrip";
+import type { PullRequestState } from "../hooks/usePullRequest";
 import { PlanPanel } from "./PlanPanel";
 import { useRules } from "../hooks/useRules";
 import { useSkills } from "../hooks/useSkills";
@@ -45,6 +47,10 @@ export type PaneContext = {
   onNotify: (msg: string) => void;
   /** The commit message being written in Changes. */
   commitDraft: { message: string; onMessage: (message: string) => void };
+  /** The Catalog's `pull-requests` feature is on: Overview shows the branch's pull request. */
+  pullRequests: boolean;
+  /** The branch's pull request, read once in App: Overview's strip and the chat's task buttons draw the same read. */
+  pr: PullRequestState;
   /** The background process a chat row asked to see — `null` for the list; a new object each ask. */
   processFocus: { id: number | null } | null;
   /** Terminal took what was asked for: App lets go of it. */
@@ -68,7 +74,7 @@ export type PaneContext = {
   mcp: McpListProps;
   hooks: HooksListProps;
   /** What Overview shows besides the MCP servers, which it reads from here too, and what it reads itself. */
-  overview: Omit<OverviewProps, "servers" | "processes" | "agents">;
+  overview: Omit<OverviewProps, "servers" | "processes" | "agents" | "pullRequest">;
   plan: {
     plan: string | null;
     checklist: Task[];
@@ -409,11 +415,19 @@ function RulesPane({ active, workspace }: PaneContext) {
 
 // ─── Overview ──────────────────────────────────────────────────────────────
 
-/** Reads the processes and helper agents itself, as Terminal does, while it is on screen. */
-function OverviewPane({ active, chatId, mcp, overview }: PaneContext) {
+/** Reads the processes and helper agents itself, as Terminal does, while it is on screen; the pull request is App's one read. */
+function OverviewPane({ active, chatId, mcp, overview, onNotify, pullRequests, pr, onAddToChat }: PaneContext) {
   const { processes } = useProcesses(active, chatId);
   const { agents } = useAgents(active, chatId);
-  return <OverviewPanel servers={mcp.view?.servers ?? []} processes={processes} agents={agents} {...overview} />;
+  return (
+    <OverviewPanel
+      servers={mcp.view?.servers ?? []}
+      processes={processes}
+      agents={agents}
+      pullRequest={pullRequests ? <PullRequestStrip {...pr} onNotify={onNotify} onTask={onAddToChat} /> : null}
+      {...overview}
+    />
+  );
 }
 
 // ─── Files ─────────────────────────────────────────────────────────────────

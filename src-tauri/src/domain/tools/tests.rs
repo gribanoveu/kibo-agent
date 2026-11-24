@@ -121,14 +121,14 @@ fn reads_survive_the_trip_through_javascript() {
 #[test]
 fn what_waits_for_tool_search_is_these() {
     let waiting: Vec<ToolName> = ToolName::ALL.iter().copied().filter(|t| !t.loads_up_front()).collect();
-    assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo]);
+    assert_eq!(waiting, [ToolName::Move, ToolName::GitBlame, ToolName::ReadTerminal, ToolName::Board, ToolName::Mongo, ToolName::PullRequestStatus, ToolName::PullRequestCreate]);
 }
 
 #[test]
 fn all_is_complete() {
     assert_eq!(
         ToolName::ALL.len(),
-        50,
+        52,
         "a variant was added or removed — update ALL and this count together"
     );
     let unique: HashSet<_> = ToolName::ALL.iter().collect();
@@ -205,6 +205,8 @@ fn exactly_the_writing_tools_are_mutating() {
             ToolName::Move,
             // Unknown, so assumed.
             ToolName::Mcp,
+            // A pull request on the server, which notifies its reviewers.
+            ToolName::PullRequestCreate,
         ])
     );
 }
@@ -248,6 +250,25 @@ fn a_command_that_reaches_the_network_asks_even_when_commands_are_allowed() {
 
     policy.skip_all = true;
     assert!(!policy.requires_approval_for(&run("curl https://x.io")));
+}
+
+/// A pull request notifies its reviewers, so "always allow" given once is
+/// not given for every one after; Auto still means not asking.
+#[test]
+fn a_pull_request_asks_even_when_allowed_always() {
+    let call = ToolCall::PullRequestCreate(PullRequestCreateArgs {
+        title: "t".into(),
+        body: None,
+        target: None,
+        draft: None,
+    });
+    let mut policy = ApprovalPolicy::default();
+    policy.allow_always("pullRequestCreate").unwrap();
+    assert!(policy.requires_approval_for(&call));
+    assert!(policy.approval_reason(&call).unwrap().contains("notified"));
+
+    policy.skip_all = true;
+    assert!(!policy.requires_approval_for(&call));
 }
 
 /// The turn's aliases are the ones the gate reads with.

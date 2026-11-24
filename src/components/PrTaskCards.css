@@ -1,0 +1,55 @@
+/* The pull request's tasks under the agent's answer: the same card shape as
+   the offered next steps, in their own names — pressing one puts its request
+   in the message box rather than sending it. */
+.pr-task-cards {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.pr-task-cards-caption {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+.pr-task-card {
+  --tint: var(--accent);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background-color 0.12s;
+}
+.pr-task-card.conflicts {
+  --tint: var(--amber);
+}
+.pr-task-card:hover {
+  border-color: color-mix(in srgb, var(--tint) 45%, var(--border-soft));
+  background: color-mix(in srgb, var(--tint) 5%, var(--bg-panel));
+}
+.pr-task-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.pr-task-card-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--tint) 14%, transparent);
+  color: var(--tint);
+}
+.pr-task-card-label {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}

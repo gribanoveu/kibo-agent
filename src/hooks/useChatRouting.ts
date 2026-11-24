@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import type { ImagePart } from "../lib/images";
-import { COMMIT_REQUEST, type Offer, PULL_REQUEST, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
+import { COMMIT_REQUEST, type Offer, PULL_REQUEST, PULL_REQUEST_ON_SERVER, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
 import { exportChat, moveChatToWorktree } from "../lib/savedChats";
 import { pickSavePath } from "../lib/dialog";
 import { withLanguageReminder, type ReplyLanguage } from "../lib/settings";
@@ -34,6 +34,7 @@ export function useChatRouting({
   leavePage,
   giveBack,
   worktreeMain,
+  pullRequestsOn,
   openPlan,
   askWorktreeRemoval,
 }: {
@@ -51,6 +52,8 @@ export function useChatRouting({
   giveBack: (text: string, images?: ImagePart[]) => void;
   /** The main checkout when the open folder is a worktree of it (`useWorktreeOf`). */
   worktreeMain: string | null;
+  /** Pull requests in Catalog is on: the PR offer names the app's own tool. */
+  pullRequestsOn: boolean;
   /** Opens the Plan tab: the plan card leads there, implementation starts in it. */
   openPlan: () => void;
   /** Opens the removal dialog for a worktree the chat has already left. */
@@ -141,7 +144,7 @@ export function useChatRouting({
     }
     if (kind === "review") return send(REVIEW_REQUEST);
     if (kind === "commit") return send(COMMIT_REQUEST);
-    if (kind === "pullRequest") return send(PULL_REQUEST);
+    if (kind === "pullRequest") return send(pullRequestsOn ? PULL_REQUEST_ON_SERVER : PULL_REQUEST);
     if (kind === "syncBase") return send(SYNC_BASE);
     if (kind === "cleanup") {
       const path = workspace.path;

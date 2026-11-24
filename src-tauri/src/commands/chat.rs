@@ -218,7 +218,7 @@ pub async fn chat_preview(
     calls: Vec<PendingToolCall>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<Vec<ToolPreview>, String> {
-    let (workspace, _) = state.chat_workspace(&chat_id)?;
+    let (workspace, worktree_base) = state.chat_workspace(&chat_id)?;
     let calls: Vec<LlmToolCall> = calls
         .into_iter()
         .map(|call| LlmToolCall {
@@ -230,7 +230,7 @@ pub async fn chat_preview(
     // Reads the files the calls would change, and diffs them.
     super::blocking(move || {
         let scope = ToolScope::new(&workspace).map_err(|e| e.to_string())?;
-        Ok::<_, String>(preview::preview_round(&scope, &calls))
+        Ok::<_, String>(preview::preview_round(&scope, &calls, worktree_base.as_deref()))
     })
     .await
 }
@@ -550,6 +550,9 @@ where
             .try_state::<Arc<crate::infra::board_store::Board>>()
             .map(|board| Arc::clone(&board) as Arc<dyn crate::domain::board::TaskBoard>),
         mongo: mongo_servers_of(&app),
+        pull_requests: app
+            .try_state::<Arc<crate::services::pull_requests::PullRequests>>()
+            .map(|prs| Arc::clone(&prs) as Arc<dyn crate::domain::code_host::AgentPullRequests>),
         markers: Some(Arc::new(ChatMarkers {
             session: Arc::clone(&session),
             chat_id: chat_id.clone(),

@@ -42,6 +42,8 @@ pub const CONTENT_FIELDS: &[&str] = &[
     "output",
     // skill
     "instructions",
+    // pullRequestCreate's description
+    "body",
 ];
 
 pub const REDACTED: &str = "<redacted>";
@@ -414,6 +416,22 @@ mod tests {
             ToolName::Mongo => (
                 Some(ToolCall::Mongo(crate::domain::tools::MongoArgs { op: crate::domain::tools::MongoOp::Find, filter: Some("{ paid: true }".into()), ..Default::default() })),
                 ToolResult::Mongo { text: LEAK.into(), summary: "3 documents".into() },
+            ),
+            // The branch asked about stays; the pull request read goes as `text`.
+            ToolName::PullRequestStatus => (
+                Some(ToolCall::PullRequestStatus(crate::domain::tools::PullRequestStatusArgs { branch: Some("release/1.2".into()) })),
+                ToolResult::PullRequest { text: LEAK.into(), summary: "#153 blocked".into() },
+            ),
+            // Where it went and under what title stay; the body is the model's
+            // prose about the code, as an edit's content is.
+            ToolName::PullRequestCreate => (
+                Some(ToolCall::PullRequestCreate(crate::domain::tools::PullRequestCreateArgs {
+                    title: "Fix it".into(),
+                    body: Some(LEAK.into()),
+                    target: Some("master".into()),
+                    draft: None,
+                })),
+                ToolResult::PullRequestCreated { id: 154, title: "Fix it".into(), from: "feature/x".into(), to: "master".into(), url: "https://u".into(), draft: false },
             ),
             // A path and the page's name for its card: what the log is for.
             ToolName::Present => (

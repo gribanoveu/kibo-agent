@@ -34,6 +34,8 @@ pub mod review;
 pub mod git;
 pub mod grep;
 pub mod mongo;
+pub mod pull_request_create;
+pub mod pull_request_status;
 pub mod cluster;
 pub mod runbook;
 pub mod list_files;
@@ -120,6 +122,8 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::DeepseekFetch, deepseek::fetch_definition),
     (ToolName::Board, board::definition),
     (ToolName::Mongo, mongo::definition),
+    (ToolName::PullRequestStatus, pull_request_status::definition),
+    (ToolName::PullRequestCreate, pull_request_create::definition),
     (ToolName::Present, present::definition),
     (ToolName::ToolSearch, tool_search::definition),
 ];
@@ -185,6 +189,8 @@ pub fn dispatch(
         ToolCall::DeepseekFetch(args) => deepseek::deepseek_fetch(args, deps),
         ToolCall::Board(args) => board::board(args, deps),
         ToolCall::Mongo(args) => mongo::mongo(args, deps),
+        ToolCall::PullRequestStatus(args) => pull_request_status::pull_request_status(folder()?, args, deps),
+        ToolCall::PullRequestCreate(args) => pull_request_create::pull_request_create(folder()?, args, deps),
         ToolCall::Present(args) => present::present(folder()?, args),
         ToolCall::ToolSearch(args) => tool_search::tool_search(args, deps),
         ToolCall::KubeList(args) => cluster::kube_list(deps.kube, args),
@@ -601,6 +607,19 @@ mod definition_tests {
                     sort: Some("{ at: -1 }".into()),
                     pipeline: Some("[{ $limit: 1 }]".into()),
                     limit: Some(5),
+                })],
+            ),
+            ToolName::PullRequestStatus => (
+                r#"{"branch":"release/1.2"}"#,
+                vec![ToolCall::PullRequestStatus(crate::domain::tools::PullRequestStatusArgs { branch: Some("release/1.2".into()) })],
+            ),
+            ToolName::PullRequestCreate => (
+                r#"{"title":"Fix it"}"#,
+                vec![ToolCall::PullRequestCreate(crate::domain::tools::PullRequestCreateArgs {
+                    title: "Fix it".into(),
+                    body: Some("Why.".into()),
+                    target: Some("master".into()),
+                    draft: Some(true),
                 })],
             ),
             ToolName::Present => (

@@ -32,6 +32,24 @@ describe("what each call shows", () => {
     expect(done).toMatchObject({ name: "Prototype", arg: "Coffee shop", meta: "version 3", detail: "index.html" });
   });
 
+  test("a pull request read names its branch; one created shows its number, branches and link", () => {
+    const read = (args: string) => describeTool(tool({ name: "pullRequestStatus", arguments: args, result: { result: "pullRequest", text: "Pull request #153", summary: "#153 blocked" } }));
+    expect(read('{"branch":"release/1.2"}')).toMatchObject({ name: "Pull request", arg: "release/1.2", meta: "#153 blocked", detail: "Pull request #153" });
+    expect(read('{"branch":"  "}')).toMatchObject({ arg: "current branch" });
+    expect(read("{}")).toMatchObject({ arg: "current branch" });
+
+    const asked = describeTool(tool({ name: "pullRequestCreate", arguments: '{"title":"Fix it","draft":true}', status: "running" }));
+    expect(asked).toMatchObject({ name: "Create pull request", arg: "Fix it", meta: "draft" });
+    const made = describeTool(
+      tool({
+        name: "pullRequestCreate",
+        arguments: '{"title":"Fix it"}',
+        result: { result: "pullRequestCreated", id: 154, title: "Fix it", from: "feature/x", to: "master", url: "https://git/pr/154", draft: false },
+      }),
+    );
+    expect(made).toMatchObject({ name: "Create pull request", arg: "Fix it", meta: "#154", detail: "feature/x → master\nhttps://git/pr/154" });
+  });
+
   test("a board call names the card it is about, and an edit shows the note it wrote", () => {
     const board = (args: string) => describeTool(tool({ name: "board", arguments: args, result: { cards: [{}, {}] } }));
     expect(board('{"op":"add","title":"Renew cert"}')).toMatchObject({ name: "Board", arg: "Renew cert", meta: "2 cards" });

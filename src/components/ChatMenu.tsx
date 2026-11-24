@@ -38,7 +38,8 @@ export type ChatMenuItem = {
  * at the trigger, it flips above when the window's lower edge is nearer,
  * and scrolling or resizing closes it — the trigger it names has moved.
  */
-export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
+/** `icon` replaces the trigger's "⋮" — a row that reads left to right takes "⋯". */
+export function ChatMenu({ items, icon }: { items: ChatMenuItem[]; icon?: ReactNode }) {
   const [open, setOpen] = useState(false);
   // The levels drilled into: the last is what the menu shows. Picking from a
   // submenu acts and closes, like picking from the top level.
@@ -127,7 +128,7 @@ export function ChatMenu({ items }: { items: ChatMenuItem[] }) {
           setOpen(true);
         }}
       >
-        <MoreVertical size={15} />
+        {icon ?? <MoreVertical size={15} />}
       </button>
       {open &&
         pos &&

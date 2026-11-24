@@ -1,0 +1,1525 @@
+//! Bitbucket Data Center's REST 1.0, as the `CodeHost` a strip asks
+//! (`docs/62-bitbucket-prs.md`, decisions 2, 3 and 9).
+//!
+//! Every address and every shape read here was answered by the probe of that
+//! plan against a live 8.19.26; the tests' JSON is those answers with the names
+//! taken out. Two of them settled decisions: the builds endpoint under the
+//! repository answers 400 because it wants a `key` it is never given, so the
+//! legacy `/rest/build-status` path is the one read; and the merge check hands
+//! back its veto lines ready to show.
+//!
+//! Nothing here keeps a token: [`Call`] carries it per request, and it goes in
+//! one header, to the address the user added and nowhere else.
+
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, PoisonError};
+use std::time::Duration;
+
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::domain::code_host::{
+    host_of, Build, BuildState, Call, CodeHost, CodeHostError, CodeHostServer, Comment, MergeCheck, PullRequest, ReviewStatus,
+    Reviewer,
+};
+use crate::infra::http_agent;
+
+/// A read answers in about a second on the probed server; a minute of nothing
+/// is a server that is not coming back this poll.
+const TIMEOUT: Duration = Duration::from_secs(20);
+/// Of an error body, what the strip shows.
+const ERROR_CHARS: usize = 200;
+
+/// Data Center's API, in its own names. The one place Bitbucket is spoken.
+pub struct Bitbucket;
+
+impl CodeHost for Bitbucket {
+    fn identify(&self, server: &CodeHostServer) -> Result<String, CodeHostError> {
+        // No token: the form asks this before one is saved, and the probe saw
+        // the server answer it to anyone.
+        let url = format!("{}/rest/api/latest/application-properties", server.base_url.trim().trim_end_matches('/'));
+        let (_, text) = answer(server, common(http::Method::GET, &url), None)?;
+        let properties: Properties = read(&text)?;
+        if properties.display_name != "Bitbucket" {
+            return Err(CodeHostError::BadAnswer(format!(
+                "the server calls itself \"{}\", not Bitbucket",
+                properties.display_name
+            )));
+        }
+        Ok(format!("Bitbucket {}", properties.version).trim().to_string())
+    }
+
+    fn clone_links(&self, call: &Call) -> Result<Vec<String>, CodeHostError> {
+        let repo: Repo = read(&get(call, &api(call))?)?;
+        Ok(repo.links.clone_links.into_iter().map(|link| link.href).collect())
+    }
+
+    fn me(&self, call: &Call) -> Result<String, CodeHostError> {
+        let (headers, _) = request(call, http::Method::GET, &api(call), None)?;
+        headers
+            .get("x-ausername")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                CodeHostError::BadAnswer(
+                    "the server did not say whose token this is (no X-AUSERNAME header)".to_string(),
+                )
+            })
+    }
+
+    fn default_branch(&self, call: &Call) -> Result<String, CodeHostError> {
+        let branch: Branch = read(&get(call, &format!("{}/default-branch", api(call)))?)?;
+        Ok(branch.display_id)
+    }
+
+    fn branch_commit(&self, call: &Call, branch: &str) -> Result<Option<String>, CodeHostError> {
+        let found: Values<BranchCommit> =
+            read(&get(call, &format!("{}/branches?filterText={}&boostMatches=true&limit=25", api(call), encode(branch)))?)?;
+        // `filterText` is a substring search: the server's list is searched for
+        // the branch itself, not taken as the answer. `boostMatches` puts the
+        // exact name first, or `dev` among thirty `feature/dev-*` would fall off
+        // the page and read as a branch nobody pushed.
+        Ok(found.values.into_iter().find(|candidate| candidate.display_id == branch).and_then(|candidate| candidate.latest_commit))
+    }
+
+    fn pull_request(&self, call: &Call, branch: &str) -> Result<Option<PullRequest>, CodeHostError> {
+        let at = encode(&format!("refs/heads/{branch}"));
+        let found: Values<Pr> = read(&get(
+            call,
+            &format!("{}/pull-requests?at={at}&direction=OUTGOING&state=OPEN", api(call)),
+        )?)?;
+        Ok(found.values.into_iter().next().map(Pr::into_pull_request))
+    }
+
+    fn merge_check(&self, call: &Call, id: u64) -> Result<MergeCheck, CodeHostError> {
+        let merge: Merge = read(&get(call, &format!("{}/pull-requests/{id}/merge", api(call)))?)?;
+        Ok(MergeCheck {
+            can_merge: merge.can_merge.unwrap_or(false),
+            conflicted: merge.conflicted.unwrap_or(false),
+            vetoes: merge
+                .vetoes
+                .into_iter()
+                .map(|veto| veto.summary_message)
+                .filter(|line| !line.trim().is_empty())
+                .collect(),
+        })
+    }
+
+    fn builds(&self, call: &Call, commit: &str) -> Result<Vec<Build>, CodeHostError> {
+        // The probe's finding: `/repos/{r}/commits/{sha}/builds` answers 400
+        // ("specify a non-blank key") — it wants one build's key, not the list —
+        // so the legacy path is the one that lists them.
+        let found: Values<BuildJson> =
+            read(&get(call, &format!("{}/rest/build-status/latest/commits/{}", base(call), encode(commit)))?)?;
+        Ok(found
+            .values
+            .into_iter()
+            .map(|build| Build {
+                key: build.key,
+                name: build.name,
+                state: build_state(&build.state),
+                url: build.url,
+                date_added: build.date_added,
+            })
+            .collect())
+    }
+
+    fn comments(&self, call: &Call, id: u64) -> Result<Vec<Comment>, CodeHostError> {
+        // The BB-8 probe's finding: `/comments` answers 400 without a `path` —
+        // it reads one file's comments, not the pull request's. The activity
+        // stream carries every comment with its anchor; tasks (blocker
+        // comments) have their own endpoint.
+        let mut latest: HashMap<u64, Activity> = HashMap::new();
+        let mut start = 0usize;
+        // ponytail: ten pages of a hundred events — a pull request with a
+        // longer history loses its oldest comments; past this, read by id.
+        for _ in 0..10 {
+            let page: Values<Activity> =
+                read(&get(call, &format!("{}/pull-requests/{id}/activities?limit=100&start={start}", api(call)))?)?;
+            for activity in page.values {
+                let Some(comment) = activity.comment.as_ref() else { continue };
+                if activity.action != "COMMENTED" {
+                    continue;
+                }
+                // The last event of a comment is its current state: an edit
+                // carries the new text, a delete withdraws it. The stream runs
+                // newest first (the probe's order), and two events may share a
+                // millisecond: the greater event id is the newer one, whatever
+                // order they arrive in.
+                let id = comment.id;
+                if latest.get(&id).is_none_or(|seen| (seen.created_date, seen.id) <= (activity.created_date, activity.id)) {
+                    latest.insert(id, activity);
+                }
+            }
+            if page.is_last_page {
+                break;
+            }
+            let next = page.next_page_start;
+            if next <= start {
+                break;
+            }
+            start = next;
+        }
+        let mut remarks: HashMap<u64, Comment> = latest
+            .into_values()
+            .filter_map(|activity| {
+                if activity.comment_action == "DELETED" {
+                    return None;
+                }
+                let comment = activity.comment?;
+                // PENDING is a reviewer's unpublished draft; a reply is part
+                // of its thread; a task is read from its own endpoint below.
+                if comment.state != "OPEN" || comment.parent.is_some() || comment.severity == "BLOCKER" {
+                    return None;
+                }
+                let (path, line) = match activity.comment_anchor.or(comment.anchor) {
+                    Some(anchor) => (anchor.path, anchor.line),
+                    None => (None, None),
+                };
+                Some((
+                    comment.id,
+                    Comment {
+                        id: comment.id,
+                        author_name: comment.author.shown(),
+                        author: comment.author.slug,
+                        text: comment.text,
+                        path,
+                        line,
+                        task: false,
+                        resolved: comment.thread_resolved,
+                    },
+                ))
+            })
+            .collect();
+        let tasks: Values<CommentJson> = read(&get(call, &format!("{}/pull-requests/{id}/blocker-comments?limit=100", api(call)))?)?;
+        for task in tasks.values {
+            if task.state != "OPEN" && task.state != "RESOLVED" {
+                continue;
+            }
+            let (path, line) = match task.anchor {
+                Some(anchor) => (anchor.path, anchor.line),
+                None => (None, None),
+            };
+            remarks.insert(
+                task.id,
+                Comment {
+                    id: task.id,
+                    author_name: task.author.shown(),
+                    author: task.author.slug,
+                    text: task.text,
+                    path,
+                    line,
+                    task: true,
+                    resolved: task.state == "RESOLVED",
+                },
+            );
+        }
+        // A stable order: the watcher compares snapshots whole, and a hash
+        // map's own would make every read a change.
+        let mut remarks: Vec<Comment> = remarks.into_values().collect();
+        remarks.sort_by_key(|remark| remark.id);
+        Ok(remarks)
+    }
+
+    fn approve(&self, call: &Call, pr: &PullRequest, me: &str, approved: bool) -> Result<(), CodeHostError> {
+        let status = if approved { "APPROVED" } else { "UNAPPROVED" };
+        put(
+            call,
+            &format!("{}/pull-requests/{}/participants/{}", api(call), pr.id, encode(me)),
+            json!({ "status": status }),
+        )
+        .map(|_| ())
+    }
+
+    fn merge(&self, call: &Call, pr: &PullRequest) -> Result<(), CodeHostError> {
+        // The version is the optimistic lock: a stale one is 409, and the strip
+        // re-reads rather than repeating this. The empty object is there for the
+        // `Content-Type`: the resource takes JSON, and a body-less POST is 415.
+        post(call, &format!("{}/pull-requests/{}/merge?version={}", api(call), pr.id, pr.version), json!({})).map(|_| ())
+    }
+
+    fn set_draft(&self, call: &Call, pr: &PullRequest, draft: bool) -> Result<(), CodeHostError> {
+        // The update takes the whole pull request: a field left out is not
+        // "unchanged" — reviewers left out are removed, and the description with
+        // them. So the server's own copy goes back with only `draft` changed, at
+        // the version the user saw: one that moved since is the 409 of a merge.
+        let url = format!("{}/pull-requests/{}", api(call), pr.id);
+        let mut body: Value = read(&get(call, &url)?)?;
+        let Some(fields) = body.as_object_mut() else {
+            return Err(CodeHostError::BadAnswer("the pull request is not a JSON object".to_string()));
+        };
+        fields.insert("draft".to_string(), json!(draft));
+        fields.insert("version".to_string(), json!(pr.version));
+        put(call, &url, body).map(|_| ())
+    }
+
+    fn create(&self, call: &Call, from: &str, to: &str, title: &str, description: &str, draft: bool) -> Result<PullRequest, CodeHostError> {
+        let mut body = json!({
+            "title": title,
+            "fromRef": { "id": format!("refs/heads/{from}") },
+            "toRef": { "id": format!("refs/heads/{to}") },
+        });
+        if !description.trim().is_empty() {
+            body["description"] = json!(description);
+        }
+        // Only when asked: a server older than 8.18 has no drafts to make.
+        if draft {
+            body["draft"] = json!(true);
+        }
+        let created = post(call, &format!("{}/pull-requests", api(call)), body)?;
+        Ok(read::<Pr>(&created)?.into_pull_request())
+    }
+}
+
+// ------------------------------------------------------------------ requests
+
+fn base<'a>(call: &'a Call) -> &'a str {
+    call.server.base_url.trim_end_matches('/')
+}
+
+fn api(call: &Call) -> String {
+    format!("{}/rest/api/latest/projects/{}/repos/{}", base(call), encode(&call.remote.project), encode(&call.remote.slug))
+}
+
+fn bearer(call: &Call) -> String {
+    format!("Bearer {}", call.token)
+}
+
+/// The name the app gives itself in a request — the same header the providers'
+/// agent sends, so a WAF that refuses an unnamed client at least says which.
+const AGENT: &str = concat!("Kibo-Agent/", env!("CARGO_PKG_VERSION"));
+
+/// One request, with what every one of them shares: the token in one header, a
+/// timeout, and no redirect followed. A body is JSON; a request without one is
+/// a read.
+///
+/// The redirect is not a nicety: Data Center answers 302 to an SSO page (the
+/// probe's step 3 looks for exactly that), and following it would carry the
+/// `Authorization` header to whichever host the answer names — the one thing
+/// decision 1 promises never happens.
+///
+/// `X-Atlassian-Token: no-check` is what Atlassian's XSRF filter wants of a
+/// client that is not a browser; without it a write can come back 403, which
+/// would read as a token without the right to write.
+fn request(
+    call: &Call,
+    method: http::Method,
+    url: &str,
+    body: Option<Value>,
+) -> Result<(http::HeaderMap, String), CodeHostError> {
+    answer(call.server, common(method, url).header("Authorization", bearer(call)), body)
+}
+
+/// The agents kept, by address and certificate.
+type Agents = HashMap<(String, Option<blake3::Hash>), ureq::Agent>;
+
+/// ponytail: never emptied — one agent per address and certificate this run
+/// has used, a handful; drop one with its server if that ever grows.
+static AGENTS: LazyLock<Mutex<Agents>> = LazyLock::new(Mutex::default);
+
+/// One agent per server, kept: ureq's pool keeps its connections open, so
+/// every request of a read after the first goes without a TCP and TLS
+/// handshake — over a VPN, most of what a read cost. The server's own
+/// certificate replaces the public roots, trusted for this server and nowhere
+/// else; a new certificate is a new agent, and a connection it did not vouch
+/// for is never reused.
+fn agent_for(base: &str, pem: Option<&str>) -> Result<ureq::Agent, CodeHostError> {
+    let key = (base.to_string(), pem.map(|pem| blake3::hash(pem.as_bytes())));
+    let mut agents = AGENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(agent) = agents.get(&key) {
+        return Ok(agent.clone());
+    }
+    let agent = http_agent::build_agent(pem).map_err(|e| CodeHostError::Tls(e.0))?;
+    agents.insert(key, agent.clone());
+    Ok(agent)
+}
+
+/// The headers every request carries, the token aside.
+fn common(method: http::Method, url: &str) -> http::request::Builder {
+    http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header("Accept", "application/json")
+        .header("User-Agent", AGENT)
+        .header("X-Atlassian-Token", "no-check")
+}
+
+/// Sends `request` to `server` and reads the answer through [`status_check`].
+fn answer(
+    server: &CodeHostServer,
+    request: http::request::Builder,
+    body: Option<Value>,
+) -> Result<(http::HeaderMap, String), CodeHostError> {
+    // A token goes over TLS or nowhere; `http` is left for this machine alone,
+    // where a test's own server listens — the rule the catalog's sources use.
+    let base = server.base_url.trim().trim_end_matches('/');
+    if base.starts_with("http://") && !is_loopback(base) {
+        return Err(CodeHostError::Insecure(base.to_string()));
+    }
+    let agent = agent_for(base, server.trusted_cert_pem.as_deref())?;
+    let mut response = match body {
+        None => send(&agent, request.body(())),
+        Some(body) => send(&agent, request.header("Content-Type", "application/json").body(body.to_string())),
+    }?;
+    let status = response.status().as_u16();
+    let text = response.body_mut().read_to_string().map_err(|e| CodeHostError::Network(e.to_string()))?;
+    status_check(status, &text)?;
+    Ok((std::mem::take(response.headers_mut()), text))
+}
+
+fn send<S: ureq::AsSendBody>(
+    agent: &ureq::Agent,
+    request: Result<http::Request<S>, http::Error>,
+) -> Result<http::Response<ureq::Body>, CodeHostError> {
+    // A header the token makes invalid — a newline pasted with it — fails here,
+    // before anything is sent.
+    let request = request.map_err(|e| CodeHostError::Network(e.to_string()))?;
+    let request = agent.configure_request(request).timeout_global(Some(TIMEOUT)).max_redirects(0).build();
+    agent.run(request).map_err(classify)
+}
+
+/// What a failed request means to the strip: a certificate to add, no route
+/// to the server (only the branch is shown), or something the server sent
+/// back that is worth saying.
+fn classify(error: ureq::Error) -> CodeHostError {
+    use std::io::ErrorKind;
+    match error {
+        ureq::Error::Tls(message) => CodeHostError::Tls(message.to_string()),
+        // A rustls handshake failure reaches ureq as an io error, and its text is
+        // rustls' own — "invalid peer certificate: UnknownIssuer". That text is
+        // the only thing telling a refused certificate from a closed port, and a
+        // server behind an untrusted CA is exactly what this names.
+        ureq::Error::Io(e) if e.to_string().to_lowercase().contains("certificate") => CodeHostError::Tls(e.to_string()),
+        ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) => {
+            CodeHostError::Unreachable(error.to_string())
+        }
+        ureq::Error::Io(e)
+            if matches!(
+                e.kind(),
+                ErrorKind::ConnectionRefused | ErrorKind::TimedOut | ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable
+            ) =>
+        {
+            CodeHostError::Unreachable(e.to_string())
+        }
+        other => CodeHostError::Network(other.to_string()),
+    }
+}
+
+/// `http` is allowed only to this machine, where a test's own server listens.
+/// The host is compared whole: `localhost.example` and `localhost@example` are
+/// somewhere else.
+fn is_loopback(base: &str) -> bool {
+    match host_of(base) {
+        Some(host) => host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    }
+}
+
+fn get(call: &Call, url: &str) -> Result<String, CodeHostError> {
+    request(call, http::Method::GET, url, None).map(|(_, text)| text)
+}
+
+fn post(call: &Call, url: &str, body: Value) -> Result<String, CodeHostError> {
+    request(call, http::Method::POST, url, Some(body)).map(|(_, text)| text)
+}
+
+fn put(call: &Call, url: &str, body: Value) -> Result<String, CodeHostError> {
+    request(call, http::Method::PUT, url, Some(body)).map(|(_, text)| text)
+}
+
+/// The three statuses the strip acts on, and everything else with the server's
+/// own words: 401 is the token, 403 the token's rights, 409 a stale version.
+///
+/// Only a stale version is [`CodeHostError::Conflict`]: Data Center answers 409
+/// to a vetoed merge and to a second pull request between the same branches as
+/// well, and there its own words are the whole point.
+fn status_check(status: u16, text: &str) -> Result<(), CodeHostError> {
+    match status {
+        200..=299 => Ok(()),
+        401 => Err(CodeHostError::Unauthorized),
+        403 => Err(CodeHostError::Forbidden),
+        409 if is_out_of_date(text) => Err(CodeHostError::Conflict),
+        _ => Err(CodeHostError::Http(status, said(text))),
+    }
+}
+
+/// Whether a 409 is the optimistic lock: Data Center names the exception
+/// `…PullRequestOutOfDateException`.
+fn is_out_of_date(text: &str) -> bool {
+    serde_json::from_str::<Value>(text).is_ok_and(|value| {
+        value["errors"]
+            .as_array()
+            .is_some_and(|errors| errors.iter().any(|error| error["exceptionName"].as_str().is_some_and(|name| name.ends_with("OutOfDateException"))))
+    })
+}
+
+fn read<T: DeserializeOwned>(text: &str) -> Result<T, CodeHostError> {
+    serde_json::from_str(text).map_err(|e| CodeHostError::BadAnswer(e.to_string()))
+}
+
+/// A path or query segment as the API takes it: a branch's `/` becomes `%2F`,
+/// which is what the probe sent for `at=refs%2Fheads%2Fdocs%2Fwowtax-8238`.
+fn encode(segment: &str) -> String {
+    // RFC 3986's unreserved set, kept; everything else percent-encoded.
+    const KEPT: &percent_encoding::AsciiSet =
+        &percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+    percent_encoding::utf8_percent_encode(segment, KEPT).to_string()
+}
+
+/// The server's own words: its `errors[].message`, or the body, cut short.
+fn said(text: &str) -> String {
+    let parsed: Option<Value> = serde_json::from_str(text).ok();
+    let message = parsed
+        .as_ref()
+        .and_then(|value| value["errors"][0]["message"].as_str().or_else(|| value["message"].as_str()));
+    let text = message.unwrap_or(text).trim();
+    match text.char_indices().nth(ERROR_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_string(),
+    }
+}
+
+/// `APPROVED` is the only yes; a `NEEDS_WORK` is a decision too; anything this
+/// app has no word for counts as not approved — the strip shows it as a
+/// reviewer who has not said yes.
+fn review_status(state: &str) -> ReviewStatus {
+    match state {
+        "APPROVED" => ReviewStatus::Approved,
+        "NEEDS_WORK" => ReviewStatus::NeedsWork,
+        _ => ReviewStatus::Unapproved,
+    }
+}
+
+/// A state this app has no word for is never a success.
+fn build_state(state: &str) -> BuildState {
+    match state {
+        "SUCCESSFUL" => BuildState::Successful,
+        "FAILED" => BuildState::Failed,
+        "INPROGRESS" => BuildState::InProgress,
+        _ => BuildState::Unknown,
+    }
+}
+
+// ----------------------------------------------------------- the server's JSON
+
+#[derive(Deserialize)]
+struct Properties {
+    #[serde(default, rename = "displayName")]
+    display_name: String,
+    #[serde(default)]
+    version: String,
+}
+
+#[derive(Deserialize)]
+struct Values<T> {
+    #[serde(default = "Vec::new")]
+    values: Vec<T>,
+    /// A response that does not say reads as the last page: nothing to follow.
+    #[serde(default = "last_page", rename = "isLastPage")]
+    is_last_page: bool,
+    #[serde(default, rename = "nextPageStart")]
+    next_page_start: usize,
+}
+
+fn last_page() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+struct Repo {
+    #[serde(default)]
+    links: RepoLinks,
+}
+
+#[derive(Deserialize, Default)]
+struct RepoLinks {
+    #[serde(default, rename = "clone")]
+    clone_links: Vec<Link>,
+}
+
+#[derive(Deserialize)]
+struct Link {
+    href: String,
+}
+
+#[derive(Deserialize)]
+struct Branch {
+    #[serde(rename = "displayId")]
+    display_id: String,
+}
+
+#[derive(Deserialize)]
+struct BranchCommit {
+    #[serde(rename = "displayId")]
+    display_id: String,
+    #[serde(default, rename = "latestCommit")]
+    latest_commit: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Pr {
+    id: u64,
+    #[serde(default)]
+    version: u64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    author: Person,
+    #[serde(default, rename = "fromRef")]
+    from_ref: GitRef,
+    #[serde(default, rename = "toRef")]
+    to_ref: GitRef,
+    #[serde(default)]
+    reviewers: Vec<PrReviewer>,
+    #[serde(default)]
+    links: PrLinks,
+    /// Absent on a server before 8.18 — which has no drafts at all.
+    #[serde(default)]
+    draft: Option<bool>,
+}
+
+impl Pr {
+    fn into_pull_request(self) -> PullRequest {
+        PullRequest {
+            id: self.id,
+            title: self.title,
+            version: self.version,
+            author_name: self.author.user.shown(),
+            author: self.author.user.slug,
+            draft: self.draft,
+            from_branch: self.from_ref.display_id,
+            to_branch: self.to_ref.display_id,
+            reviewers: self
+                .reviewers
+                .into_iter()
+                .filter(|reviewer| !reviewer.user.slug.is_empty())
+                .map(|reviewer| Reviewer {
+                    display_name: reviewer.user.shown(),
+                    slug: reviewer.user.slug,
+                    status: review_status(&reviewer.status),
+                })
+                .collect(),
+            // The probe's answer has only `self`, and it is the page Open
+            // opens; `web` is preferred first because a server that names one
+            // separately means it.
+            url: self
+                .links
+                .web
+                .into_iter()
+                .chain(self.links.self_links)
+                .next()
+                .map(|link| link.href)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct Person {
+    #[serde(default)]
+    user: User,
+}
+
+#[derive(Deserialize, Default)]
+struct User {
+    #[serde(default)]
+    slug: String,
+    #[serde(default, rename = "displayName")]
+    display_name: String,
+}
+
+impl User {
+    /// The name a person reads; the slug when the server gives none.
+    fn shown(&self) -> String {
+        match self.display_name.trim() {
+            "" => self.slug.clone(),
+            name => name.to_string(),
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct GitRef {
+    #[serde(default, rename = "displayId")]
+    display_id: String,
+}
+
+#[derive(Deserialize)]
+struct PrReviewer {
+    #[serde(default)]
+    user: User,
+    #[serde(default)]
+    status: String,
+}
+
+#[derive(Deserialize, Default)]
+struct PrLinks {
+    #[serde(default)]
+    web: Vec<Link>,
+    /// The PR's own page, as the probe read it: `…/projects/{KEY}/repos/…/pull-requests/{id}`.
+    #[serde(default, rename = "self")]
+    self_links: Vec<Link>,
+}
+
+#[derive(Deserialize)]
+struct Merge {
+    #[serde(default, rename = "canMerge")]
+    can_merge: Option<bool>,
+    #[serde(default)]
+    conflicted: Option<bool>,
+    #[serde(default)]
+    vetoes: Vec<Veto>,
+}
+
+#[derive(Deserialize)]
+struct Veto {
+    #[serde(rename = "summaryMessage")]
+    summary_message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildJson {
+    #[serde(default)]
+    date_added: Option<u64>,
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    url: String,
+}
+
+/// One event of the activity stream: a comment added, edited, replied to or
+/// deleted, with the anchor it was written against (the BB-8 probe's shape).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Activity {
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    created_date: u64,
+    #[serde(default)]
+    comment_action: String,
+    #[serde(default)]
+    comment: Option<CommentJson>,
+    #[serde(default)]
+    comment_anchor: Option<Anchor>,
+}
+
+/// A comment as the server keeps it — in an activity, or a task of the
+/// blocker-comments list. Its `author` is the user itself, not wrapped in
+/// `user` as the pull request's is.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommentJson {
+    id: u64,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    author: User,
+    #[serde(default)]
+    severity: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    thread_resolved: bool,
+    /// A reply carries its parent: part of a thread, not a remark of its own.
+    #[serde(default)]
+    parent: Option<Value>,
+    #[serde(default)]
+    anchor: Option<Anchor>,
+}
+
+/// The file and line a remark points at; a general comment has no anchor.
+#[derive(Deserialize)]
+struct Anchor {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    line: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::code_host::{Call, CodeHostServer, RemoteRepo};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // What the probe of `docs/62-bitbucket-prs.md` saved for this repository,
+    // with slugs and titles replaced. The builds list was empty on the probed
+    // commit, so its entries are shaped by the field names the legacy path
+    // documents rather than copied from an answer.
+    const REPO: &str = r#"{"slug":"tax-api","id":1,"name":"tax-api","project":{"key":"CORP","id":2},
+        "links":{"clone":[{"href":"ssh://git@server.com/corp/tax-api.git","name":"ssh"},
+                          {"href":"https://server.com/scm/corp/tax-api.git","name":"http"}],
+                 "self":[{"href":"https://server.com/projects/CORP/repos/tax-api/browse"}]}}"#;
+
+    const PRS: &str = r#"{"size":1,"limit":25,"isLastPage":true,"values":[{"id":153,"version":6,
+        "title":"feat(ABC-1): a fix","state":"OPEN","open":true,"closed":false,"draft":false,
+        "fromRef":{"id":"refs/heads/docs/wowtax-8238","displayId":"docs/wowtax-8238",
+                   "latestCommit":"94beed93512849804d03fe90d10a99b1418d4342","type":"BRANCH"},
+        "toRef":{"id":"refs/heads/master","displayId":"master","type":"BRANCH"},
+        "author":{"user":{"name":"A","emailAddress":"a@example.com","id":1,"displayName":"Anna Author","active":true,"slug":"u_author","type":"NORMAL"}},
+        "reviewers":[{"user":{"name":"R","emailAddress":"r@example.com","id":2,"displayName":"Rita Reviewer","active":true,"slug":"u_reviewer","type":"NORMAL"},
+                      "lastReviewedCommit":"94beed9","approved":false,"status":"UNAPPROVED"},
+                     {"user":{"name":"S","id":3,"displayName":" ","slug":"u_silent","type":"NORMAL"},"status":"APPROVED"}],
+        "links":{"self":[{"href":"https://server.com/projects/CORP/repos/tax-api/pull-requests/153"}]}}]}"#;
+
+    const MERGE: &str = r#"{"canMerge":false,"conflicted":false,"outcome":"CLEAN","vetoes":[
+        {"summaryMessage":"Include Code Quality detected missing project data","detailedMessage":"No data found."},
+        {"summaryMessage":"Not all required builds are successful yet","detailedMessage":"You still need a build."},
+        {"summaryMessage":"Requires approvals","detailedMessage":"You still need 1 approval."}]}"#;
+
+    const BUILDS_EMPTY: &str = r#"{"size":0,"limit":25,"isLastPage":true,"values":[],"start":0}"#;
+
+    const BUILDS: &str = r#"{"size":4,"limit":25,"isLastPage":true,"values":[
+        {"key":"ci","state":"SUCCESSFUL","name":"build #12","url":"https://ci.example/12","description":"","dateAdded":1763100000000},
+        {"key":"cq","state":"FAILED","name":"code quality","url":"https://ci.example/cq"},
+        {"key":"scan","state":"INPROGRESS","name":"scan","url":""},
+        {"key":"odd","state":"QUEUED","name":"queued","url":""}],"start":0}"#;
+
+    const BRANCHES: &str = r#"{"size":1,"limit":25,"isLastPage":true,"values":[{"id":"refs/heads/docs/wowtax-8238",
+        "displayId":"docs/wowtax-8238","type":"BRANCH","latestCommit":"94beed93512849804d03fe90d10a99b1418d4342",
+        "latestChangeset":"94beed93512849804d03fe90d10a99b1418d4342","isDefault":false}],"start":0}"#;
+
+    const DEFAULT_BRANCH: &str = r#"{"id":"refs/heads/master","displayId":"master","type":"BRANCH"}"#;
+
+    const CREATED: &str = r#"{"id":154,"version":0,"title":"a title",
+        "fromRef":{"displayId":"docs/wowtax-8238"},"toRef":{"displayId":"master"},
+        "author":{"user":{"slug":"u_author"}},
+        "links":{"self":[{"href":"https://server.com/projects/CORP/repos/tax-api/pull-requests/154"}]}}"#;
+
+    /// The activity stream the BB-8 probe read, with names taken out and in
+    /// the server's order — newest first: comments with anchors and a general
+    /// one, and the shapes a thread can take — a resolved one, a draft, a
+    /// reply, a task, an edit, a delete, and an edit in the same millisecond.
+    const ACTIVITIES: &str = r#"{"size":14,"limit":100,"isLastPage":true,"values":[
+        {"id":14,"createdDate":1300,"action":"COMMENTED","commentAction":"EDITED",
+         "comment":{"id":109,"version":2,"text":"Same-ms edit","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":13,"createdDate":1300,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":109,"text":"First words","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":12,"createdDate":1200,"action":"REVIEWED"},
+        {"id":11,"createdDate":1100,"action":"COMMENTED","commentAction":"DELETED",
+         "comment":{"id":108,"text":"Withdrawn","author":{"slug":"u_reviewer"},"severity":"NORMAL","state":"OPEN"}},
+        {"id":10,"createdDate":1000,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":108,"text":"Withdrawn","author":{"slug":"u_reviewer"},"severity":"NORMAL","state":"OPEN"}},
+        {"id":9,"createdDate":900,"action":"COMMENTED","commentAction":"EDITED",
+         "comment":{"id":107,"version":2,"text":"Edited words","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":8,"createdDate":800,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":107,"text":"First words","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":7,"createdDate":700,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":106,"text":"A task in the stream","author":{"slug":"u_reviewer"},"severity":"BLOCKER","state":"OPEN"}},
+        {"id":6,"createdDate":600,"action":"COMMENTED","commentAction":"REPLIED",
+         "comment":{"id":105,"text":"Agreed","author":{"slug":"u_author"},"severity":"NORMAL","state":"OPEN","parent":{"id":101}}},
+        {"id":5,"createdDate":500,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":104,"text":"A draft thought","author":{"slug":"u_me"},"severity":"NORMAL","state":"PENDING"}},
+        {"id":4,"createdDate":400,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":103,"text":"Done","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":true},
+         "commentAnchor":{"path":"src/main.rs","line":10}},
+        {"id":3,"createdDate":300,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":102,"text":"Why this change?","author":{"slug":"u_author"},"severity":"NORMAL","state":"OPEN","threadResolved":false}},
+        {"id":2,"createdDate":200,"action":"COMMENTED","commentAction":"ADDED",
+         "comment":{"id":101,"version":1,"text":"Move the build into the builder","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"NORMAL","state":"OPEN","threadResolved":false,"comments":[]},
+         "commentAnchor":{"path":"src/test/java/ExampleTest.java","line":34,"lineType":"ADDED","fileType":"TO","diffType":"EFFECTIVE","orphaned":false}},
+        {"id":1,"createdDate":100,"action":"OPENED"}]}"#;
+
+    /// Tasks were empty on the probed pull request: their shape is the
+    /// documented comment's, as the builds' was in BB-0.
+    const BLOCKERS: &str = r#"{"size":2,"limit":100,"isLastPage":true,"values":[
+        {"id":201,"text":"Add the missing test","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"BLOCKER","state":"OPEN",
+         "anchor":{"path":"src/main.rs","line":10}},
+        {"id":202,"text":"Rename this","author":{"slug":"u_reviewer","displayName":"Rita Reviewer"},"severity":"BLOCKER","state":"RESOLVED"}]}"#;
+
+    const NO_REMARKS: &str = r#"{"size":0,"limit":100,"isLastPage":true,"values":[]}"#;
+
+    /// Answers one request with `reply` as written, and hands the request back.
+    ///
+    /// The wait has a deadline: a client that refuses before sending — a server
+    /// whose address is `http`, say — must fail a test, not hang it.
+    fn serve(reply: String) -> (String, std::thread::JoinHandle<String>) {
+        let (base, handle) = serve_each(vec![reply]);
+        (base, std::thread::spawn(move || handle.join().unwrap().remove(0)))
+    }
+
+    /// [`serve`] for a client that asks more than once: each reply answers one
+    /// request, in order, and the requests come back in the same order.
+    fn serve_each(replies: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || replies.into_iter().map(|reply| answer_one(&listener, &reply)).collect());
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    fn answer_one(listener: &TcpListener, reply: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut socket = loop {
+            match listener.accept() {
+                Ok((socket, _)) => break socket,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() > deadline {
+                        return "<no request>".to_string();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(_) => return "<no request>".to_string(),
+            }
+        };
+        socket.set_nonblocking(false).unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 8192];
+        while let Ok(read @ 1..) = socket.read(&mut buffer) {
+            request.extend_from_slice(&buffer[..read]);
+            let text = String::from_utf8_lossy(&request);
+            if let Some(end) = text.find("\r\n\r\n") {
+                let length = text[..end]
+                    .lines()
+                    .find_map(|line| line.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().to_string()))
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    break;
+                }
+            }
+        }
+        socket.write_all(reply.as_bytes()).unwrap();
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    fn json_reply(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn server_at(base_url: &str) -> CodeHostServer {
+        CodeHostServer {
+            id: "s".to_string(),
+            base_url: base_url.to_string(),
+            hosts: Vec::new(),
+            trusted_cert_pem: None,
+            token_set: true,
+        }
+    }
+
+    /// The request the client sends for `body`'s answer, and what it made of it.
+    fn ask<T>(reply: String, ask: impl Fn(&Call) -> Result<T, CodeHostError>) -> (T, String, String) {
+        let (base, server) = serve(reply);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let answer = ask(&call).expect("an answer");
+        (answer, server.join().unwrap(), base)
+    }
+
+    /// Runs `ask` against a server that answers one request with `reply`, and
+    /// hands back the request the client sent.
+    fn with_server<T>(reply: &str, ask: impl Fn(&Call) -> T) -> (T, String) {
+        let (base, server) = serve(reply.to_string());
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let answer = ask(&call);
+        (answer, server.join().unwrap())
+    }
+
+    fn body_of(request: &str) -> Value {
+        let (_, body) = request.split_once("\r\n\r\n").expect("a head and a body");
+        serde_json::from_str(body).expect("a JSON body")
+    }
+
+    /// The probe's own answer, read back: the pull request of a branch with a
+    /// `/` in its name, found through the encoded ref.
+    #[test]
+    fn the_pull_request_the_probe_saw_is_read_as_the_strip_shows_it() {
+        let (pr, asked, _) = ask(json_reply("200 OK", PRS), |call| Bitbucket.pull_request(call, "docs/wowtax-8238"));
+        let pr = pr.expect("a pull request");
+
+        assert!(asked.starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/pull-requests?"), "{asked}");
+        assert!(asked.contains("at=refs%2Fheads%2Fdocs%2Fwowtax-8238"), "the branch's slash is not encoded: {asked}");
+        assert!(asked.contains("direction=OUTGOING") && asked.contains("state=OPEN"), "{asked}");
+        assert!(asked.to_lowercase().contains("authorization: bearer atatt-secret"), "{asked}");
+
+        assert_eq!((pr.id, pr.version), (153, 6));
+        assert_eq!((pr.author.as_str(), pr.from_branch.as_str(), pr.to_branch.as_str()), ("u_author", "docs/wowtax-8238", "master"));
+        assert_eq!(pr.author_name, "Anna Author", "the slug for the rules, the name for the window");
+        assert_eq!(
+            pr.reviewers,
+            [
+                Reviewer { slug: "u_reviewer".to_string(), display_name: "Rita Reviewer".to_string(), status: ReviewStatus::Unapproved },
+                // No name from the server: the slug is what is shown.
+                Reviewer { slug: "u_silent".to_string(), display_name: "u_silent".to_string(), status: ReviewStatus::Approved },
+            ]
+        );
+        assert_eq!(pr.url, "https://server.com/projects/CORP/repos/tax-api/pull-requests/153");
+        assert_eq!(pr.draft, Some(false));
+        assert_eq!(read::<Pr>(r#"{"id":1,"draft":true}"#).unwrap().into_pull_request().draft, Some(true), "a draft is read as one");
+        assert_eq!(read::<Pr>(r#"{"id":1}"#).unwrap().into_pull_request().draft, None, "a server before drafts has none");
+    }
+
+    /// An empty list is no pull request — Create PR, not an error.
+    #[test]
+    fn no_pull_request_for_the_branch_is_nothing_rather_than_a_failure() {
+        let (pr, _, _) = ask(json_reply("200 OK", r#"{"size":0,"isLastPage":true,"values":[]}"#), |call| {
+            Bitbucket.pull_request(call, "main")
+        });
+        assert_eq!(pr, None);
+    }
+
+    /// The three veto lines the probe's merge check returned, as the server
+    /// wrote them and in its order.
+    #[test]
+    fn the_merge_check_keeps_the_server_s_own_lines() {
+        let (merge, asked, _) = ask(json_reply("200 OK", MERGE), |call| Bitbucket.merge_check(call, 153));
+        assert!(asked.starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153/merge"), "{asked}");
+        assert!(!merge.can_merge && !merge.conflicted);
+        assert_eq!(
+            merge.vetoes,
+            [
+                "Include Code Quality detected missing project data",
+                "Not all required builds are successful yet",
+                "Requires approvals"
+            ]
+        );
+    }
+
+    /// The legacy path, because the repository's own builds endpoint wants a
+    /// build key it is never given (the probe's 400).
+    #[test]
+    fn builds_are_read_from_the_legacy_path_and_an_unknown_state_is_not_a_success() {
+        let (builds, asked, _) = ask(json_reply("200 OK", BUILDS), |call| {
+            Bitbucket.builds(call, "94beed93512849804d03fe90d10a99b1418d4342")
+        });
+        assert!(asked.starts_with("GET /rest/build-status/latest/commits/94beed93512849804d03fe90d10a99b1418d4342"), "{asked}");
+        assert_eq!(
+            builds.iter().map(|build| build.state).collect::<Vec<_>>(),
+            [BuildState::Successful, BuildState::Failed, BuildState::InProgress, BuildState::Unknown]
+        );
+        assert_eq!(builds[0].name, "build #12");
+        assert_eq!((builds[0].date_added, builds[1].date_added), (Some(1_763_100_000_000), None), "when the server took it, if it says");
+
+        let (none, _, _) = ask(json_reply("200 OK", BUILDS_EMPTY), |call| Bitbucket.builds(call, "94beed9"));
+        assert!(none.is_empty());
+    }
+
+    /// The remarks the BB-8 probe's stream carries: an anchored comment with
+    /// its place and author, a general one without, a resolved thread kept
+    /// but flagged; a draft, a reply, a task-in-the-stream and a deleted one
+    /// are not remarks; an edit is the comment's current text. Tasks come
+    /// from their own endpoint, open and resolved.
+    #[test]
+    fn the_remarks_of_the_stream_are_read_with_their_place() {
+        let (base, server) = serve_each(vec![json_reply("200 OK", ACTIVITIES), json_reply("200 OK", BLOCKERS)]);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+        let asked = server.join().unwrap();
+        assert!(asked[0].starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153/activities?limit=100&start=0"), "{}", asked[0]);
+        assert!(asked[1].starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153/blocker-comments"), "{}", asked[1]);
+
+        let ids: Vec<u64> = remarks.iter().map(|r| r.id).collect();
+        assert_eq!(ids, [101, 102, 103, 107, 109, 201, 202], "drafts, replies, stream tasks and deleted ones are not remarks: {remarks:?}");
+        let by_id = |id: u64| remarks.iter().find(|r| r.id == id).unwrap();
+        let anchored = by_id(101);
+        assert_eq!((anchored.path.as_deref(), anchored.line), (Some("src/test/java/ExampleTest.java"), Some(34)));
+        assert_eq!((anchored.author.as_str(), anchored.author_name.as_str()), ("u_reviewer", "Rita Reviewer"));
+        assert_eq!(anchored.text, "Move the build into the builder");
+        assert!(!anchored.task && !anchored.resolved);
+        let general = by_id(102);
+        assert_eq!((general.path.as_deref(), general.line), (None, None), "a general comment has no place");
+        assert_eq!(general.author_name, "u_author", "no display name: the slug is shown");
+        assert!(by_id(103).resolved, "a resolved thread is kept, flagged");
+        assert_eq!(by_id(107).text, "Edited words", "the last event of a comment is its text");
+        assert_eq!(by_id(109).text, "Same-ms edit", "an edit in the same millisecond is still the newer event");
+        let task = by_id(201);
+        assert!(task.task && !task.resolved);
+        assert_eq!((task.path.as_deref(), task.line), (Some("src/main.rs"), Some(10)));
+        assert!(by_id(202).task && by_id(202).resolved, "a RESOLVED task is kept, flagged");
+        assert_eq!(crate::domain::code_host::open_comments(&remarks), 5);
+    }
+
+    /// Two events of one comment in one millisecond: the greater event id is
+    /// the newer one, whichever order the pages deliver them in.
+    #[test]
+    fn events_of_one_millisecond_are_told_apart_by_their_id() {
+        let added = r#"{"id":13,"createdDate":1300,"action":"COMMENTED","commentAction":"ADDED","comment":{"id":109,"text":"First words","author":{"slug":"u_r"},"severity":"NORMAL","state":"OPEN"}}"#;
+        let edited = r#"{"id":14,"createdDate":1300,"action":"COMMENTED","commentAction":"EDITED","comment":{"id":109,"version":2,"text":"Same-ms edit","author":{"slug":"u_r"},"severity":"NORMAL","state":"OPEN"}}"#;
+        for order in [[added, edited], [edited, added]] {
+            let stream = format!(r#"{{"isLastPage":true,"values":[{},{}]}}"#, order[0], order[1]);
+            let (base, server) = serve_each(vec![json_reply("200 OK", &stream), json_reply("200 OK", NO_REMARKS)]);
+            let at = server_at(&base);
+            let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+            let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+            let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+            server.join().unwrap();
+            assert_eq!(remarks.len(), 1);
+            assert_eq!(remarks[0].text, "Same-ms edit", "order {order:?}");
+        }
+    }
+
+    /// The stream is paged: a page that is not the last is followed at its
+    /// `nextPageStart`, and both pages' comments are read.
+    #[test]
+    fn the_stream_is_paged_to_the_last() {
+        let page = |id: u64, last: bool, next: usize| {
+            json_reply("200 OK", &format!(
+                r#"{{"isLastPage":{last},"nextPageStart":{next},"values":[{{"id":{id},"createdDate":{id},"action":"COMMENTED","commentAction":"ADDED","comment":{{"id":{id},"text":"remark {id}","author":{{"slug":"u_r"}},"severity":"NORMAL","state":"OPEN"}}}}]}}"#
+            ))
+        };
+        let (base, server) = serve_each(vec![page(301, false, 100), page(302, true, 200), json_reply("200 OK", NO_REMARKS)]);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+        let asked = server.join().unwrap();
+        assert_eq!(remarks.iter().map(|r| r.id).collect::<Vec<_>>(), [301, 302]);
+        assert!(asked[1].contains("start=100"), "the second page starts where the first said: {}", asked[1]);
+        assert_eq!(asked.len(), 3, "the last page ends the stream");
+    }
+
+    /// A history longer than ten pages stops at the cap: the oldest comments
+    /// are lost, the read still answers (the ponytail's ceiling).
+    #[test]
+    fn a_long_history_stops_at_the_cap() {
+        let page = |i: usize| {
+            json_reply("200 OK", &format!(
+                r#"{{"isLastPage":false,"nextPageStart":{},"values":[{{"id":{},"createdDate":{},"action":"COMMENTED","commentAction":"ADDED","comment":{{"id":{},"text":"remark","author":{{"slug":"u_r"}},"severity":"NORMAL","state":"OPEN"}}}}]}}"#,
+                (i + 1) * 100, i + 1, i + 1, i + 1
+            ))
+        };
+        let mut replies: Vec<String> = (0..10).map(page).collect();
+        replies.push(json_reply("200 OK", NO_REMARKS));
+        let (base, server) = serve_each(replies);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+        let asked = server.join().unwrap();
+        assert_eq!(asked.len(), 11, "ten pages of activities and one of tasks");
+        assert!(asked[9].contains("start=900"), "{}", asked[9]);
+        assert_eq!(remarks.len(), 10);
+        assert!(!remarks.iter().any(|r| r.id == 11), "the eleventh page is not read");
+    }
+
+    /// Two reads of one state are one answer in one order: the watcher
+    /// compares snapshots whole, and a hash map's own order would make every
+    /// poll a change.
+    #[test]
+    fn two_reads_of_one_stream_are_equal() {
+        let read = || {
+            let (base, server) = serve_each(vec![json_reply("200 OK", ACTIVITIES), json_reply("200 OK", BLOCKERS)]);
+            let at = server_at(&base);
+            let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+            let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+            let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+            server.join().unwrap();
+            remarks
+        };
+        assert_eq!(read(), read());
+        // An empty stream and no tasks: no remarks, not an error.
+        let (base, server) = serve_each(vec![json_reply("200 OK", NO_REMARKS), json_reply("200 OK", NO_REMARKS)]);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let remarks = Bitbucket.comments(&call, 153).expect("an answer");
+        server.join().unwrap();
+        assert!(remarks.is_empty());
+    }
+
+    #[test]
+    fn a_branch_on_the_server_is_its_commit_and_a_missing_one_is_nothing() {
+        let (commit, asked, _) = ask(json_reply("200 OK", BRANCHES), |call| Bitbucket.branch_commit(call, "docs/wowtax-8238"));
+        assert!(asked.contains("filterText=docs%2Fwowtax-8238"), "{asked}");
+        // Without it the exact name can be past the page among longer ones.
+        assert!(asked.contains("boostMatches=true"), "{asked}");
+        assert_eq!(commit.as_deref(), Some("94beed93512849804d03fe90d10a99b1418d4342"));
+
+        // `filterText` is a substring search: a longer branch in its answer is
+        // not this branch.
+        let (missing, _, _) = ask(json_reply("200 OK", BRANCHES), |call| Bitbucket.branch_commit(call, "wowtax-8238"));
+        assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn the_default_branch_and_the_clone_links_are_read() {
+        let (branch, asked, _) = ask(json_reply("200 OK", DEFAULT_BRANCH), |call| Bitbucket.default_branch(call));
+        assert!(asked.starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/default-branch HTTP/1.1"), "{asked}");
+        assert_eq!(branch, "master");
+
+        let (links, _, _) = ask(json_reply("200 OK", REPO), |call| Bitbucket.clone_links(call));
+        assert_eq!(
+            links,
+            ["ssh://git@server.com/corp/tax-api.git", "https://server.com/scm/corp/tax-api.git"]
+        );
+    }
+
+    /// The slug comes from the header, before the body is read: it is what
+    /// approve sends as the participant.
+    #[test]
+    fn who_the_token_belongs_to_is_the_x_ausername_header() {
+        let (me, _, _) = ask(
+            format!("HTTP/1.1 200 OK\r\nX-AUSERNAME: u_me\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"),
+            |call| Bitbucket.me(call),
+        );
+        assert_eq!(me, "u_me");
+
+        let (base, server) = serve(json_reply("200 OK", "{}"));
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "t", remote: &remote };
+        let error = Bitbucket.me(&call).unwrap_err();
+        server.join().unwrap();
+        assert!(
+            matches!(&error, CodeHostError::BadAnswer(message) if message.contains("X-AUSERNAME")),
+            "{error}"
+        );
+    }
+
+    /// The three statuses the strip acts on, and the server's own words for the
+    /// rest — a 400 from a wrong project key is not "not a Bitbucket".
+    #[test]
+    fn statuses_become_the_errors_the_buttons_act_on() {
+        // Each status through a server of its own.
+        let stale = r#"{"errors":[{"exceptionName":"com.atlassian.bitbucket.pull.PullRequestOutOfDateException"}]}"#;
+        for (status, body, wanted) in
+            [("401 Unauthorized", "{}", "token"), ("403 Forbidden", "{}", "Repository write"), ("409 Conflict", stale, "read again")]
+        {
+            let (base, server) = serve(json_reply(status, body));
+            let at = server_at(&base);
+            let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+            let call = Call { server: &at, token: "t", remote: &remote };
+            let error = Bitbucket.default_branch(&call).unwrap_err().to_string();
+            server.join().unwrap();
+            assert!(error.contains(wanted), "{status}: {error}");
+        }
+
+        let (base, server) = serve(json_reply("400 Bad Request", r#"{"errors":[{"message":"Please specify a non-blank key"}]}"#));
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "t", remote: &remote };
+        let error = Bitbucket.builds(&call, "94beed9").unwrap_err().to_string();
+        server.join().unwrap();
+        assert!(error.contains("400") && error.contains("non-blank key"), "{error}");
+    }
+
+    /// The reason the server carries a PEM: the app trusts the public roots or
+    /// that file, never the keychain.
+    #[test]
+    fn a_server_behind_its_own_ca_is_trusted_with_its_pem_and_refused_without() {
+        use crate::infra::http_agent::tests::{serve_tls_with, CA, LEAF, LEAF_KEY};
+
+        let port = serve_tls_with(LEAF, LEAF_KEY, &json_reply("200 OK", DEFAULT_BRANCH));
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+
+        let with_pem = CodeHostServer {
+            id: "s".to_string(),
+            base_url: format!("https://127.0.0.1:{port}"),
+            hosts: Vec::new(),
+            trusted_cert_pem: Some(CA.to_string()),
+            token_set: true,
+        };
+        let call = Call { server: &with_pem, token: "t", remote: &remote };
+        assert_eq!(Bitbucket.default_branch(&call).unwrap(), "master");
+
+        let without = CodeHostServer { trusted_cert_pem: None, ..with_pem };
+        let call = Call { server: &without, token: "t", remote: &remote };
+        let error = Bitbucket.default_branch(&call).unwrap_err();
+        assert!(matches!(error, CodeHostError::Tls(_)), "not a TLS refusal: {error}");
+    }
+
+    /// Only no route at all hides the row: a closed port is out of reach, and
+    /// what a server says back — a broken answer, its TLS alert — is shown.
+    #[test]
+    fn only_no_route_to_the_server_is_out_of_reach() {
+        use std::io::{Error, ErrorKind};
+
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let server = CodeHostServer {
+            id: "s".to_string(),
+            base_url: format!("http://127.0.0.1:{closed}"),
+            hosts: Vec::new(),
+            trusted_cert_pem: None,
+            token_set: true,
+        };
+        let call = Call { server: &server, token: "t", remote: &remote };
+        let error = Bitbucket.default_branch(&call).unwrap_err();
+        assert!(matches!(error, CodeHostError::Unreachable(_)), "a closed port: {error}");
+
+        for kind in [ErrorKind::ConnectionRefused, ErrorKind::TimedOut, ErrorKind::HostUnreachable, ErrorKind::NetworkUnreachable] {
+            let error = classify(ureq::Error::Io(Error::new(kind, "no")));
+            assert!(matches!(error, CodeHostError::Unreachable(_)), "{kind:?}: {error}");
+        }
+        assert!(matches!(classify(ureq::Error::HostNotFound), CodeHostError::Unreachable(_)));
+        assert!(matches!(classify(ureq::Error::ConnectionFailed), CodeHostError::Unreachable(_)));
+        assert!(matches!(classify(ureq::Error::Timeout(ureq::Timeout::Connect)), CodeHostError::Unreachable(_)));
+        let alert = classify(ureq::Error::Io(Error::new(ErrorKind::InvalidData, "received fatal alert: HandshakeFailure")));
+        assert!(matches!(alert, CodeHostError::Network(_)), "{alert}");
+        assert!(matches!(classify(ureq::Error::Io(Error::other("reset mid-answer"))), CodeHostError::Network(_)));
+        let cert = classify(ureq::Error::Io(Error::new(ErrorKind::InvalidData, "Certificate expired")));
+        assert!(matches!(cert, CodeHostError::Tls(_)), "{cert}");
+    }
+
+    /// The three buttons' requests: the participant and its status, the version
+    /// that is the optimistic lock, and the two refs a new pull request names.
+    #[test]
+    fn the_buttons_send_what_the_server_takes() {
+        let pr = PullRequest {
+            id: 153,
+            version: 6,
+            title: "a pull request".to_string(),
+            author: "u_author".to_string(),
+            author_name: "Anna Author".to_string(),
+            draft: Some(true),
+            from_branch: "docs/wowtax-8238".to_string(),
+            to_branch: "master".to_string(),
+            reviewers: Vec::new(),
+            url: "https://server.com/projects/CORP/repos/tax-api/pull-requests/153".to_string(),
+        };
+
+        for (approved, wanted) in [(true, "APPROVED"), (false, "UNAPPROVED")] {
+            let (answered, asked) =
+                with_server(&json_reply("200 OK", "{}"), |call| Bitbucket.approve(call, &pr, "u_me", approved));
+            answered.unwrap();
+            assert!(
+                asked.starts_with("PUT /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153/participants/u_me HTTP/1.1"),
+                "{asked}"
+            );
+            assert_eq!(body_of(&asked), json!({ "status": wanted }));
+        }
+
+        let (answered, asked) = with_server(&json_reply("200 OK", "{}"), |call| Bitbucket.merge(call, &pr));
+        answered.unwrap();
+        assert!(
+            asked.starts_with("POST /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153/merge?version=6 HTTP/1.1"),
+            "{asked}"
+        );
+        // The resource takes JSON, and Atlassian's XSRF filter wants a client
+        // that is not a browser to say so: without either a merge is 415 or 403.
+        let head = asked.to_lowercase();
+        assert!(head.contains("content-type: application/json"), "{asked}");
+        assert!(head.contains("x-atlassian-token: no-check"), "{asked}");
+        assert_eq!(body_of(&asked), json!({}));
+
+        let (created, asked) =
+            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", "", false));
+        let created = created.expect("the new pull request");
+        assert!(asked.starts_with("POST /rest/api/latest/projects/corp/repos/tax-api/pull-requests HTTP/1.1"), "{asked}");
+        assert_eq!(
+            body_of(&asked),
+            json!({
+                "title": "a title",
+                "fromRef": { "id": "refs/heads/docs/wowtax-8238" },
+                "toRef": { "id": "refs/heads/master" },
+            })
+        );
+        assert_eq!((created.id, created.from_branch.as_str()), (154, "docs/wowtax-8238"));
+
+        let (_, asked) =
+            with_server(&json_reply("200 OK", CREATED), |call| Bitbucket.create(call, "docs/wowtax-8238", "master", "a title", "Why:\n- because", true));
+        assert_eq!(body_of(&asked)["draft"], json!(true), "a draft is asked for as one");
+        assert_eq!(body_of(&asked)["description"], json!("Why:\n- because"), "the description goes as written");
+    }
+
+    /// The second request of a read goes down the first one's connection: the
+    /// stand answers both on the one socket it accepts, and a client that
+    /// opened another would wait on it for nothing.
+    #[test]
+    fn a_read_s_requests_share_one_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stand = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{DEFAULT_BRANCH}",
+                DEFAULT_BRANCH.len()
+            );
+            let mut answered = 0;
+            let mut buffer = [0u8; 8192];
+            let mut request = Vec::new();
+            while answered < 2 {
+                match socket.read(&mut buffer) {
+                    Ok(read @ 1..) => request.extend_from_slice(&buffer[..read]),
+                    _ => break,
+                }
+                if String::from_utf8_lossy(&request).contains("\r\n\r\n") {
+                    socket.write_all(reply.as_bytes()).unwrap();
+                    request.clear();
+                    answered += 1;
+                }
+            }
+            answered
+        });
+        let at = server_at(&format!("http://127.0.0.1:{port}"));
+        // On a thread of its own: a client that opened a second connection waits
+        // its whole timeout on it, and the stand's answer should not.
+        let client = std::thread::spawn(move || {
+            let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+            let call = Call { server: &at, token: "t", remote: &remote };
+            (Bitbucket.default_branch(&call).is_ok(), Bitbucket.default_branch(&call).is_ok())
+        });
+        assert_eq!(stand.join().unwrap(), 2, "the second request came on another connection");
+        assert_eq!(client.join().unwrap(), (true, true));
+    }
+
+    /// Mark ready sends the server's own pull request back with `draft` changed
+    /// and the version the user saw: the update takes the whole thing, and a
+    /// field left out — the reviewers, the description — would be wiped.
+    #[test]
+    fn mark_ready_puts_back_the_whole_pull_request_with_draft_changed() {
+        let current = r#"{"id":153,"version":9,"title":"t","description":"keep me","draft":true,
+            "reviewers":[{"user":{"name":"R","slug":"u_reviewer"},"status":"UNAPPROVED"}],
+            "toRef":{"id":"refs/heads/master"}}"#;
+        let (base, server) = serve_each(vec![json_reply("200 OK", current), json_reply("200 OK", "{}")]);
+        let at = server_at(&base);
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let pr = PullRequest { version: 7, ..read::<Pr>(r#"{"id":153,"draft":true}"#).unwrap().into_pull_request() };
+        Bitbucket.set_draft(&call, &pr, false).unwrap();
+        let asked = server.join().unwrap();
+
+        assert!(asked[0].starts_with("GET /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153 HTTP/1.1"), "{}", asked[0]);
+        assert!(asked[1].starts_with("PUT /rest/api/latest/projects/corp/repos/tax-api/pull-requests/153 HTTP/1.1"), "{}", asked[1]);
+        let sent = body_of(&asked[1]);
+        assert_eq!((&sent["draft"], &sent["version"]), (&json!(false), &json!(7)), "{sent}");
+        assert_eq!(sent["description"], "keep me");
+        assert_eq!(sent["reviewers"][0]["user"]["slug"], "u_reviewer");
+        assert_eq!(sent["toRef"]["id"], "refs/heads/master");
+    }
+
+    /// A 409 is the optimistic lock only when the server says so; a vetoed
+    /// merge and a second pull request between the same branches are 409 too,
+    /// and their reason is what the user needs to see.
+    #[test]
+    fn only_a_stale_version_is_a_conflict() {
+        let stale = r#"{"errors":[{"message":"You are attempting to modify a pull request based on out-of-date information.",
+            "exceptionName":"com.atlassian.bitbucket.pull.PullRequestOutOfDateException"}]}"#;
+        let vetoed = r#"{"errors":[{"message":"Merging the pull request has been vetoed.",
+            "exceptionName":"com.atlassian.bitbucket.pull.PullRequestMergeVetoedException",
+            "vetoes":[{"summaryMessage":"Requires approvals"}]}]}"#;
+        let duplicate = r#"{"errors":[{"message":"Only one pull request may be open for a given source and target branch",
+            "exceptionName":"com.atlassian.bitbucket.pull.DuplicatePullRequestException"}]}"#;
+
+        assert_eq!(status_check(409, stale), Err(CodeHostError::Conflict));
+        assert!(matches!(status_check(409, vetoed), Err(CodeHostError::Http(409, words)) if words.contains("vetoed")));
+        assert!(matches!(status_check(409, duplicate), Err(CodeHostError::Http(409, words)) if words.contains("Only one")));
+        assert!(matches!(status_check(409, "{}"), Err(CodeHostError::Http(409, _))));
+    }
+
+    /// `http` reaches this machine and nothing else, however the host is
+    /// dressed: a name that starts like `localhost` is somebody's host.
+    #[test]
+    fn only_this_machine_is_loopback() {
+        for local in ["http://localhost:7990", "http://127.0.0.1:1/x", "http://[::1]:8080", "http://LOCALHOST", "http://127.0.0.2"] {
+            assert!(is_loopback(local), "{local}");
+        }
+        for remote in [
+            "http://localhost.corp.example",
+            "http://127.0.0.1.nip.io",
+            "http://localhost@code.corp.example",
+            "http://localhost:x@code.corp.example/",
+            "http://code.corp.example/localhost",
+            "http://",
+        ] {
+            assert!(!is_loopback(remote), "{remote}");
+        }
+    }
+
+    /// A token goes over TLS or nowhere: a server stored as `http://` on a real
+    /// host is refused before a single byte is sent.
+    #[test]
+    fn a_plain_http_server_gets_no_token() {
+        let at = server_at("http://git.server.example");
+        let remote = RemoteRepo::parse("ssh://git@server.com/corp/tax-api.git").unwrap();
+        let call = Call { server: &at, token: "ATATT-secret", remote: &remote };
+        let error = Bitbucket.default_branch(&call).unwrap_err();
+        assert!(
+            matches!(&error, CodeHostError::Insecure(base) if base == "http://git.server.example"),
+            "{error}"
+        );
+    }
+
+    /// A 302 is an answer, not a step: following it would take the token to
+    /// whichever host it names, and Data Center answers one for something as
+    /// ordinary as a sign-in page.
+    #[test]
+    fn a_redirect_is_not_followed() {
+        let redirect = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (answer, _) = with_server(redirect, |call| Bitbucket.default_branch(call));
+        assert!(matches!(answer, Err(CodeHostError::Http(302, _))), "{answer:?}");
+    }
+
+    /// A server that names the pull request's page apart from its own link
+    /// means it: `web` is opened, and `self` only when it is all there is.
+    #[test]
+    fn the_web_link_is_preferred_over_self() {
+        let both: Pr = serde_json::from_str(
+            r#"{"id":1,"links":{"self":[{"href":"https://server.com/self"}],"web":[{"href":"https://server.com/web"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(both.into_pull_request().url, "https://server.com/web");
+
+        let only_self: Pr = serde_json::from_str(r#"{"id":1,"links":{"self":[{"href":"https://server.com/self"}]}}"#).unwrap();
+        assert_eq!(only_self.into_pull_request().url, "https://server.com/self");
+    }
+
+    /// The connect form's check, before a token is saved: no `Authorization`
+    /// goes with it, and a server that is something else says so.
+    #[test]
+    fn identify_asks_without_a_token_and_knows_bitbucket_when_it_sees_it() {
+        let answer = r#"{"version":"8.19.26","buildNumber":"8019026","buildDate":"1","displayName":"Bitbucket"}"#;
+        let (said, asked) = with_server(&json_reply("200 OK", answer), |call| Bitbucket.identify(call.server));
+        assert_eq!(said.unwrap(), "Bitbucket 8.19.26");
+        assert!(asked.starts_with("GET /rest/api/latest/application-properties HTTP/1.1"), "{asked}");
+        assert!(!asked.to_lowercase().contains("authorization"), "a token went with it: {asked}");
+
+        let (other, _) =
+            with_server(&json_reply("200 OK", r#"{"displayName":"Jira","version":"9"}"#), |call| Bitbucket.identify(call.server));
+        assert!(matches!(&other, Err(CodeHostError::BadAnswer(said)) if said.contains("Jira")), "{other:?}");
+
+        let insecure = Bitbucket.identify(&server_at("http://git.server.example"));
+        assert!(matches!(insecure, Err(CodeHostError::Insecure(_))), "{insecure:?}");
+    }
+
+    /// A `NEEDS_WORK` is a decision the strip shows; a word this app has no
+    /// word for is not an approval, and not a success either.
+    #[test]
+    fn the_states_this_app_has_no_word_for_are_neither_a_yes_nor_a_success() {
+        assert_eq!(review_status("APPROVED"), ReviewStatus::Approved);
+        assert_eq!(review_status("NEEDS_WORK"), ReviewStatus::NeedsWork);
+        assert_eq!(review_status("UNAPPROVED"), ReviewStatus::Unapproved);
+        assert_eq!(review_status("SOMETHING_NEW"), ReviewStatus::Unapproved);
+
+        assert_eq!(build_state("SUCCESSFUL"), BuildState::Successful);
+        assert_eq!(build_state("FAILED"), BuildState::Failed);
+        assert_eq!(build_state("INPROGRESS"), BuildState::InProgress);
+        assert_eq!(build_state("QUEUED"), BuildState::Unknown);
+    }
+
+    #[test]
+    fn a_segment_is_encoded_as_the_api_takes_it() {
+        assert_eq!(encode("docs/wowtax-8238"), "docs%2Fwowtax-8238");
+        assert_eq!(encode("refs/heads/main"), "refs%2Fheads%2Fmain");
+        assert_eq!(encode("corp-wowtax"), "corp-wowtax");
+        assert_eq!(encode("a b&c"), "a%20b%26c");
+    }
+
+    #[test]
+    fn a_refusal_says_its_own_words_cut_short() {
+        assert_eq!(said(r#"{"errors":[{"message":"Repository not found"}]}"#), "Repository not found");
+        assert_eq!(said("plain text"), "plain text");
+        assert_eq!(said(&"x".repeat(ERROR_CHARS + 1)), format!("{}…", "x".repeat(ERROR_CHARS)));
+    }
+}

@@ -1,0 +1,25 @@
+.code-host-row {
+  display: flex;
+  gap: 6px;
+}
+.code-host-row input {
+  flex: 1;
+  min-width: 0;
+}
+.code-host-token {
+  margin-top: 12px;
+}
+.code-host-ok {
+  color: var(--green);
+}
+.code-host-error {
+  color: var(--red);
+}
+.code-host-spin {
+  animation: code-host-spin 0.8s linear infinite;
+}
+@keyframes code-host-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -41,3 +41,4 @@ pub mod provider_balance;
 pub mod dictation;
 pub mod meeting_notes;
 pub mod mongo;
+pub mod pull_requests;

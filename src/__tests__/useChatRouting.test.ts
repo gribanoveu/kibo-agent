@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test, mock } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
-import { COMMIT_REQUEST, PULL_REQUEST, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
+import { COMMIT_REQUEST, PULL_REQUEST, PULL_REQUEST_ON_SERVER, REVIEW_REQUEST, SYNC_BASE } from "../lib/offer";
 import { withLanguageReminder } from "../lib/settings";
 import { STAY } from "../hooks/useSidebarActions";
 
@@ -48,6 +48,7 @@ type Over = Partial<{
   compactResult: true | string | null;
   modeFail: string | null;
   worktreeMain: string | null;
+  pullRequestsOn: boolean;
   closeAnswer: boolean;
   replyLanguage: "auto" | "english" | "russian";
   holdOpens: boolean;
@@ -146,6 +147,7 @@ function setup(over: Over = {}) {
       leavePage: () => left++,
       giveBack: (text, images = []) => back.push([text, images]),
       worktreeMain: over.worktreeMain === undefined ? "/repo-main" : over.worktreeMain,
+      pullRequestsOn: over.pullRequestsOn ?? false,
       openPlan: () => calls.push("openPlan"),
       askWorktreeRemoval: (path) => asked.push(path),
     }),
@@ -265,6 +267,12 @@ describe("the offers after an answer", () => {
     await act(async () => result.current.pickOffer({ kind: "pullRequest", reason: "why" }));
     await act(async () => result.current.pickOffer({ kind: "syncBase", reason: "why" }));
     expect(sent.map(([text]) => text)).toEqual([REVIEW_REQUEST, COMMIT_REQUEST, PULL_REQUEST, SYNC_BASE]);
+  });
+
+  test("with Pull requests on, the PR offer names the app's own tool instead of gh", async () => {
+    const { result, sent } = setup({ pullRequestsOn: true });
+    await act(async () => result.current.pickOffer({ kind: "pullRequest", reason: "why" }));
+    expect(sent.map(([text]) => text)).toEqual([PULL_REQUEST_ON_SERVER]);
   });
 
   test("a message offer sends exactly its text", async () => {
