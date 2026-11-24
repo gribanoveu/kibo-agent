@@ -9,6 +9,8 @@ export type FeatureView = {
   id: string;
   name: string;
   description: string;
+  /** One line for the card and the top of the sheet; `description` is the long text. */
+  summary: string;
   on: boolean;
   /** What the build says it should be until the user chooses (`enabled_by_default`). */
   defaultOn: boolean;

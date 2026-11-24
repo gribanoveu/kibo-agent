@@ -42,6 +42,9 @@ pub struct Manifest {
     /// `[a-z0-9-]`: its key in `settings.json` and in the window.
     pub id: &'static str,
     pub name: &'static str,
+    /// One line for the card and the top of its sheet: what it is, in a breath.
+    /// The long text is `description`, read behind "More".
+    pub summary: &'static str,
     pub description: &'static str,
     pub enabled_by_default: bool,
     pub tools: &'static [ToolName],
@@ -57,6 +60,7 @@ impl Feature {
             Feature::Board => Manifest {
                 id: "board",
                 name: "Board",
+                summary: "Cards for later, written by the model when you ask it to remind you.",
                 description: "Cards for later: ask the model to remind you of something and it lands on the Board page, \
                     in To do, Doing and Done.",
                 enabled_by_default: true,
@@ -66,6 +70,7 @@ impl Feature {
             Feature::ProviderBalance => Manifest {
                 id: "provider-balance",
                 name: "Provider balance",
+                summary: "What is left on the DeepSeek account, beside the model under the message box.",
                 description: "What is left on the account, beside the model under the message box — for DeepSeek, \
                     known by its address api.deepseek.com. Read again after each answer.",
                 enabled_by_default: false,
@@ -75,6 +80,7 @@ impl Feature {
             Feature::DeepseekSearch => Manifest {
                 id: "deepseek-search",
                 name: "DeepSeek search",
+                summary: "DeepSeek's own web search and page reader, as two tools for the model.",
                 description: "Two tools for the model, deepseekSearch and deepseekFetch: DeepSeek's own web search and page reader, \
                     paid from the DeepSeek account set up in Settings → Models. Apart from the web search chosen in Settings.",
                 enabled_by_default: false,
@@ -84,6 +90,7 @@ impl Feature {
             Feature::MeetingNotes => Manifest {
                 id: "meeting-notes",
                 name: "Meeting notes",
+                summary: "A Meetings page: a call's recording becomes notes, the speech recognized here.",
                 description: "A Meetings page: add a call's recording and get its notes — summary, decisions, action items — \
                     written by the model from a transcript with speakers and times. The speech is recognized on this computer; \
                     only the transcript goes to the model chosen in Settings. Each meeting keeps its own copy of the sound \
@@ -95,6 +102,7 @@ impl Feature {
             Feature::VoiceMemory => Manifest {
                 id: "voice-memory",
                 name: "Voice memory",
+                summary: "A speaker you name once is named by voice in the next meeting.",
                 description: "With Meeting notes: a speaker you name on the Meetings page is named by voice in the next meeting. \
                     It keeps a voice print of each speaker who said 20 seconds and 20 words or more in phrases in a meeting — \
                     biometric data about the people on your calls, so have their consent. Kept on this computer only; \
@@ -106,6 +114,7 @@ impl Feature {
             Feature::Mongodb => Manifest {
                 id: "mongodb",
                 name: "MongoDB",
+                summary: "A MongoDB page: your connections, their documents, queries and indexes.",
                 description: "A MongoDB page in the spirit of Compass: your connections, their databases and collections; \
                     documents found with a filter, a sort and a projection, edited, added and deleted; aggregations; indexes. \
                     Connection strings are sealed on this computer as the API keys are, and the window never sees a password. \
@@ -118,6 +127,7 @@ impl Feature {
             Feature::VoiceInput => Manifest {
                 id: "voice-input",
                 name: "Voice input",
+                summary: "Dictate into the message box in Russian; the speech is recognized here.",
                 description: "Dictate into the message box: the microphone button beside Send, or hold the right Option or Alt key. \
                     Russian only. The speech is recognized on this computer and no sound is kept; the text goes nowhere until you send it.",
                 enabled_by_default: false,
@@ -127,6 +137,7 @@ impl Feature {
             Feature::LayoutCorrection => Manifest {
                 id: "layout-correction",
                 name: "Keyboard layout correction",
+                summary: "The message boxes notice text typed in the wrong layout and offer the fix.",
                 description: "The message boxes notice Russian or English typed in the other keyboard layout, including the wrong words in mixed prose, and offer the likely text. \
                     Nothing changes until you click Fix or press Cmd/Ctrl+F; ordinary Undo restores what you typed. On macOS and Windows, an optional switch also selects the corrected text's dominant installed layout.",
                 enabled_by_default: true,
@@ -136,6 +147,7 @@ impl Feature {
             Feature::PullRequests => Manifest {
                 id: "pull-requests",
                 name: "Bitbucket",
+                summary: "The pull request of your branch in Overview, from your Bitbucket Data Center.",
                 description: "Pull requests of the branch you are on, in Overview under it, from your Bitbucket Data Center — \
                     its reviewers and their decisions, the builds of its last commit, and whether it can be merged and why not. \
                     Create (as a draft too), Mark ready, Approve, Merge and Open from there. You add the server and its HTTP access token here, once it is on, or from the folder; the token is sealed \
@@ -233,6 +245,18 @@ mod tests {
         for &tool in ToolName::ALL {
             let owners = Feature::ALL.iter().filter(|f| f.manifest().tools.contains(&tool)).count();
             assert!(owners <= 1, "{tool:?}");
+        }
+    }
+
+    /// The card and the top of the sheet read one line; the long text is behind "More".
+    #[test]
+    fn the_summary_is_one_line_and_the_description_is_the_long_text() {
+        for &feature in Feature::ALL {
+            let m = feature.manifest();
+            assert!(!m.summary.is_empty(), "{}", m.id);
+            assert!(!m.summary.contains('\n'), "{}", m.id);
+            assert!(m.summary.len() <= 120, "{}: {} characters", m.id, m.summary.len());
+            assert!(m.summary.len() < m.description.len(), "{}", m.id);
         }
     }
 

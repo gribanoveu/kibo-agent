@@ -54,7 +54,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {
   const q = query.trim().toLowerCase();
-  return !q || [feature.id, feature.name, feature.description].some((text) => text.toLowerCase().includes(q));
+  return !q || [feature.id, feature.name, feature.summary, feature.description].some((text) => text.toLowerCase().includes(q));
 };
 
 /** How many cells a kind fills under All: a row is one to four wide, so eight is two rows of four — seven cards and "Show all" in the eighth's place. */
@@ -328,7 +328,7 @@ function FeatureCard({ feature, selected, onOpen, onTurnOn }: { feature: Feature
       </div>
       <div className="catalog-card-body">
         <h3>{feature.name}</h3>
-        <p title={feature.description}>{feature.description}</p>
+        <p title={feature.description}>{feature.summary}</p>
         <div className="catalog-card-meta">Built into the app</div>
       </div>
       {feature.on ? (
@@ -379,7 +379,7 @@ function FeatureDetails({
   return (
     <PageSheet icon={featureIcon(feature.id)} title="Feature" label={`${feature.name} details`} onClose={onClose}>
       <h3 className="catalog-detail-name">{feature.name}</h3>
-      <p className="catalog-detail-desc">{feature.description}</p>
+      <p className="catalog-detail-desc">{feature.summary}</p>
 
       {/* Above the tabs: a switch on either tab can fail, and the message about it
           must be read where it was clicked. */}
@@ -395,25 +395,29 @@ function FeatureDetails({
 
       {tab === "settings" && (
         <div role="tabpanel" aria-label="Settings">
-          <div className="catalog-detail-actions">
-            <button type="button" className={`btn ${feature.on ? "btn-ghost" : "btn-primary"}`} onClick={() => onSet(!feature.on)}>
-              {feature.on ? "Turn off" : "Turn on"}
-            </button>
-            {!feature.on && feature.hasData && (
-              <button type="button" className="btn btn-ghost" onClick={() => setConfirming(true)}>
-                Delete data
-              </button>
-            )}
-            {feature.on && <span className="catalog-detail-state installed">{feature.tools.length > 0 ? "On — from the next message" : "On"}</span>}
-          </div>
+          {/* The state and its control in one row, as the switches below it: a button
+              named for the opposite of the state made the reader work out which it was. */}
+          <label className="catalog-detail-switch">
+            <span>Enabled</span>
+            <Switch label={`${feature.name} enabled`} on={feature.on} onChange={onSet} />
+          </label>
           {feature.tools.length > 0 && (
             <p className="catalog-detail-note">
               {/* Only a feature with a page in PAGES can promise one: Bitbucket adds a row
                   in Overview, not a sidebar entry. */}
               {feature.on
-                ? `Turned off, the model stops getting its tools${hasPage ? " and its page leaves the sidebar" : ""}; what it kept stays until you delete it.`
-                : `Turned on, the model gets its tools from its next message${hasPage ? ", and its page appears in the sidebar" : ""}.`}
+                ? "The model gets its tools from your next message."
+                : hasPage
+                  ? "Off: the model gets no tools from it, and its page leaves the sidebar."
+                  : "Off: the model gets no tools from it."}
             </p>
+          )}
+          {!feature.on && feature.hasData && (
+            <div className="catalog-detail-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirming(true)}>
+                Delete data
+              </button>
+            </div>
           )}
           {feature.id === "layout-correction" && feature.layoutSwitchSupported && (
             <label className="catalog-detail-switch">
@@ -424,19 +428,25 @@ function FeatureDetails({
           {/* Its servers where it is turned on, rather than a trip to Settings after. */}
           {feature.id === "pull-requests" && feature.on && <CodeHostServers />}
 
-          <dl className="catalog-detail-facts">
-            <dt>Source</dt>
-            <dd>Built into the app</dd>
-            {/* What it is until the user decides — the answer to "why is this on?" */}
-            <dt>Default</dt>
-            <dd>{feature.defaultOn ? "On — until you choose otherwise" : "Off — as it ships"}</dd>
-            {feature.data && (
-              <>
-                <dt>Keeps</dt>
-                <dd className="mono">{feature.data}</dd>
-              </>
-            )}
-          </dl>
+          {/* The long text and the facts about the build: read when wanted, out of the
+              way of the switch and the servers above. */}
+          <details className="catalog-detail-more">
+            <summary>More about {feature.name}</summary>
+            <div className="catalog-detail-text">{feature.description}</div>
+            <dl className="catalog-detail-facts">
+              <dt>Source</dt>
+              <dd>Built into the app</dd>
+              {/* What it is until the user decides — the answer to "why is this on?" */}
+              <dt>Default</dt>
+              <dd>{feature.defaultOn ? "On — until you choose otherwise" : "Off — as it ships"}</dd>
+              {feature.data && (
+                <>
+                  <dt>Keeps</dt>
+                  <dd className="mono">{feature.data}</dd>
+                </>
+              )}
+            </dl>
+          </details>
         </div>
       )}
 

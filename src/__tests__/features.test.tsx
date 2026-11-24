@@ -63,7 +63,8 @@ beforeEach(() => {
   board = {
     id: "board",
     name: "Board",
-    description: "Cards for later",
+    description: "Cards for later: ask the model to remind you of something and it lands on the Board page, in To do, Doing and Done.",
+    summary: "Cards for later, written by the model when you ask it to remind you.",
     on: false,
     defaultOn: false,
     tools: [{ name: "board", description: "When the user asks you to remind them…" }],
@@ -85,8 +86,9 @@ describe("features on the catalog page", () => {
 
     fireEvent.click(section.getByRole("button", { name: "Board" }));
     const panel = within(screen.getByRole("complementary", { name: "Board details" }));
-    // The sheet opens on Settings: what the feature is and where its data is.
+    // The sheet opens on Settings: the switch, and what the feature keeps behind More.
     expect(panel.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe("true");
+    fireEvent.click(panel.getByText("More about Board"));
     expect(panel.getByText("~/.kibo/board.db")).toBeTruthy();
     // One panel at a time: nothing of the other tab is here.
     expect(panel.queryByText("When the user asks you to remind them…")).toBeNull();
@@ -99,6 +101,22 @@ describe("features on the catalog page", () => {
     expect(panel.getByText("When the user asks you to remind them…")).toBeTruthy();
     // And the settings are gone: the tab replaced them, rather than stacking on them.
     expect(panel.queryByText("~/.kibo/board.db")).toBeNull();
+  });
+
+  test("the sheet leads with one line, and the long text waits behind More", async () => {
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    const card = within(screen.getByRole("region", { name: "Features" })).getByRole("button", { name: "Board" });
+    expect(within(card).getByText(board.summary)).toBeTruthy();
+
+    fireEvent.click(card);
+    const panel = within(screen.getByRole("complementary", { name: "Board details" }));
+    expect(panel.getByText(board.summary)).toBeTruthy();
+    const more = panel.getByText("More about Board").closest("details")!;
+    expect(more.hasAttribute("open")).toBe(false);
+    expect(within(more).getByText(board.description)).toBeTruthy();
+    fireEvent.click(panel.getByText("More about Board"));
+    expect(more.hasAttribute("open")).toBe(true);
   });
 
   test("a feature with no tools says so on its Tools tab, and one with a page says what it adds", async () => {
@@ -131,9 +149,11 @@ describe("features on the catalog page", () => {
     expect(screen.getByLabelText("On")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Board" }));
-    // Bitbucket's servers belong to Pull requests' panel, not to every feature that is on.
+    // Bitbucket's servers belong to its own panel, not to every feature that is on.
     expect(screen.queryByRole("region", { name: "Bitbucket servers" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
+    const enabled = () => screen.getByRole("switch", { name: "Board enabled" });
+    expect(enabled().getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(enabled());
     await settle();
     expect(calls.at(-1)).toEqual({ command: "features_set", args: { id: "board", on: false } });
   });
@@ -152,7 +172,7 @@ describe("features on the catalog page", () => {
     expect(calls.at(-1)).toEqual({ command: "features_set_tools", args: { id: "board", on: false } });
     expect(tools().getAttribute("aria-checked")).toBe("false");
     fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
-    expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Board enabled" }).getAttribute("aria-checked")).toBe("true");
   });
 
   test("a feature with tools but no page promises no page in the sidebar", async () => {
@@ -168,11 +188,11 @@ describe("features on the catalog page", () => {
     render(<CatalogPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Bitbucket" }));
-    expect(screen.getByText("Turned off, the model stops getting its tools; what it kept stays until you delete it.")).toBeTruthy();
+    expect(screen.getByText("The model gets its tools from your next message.")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Bitbucket enabled" }));
     await settle();
-    expect(screen.getByText("Turned on, the model gets its tools from its next message.")).toBeTruthy();
+    expect(screen.getByText("Off: the model gets no tools from it.")).toBeTruthy();
   });
 
   test("the panel says what the feature is until the user chooses", async () => {
@@ -180,6 +200,7 @@ describe("features on the catalog page", () => {
     render(<CatalogPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    fireEvent.click(screen.getByText("More about Board"));
     expect(screen.getByText("On — until you choose otherwise")).toBeTruthy();
 
     // A feature whose build says off: turned on here, the default still reads off.
@@ -210,7 +231,7 @@ describe("features on the catalog page", () => {
     await settle();
     expect(screen.queryByRole("region", { name: "Bitbucket servers" })).toBeNull();
 
-    fireEvent.click(screen.getByText("Turn on"));
+    fireEvent.click(screen.getByRole("switch", { name: "Bitbucket enabled" }));
     await settle();
     const servers = within(screen.getByRole("region", { name: "Bitbucket servers" }));
     expect(servers.getByText(/None yet/)).toBeTruthy();
@@ -239,7 +260,7 @@ describe("features on the catalog page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Board" }));
     expect(screen.queryByRole("button", { name: "Delete data" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Board enabled" }));
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Delete data" }));
     expect(calls.some((c) => c.command === "features_delete_data")).toBe(false);
@@ -247,6 +268,14 @@ describe("features on the catalog page", () => {
     await settle();
     expect(calls.at(-1)).toEqual({ command: "features_delete_data", args: { id: "board" } });
     expect(screen.queryByRole("button", { name: "Delete data" })).toBeNull();
+  });
+
+  test("search finds a word the card shows, even when the long text lacks it", async () => {
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    // "written" is in the summary the card reads, and not in the description behind More.
+    fireEvent.change(screen.getByLabelText("Search the catalog"), { target: { value: "written" } });
+    expect(screen.getByRole("button", { name: "Board" })).toBeTruthy();
   });
 
   test("the Features tab shows only features, and search narrows them", async () => {

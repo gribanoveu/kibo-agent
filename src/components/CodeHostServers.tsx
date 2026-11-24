@@ -23,10 +23,7 @@ export function CodeHostServers() {
   return (
     <section className="code-hosts-section" aria-label="Bitbucket servers">
       <h4 className="code-hosts-title">Bitbucket servers</h4>
-      <p className="code-hosts-intro">
-        The Bitbucket Data Center servers the pull request under the branch in Overview is read from. A folder finds its server by
-        its remote: by the address, or by a host the server's clone links have shown it answers to.
-      </p>
+      <p className="code-hosts-intro">Servers the pull request in Overview is read from. A folder finds its server by its remote.</p>
       {error && <p className="code-hosts-error">{error}</p>}
       <ul className="code-hosts">
         {servers.map((server) => {

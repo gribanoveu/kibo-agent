@@ -49,6 +49,22 @@
   background: var(--bg-active);
   color: var(--text);
 }
+/* The long text and the facts about the build: read when wanted, not in the way
+   of the switch and the servers above them. */
+.catalog-detail-more {
+  margin-top: 14px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.catalog-detail-more summary {
+  cursor: pointer;
+}
+.catalog-detail-more .catalog-detail-text {
+  margin-top: 8px;
+}
+.catalog-detail-more .catalog-detail-facts {
+  margin: 10px 0 0;
+}
 .catalog-search {
   flex: 0 1 260px;
   min-width: 160px;
