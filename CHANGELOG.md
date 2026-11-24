@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-24 The chat thread no longer moves while a message is typed into the box for the next one: the box grows a line and the thread with it shrinks, and the follow-the-end scroll used to treat that as the answer growing — what was being read jumped up a line per line typed, with the agent at rest; the end still follows the answer as it streams and comes back when the message is sent
 - 2026-11-24 The Create pull request dialog offers the branch to go into as a list of this folder's own branches — the default branch first, the branch the pull request comes from left out — with a field for one the folder has not read, taken as it is typed; Escape closes that list first and the dialog after it
 - 2026-11-24 The pull request row in Overview is its title over one line — "1/1 approved · Ready to merge" — with whether it can go in at the end of that line instead of on its own, and the number and the repository name, which only cut that line short, moved into its tooltip
 - 2026-11-24 "N/M approved" on the pull request row in Overview is a button: the reviewers and their decisions open in a popover pinned to it, in the order of who holds the pull request up, instead of inside the row's own expansion — which now keeps the author, the target branch and the reasons it cannot be merged

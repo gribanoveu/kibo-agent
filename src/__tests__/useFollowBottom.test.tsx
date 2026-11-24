@@ -5,14 +5,16 @@ import { useFollowBottom } from "../hooks/useFollowBottom";
 // The chat thread stays at its end while the answer grows, and lets go of it
 // the moment the user scrolls up to read.
 
-let resized: (() => void)[] = [];
+// One entry per observed node, so a test can grow the content and resize the
+// box apart — they mean different things to the hook.
+let resized: { target: Element; cb: () => void }[] = [];
 const RealObserver = globalThis.ResizeObserver;
 beforeEach(() => {
   resized = [];
   globalThis.ResizeObserver = class {
     constructor(private cb: () => void) {}
-    observe() {
-      resized.push(this.cb);
+    observe(target: Element) {
+      resized.push({ target, cb: this.cb });
     }
     unobserve() {}
     disconnect() {}
@@ -27,7 +29,7 @@ function Thread({ onReady }: { onReady: (api: ReturnType<typeof useFollowBottom>
   onReady(api);
   return (
     <div ref={api.scrollRef} data-testid="box">
-      <div ref={api.contentRef} />
+      <div ref={api.contentRef} data-testid="content" />
     </div>
   );
 }
@@ -36,24 +38,50 @@ function setup(start = 1000) {
   let api!: ReturnType<typeof useFollowBottom>;
   const { getByTestId } = render(<Thread onReady={(a) => (api = a)} />);
   const box = getByTestId("box");
+  const content = getByTestId("content");
+  const fire = (target: Element) => {
+    for (const { target: node, cb } of resized) if (node === target) cb();
+  };
   let height = start;
+  let shown = 300;
   Object.defineProperty(box, "scrollHeight", { get: () => height });
-  Object.defineProperty(box, "clientHeight", { get: () => 300 });
+  Object.defineProperty(box, "clientHeight", { get: () => shown });
+  // The answer grows a word longer.
   const grow = (by: number) => {
     height += by;
-    for (const cb of resized) cb();
+    fire(content);
+  };
+  // The message box takes its height from the thread: a line typed, a line sent.
+  const resizeBox = (by: number) => {
+    shown += by;
+    fire(box);
   };
   const userScrollsTo = (top: number) => {
     box.scrollTop = top;
     box.dispatchEvent(new Event("scroll"));
   };
-  return { box, grow, userScrollsTo, api: () => api };
+  return { box, grow, resizeBox, userScrollsTo, api: () => api };
 }
 
 describe("following the end of the thread", () => {
   test("scrolls to the end as the content grows", () => {
     const { box, grow } = setup();
     grow(200);
+    expect(box.scrollTop).toBe(1200);
+  });
+
+  /// Typing grows the message box, which takes its height from the thread. That
+  /// is not the answer growing: what is being read must not move by a line for
+  /// every line typed, and the end waits for the next word of the answer.
+  test("a taller message box leaves the thread where it is", () => {
+    const { box, grow, resizeBox } = setup();
+    grow(0);
+    box.scrollTop = 700; // the end: 1000 - 300
+    resizeBox(-42); // two lines typed
+    expect(box.scrollTop).toBe(700);
+    resizeBox(42); // sent, and the box back to one line
+    expect(box.scrollTop).toBe(700);
+    grow(200); // the answer's next word takes the end again
     expect(box.scrollTop).toBe(1200);
   });
 

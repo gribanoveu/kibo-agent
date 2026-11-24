@@ -5,8 +5,12 @@ import { useCallback, useRef } from "react";
  * away from the end; scrolling back to it picks it up again.
  *
  * The scroll happens in a ResizeObserver, which runs after layout and before
- * paint, so no frame is drawn with the new text below the edge. The box is
- * observed too: a shorter window or a taller composer keeps the end in view.
+ * paint, so no frame is drawn with the new text below the edge. The content is
+ * what is observed, never the box: the box's own height changes whenever a
+ * line is typed into the message box, and sticking on that shoves what is
+ * being read up by a line per line typed — with the answer at rest and nothing
+ * else moving on screen. The end catches up with the next word of the answer
+ * instead, and `scrollToBottom` puts it back when the user sends.
  *
  * `scrollRef` goes on the scrolling box, `contentRef` on the one child that
  * holds everything inside it.
@@ -107,13 +111,10 @@ export function useFollowBottom() {
       const onKey = (e: KeyboardEvent) => {
         if (e.key === "PageUp" || e.key === "ArrowUp" || e.key === "Home") letGo();
       };
-      const resize = new ResizeObserver(stick);
-      resize.observe(el);
       el.addEventListener("scroll", onScroll, { passive: true });
       el.addEventListener("wheel", onWheel, { passive: true });
       el.addEventListener("keydown", onKey);
       return () => {
-        resize.disconnect();
         settled();
         el.removeEventListener("scroll", onScroll);
         el.removeEventListener("wheel", onWheel);
