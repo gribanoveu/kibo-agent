@@ -408,9 +408,11 @@ function FeatureDetails({
           </div>
           {feature.tools.length > 0 && (
             <p className="catalog-detail-note">
+              {/* Only a feature with a page in PAGES can promise one: Bitbucket adds a row
+                  in Overview, not a sidebar entry. */}
               {feature.on
-                ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
-                : "Turned on, the model gets its tools from its next message, and its page appears in the sidebar."}
+                ? `Turned off, the model stops getting its tools${hasPage ? " and its page leaves the sidebar" : ""}; what it kept stays until you delete it.`
+                : `Turned on, the model gets its tools from its next message${hasPage ? ", and its page appears in the sidebar" : ""}.`}
             </p>
           )}
           {feature.id === "layout-correction" && feature.layoutSwitchSupported && (

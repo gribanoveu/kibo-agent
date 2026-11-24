@@ -155,6 +155,26 @@ describe("features on the catalog page", () => {
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
   });
 
+  test("a feature with tools but no page promises no page in the sidebar", async () => {
+    // Bitbucket adds a row under the branch in Overview; nothing of it is a sidebar page.
+    board = {
+      ...board,
+      id: "pull-requests",
+      name: "Bitbucket",
+      on: true,
+      tools: [{ name: "pullRequestStatus", description: "The pull request of a branch" }],
+      places: ["Agent", "Analyst"],
+    };
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Bitbucket" }));
+    expect(screen.getByText("Turned off, the model stops getting its tools; what it kept stays until you delete it.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Turn off" }));
+    await settle();
+    expect(screen.getByText("Turned on, the model gets its tools from its next message.")).toBeTruthy();
+  });
+
   test("the panel says what the feature is until the user chooses", async () => {
     board = { ...board, defaultOn: true, on: true };
     render(<CatalogPage openPane={() => {}} />);
