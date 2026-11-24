@@ -341,7 +341,15 @@ pub fn fetch_cert(base: &str) -> Result<crate::domain::code_host::FetchedCert, F
     socket.set_read_timeout(Some(FETCH_TIMEOUT)).map_err(|e| FetchCertError::Unreachable(e.to_string()))?;
     socket.set_write_timeout(Some(FETCH_TIMEOUT)).map_err(|e| FetchCertError::Unreachable(e.to_string()))?;
     let mut conn = ClientConnection::new(Arc::new(config), name).map_err(|e| FetchCertError::Tls(e.to_string()))?;
-    conn.complete_io(&mut socket).map_err(|e| FetchCertError::Tls(e.to_string()))?;
+    // A handshake that times out or is cut short never said anything about a
+    // certificate; only what rustls itself refused (`InvalidData`) did.
+    conn.complete_io(&mut socket).map_err(|e| {
+        if nothing_answered(e.kind()) {
+            FetchCertError::Unreachable(e.to_string())
+        } else {
+            FetchCertError::Tls(e.to_string())
+        }
+    })?;
     conn.send_close_notify();
     let _ = conn.complete_io(&mut socket);
 
@@ -368,6 +376,16 @@ fn connect(host: &str, port: u16) -> Result<TcpStream, TlsError> {
         }
     }
     Err(last)
+}
+
+/// Whether a failed handshake is the socket giving up rather than the handshake
+/// failing: a server that took the connection and then went silent, a reset, a
+/// peer that closed. rustls wraps its own protocol and certificate errors as
+/// `InvalidData` (`conn.rs`), so the kind tells the two apart — and only the
+/// second is worth a CA to paste.
+fn nothing_answered(kind: std::io::ErrorKind) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(kind, TimedOut | WouldBlock | ConnectionReset | ConnectionAborted | BrokenPipe | UnexpectedEof)
 }
 
 /// Writes down what the server presented and accepts it, so the handshake
@@ -710,12 +728,41 @@ gxvaf8JES4ZQc67yzeks3IKB5uhP+V2w2QD5KrA=\n\
     }
 
     /// Nothing reached is the address's fault, not a certificate's: the user is
-    /// sent where the fix is. Port 1 is nothing listening on this machine.
+    /// sent where the fix is. Port 1 is nothing listening.
     #[test]
     fn an_address_that_reaches_nothing_is_not_a_certificate_problem() {
         for address in ["https://", "not an address", "https://127.0.0.1:1"] {
             assert!(matches!(fetch_cert(address), Err(FetchCertError::Unreachable(_))), "{address}");
         }
+    }
+
+    /// A server that takes the connection and then hangs up has said nothing
+    /// about a certificate either — the same reading of a silent firewall.
+    #[test]
+    fn a_server_that_hangs_up_mid_handshake_is_out_of_reach() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for socket in listener.incoming().flatten() {
+                drop(socket); // closed without a byte in either direction
+            }
+        });
+        assert!(matches!(fetch_cert(&format!("https://127.0.0.1:{port}")), Err(FetchCertError::Unreachable(_))));
+    }
+
+    /// Something answered and it was not a certificate: that is the case the CA
+    /// message is for, and the one place `Tls` still belongs.
+    #[test]
+    fn an_answer_that_is_not_tls_is_a_certificate_problem() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut socket in listener.incoming().flatten() {
+                let _ = socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n");
+                let _ = socket.flush();
+            }
+        });
+        assert!(matches!(fetch_cert(&format!("https://127.0.0.1:{port}")), Err(FetchCertError::Tls(_))));
     }
 
     /// BB-11: a name is what the user recognises; the hex is what they compare.
