@@ -288,8 +288,9 @@ pub fn parallel_block(chats: &[String]) -> Option<String> {
          a file you read earlier may have changed since, and a write that finds it changed is refused — re-read the file \
          and apply your change to what is there now. Never revert, delete or commit changes you did not make; branches and \
          the git index are shared — do not run git checkout, switch, restore, reset, clean, rebase or merge. If your task is \
-         likely to touch the same files, offer the user a move of this chat to a separate worktree (offer `worktree`) and \
-         carry on there."
+         likely to touch the same files, put a move of this chat to a separate worktree to the user with `offer`, kind \
+         `worktree` — a button after your answer, not a question written in it. Until they press it, keep working in this \
+         folder; the move has not happened yet, so do not go on as if it had."
     ))
 }
 
@@ -566,7 +567,8 @@ mod tests {
         let block = parallel_block(&["Fix\nlogin".into()]).expect("a running neighbour is named");
         assert!(block.contains("chat \"Fix login\""), "{block}");
         assert!(block.contains("do not run git checkout") && block.contains("reset") && block.contains("merge"), "{block}");
-        assert!(block.contains("offer `worktree`"), "{block}");
+        assert!(block.contains("`offer`, kind `worktree`"), "{block}");
+        assert!(block.contains("not a question written in it"), "{block}");
         let workspace = PathBuf::from("/tmp/p");
         let parallel = Some(block.as_str());
         assert!(context_block(&TurnContext { parallel, ..ctx(&workspace) }).contains(&block));
