@@ -19,7 +19,7 @@ const BUILDS: usize = 10;
 pub fn pull_request_status(scope: &ToolScope, args: &PullRequestStatusArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
     let reader = deps.pull_requests.as_deref().ok_or_else(|| ToolError::FeatureOff {
         tool: "pullRequestStatus".to_string(),
-        feature: "Bitbucket".to_string(),
+        feature: crate::domain::features::Feature::PullRequests.manifest().name.to_string(),
     })?;
     let strip = reader.status(scope.root(), args.branch.as_deref())?;
     let (text, summary) = describe(&strip)?;
@@ -400,6 +400,11 @@ mod tests {
         let dir = crate::testing::temp_dir("pr-status-off");
         let scope = ToolScope::new(&dir).unwrap();
         let error = pull_request_status(&scope, &PullRequestStatusArgs::default(), &ToolDeps::default()).unwrap_err();
-        assert!(matches!(error, ToolError::FeatureOff { .. }), "{error}");
+        // The name it sends the model to is the Catalog card's, not one copied here:
+        // renamed there, this refusal still names a card that exists.
+        assert!(
+            matches!(&error, ToolError::FeatureOff { feature, .. } if feature == crate::domain::features::Feature::PullRequests.manifest().name),
+            "{error}"
+        );
     }
 }

@@ -381,6 +381,10 @@ function FeatureDetails({
       <h3 className="catalog-detail-name">{feature.name}</h3>
       <p className="catalog-detail-desc">{feature.description}</p>
 
+      {/* Above the tabs: a switch on either tab can fail, and the message about it
+          must be read where it was clicked. */}
+      {error && <div className="catalog-detail-error">{error}</div>}
+
       <div className="catalog-sheet-tabs" role="tablist" aria-label={`${feature.name} sections`}>
         {SHEET_TABS.map(({ value, label }) => (
           <button key={value} type="button" role="tab" aria-selected={tab === value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>
@@ -402,7 +406,6 @@ function FeatureDetails({
             )}
             {feature.on && <span className="catalog-detail-state installed">{feature.tools.length > 0 ? "On — from the next message" : "On"}</span>}
           </div>
-          {error && <div className="catalog-detail-error">{error}</div>}
           {feature.tools.length > 0 && (
             <p className="catalog-detail-note">
               {feature.on

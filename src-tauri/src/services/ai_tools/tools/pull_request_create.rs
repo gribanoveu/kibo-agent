@@ -16,7 +16,7 @@ use crate::infra::{git_head, repository_identity};
 pub fn pull_request_create(scope: &ToolScope, args: &PullRequestCreateArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
     let prs = deps.pull_requests.as_deref().ok_or_else(|| ToolError::FeatureOff {
         tool: "pullRequestCreate".to_string(),
-        feature: "Bitbucket".to_string(),
+        feature: crate::domain::features::Feature::PullRequests.manifest().name.to_string(),
     })?;
     let title = title(args)?;
     let description = args.body.as_deref().unwrap_or("");

@@ -8,6 +8,8 @@ import type { FeatureView } from "../lib/features";
 
 let board: FeatureView;
 let calls: { command: string; args?: Record<string, unknown> }[] = [];
+/** What a switch refuses with, as a rejected write does. */
+let switchFails: string | null = null;
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (command: string, args?: Record<string, unknown>) => {
@@ -20,6 +22,7 @@ mock.module("@tauri-apps/api/core", () => ({
       return Promise.resolve([structuredClone(board)]);
     }
     if (command === "features_set_tools") {
+      if (switchFails) return Promise.reject(switchFails);
       board = { ...board, toolsOn: args!.on as boolean };
       return Promise.resolve([structuredClone(board)]);
     }
@@ -56,6 +59,7 @@ const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)))
 
 beforeEach(() => {
   calls = [];
+  switchFails = null;
   board = {
     id: "board",
     name: "Board",
@@ -148,6 +152,19 @@ describe("features on the catalog page", () => {
     expect(tools().getAttribute("aria-checked")).toBe("false");
     fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
+  });
+
+  test("a switch that fails says so on the tab it was thrown from", async () => {
+    board = { ...board, on: true };
+    switchFails = "the settings file could not be written";
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Tools" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Tools for the model" }));
+    await settle();
+    // The message is not a tab's own: it is where it was clicked.
+    expect(screen.getByText("the settings file could not be written")).toBeTruthy();
   });
 
   test("Bitbucket takes its servers in its own panel, once it is on", async () => {
