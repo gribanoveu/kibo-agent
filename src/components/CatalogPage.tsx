@@ -8,6 +8,7 @@ import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
 import { CodeHostServers } from "./CodeHostServers";
 import { Page, PageEmpty, PageSheet } from "./Page";
+import { PAGES, type PageDef } from "./pages";
 import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
 import { useFeatures } from "../hooks/useFeatures";
 import { Switch } from "./Switch";
@@ -31,6 +32,12 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "features", label: "Features" },
   ...KINDS.map(({ kind, label }) => ({ value: kind, label })),
 ];
+
+/** The two halves of a feature's sheet: what it adds to the window, and what it gives the model. */
+const SHEET_TABS = [
+  { value: "settings", label: "Settings" },
+  { value: "tools", label: "Tools" },
+] as const;
 
 /** A feature's icon, by its id; one without its own gets the generic piece. */
 const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
@@ -365,68 +372,93 @@ function FeatureDetails({
   onClose: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  // Settings first: turning a feature on is what most openings are about.
+  const [tab, setTab] = useState<(typeof SHEET_TABS)[number]["value"]>("settings");
+  // Whether it brings a page of its own — what the Tools tab says when there are no tools.
+  const hasPage = PAGES.some((page) => (page as PageDef).feature === feature.id);
   return (
     <PageSheet icon={featureIcon(feature.id)} title="Feature" label={`${feature.name} details`} onClose={onClose}>
       <h3 className="catalog-detail-name">{feature.name}</h3>
       <p className="catalog-detail-desc">{feature.description}</p>
 
-      <div className="catalog-detail-actions">
-        <button type="button" className={`btn ${feature.on ? "btn-ghost" : "btn-primary"}`} onClick={() => onSet(!feature.on)}>
-          {feature.on ? "Turn off" : "Turn on"}
-        </button>
-        {!feature.on && feature.hasData && (
-          <button type="button" className="btn btn-ghost" onClick={() => setConfirming(true)}>
-            Delete data
+      <div className="catalog-sheet-tabs" role="tablist" aria-label={`${feature.name} sections`}>
+        {SHEET_TABS.map(({ value, label }) => (
+          <button key={value} type="button" role="tab" aria-selected={tab === value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>
+            {label}
           </button>
-        )}
-        {feature.on && <span className="catalog-detail-state installed">{feature.tools.length > 0 ? "On — from the next message" : "On"}</span>}
+        ))}
       </div>
-      {error && <div className="catalog-detail-error">{error}</div>}
-      {feature.tools.length > 0 && (
-        <p className="catalog-detail-note">
-          {feature.on
-            ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
-            : "Turned on, the model gets the tools below from its next message, and its page appears in the sidebar."}
-        </p>
-      )}
-      {feature.tools.length > 0 && (
-        <label className="catalog-detail-switch">
-          <span>Tools for the model</span>
-          <Switch label="Tools for the model" on={feature.toolsOn} onChange={onSetTools} />
-        </label>
-      )}
-      {feature.id === "layout-correction" && feature.layoutSwitchSupported && (
-        <label className="catalog-detail-switch">
-          <span>Switch keyboard layout after Fix</span>
-          <Switch label="Switch keyboard layout after Fix" on={feature.layoutSwitchOn} onChange={onSetLayoutSwitch} />
-        </label>
-      )}
-      {/* Its servers where it is turned on, rather than a trip to Settings after. */}
-      {feature.id === "pull-requests" && feature.on && <CodeHostServers />}
 
-      <dl className="catalog-detail-facts">
-        <dt>Source</dt>
-        <dd>Built into the app</dd>
-        {feature.places.length > 0 && (
-          <>
-            <dt>Where</dt>
-            <dd>{feature.places.join(", ")}</dd>
-          </>
-        )}
-        {feature.data && (
-          <>
-            <dt>Keeps</dt>
-            <dd className="mono">{feature.data}</dd>
-          </>
-        )}
-      </dl>
+      {tab === "settings" && (
+        <div role="tabpanel" aria-label="Settings">
+          <div className="catalog-detail-actions">
+            <button type="button" className={`btn ${feature.on ? "btn-ghost" : "btn-primary"}`} onClick={() => onSet(!feature.on)}>
+              {feature.on ? "Turn off" : "Turn on"}
+            </button>
+            {!feature.on && feature.hasData && (
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirming(true)}>
+                Delete data
+              </button>
+            )}
+            {feature.on && <span className="catalog-detail-state installed">{feature.tools.length > 0 ? "On — from the next message" : "On"}</span>}
+          </div>
+          {error && <div className="catalog-detail-error">{error}</div>}
+          {feature.tools.length > 0 && (
+            <p className="catalog-detail-note">
+              {feature.on
+                ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
+                : "Turned on, the model gets its tools from its next message, and its page appears in the sidebar."}
+            </p>
+          )}
+          {feature.id === "layout-correction" && feature.layoutSwitchSupported && (
+            <label className="catalog-detail-switch">
+              <span>Switch keyboard layout after Fix</span>
+              <Switch label="Switch keyboard layout after Fix" on={feature.layoutSwitchOn} onChange={onSetLayoutSwitch} />
+            </label>
+          )}
+          {/* Its servers where it is turned on, rather than a trip to Settings after. */}
+          {feature.id === "pull-requests" && feature.on && <CodeHostServers />}
 
-      {feature.tools.map((tool) => (
-        <div key={tool.name}>
-          <h4 className="catalog-detail-file">{tool.name}</h4>
-          <div className="catalog-detail-text">{tool.description}</div>
+          <dl className="catalog-detail-facts">
+            <dt>Source</dt>
+            <dd>Built into the app</dd>
+            {feature.data && (
+              <>
+                <dt>Keeps</dt>
+                <dd className="mono">{feature.data}</dd>
+              </>
+            )}
+          </dl>
         </div>
-      ))}
+      )}
+
+      {tab === "tools" && (
+        <div role="tabpanel" aria-label="Tools">
+          {feature.tools.length === 0 ? (
+            // Said rather than hidden: no tools is a fact about the feature, and an
+            // empty list would read as something that failed to load.
+            <p className="catalog-detail-text">
+              {hasPage
+                ? "No tools for the model: this feature adds its page to the sidebar, and nothing to the model."
+                : "No tools for the model: everything this feature adds is for you in the window."}
+            </p>
+          ) : (
+            <>
+              <label className="catalog-detail-switch">
+                <span>Tools for the model</span>
+                <Switch label="Tools for the model" on={feature.toolsOn} onChange={onSetTools} />
+              </label>
+              {feature.places.length > 0 && <p className="catalog-detail-note">Where: {feature.places.join(", ")}</p>}
+              {feature.tools.map((tool) => (
+                <div key={tool.name}>
+                  <h4 className="catalog-detail-file">{tool.name}</h4>
+                  <div className="catalog-detail-text">{tool.description}</div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
 
       <Modal
         title={`Delete ${feature.name}'s data?`}

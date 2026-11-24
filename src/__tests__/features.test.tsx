@@ -80,9 +80,41 @@ describe("features on the catalog page", () => {
 
     fireEvent.click(section.getByRole("button", { name: "Board" }));
     const panel = within(screen.getByRole("complementary", { name: "Board details" }));
-    expect(panel.getByText("Assistant chat, Agent, Analyst")).toBeTruthy();
-    expect(panel.getByText("When the user asks you to remind them…")).toBeTruthy();
+    // The sheet opens on Settings: what the feature is and where its data is.
+    expect(panel.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe("true");
     expect(panel.getByText("~/.kibo/board.db")).toBeTruthy();
+    // One panel at a time: nothing of the other tab is here.
+    expect(panel.queryByText("When the user asks you to remind them…")).toBeNull();
+
+    // What the model gets, and where it is offered, is the Tools tab's.
+    fireEvent.click(panel.getByRole("tab", { name: "Tools" }));
+    expect(panel.getByRole("tab", { name: "Tools" }).getAttribute("aria-selected")).toBe("true");
+    expect(panel.getByRole("tab", { name: "Settings" }).getAttribute("aria-selected")).toBe("false");
+    expect(panel.getByText("Where: Assistant chat, Agent, Analyst")).toBeTruthy();
+    expect(panel.getByText("When the user asks you to remind them…")).toBeTruthy();
+    // And the settings are gone: the tab replaced them, rather than stacking on them.
+    expect(panel.queryByText("~/.kibo/board.db")).toBeNull();
+  });
+
+  test("a feature with no tools says so on its Tools tab, and one with a page says what it adds", async () => {
+    board = { ...board, id: "provider-balance", name: "Provider balance", tools: [], places: [], data: null, hasData: false };
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Provider balance" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Tools" }));
+    expect(screen.getByText("No tools for the model: everything this feature adds is for you in the window.")).toBeTruthy();
+    // The tab stays, with that line instead of an empty list.
+    expect(screen.getByRole("tabpanel", { name: "Tools" })).toBeTruthy();
+  });
+
+  test("a feature whose tools bring a page says so where its tools would be", async () => {
+    // The board is the one of the test's features with a page of its own (pages.tsx).
+    board = { ...board, tools: [] };
+    render(<CatalogPage openPane={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Tools" }));
+    expect(screen.getByText("No tools for the model: this feature adds its page to the sidebar, and nothing to the model.")).toBeTruthy();
   });
 
   test("+ turns it on, and the panel turns it off again", async () => {
@@ -106,20 +138,23 @@ describe("features on the catalog page", () => {
     render(<CatalogPage openPane={() => {}} />);
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    // The switch is about the tools, so it is set among them.
+    fireEvent.click(screen.getByRole("tab", { name: "Tools" }));
     const tools = () => screen.getByRole("switch", { name: "Tools for the model" });
     expect(tools().getAttribute("aria-checked")).toBe("true");
     fireEvent.click(tools());
     await settle();
     expect(calls.at(-1)).toEqual({ command: "features_set_tools", args: { id: "board", on: false } });
     expect(tools().getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
     expect(screen.getByRole("button", { name: "Turn off" })).toBeTruthy();
   });
 
-  test("Pull requests takes its servers in its own panel, once it is on", async () => {
-    board = { ...board, id: "pull-requests", name: "Pull requests", tools: [], places: [], data: "code_hosts.enc" };
+  test("Bitbucket takes its servers in its own panel, once it is on", async () => {
+    board = { ...board, id: "pull-requests", name: "Bitbucket", tools: [], places: [], data: "code_hosts.enc" };
     render(<CatalogPage openPane={() => {}} />);
     await settle();
-    fireEvent.click(within(screen.getByRole("region", { name: "Features" })).getByRole("button", { name: "Pull requests" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Features" })).getByRole("button", { name: "Bitbucket" }));
     await settle();
     expect(screen.queryByRole("region", { name: "Bitbucket servers" })).toBeNull();
 

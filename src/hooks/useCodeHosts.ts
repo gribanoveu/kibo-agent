@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { codeHostDelete, codeHostDetect, codeHosts, codeHostSave, type CodeHostServer } from "../lib/pullRequests";
 
 /**
- * The Bitbucket servers the user added, for the Pull requests feature's panel
+ * The Bitbucket servers the user added, for the Bitbucket feature's panel
  * in Catalog: read when it opens; a save or a delete answers with the list after it. Nothing else
  * changes them, so there is nothing to listen to.
  */

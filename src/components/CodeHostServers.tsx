@@ -10,7 +10,7 @@ import "./CodeHostServers.css";
 const NEW: CodeHostServer = { id: "", baseUrl: "", hosts: [], trustedCertPem: null, tokenSet: false };
 
 /**
- * The Pull requests feature's panel in Catalog: the servers the pull request
+ * The Bitbucket feature's panel in Catalog: the servers the pull request
  * under the branch is read from, each
  * with its address, the hosts learnt from its clone links, its certificate and
  * whether a token is kept. The token goes in and never comes back.

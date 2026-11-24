@@ -28,7 +28,7 @@ pub enum CodeHostError {
     /// cut short. The variants after it are the ones the strip acts on.
     #[error("the server answered {0}: {1}")]
     Http(u16, String),
-    #[error("the token was refused — it may have expired or been revoked; a new one goes in Catalog → Pull requests")]
+    #[error("the token was refused — it may have expired or been revoked; a new one goes in Catalog → Bitbucket")]
     Unauthorized,
     #[error("the token may read but not do this — merge and create need Repository write")]
     Forbidden,
@@ -39,7 +39,7 @@ pub enum CodeHostError {
     Conflict,
     /// The app trusts the public roots or the PEM a server carries, never a
     /// keychain, so a corporate server says this on the first request.
-    #[error("the server's certificate is not trusted — the server in Catalog → Pull requests needs its CA as a PEM: {0}")]
+    #[error("the server's certificate is not trusted — the server in Catalog → Bitbucket needs its CA as a PEM: {0}")]
     Tls(String),
     #[error("the server's answer is not what was asked for: {0}")]
     BadAnswer(String),
@@ -51,15 +51,15 @@ pub enum CodeHostError {
     /// alert, a broken answer) is [`CodeHostError::Network`] and is shown.
     #[error("the server is out of reach: {0}")]
     Unreachable(String),
-    #[error("no server is configured for {0} — add one in Catalog → Pull requests")]
+    #[error("no server is configured for {0} — add one in Catalog → Bitbucket")]
     NoServer(String),
     /// The server is there and has no token yet: telling the user to add the
     /// server again is how a form loses them.
-    #[error("the server \"{0}\" has no token — add one in Catalog → Pull requests")]
+    #[error("the server \"{0}\" has no token — add one in Catalog → Bitbucket")]
     NoToken(String),
     /// A token goes over TLS or nowhere; `http` is allowed only to this machine,
     /// where a test's own server listens.
-    #[error("{0} is not https — a token goes over TLS or nowhere; fix the address in Catalog → Pull requests")]
+    #[error("{0} is not https — a token goes over TLS or nowhere; fix the address in Catalog → Bitbucket")]
     Insecure(String),
     #[error("{0}")]
     Store(String),
@@ -640,6 +640,25 @@ pub fn merge_blocked(merge: &MergeCheck) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where an error sends the user — "Catalog → Bitbucket" — is the name the
+    /// Catalog card carries: renaming the feature without these is a signpost to
+    /// a card nobody has.
+    #[test]
+    fn the_errors_send_the_user_to_the_catalogs_own_name() {
+        let name = crate::domain::features::Feature::PullRequests.manifest().name;
+        let errors = [
+            CodeHostError::Unauthorized,
+            CodeHostError::Tls("the server's certificate".to_string()),
+            CodeHostError::NoServer("git.corp.example".to_string()),
+            CodeHostError::NoToken("git.corp.example".to_string()),
+            CodeHostError::Insecure("http://git.corp.example".to_string()),
+        ];
+        for error in errors {
+            let text = error.to_string();
+            assert!(text.contains(&format!("Catalog → {name}")), "{text}");
+        }
+    }
 
     fn server(id: &str, base_url: &str, hosts: &[&str]) -> CodeHostServer {
         CodeHostServer {

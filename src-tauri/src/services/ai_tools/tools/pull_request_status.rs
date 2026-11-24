@@ -19,7 +19,7 @@ const BUILDS: usize = 10;
 pub fn pull_request_status(scope: &ToolScope, args: &PullRequestStatusArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
     let reader = deps.pull_requests.as_deref().ok_or_else(|| ToolError::FeatureOff {
         tool: "pullRequestStatus".to_string(),
-        feature: "Pull requests".to_string(),
+        feature: "Bitbucket".to_string(),
     })?;
     let strip = reader.status(scope.root(), args.branch.as_deref())?;
     let (text, summary) = describe(&strip)?;
@@ -346,7 +346,7 @@ mod tests {
     fn what_cannot_be_asked_is_said_plainly() {
         let remote = RemoteRepo::parse("ssh://git@git.corp.example/corp/tax-api.git").unwrap();
         let error = run(Ok(PrStrip::NotConnected { remote }), None).0.unwrap_err().to_string();
-        assert!(error.contains("no server is configured for git.corp.example") && error.contains("Catalog → Pull requests"), "{error}");
+        assert!(error.contains("no server is configured for git.corp.example") && error.contains("Catalog → Bitbucket"), "{error}");
         let error = run(Err(CodeHostError::Unreachable("connection refused".to_string())), None).0.unwrap_err().to_string();
         assert!(error.contains("out of reach"), "{error}");
         assert!(run(Ok(PrStrip::NoRemote), None).0.is_err());
