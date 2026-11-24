@@ -14,6 +14,10 @@ let calls: { command: string; args?: Record<string, unknown> }[] = [];
 let opened: string[] = [];
 let mergeFails: string | null = null;
 let servers: CodeHostServer[] = [];
+/** What Check refuses with, as a server behind its own CA does. */
+let detectFails: string | null = null;
+/** What the fetch handshake brings back (BB-10). */
+let fetchedCert = { pem: "-----BEGIN CERTIFICATE-----\nMIIBfetched\n-----END CERTIFICATE-----\n", fingerprint: "7C:AD:15:73", chain: 1 };
 /** What `pull_request_last` hands back: the backend's last read, or a promise to hold it. */
 let lastStrip: PrStrip | null | Promise<PrStrip | null> = null;
 
@@ -32,6 +36,8 @@ mock.module("@tauri-apps/api/core", () => ({
     if (command === "pull_request_git_changed") return Promise.resolve(gitMoved);
     if (command === "pull_request_last") return lastStrip instanceof Promise ? lastStrip : Promise.resolve(structuredClone(lastStrip));
     if (command === "code_host_save") return Promise.resolve([]);
+    if (command === "code_host_detect") return detectFails ? Promise.reject(detectFails) : Promise.resolve("Bitbucket 8.19.26");
+    if (command === "code_host_fetch_cert") return Promise.resolve(structuredClone(fetchedCert));
     if (command === "code_hosts") return Promise.resolve(structuredClone(servers));
     if (command === "code_host_delete") {
       servers = servers.filter((s) => s.id !== args?.id);
@@ -120,6 +126,8 @@ beforeEach(() => {
   strip = ready();
   lastStrip = null;
   gitMoved = false;
+  detectFails = null;
+  fetchedCert = { pem: "-----BEGIN CERTIFICATE-----\nMIIBfetched\n-----END CERTIFICATE-----\n", fingerprint: "7C:AD:15:73", chain: 1 };
   calls = [];
   opened = [];
   mergeFails = null;
@@ -633,6 +641,95 @@ describe("connecting a server", () => {
     fireEvent.click(screen.getByText("Check"));
     await settle();
     expect(asked("code_host_detect").map((c) => (c.args as { server: { baseUrl: string } }).server.baseUrl)).toEqual(["https://git.example"]);
+    // An address that answered has no certificate to fetch.
+    expect(screen.queryByText("Fetch certificate")).toBeNull();
+  });
+
+  test("a refused certificate is fetched, shown by its fingerprint, and kept only after it is accepted", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted — it needs its CA as a PEM: UnknownIssuer";
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    expect(screen.queryByText("Fetch certificate")).toBeNull();
+
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+    expect(asked("code_host_fetch_cert").map((c) => c.args)).toEqual([{ baseUrl: "https://git.example" }]);
+    expect(screen.getByText(fetchedCert.fingerprint)).toBeTruthy();
+    expect(screen.getByText(/anyone on the path could have shown it/)).toBeTruthy();
+    // Shown is not trusted: nothing has gone to the server.
+    expect(asked("code_host_save")).toEqual([]);
+
+    fireEvent.click(screen.getByText("Use this certificate"));
+    await settle();
+    expect(asked("code_host_save")).toEqual([]);
+    fireEvent.change(screen.getByLabelText("HTTP access token"), { target: { value: "t0k" } });
+    fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
+    await settle();
+    const [sent] = asked("code_host_save").map((c) => c.args as { server: { trustedCertPem: string } });
+    expect(sent.server.trustedCertPem).toBe(fetchedCert.pem);
+  });
+
+  test("a token typed in the form is not on the wire while the certificate is fetched", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.change(screen.getByLabelText("HTTP access token"), { target: { value: "s3cr3t-t0ken" } });
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+    fireEvent.click(screen.getByText("Use this certificate"));
+    await settle();
+
+    // The fetch carries the address and nothing else, and no other call has
+    // taken the token anywhere: it goes only with Save, to this server.
+    expect(asked("code_host_fetch_cert").map((c) => c.args)).toEqual([{ baseUrl: "https://git.example" }]);
+    expect(JSON.stringify(calls)).not.toContain("s3cr3t-t0ken");
+    expect(asked("code_host_save")).toEqual([]);
+  });
+
+  test("a certificate fetched for one address is not offered for another", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+    expect(screen.getByText(fetchedCert.fingerprint)).toBeTruthy();
+
+    // Another host: what the first one presented must not be accepted for it.
+    fireEvent.change(screen.getByLabelText("Address"), { target: { value: "https://other.example" } });
+    expect(screen.queryByText(fetchedCert.fingerprint)).toBeNull();
+    expect(screen.queryByText("Use this certificate")).toBeNull();
+  });
+
+  test("a fetched certificate declined leaves the form as it was", async () => {
+    strip = { state: "notConnected", remote: { host: "git.example", baseUrl: "https://git.example", project: "corp", slug: "tax-api", transport: "ssh" } };
+    detectFails = "the server's certificate is not trusted";
+    panel();
+    await settle();
+    fireEvent.click(screen.getByText("Connect Bitbucket…"));
+    fireEvent.click(screen.getByText("Check"));
+    await settle();
+    fireEvent.click(screen.getByText("Fetch certificate"));
+    await settle();
+    fireEvent.click(screen.getByText("Discard"));
+    expect(screen.queryByText(fetchedCert.fingerprint)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("HTTP access token"), { target: { value: "t0k" } });
+    fireEvent.click(screen.getByRole("dialog").querySelector(".modal-foot .btn-primary")!);
+    await settle();
+    const [sent] = asked("code_host_save").map((c) => c.args as { server: { trustedCertPem: string | null } });
+    expect(sent.server.trustedCertPem).toBeNull();
   });
 });
 

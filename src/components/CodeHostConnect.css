@@ -18,6 +18,29 @@
 .code-host-spin {
   animation: code-host-spin 0.8s linear infinite;
 }
+/* The certificate the address presented (BB-10): its fingerprint is what the
+   user is asked to compare, so it is the thing that stands out here. */
+.code-host-fetched {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+}
+.code-host-fingerprint {
+  display: block;
+  margin: 6px 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.code-host-fetched-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
 @keyframes code-host-spin {
   to {
     transform: rotate(360deg);

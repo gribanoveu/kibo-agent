@@ -132,6 +132,25 @@ export async function codeHostDetect(server: CodeHostServer): Promise<string> {
   return invoke<string>("code_host_detect", { server });
 }
 
+/** What a server presented on a handshake that asked nothing else (BB-10). */
+export type FetchedCert = {
+  /** The most root-ward certificate it sent, PEM. */
+  pem: string;
+  /** SHA-256 of its DER, as openssl prints it: uppercase hex pairs, colon between. */
+  fingerprint: string;
+  /** How many certificates it sent. */
+  chain: number;
+};
+
+/**
+ * The certificate the address presents, without a token and without trusting
+ * it: the form shows the fingerprint and asks before it is kept.
+ */
+export async function codeHostFetchCert(baseUrl: string): Promise<FetchedCert> {
+  requireBackend();
+  return invoke<FetchedCert>("code_host_fetch_cert", { baseUrl });
+}
+
 export async function pullRequest(): Promise<PrStrip> {
   if (!inTauri()) return { state: "noRemote" };
   return invoke<PrStrip>("pull_request");

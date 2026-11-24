@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-24 Adding a Bitbucket server whose certificate is not trusted: "Fetch certificate" takes it from the server over a handshake that sends no token and asks for nothing, shows its SHA-256 fingerprint to compare with the one your IT gives you, and puts it in the form only when you accept it — Check and Save stay yours
 - 2026-11-24 A feature's panel in the Catalog opens with one line about what it is and a switch that shows whether it is on — the long description, the file it keeps and what the build defaults to are behind "More about …", so turning a feature on or off is the first thing on screen rather than the last
 - 2026-11-24 Board, Bitbucket and Keyboard layout correction are on in a fresh install — no choosing needed — and any of them turns off in the Catalog, where the panel now says whether a feature is on until you choose otherwise
 - 2026-11-24 The Catalog's feature panel has two tabs — Settings and Tools — where the tools a feature gives the model, and where they are offered, are read apart from turning it on and off, and a feature that gives no tools says so instead of showing an empty list; the pull request feature is called Bitbucket there, and the panel says whether a feature is on until you choose otherwise

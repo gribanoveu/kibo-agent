@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { codeHostDelete, codeHostDetect, codeHosts, codeHostSave, type CodeHostServer } from "../lib/pullRequests";
+import { codeHostDelete, codeHostDetect, codeHostFetchCert, codeHosts, codeHostSave, type CodeHostServer } from "../lib/pullRequests";
 
 /**
  * The Bitbucket servers the user added, for the Bitbucket feature's panel
@@ -36,5 +36,5 @@ export function useCodeHosts() {
     }
   }, []);
 
-  return { servers, error, save, remove, detect: codeHostDetect };
+  return { servers, error, save, remove, detect: codeHostDetect, fetchCert: codeHostFetchCert };
 }

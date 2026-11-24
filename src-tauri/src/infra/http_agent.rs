@@ -9,7 +9,9 @@
 
 use std::fmt;
 use std::io::{Read, Write};
-use std::sync::Arc;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::WebPkiServerVerifier;
@@ -234,6 +236,147 @@ pub fn parse_trusted_certs(pem: &str) -> Result<Vec<ureq::tls::Certificate<'stat
     Ok(certs)
 }
 
+/// How long the certificate handshake may take, connect and read alike.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The certificate `base` presents, taken by a handshake that asks nothing
+/// else (`docs/62-bitbucket-prs.md`, BB-10).
+///
+/// **No request is written and no token is sent**: the connection is closed
+/// once the server has presented its chain. What comes back is not trusted —
+/// it arrived over the channel the caller does not trust yet, so the form
+/// shows its fingerprint and asks the user before it is kept.
+///
+/// The last certificate of the chain is the one returned: the most root-ward
+/// thing the server sent, which for a self-signed server is its own leaf.
+/// Trusting that is what [`build_agent`] already knows how to do.
+///
+/// ponytail: "last" is the order RFC 8446 asks for, not one it guarantees — a
+/// server that sends its intermediates out of order offers one of them here
+/// instead of the root. The fingerprint is shown before anything is trusted,
+/// so a wrong one is the user's to notice; past this ceiling lies parsing the
+/// chain's subject and issuer (an X.509 parser crate) and preferring the
+/// self-signed certificate wherever it stands.
+pub fn fetch_cert(base: &str) -> Result<crate::domain::code_host::FetchedCert, TlsError> {
+    let (host, port) = host_and_port(base)?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let chain = Arc::new(Mutex::new(Vec::<CertificateDer<'static>>::new()));
+    let config = ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| TlsError(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(Capture { chain: chain.clone(), provider }))
+        .with_no_client_auth();
+    let name = ServerName::try_from(host.clone()).map_err(|_| TlsError(format!("{host} is not a server name")))?;
+
+    let mut socket = connect(&host, port)?;
+    socket.set_read_timeout(Some(FETCH_TIMEOUT)).map_err(|e| TlsError(e.to_string()))?;
+    socket.set_write_timeout(Some(FETCH_TIMEOUT)).map_err(|e| TlsError(e.to_string()))?;
+    let mut conn = ClientConnection::new(Arc::new(config), name).map_err(|e| TlsError(e.to_string()))?;
+    conn.complete_io(&mut socket).map_err(|e| TlsError(e.to_string()))?;
+    conn.send_close_notify();
+    let _ = conn.complete_io(&mut socket);
+
+    let chain = chain.lock().unwrap_or_else(PoisonError::into_inner);
+    let cert = chain.last().ok_or_else(|| TlsError("the server presented no certificate".to_string()))?;
+    Ok(crate::domain::code_host::FetchedCert {
+        pem: pem_of(cert),
+        fingerprint: fingerprint_of(cert),
+        chain: chain.len(),
+    })
+}
+
+/// The host and port of an https address, 443 when it names none.
+fn host_and_port(base: &str) -> Result<(String, u16), TlsError> {
+    let uri: http::Uri = base.parse().map_err(|e| TlsError(format!("{base}: {e}")))?;
+    let host = uri.host().ok_or_else(|| TlsError(format!("{base} names no host")))?;
+    // An IPv6 address keeps its brackets in a URI and has none in a server name.
+    Ok((host.trim_start_matches('[').trim_end_matches(']').to_string(), uri.port_u16().unwrap_or(443)))
+}
+
+fn connect(host: &str, port: u16) -> Result<TcpStream, TlsError> {
+    let addrs = (host, port).to_socket_addrs().map_err(|e| TlsError(format!("{host}:{port}: {e}")))?;
+    let mut last = TlsError(format!("{host}:{port} names no address"));
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, FETCH_TIMEOUT) {
+            Ok(socket) => return Ok(socket),
+            Err(e) => last = TlsError(format!("{host}:{port}: {e}")),
+        }
+    }
+    Err(last)
+}
+
+/// Writes down what the server presented and accepts it, so the handshake
+/// finishes and the chain can be read. The acceptance is the point: this is
+/// the certificate the user is being asked about, not one being trusted.
+///
+/// The signatures are still checked, as in [`Pinned`]: they are what proves
+/// the server holds the key it presented.
+#[derive(Debug)]
+struct Capture {
+    chain: Arc<Mutex<Vec<CertificateDer<'static>>>>,
+    provider: Arc<CryptoProvider>,
+}
+
+impl ServerCertVerifier for Capture {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let mut chain = self.chain.lock().unwrap_or_else(PoisonError::into_inner);
+        chain.clear();
+        chain.push(CertificateDer::from(end_entity.as_ref().to_vec()));
+        chain.extend(intermediates.iter().map(|cert| CertificateDer::from(cert.as_ref().to_vec())));
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// One certificate as PEM, 64 characters to the line, as every tool writes it.
+fn pem_of(cert: &CertificateDer<'_>) -> String {
+    use base64::Engine;
+    let body = base64::engine::general_purpose::STANDARD.encode(cert.as_ref());
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    for line in body.as_bytes().chunks(64) {
+        pem.push_str(&String::from_utf8_lossy(line));
+        pem.push('\n');
+    }
+    pem.push_str("-----END CERTIFICATE-----\n");
+    pem
+}
+
+/// SHA-256 of the DER, as `openssl x509 -fingerprint -sha256` prints it — the
+/// form the user can compare with what their IT gives them.
+fn fingerprint_of(cert: &CertificateDer<'_>) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(cert.as_ref()).iter().map(|byte| format!("{byte:02X}")).collect::<Vec<_>>().join(":")
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -430,6 +573,82 @@ gxvaf8JES4ZQc67yzeks3IKB5uhP+V2w2QD5KrA=\n\
     fn damaged_certificate_data_is_refused() {
         let damaged = ROOT_1.replace("MII", "!!!");
         assert!(parse_trusted_certs(&damaged).is_err());
+    }
+
+    /// BB-10: what the button brings back is the server's own certificate, and
+    /// enough to trust it with — the whole point of fetching it.
+    #[test]
+    fn a_self_signed_server_hands_over_its_certificate() {
+        let port = serve_tls(SELF, SELF_KEY);
+        let fetched = fetch_cert(&format!("https://127.0.0.1:{port}")).expect("fetched");
+        assert_eq!(fetched.chain, 1);
+        let served = parse_trusted_certs(SELF).expect("the test's own certificate")[0].der().to_vec();
+        assert_eq!(parse_trusted_certs(&fetched.pem).expect("PEM parses")[0].der().to_vec(), served);
+        // `openssl x509 -in testdata/tls/self.pem -outform DER | shasum -a 256`,
+        // pinned here so the fingerprint is checked against openssl's own answer
+        // rather than against the code that produced it.
+        assert_eq!(
+            fetched.fingerprint,
+            "7C:AD:15:73:51:F0:22:B5:FB:EB:49:5F:D3:E0:82:B6:C1:A9:D4:F0:D5:09:B5:37:A5:2B:36:FD:48:70:09:46"
+        );
+        assert_eq!(get(&fetched.pem, port).expect("trusted after the fetch"), 200);
+    }
+
+    /// A server that sends its CA above the leaf: the CA is what is offered,
+    /// not the leaf that expires next month.
+    #[test]
+    fn the_chain_is_taken_from_its_root_end() {
+        let reply = "HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        let port = serve_tls_with(&format!("{LEAF}{CA}"), LEAF_KEY, reply);
+        let fetched = fetch_cert(&format!("https://127.0.0.1:{port}")).expect("fetched");
+        assert_eq!(fetched.chain, 2);
+        let ca = parse_trusted_certs(CA).expect("the test's CA")[0].der().to_vec();
+        assert_eq!(parse_trusted_certs(&fetched.pem).expect("PEM parses")[0].der().to_vec(), ca);
+        assert_eq!(get(&fetched.pem, port).expect("trusted through the CA"), 200);
+    }
+
+    /// The fetch is a handshake and nothing else: no request, so no token and
+    /// no path leave the machine while the certificate is still untrusted.
+    #[test]
+    fn the_fetch_asks_the_server_for_nothing() {
+        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+        let certs = parse_trusted_certs(SELF)
+            .expect("certs")
+            .iter()
+            .map(|c| CertificateDer::from(c.der().to_vec()))
+            .collect();
+        let key = ureq::tls::parse_pem(SELF_KEY.as_bytes())
+            .find_map(|item| match item {
+                Ok(ureq::tls::PemItem::PrivateKey(key)) => Some(key.der().to_vec()),
+                _ => None,
+            })
+            .expect("key");
+        let config = Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("versions")
+                .with_no_client_auth()
+                .with_single_cert(certs, PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)))
+                .expect("server config"),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (said, heard) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (socket, _) = listener.accept().expect("accept");
+            let mut tls = StreamOwned::new(rustls::ServerConnection::new(config).expect("server"), socket);
+            let read = tls.read(&mut [0u8; 4096]).unwrap_or(0);
+            let _ = said.send(read);
+        });
+
+        fetch_cert(&format!("https://127.0.0.1:{port}")).expect("fetched");
+        assert_eq!(heard.recv_timeout(Duration::from_secs(10)).expect("the server read"), 0, "a request was sent");
+    }
+
+    #[test]
+    fn an_address_with_no_host_is_refused() {
+        assert!(fetch_cert("https://").is_err());
+        assert!(fetch_cert("not an address").is_err());
     }
 }
 

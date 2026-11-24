@@ -17,7 +17,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::domain::code_host::{
     alias_to_remember, approved_by, can_approve, canonical_remote, host_of, latest_build, merge_blocked, open_comments, server_for, Call,
-    CodeHost, CodeHostError, CodeHostServer, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, AgentPullRequests, RemoteRepo,
+    CodeHost, CodeHostError, CodeHostServer, FetchedCert, PrStrip, PullRequest, PullRequestChanged, PullRequestEventSink, AgentPullRequests, RemoteRepo,
     Snapshot,
 };
 use crate::infra::{code_host_store, git_head, repository_identity};
@@ -297,6 +297,20 @@ impl PullRequests {
         self.host.identify(server)
     }
 
+    /// The certificate the address presents, for the connect form to show and
+    /// ask about (`docs/62-bitbucket-prs.md`, BB-10): one handshake, no request
+    /// and no token. What comes back is not kept here — the user confirms its
+    /// fingerprint first, and only then does it go in with the server.
+    ///
+    /// https only: an `http` address has no certificate to fetch.
+    pub fn fetch_cert(base_url: &str) -> Result<FetchedCert, CodeHostError> {
+        let base = base_url.trim().trim_end_matches('/');
+        if !base.starts_with("https://") {
+            return Err(CodeHostError::Insecure(base.to_string()));
+        }
+        crate::infra::http_agent::fetch_cert(base).map_err(|e| CodeHostError::Tls(e.0))
+    }
+
     /// Saves a server; with `root`, the folder the connect form was opened for,
     /// first proves the folder's repository is on it — one of its clone links
     /// is the remote — and learns the remote's host as the server's alias
@@ -514,6 +528,15 @@ mod tests {
     use crate::testing::{temp_dir, with_app_dir};
     use std::sync::Condvar;
     use std::time::Instant;
+
+    /// BB-10: a certificate comes over TLS or there is none to fetch, so an
+    /// `http` address is refused before anything is dialled.
+    #[test]
+    fn fetching_a_certificate_needs_https() {
+        for address in ["http://git.corp.example", "git.corp.example", "", "  "] {
+            assert!(matches!(PullRequests::fetch_cert(address), Err(CodeHostError::Insecure(_))), "{address}");
+        }
+    }
 
     const REMOTE: &str = "ssh://git@git.server.com/corp/tax-api.git";
 

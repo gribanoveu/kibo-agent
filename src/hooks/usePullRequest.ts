@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { gitBranches, onGitChanged, type BranchRef } from "../lib/git";
 import {
   codeHostDetect,
+  codeHostFetchCert,
   codeHostSave,
   onPullRequestChanged,
   pullRequest,
@@ -105,6 +106,7 @@ export function usePullRequest(on: boolean, workspace: string | null) {
     loadBranches,
     connect,
     detect: codeHostDetect,
+    fetchCert: codeHostFetchCert,
     create: pullRequestCreate,
     approve: pullRequestApprove,
     merge: pullRequestMerge,

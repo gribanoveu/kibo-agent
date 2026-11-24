@@ -16,7 +16,7 @@ const NEW: CodeHostServer = { id: "", baseUrl: "", hosts: [], trustedCertPem: nu
  * whether a token is kept. The token goes in and never comes back.
  */
 export function CodeHostServers() {
-  const { servers, error, save, remove, detect } = useCodeHosts();
+  const { servers, error, save, remove, detect, fetchCert } = useCodeHosts();
   const [editing, setEditing] = useState<CodeHostServer | null>(null);
   const [deleting, setDeleting] = useState<CodeHostServer | null>(null);
 
@@ -64,6 +64,7 @@ export function CodeHostServers() {
         onClose={() => setEditing(null)}
         onSave={save}
         onDetect={detect}
+        onFetch={fetchCert}
       />
       <Modal
         title="Delete server"

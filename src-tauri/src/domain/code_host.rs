@@ -267,6 +267,26 @@ pub struct CodeHostServer {
     pub token_set: bool,
 }
 
+/// What a server presented on a handshake that asked it nothing else
+/// (`docs/62-bitbucket-prs.md`, BB-10): the certificate to trust if the user
+/// says so, and the fingerprint to say it by.
+///
+/// Not trust itself. It came over the channel that is not trusted yet, so
+/// anyone on the path could have presented it; the form shows `fingerprint`
+/// and asks, and only a confirmed one reaches [`CodeHostServer::trusted_cert_pem`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchedCert {
+    /// The most root-ward certificate the server sent, PEM-encoded: the leaf
+    /// itself when it is self-signed, the CA above it when it sent one.
+    pub pem: String,
+    /// SHA-256 of its DER, as `openssl x509 -fingerprint -sha256` prints it:
+    /// uppercase hex in pairs, colon between.
+    pub fingerprint: String,
+    /// How many certificates the server sent, the one above counted.
+    pub chain: usize,
+}
+
 /// The host of a base address, lowercase and without the port; an IPv6
 /// literal without its brackets.
 pub fn host_of(base_url: &str) -> Option<String> {
