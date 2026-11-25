@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AppWindow, MessagesSquare, MousePointerClick, SendHorizontal, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
-import { Dropdown } from "./Dropdown";
 import { KubePanel } from "./KubePanel";
 import { ContextMeter } from "./ContextMeter";
 import { ProviderBalance } from "./ProviderBalance";
@@ -30,7 +29,7 @@ import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import "./PlainChat.css";
 
 
-/** Each role's sign, on its chip above the message box and in the role's menu. */
+/** Each role's sign, on its chip under the message box. */
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   assistant: MessagesSquare,
   kubernetes: ShipWheel,
@@ -127,7 +126,6 @@ export function PlainChat({
   /** A send waiting for a picture to be read: a second Enter is the same message, not a copy of it. */
   const waiting = useRef(false);
   const running = chat.turn.status === "running";
-  const RoleIcon = ROLE_ICONS[chat.role];
   const empty = chat.turn.blocks.length === 0;
   // Two of the role's set, picked again each time an empty chat opens or the role changes.
   const suggestions = useMemo(() => pickSuggestions(ROLE_SUGGESTIONS[chat.role], 2), [chat.chatId, chat.role, empty]);
@@ -340,24 +338,9 @@ export function PlainChat({
           </div>
           {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
         </section>
-        {/* Under the box, where the agent's says which folder: here, who the
-            model is. The chat's own settings go on this strip as they come. */}
+        {/* Under the box, where the agent's says which folder: here, what the
+            message goes out with. The chat's own settings go on this strip. */}
         <div className="plain-tab">
-          {/* One role per chat: what was said was said to it. */}
-          <Dropdown
-            title={empty ? "Who the model is in this chat" : "The chat's role — start a new chat for another"}
-            locked={!empty}
-            heading="Role"
-            label={
-              <span className="plain-chip-label">
-                <RoleIcon size={13} />
-                <span>{roleName}</span>
-              </span>
-            }
-            value={chat.role}
-            options={chat.roles.map((r) => ({ value: r.id, label: r.name, hint: r.description }))}
-            onPick={(value) => chat.setRole(value as ChatRoleId)}
-          />
           {chat.role === "kubernetes" && (
             <KubePanel pin={chat.kube} onPin={chat.setPin} kube={kube} onSetUpKube={onSetUpKube} />
           )}
@@ -375,6 +358,34 @@ export function PlainChat({
           <ComposerSettings models={models} onModel={onModel} onEffort={onEffort} onLoadModels={onLoadModels} />
           <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
         </div>
+        {/* Who the model is, under the card: small chips, each its own press,
+            as the tools under a ChatGPT box are. One role per chat — what was
+            said was said to it — so once it has started only its own is left. */}
+        {chat.roles.length > 0 && (
+          <div className="plain-roles" role="radiogroup" aria-label="Role">
+            {(empty ? chat.roles : chat.roles.filter((r) => r.id === chat.role)).map((r) => {
+              const Icon = ROLE_ICONS[r.id];
+              const on = r.id === chat.role;
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  aria-disabled={!empty}
+                  className={`plain-role${on ? " on" : ""}`}
+                  title={empty ? r.description : "The chat's role — start a new chat for another"}
+                  onClick={() => {
+                    if (empty) chat.setRole(r.id);
+                  }}
+                >
+                  <Icon size={12} />
+                  <span>{r.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </>
   );
