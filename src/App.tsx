@@ -38,7 +38,7 @@ import { usePlainChat } from "./hooks/usePlainChat";
 import { usePrototypePreview } from "./hooks/usePrototypePreview";
 import { useChatHistory } from "./hooks/useChatHistory";
 import { useChatGroups } from "./hooks/useChatGroups";
-import { useLlmSettings } from "./hooks/useLlmSettings";
+import { modelChoices, useLlmSettings } from "./hooks/useLlmSettings";
 import { useKubeconfigs } from "./hooks/useKubeconfigs";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useIndexStatus } from "./hooks/useIndexStatus";
@@ -109,9 +109,9 @@ export default function App() {
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
-  // The model turns run on, for saying a cache miss came with a switch.
-  const model = llm.models.current?.label;
-  const plain = usePlainChat(kube.active?.name ?? null, model, !agentMode && !onPage);
+  // The global choice goes to the chat hooks: its label says a cache miss
+  // came with a switch, and its pair is what a new chat's first save stamps.
+  const plain = usePlainChat(kube.active?.name ?? null, llm.models.current, !agentMode && !onPage);
   const prototypePreview = usePrototypePreview(plain.chatId, plain.role === "prototype" ? plain.turn.blocks : null, plain.turn.status === "running");
   // Held here, not in the Changes pane: closing the pane, or moving it to the
   // other dock, would otherwise throw away a message half written. A different
@@ -197,12 +197,16 @@ export default function App() {
   // here: what belongs in it, and in what order, is the store's rule.
   // Queued messages that will not be sent after all go back to the box.
   const agent = useAgentTurn({
-    model,
+    choice: llm.models.current,
     folder: workspace.path,
     onSaved: history.refresh,
     onGiveBack: giveBack,
     spentShown: agentMode && shown("overview"),
   });
+  // The chip shows the open chat's own model; a new chat shows the global
+  // choice. Assembled here, not in useLlmSettings: the chat hooks already
+  // take the global choice from it, and the pin travels the other way.
+  const models = modelChoices(llm.settings, llm.served, agentMode ? agent.chatModel : plain.chatModel);
   // Counted in the chat beside the turn's clock: they outlive the turn.
   const runningProcesses = useRunningProcesses(agent.chatId);
   const approval = useApprovalMemory(agent.chatId, workspace.path, () =>
@@ -367,8 +371,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const turnBusy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
-  // The provider turns go to now: its own switch in Settings → Models.
-  const imagesEnabled = !!llm.settings?.providers.find((p) => p.id === llm.models.current?.providerId)?.supportsImages;
+  // The provider turns go to now — the open chat's own, not the global one.
+  const imagesEnabled = !!llm.settings?.providers.find((p) => p.id === models.current?.providerId)?.supportsImages;
   const worktreeRemoval = useWorktreeRemoval({ notify: toast.show, refreshRecent: workspace.refreshRecent });
   // One dialog for either chat: the one on screen is the one being rewound.
   const rewinding = useRewind(
@@ -538,7 +542,7 @@ export default function App() {
                 folderFixed={!unstarted}
               />
             }
-            end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
+            end={<ProviderBalance providerId={models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
             // Today's spend, the week's, and the run of days, under the card —
             // once anything has been counted, and only before the chat starts.
             below={unstarted && workspace.path ? <UsageGlance /> : null}
@@ -565,9 +569,14 @@ export default function App() {
             onUnattended={pickUnattended}
             draft={agent.draft}
             quote={quote}
-            models={llm.models}
-            onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
-            onEffort={llm.pickEffort}
+            models={models}
+            onModel={(choice) => {
+              // The pick stays in this chat, and moves the global choice too:
+              // the next new chat starts where this one ended.
+              agent.pickChatModel(choice.providerId, choice.model);
+              void llm.pickModel(choice.providerId, choice.model);
+            }}
+            onEffort={(effort) => llm.pickEffort(effort, models.current?.providerId)}
             onLoadModels={llm.loadModels}
             // Nothing to measure yet: an empty chat's prompt and schemas are
             // read in Overview, and the ring waits for the first message.
@@ -604,10 +613,13 @@ export default function App() {
           switchLayoutAfterFix={features.layoutSwitch}
           onLayoutCorrectionError={toast.show}
           focus={composerFocus}
-          models={llm.models}
+          models={models}
           imagesEnabled={imagesEnabled}
-          onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
-          onEffort={llm.pickEffort}
+          onModel={(choice) => {
+            plain.pickChatModel(choice.providerId, choice.model);
+            void llm.pickModel(choice.providerId, choice.model);
+          }}
+          onEffort={(effort) => llm.pickEffort(effort, models.current?.providerId)}
           onLoadModels={llm.loadModels}
           kube={kube}
           onSetUpKube={() => openSettings("kubernetes")}

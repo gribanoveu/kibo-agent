@@ -26,7 +26,8 @@ import {
 import type { ImagePart } from "../lib/images";
 import { answerMcpQuestion, type McpAnswer } from "../lib/mcp";
 import { useChatTokens, useSubagentTokens } from "./useChatTokens";
-import { generateChatTitle, journalBlocks, loadChat, logNextPrompt, nextPromptSent, saveChat, type ChatRecord } from "../lib/savedChats";
+import { chatModelLabel, generateChatTitle, journalBlocks, loadChat, logNextPrompt, nextPromptSent, saveChat, setChatModel, type ChatModel, type ChatRecord } from "../lib/savedChats";
+import type { ModelChoice } from "./useLlmSettings";
 import {
   acceptEvent,
   acceptOutcome,
@@ -87,6 +88,9 @@ type Session = {
    * while a folder opens. Unused once the chat is saved — its record says.
    */
   folder: string | null;
+  /** The provider and model this chat speaks with — its own pin; `null` until
+   * the first save stamps it, and for chats saved before pins existed. */
+  chatModel: ChatModel | null;
 };
 
 const fresh = (key: string = crypto.randomUUID()): Session => ({
@@ -115,6 +119,7 @@ const fresh = (key: string = crypto.randomUUID()): Session => ({
   writeTail: Promise.resolve(),
   finished: false,
   folder: null,
+  chatModel: null,
 });
 
 const restored = (record: ChatRecord): Session => ({
@@ -125,6 +130,7 @@ const restored = (record: ChatRecord): Session => ({
   todos: record.todos,
   plan: record.plan ?? null,
   branchedFrom: record.branchedFrom ?? null,
+  chatModel: record.model ?? null,
 });
 
 // Turn ids on the one global event channel, counted per chat key rather than
@@ -133,7 +139,7 @@ const restored = (record: ChatRecord): Session => ({
 const turnCounts = new Map<string, number>();
 
 export function useAgentTurn({
-  model,
+  choice = null,
   folder = null,
   onSaved,
   onGiveBack,
@@ -141,8 +147,9 @@ export function useAgentTurn({
 }: {
   /** The folder the window shows — where a new chat's message is typed. */
   folder?: string | null;
-  /** The model turns run on — `acceptEvent` says when a cache miss came with a switch. */
-  model?: string;
+  /** The global model choice — its label says when a cache miss came with a
+   * switch, and its pair is what the first save stamps a new chat with. */
+  choice?: ModelChoice | null;
   onSaved?: () => void;
   /** Queued text that will not be sent after all, for the composer to take back —
       and the pictures a withdrawn note carried, which go back with it. */
@@ -162,8 +169,8 @@ export function useAgentTurn({
   savedRef.current = onSaved;
   const giveBackRef = useRef(onGiveBack);
   giveBackRef.current = onGiveBack;
-  const modelRef = useRef(model);
-  modelRef.current = model;
+  const choiceRef = useRef(choice);
+  choiceRef.current = choice;
   const folderRef = useRef(folder);
   folderRef.current = folder;
 
@@ -213,7 +220,7 @@ export function useAgentTurn({
       session.subscribed = await onTurnEvent(id, (event) => {
         // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
         const now = Date.now();
-        setTurn(session, (state) => acceptEvent(state, event, now, modelRef.current));
+        setTurn(session, (state) => acceptEvent(state, event, now, session.chatModel ? chatModelLabel(session.chatModel) : choiceRef.current?.label));
         // The transcript so far, journaled once a round: a crash keeps what
         // the window drew, as the loop keeps what the model said. Queued
         // with the saves, so the turn's last save folds it, never races it.
@@ -279,6 +286,10 @@ export function useAgentTurn({
     for (const session of sessions.current.values()) {
       if (session.chatId !== null || !session.unsaved || session.turn.status !== "running") continue;
       session.chatId = session.key;
+      // The first save stamps the chat with the pair the chip showed — the
+      // backend writes the same; kept here so a global switch made elsewhere
+      // does not move this chat's chip.
+      session.chatModel ??= choiceRef.current ? { provider: choiceRef.current.providerId, model: choiceRef.current.model } : null;
       changed(session, true);
       trackWrite(
         session,
@@ -315,6 +326,9 @@ export function useAgentTurn({
       const written = writtenPlan(session.turn.blocks.slice(session.turnStart));
       if (written !== null) session.plan = written;
       session.chatId = session.key;
+      // Only while there is no pin: compact and rewind mark the chat unsaved
+      // too, and a saved chat keeps its own pair through every later save.
+      session.chatModel ??= choiceRef.current ? { provider: choiceRef.current.providerId, model: choiceRef.current.model } : null;
       if (session.lastTurn) {
         session.journaled = logNextPrompt(session.key, session.lastTurn.id, session.lastTurn.user).catch(() => null);
         session.lastTurn = null;
@@ -806,11 +820,31 @@ export function useAgentTurn({
     } else if (session.finished) chatActivity[session.chatId] = "finished";
   }
 
+  /** A pick made in this chat's chip: the chat speaks through it from the
+   * next turn. An unsaved chat is stamped by its first save instead. */
+  const pickChatModel = useCallback(
+    (provider: string, model: string | null) => {
+      const session = active.current;
+      if (session.chatId === null) return;
+      session.chatModel = { provider, model };
+      changed(session, true);
+      trackWrite(session, (snapshot) =>
+        setChatModel(snapshot.key, provider, model).catch((e) => {
+          session.error = String(e);
+          changed(session);
+        }),
+      );
+    },
+    [changed, trackWrite],
+  );
+
   return {
     turn: current.turn,
     chatId: current.chatId,
     /** The session's identity: `chatId` is null until a fresh chat is first saved. */
     sessionKey: current.key,
+    chatModel: current.chatModel,
+    pickChatModel,
     chatActivity,
     turns,
     spent,

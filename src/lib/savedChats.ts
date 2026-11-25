@@ -165,6 +165,12 @@ export async function setChatArchived(id: string, archived: boolean): Promise<vo
   return invoke("chat_set_archived", { id, archived });
 }
 
+/** The chat's own model as the chip writes it — for the cache-miss hint, which
+ * must compare the model the turn actually uses, not the global choice. */
+export function chatModelLabel(pin: ChatModel): string {
+  return `${pin.provider}/${pin.model ?? "auto"}`.toLowerCase();
+}
+
 /** A pick made in this chat's chip: the chat speaks through it from the next
  * turn. `null` model is "auto" — the provider's own pin decides. */
 export async function setChatModel(id: string, provider: string, model: string | null): Promise<void> {

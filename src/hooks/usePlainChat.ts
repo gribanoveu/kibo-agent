@@ -27,7 +27,8 @@ import {
   plainChatSave,
   plainChatSend,
 } from "../lib/plainChat";
-import { type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived, setChatGroup, setChatPinned } from "../lib/savedChats";
+import { chatModelLabel, type ChatModel, type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived, setChatGroup, setChatModel, setChatPinned } from "../lib/savedChats";
+import type { ModelChoice } from "./useLlmSettings";
 import {
   acceptEvent,
   acceptOutcome,
@@ -109,6 +110,9 @@ type Session = {
   writes: Set<Promise<unknown>>;
   writeTail: Promise<unknown>;
   finished: boolean;
+  /** The provider and model this chat speaks with — its own pin; `null` until
+   * the first save stamps it, and for chats saved before pins existed. */
+  chatModel: ChatModel | null;
 };
 
 const fresh = (key: string = crypto.randomUUID(), role: ChatRoleId = "assistant", pinned: KubePin | null = null): Session => ({
@@ -130,6 +134,7 @@ const fresh = (key: string = crypto.randomUUID(), role: ChatRoleId = "assistant"
   writes: new Set(),
   writeTail: Promise.resolve(),
   finished: false,
+  chatModel: null,
 });
 
 const restored = (record: Awaited<ReturnType<typeof loadChat>>): Session => ({
@@ -139,6 +144,7 @@ const restored = (record: Awaited<ReturnType<typeof loadChat>>): Session => ({
   history: record.messages,
   // "Allow changes" belongs to the chat as it is open now, not to its saved pin.
   pinned: record.kube ? { kubeconfig: record.kube.kubeconfig, context: record.kube.context, namespace: record.kube.namespace } : null,
+  chatModel: record.model ?? null,
 });
 
 const kubeFor = (session: Session, lastKubeconfig: string | null): KubePin | null =>
@@ -157,7 +163,7 @@ const mint = (session: Session, prefix: string) => {
  * and approval card, so leaving one does not stop it or mix its events into
  * the next chat opened. The active session is the one the panels draw.
  */
-export function usePlainChat(lastKubeconfig: string | null = null, model?: string, shown = false) {
+export function usePlainChat(lastKubeconfig: string | null = null, choice: ModelChoice | null = null, shown = false) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [openId, setOpenId] = useStoredState<string | null>("plain-chat-open", null, isId);
   const [roles, setRoles] = useState<ChatRoleView[]>([]);
@@ -169,8 +175,8 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   }
   const [revision, redraw] = useReducer((n: number) => n + 1, 0);
   const [spentTick, spentChanged] = useReducer((n: number) => n + 1, 0);
-  const modelRef = useRef(model);
-  modelRef.current = model;
+  const choiceRef = useRef(choice);
+  choiceRef.current = choice;
 
   const changed = useCallback((session: Session, force = false) => {
     if (force || session === active.current) redraw();
@@ -215,7 +221,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
       stopListening(session);
       session.subscribed = await onTurnEvent(id, (event) => {
         const now = Date.now();
-        setTurn(session, (state) => acceptEvent(state, event, now, modelRef.current));
+        setTurn(session, (state) => acceptEvent(state, event, now, session.chatModel ? chatModelLabel(session.chatModel) : choiceRef.current?.label));
       });
     },
     [setTurn, stopListening],
@@ -367,6 +373,21 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     changed(session);
   };
 
+  /** A pick made in this chat's chip: the chat speaks through it from the
+   * next turn. An unsaved chat is stamped by its first save instead. */
+  const pickChatModel = (provider: string, model: string | null) => {
+    const session = active.current;
+    if (session.chatId === null) return;
+    session.chatModel = { provider, model };
+    changed(session, true);
+    trackWrite(session, (snapshot) =>
+      setChatModel(snapshot.key, provider, model).catch((e) => {
+        session.error = String(e);
+        changed(session);
+      }),
+    );
+  };
+
   const setPin = (next: KubePin) => {
     const session = active.current;
     session.pinned = next;
@@ -408,6 +429,11 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     session.history = [...session.history, { role: "user", content: sent ?? trimmed, ...(seen.length > 0 && { images: seen }) }];
     session.unsaved = true;
     session.chatId = id;
+    // The first save stamps the chat with the pair the chip showed — the
+    // backend writes the same; kept here so a global switch made elsewhere
+    // does not move this chat's chip. Only while there is no pin: a saved
+    // chat keeps its own through every later send.
+    session.chatModel ??= choiceRef.current ? { provider: choiceRef.current.providerId, model: choiceRef.current.model } : null;
     session.pinned = pinned;
     session.error = null;
     session.stopRequested = false;
@@ -655,6 +681,8 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
     setRole,
     kube,
     setPin,
+    chatModel: current.chatModel,
+    pickChatModel,
     error: current.error,
     context: busy ? (current.turn.estimate ?? current.context) : current.context,
     spent,
