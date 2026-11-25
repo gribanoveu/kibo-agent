@@ -181,6 +181,29 @@
   border-radius: 50%;
 }
 
+/* A narrow column (the chat's minimum is 400). The card keeps the ordinary
+   box's margins there — the wide card's 14px are width nothing else has — and
+   its strip wraps instead of squeezing four chips into one row: a folder read
+   as "k." beside a branch read as "feat/ne…" is neither of them named. The
+   folder and its branch take a row, what the message goes out with the next. */
+@container (max-width: 500px) {
+  .main.chat-new .composer,
+  .main.chat-new .plain-composer,
+  .main.chat-new .composer-strip,
+  .main.chat-new .plain-tab {
+    margin-left: 8px;
+    margin-right: 8px;
+  }
+  .main.chat-new .composer-strip,
+  .main.chat-new .plain-tab {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .main.chat-new .composer-strip > .folder-tab {
+    flex: 1 1 100%;
+  }
+}
+
 /* The main window's traffic lights sit in the bar's middle
    (tauri.macos.conf.json), so its title does too — not raised to meet them,
    as the viewer's is. */
