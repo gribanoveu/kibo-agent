@@ -31,6 +31,7 @@ mock.module("@tauri-apps/api/event", () => ({
 const { modelChoices, useLlmSettings } = await import("../hooks/useLlmSettings");
 const { usePlainChat } = await import("../hooks/usePlainChat");
 const { useAgentTurn } = await import("../hooks/useAgentTurn");
+const { policyProvider } = await import("../lib/settings");
 
 afterEach(() => {
   calls.length = 0;
@@ -263,6 +264,17 @@ describe("a pick in the chat's chip", () => {
     });
     await waitFor(() => expect(result.current.chatModel).toEqual({ provider: "a", model: "ma" }));
     expect(result.current.turn.status).toBe("running");
+  });
+});
+
+describe("the provider the data policy names", () => {
+  test("is the open chat's own, else the active one", () => {
+    const settings = llm([provider("a", "ma"), provider("b", "mb")], "b");
+    expect(policyProvider(settings, "a")?.id).toBe("a");
+    expect(policyProvider(settings, null)?.id).toBe("b");
+    expect(policyProvider(settings, undefined)?.id).toBe("b");
+    expect(policyProvider(null, "a")).toBeNull();
+    expect(policyProvider(llm([], null), null)).toBeNull();
   });
 });
 

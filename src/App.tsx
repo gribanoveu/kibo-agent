@@ -67,7 +67,7 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import { type ConversationMode, getConversationMode, previewCalls, setConversationMode } from "./lib/chat";
 import type { ImagePart } from "./lib/images";
 import { type ChatSummary } from "./lib/savedChats";
-import { DEFAULT_TURN_LIMITS } from "./lib/settings";
+import { DEFAULT_TURN_LIMITS, policyProvider } from "./lib/settings";
 import type { TurnState } from "./lib/chatTurnReducer";
 import { isAppMode, type AppMode } from "./types";
 import { turnsIn, useFolderSwitch } from "./hooks/useFolderSwitch";
@@ -878,7 +878,9 @@ export default function App() {
           setLogOpen(true);
         }}
         policy={{
-          provider: llm.settings?.providers.find((p) => p.id === llm.settings?.activeProviderId) ?? null,
+          // The open chat's provider, not the global one: the question is
+          // where these messages go (docs/64-chat-model.md).
+          provider: policyProvider(llm.settings, models.current?.providerId),
           debugLogging: llm.settings?.debugLogging ?? false,
           mcpServers: mcp.view?.servers ?? null,
           hooks: hooks.view?.hooks ?? null,

@@ -62,6 +62,13 @@ describe("editing a provider", () => {
     expect(field("Model").value).toBe("qwen");
   });
 
+  /// CM-4: "active" now means where a new chat starts — an open chat keeps its own.
+  test("the provider tabs say where new chats start", () => {
+    form();
+    expect(screen.getByText("local").closest("button")?.title).toBe("New chats start with this provider");
+    expect(screen.getByText("openai").closest("button")?.title).toBe("Start new chats with this provider");
+  });
+
   /// The whole reason the key field starts empty rather than pre-filled: there
   /// is nothing to pre-fill it with, and sending its empty value on every save
   /// would delete the key the user just stored.
@@ -564,6 +571,12 @@ describe("the model list", () => {
     fireEvent.click(screen.getByText("Use “my-finetune”"));
     await saveNow();
     expect(saved[0]?.provider.model).toBe("my-finetune");
+  });
+
+  /// CM-4: the badge says whose model this is — the next new chat's, not every chat's.
+  test("the pinned model's badge says it is for new chats", () => {
+    listed({ local: ["qwen", "llama"] });
+    expect(screen.getByText("for new chats")).toBeTruthy();
   });
 
   /// The pinned model is what the next turn sends: gone from the list is not gone.
