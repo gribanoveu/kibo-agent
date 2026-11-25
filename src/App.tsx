@@ -569,7 +569,9 @@ export default function App() {
             onModel={(choice) => llm.pickModel(choice.providerId, choice.model)}
             onEffort={llm.pickEffort}
             onLoadModels={llm.loadModels}
-            context={agent.context}
+            // Nothing to measure yet: an empty chat's prompt and schemas are
+            // read in Overview, and the ring waits for the first message.
+            context={unstarted ? null : agent.context}
             usage={agent.turn.usage}
             onCompact={compactNow}
             commands={commands}

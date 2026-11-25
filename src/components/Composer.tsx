@@ -450,8 +450,8 @@ export function Composer({
               }}
             />
           </div>
-          {/* Shown from the first render, before anything has been said: an
-              empty conversation already costs the prompt and the schemas. */}
+          {/* What the next request costs, once the caller has a conversation to
+              measure: an empty chat's prompt and schemas are read in Overview. */}
           {context && (
             <span className="composer-meter">
               <ContextMeter context={context} usage={usage} running={running} onCompact={onCompact} up />

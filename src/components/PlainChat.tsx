@@ -314,7 +314,9 @@ export function PlainChat({
                 }
               }}
             />
-            {chat.context && (
+            {/* The ring waits for the first message: an empty chat's prompt and
+                schemas are read in Overview, not on a start screen. */}
+            {!empty && chat.context && (
               <span className="plain-meter">
                 <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up spent={chat.spent} />
               </span>
