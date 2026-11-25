@@ -335,16 +335,18 @@ pub async fn chat_branch_summary(messages: Vec<LlmMessage>, chat_id: String) -> 
 /// list and saves the first as the pin; the frame reads the rules, skills and
 /// the repository.
 #[tauri::command]
-pub async fn chat_context_usage(
+pub async fn chat_context_usage<R: Runtime>(
     messages: Vec<LlmMessage>,
     chat_id: String,
-    app: AppHandle,
+    app: AppHandle<R>,
     state: State<'_, Arc<AgentState>>,
 ) -> Result<ContextUsage, String> {
     let state = Arc::clone(&state);
     super::blocking(move || {
         let workspace = state.chat_prompt_workspace(&chat_id)?;
-        let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
+        // The chat's own provider: the meter measures the session the turn
+        // will actually use (docs/64-chat-model.md).
+        let session = llm_session::resolve_for(None, Some(&chat_id)).map_err(|e| e.to_string())?;
         let (frame, system, tools) = next_request_frame(&app, &state, workspace);
         let anchor = chat_anchor(&state, &chat_id);
         let current = crate::domain::request_marker::fingerprint(&system, &tools, &messages);
@@ -697,6 +699,46 @@ mod tests {
     
     use crate::testing::temp_dir;
     
+
+    /// CM-2: the meter measures the chat's own provider — its context window,
+    /// not the active provider's.
+    #[test]
+    fn the_meter_measures_the_chats_own_provider() {
+        crate::testing::with_app_dir("cmd-chat-meter-pin", || {
+            use crate::domain::settings::{AppSettings, LlmSettings, ProviderConfig};
+            let provider = |id: &str, limit: u32| ProviderConfig {
+                id: id.into(),
+                base_url: format!("https://{id}.example/v1"),
+                model: Some("m".into()),
+                context_limit: Some(limit),
+                ..Default::default()
+            };
+            crate::infra::settings_store::save(&AppSettings {
+                llm: LlmSettings {
+                    active_provider_id: Some("b".into()),
+                    providers: vec![provider("a", 111_111), provider("b", 222_222)],
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+            crate::infra::llm_credentials_store::save_api_key("a", "sk-a").unwrap();
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-meter-pin-root")).unwrap();
+            crate::infra::chat_store::save("c1", &root.display().to_string(), &[LlmMessage::user("hi")], &serde_json::json!([]), &[], None, None, None).unwrap();
+            crate::infra::chat_store::set_model("c1", &crate::domain::chat_record::ChatModel { provider: "a".into(), model: Some("m".into()) }).unwrap();
+            let state = state();
+            state.register_open(root);
+            let app = tauri::test::mock_app();
+            app.manage(state);
+
+            let usage = tauri::async_runtime::block_on(chat_context_usage(
+                vec![LlmMessage::user("hi")], "c1".into(), app.handle().clone(), app.state(),
+            ))
+            .unwrap();
+
+            assert_eq!(usage.limit, Some(111_111), "the chat's provider's window, not the active one's");
+        });
+    }
 
     /// So is a compaction's summary, "Compact now" or before a message.
     #[test]

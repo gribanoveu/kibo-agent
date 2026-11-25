@@ -81,9 +81,11 @@ export async function plainChatContextUsage(
   role: ChatRoleId,
   kube: KubePin | null,
   messages: LlmMessage[],
+  /** The saved chat whose provider the meter measures; null for an unsaved one. */
+  chatId: string | null,
 ): Promise<ContextUsage> {
   requireBackend();
-  return invoke<ContextUsage>("plain_chat_context_usage", { role, kube, messages });
+  return invoke<ContextUsage>("plain_chat_context_usage", { role, kube, messages, chatId });
 }
 
 /** `compactHistory` for a chat in `role`, against its own prompt and tools. */

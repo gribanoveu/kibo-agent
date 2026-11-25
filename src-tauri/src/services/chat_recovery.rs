@@ -9,7 +9,7 @@
 
 use crate::domain::chat_record::{ChatError, ChatRecord};
 use crate::domain::turn_journal;
-use crate::infra::chat_store;
+use crate::infra::{chat_store, settings_store};
 
 /// The chat as it should open: its saved record, or — when a journal is
 /// there and no turn of this chat is running — the record with the journal
@@ -17,31 +17,37 @@ use crate::infra::chat_store;
 /// (a running or paused turn); a live turn's journal is its own, not a
 /// crash's leavings.
 pub fn load(id: &str, busy: bool) -> Result<ChatRecord, ChatError> {
-    let record = chat_store::load(id)?;
-    if busy {
-        return Ok(record);
+    let mut record = chat_store::load(id)?;
+    if !busy {
+        let entries = chat_store::journal_entries(id)?;
+        if let Some(recovered) = turn_journal::recover(&record.messages, &record.blocks, &record.todos, record.plan.as_deref(), &entries) {
+            chat_store::save(
+                id,
+                &record.workspace,
+                &recovered.messages,
+                &recovered.blocks,
+                &recovered.todos,
+                recovered.plan.as_deref(),
+                record.branched_from.as_deref(),
+                record.git_branch.as_deref(),
+            )?;
+            record = ChatRecord {
+                messages: recovered.messages,
+                blocks: recovered.blocks,
+                todos: recovered.todos,
+                plan: recovered.plan,
+                ..record
+            };
+        }
     }
-    let entries = chat_store::journal_entries(id)?;
-    let Some(recovered) = turn_journal::recover(&record.messages, &record.blocks, &record.todos, record.plan.as_deref(), &entries) else {
-        return Ok(record);
-    };
-    chat_store::save(
-        id,
-        &record.workspace,
-        &recovered.messages,
-        &recovered.blocks,
-        &recovered.todos,
-        recovered.plan.as_deref(),
-        record.branched_from.as_deref(),
-        record.git_branch.as_deref(),
-    )?;
-    Ok(ChatRecord {
-        messages: recovered.messages,
-        blocks: recovered.blocks,
-        todos: recovered.todos,
-        plan: recovered.plan,
-        ..record
-    })
+    // The pin the chat opens with is the one its turns resolve: a removed
+    // provider is substituted here too, once and written, so the chip and
+    // the turn say the same thing. Settings that cannot be read leave the
+    // stored pin — the turn reports the settings error itself.
+    if let Ok(settings) = settings_store::load() {
+        record.model = crate::services::chat_model::pin(id, &settings.llm)?;
+    }
+    Ok(record)
 }
 
 #[cfg(test)]
@@ -53,6 +59,23 @@ mod tests {
 
     fn saved(id: &str) {
         chat_store::save(id, "/repo", &[LlmMessage::user("go")], &json!([{ "kind": "user", "id": "user:0", "text": "go" }]), &[], None, None, None).unwrap();
+    }
+
+    /// One live provider, so a pin naming it stands on opening.
+    fn configured(id: &str, model: &str) {
+        crate::infra::settings_store::save(&crate::domain::settings::AppSettings {
+            llm: crate::domain::settings::LlmSettings {
+                providers: vec![crate::domain::settings::ProviderConfig {
+                    id: id.into(),
+                    base_url: format!("https://{id}.example/v1"),
+                    model: Some(model.into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
     }
 
     /// The crash's leavings: a round's history and the window's transcript.
@@ -140,6 +163,7 @@ mod tests {
     fn a_recovered_chat_keeps_its_model() {
         with_app_dir("recovery-model", || {
             saved("c1");
+            configured("p", "m");
             let pin = crate::domain::chat_record::ChatModel { provider: "p".into(), model: Some("m".into()) };
             chat_store::set_model("c1", &pin).unwrap();
             chat_store::journal_append("c1", "c1/turn-1", "append", &json!([LlmMessage::assistant("working")]), 1).unwrap();
@@ -149,6 +173,23 @@ mod tests {
             assert_eq!(record.messages.len(), 2, "the journal was replayed");
             assert_eq!(record.model, Some(pin.clone()));
             assert_eq!(chat_store::model("c1").unwrap(), Some(pin));
+        });
+    }
+
+    /// CM-2: opening a chat whose provider was removed substitutes the active
+    /// one — written into the chat, so the chip and the next turn agree.
+    #[test]
+    fn opening_a_chat_substitutes_a_removed_provider() {
+        with_app_dir("recovery-model-substitute", || {
+            saved("c1");
+            configured("local", "qwen");
+            chat_store::set_model("c1", &crate::domain::chat_record::ChatModel { provider: "gone".into(), model: Some("m".into()) }).unwrap();
+
+            let record = load("c1", false).unwrap();
+
+            let expected = crate::domain::chat_record::ChatModel { provider: "local".into(), model: Some("qwen".into()) };
+            assert_eq!(record.model, Some(expected.clone()));
+            assert_eq!(chat_store::model("c1").unwrap(), Some(expected), "written, not computed each open");
         });
     }
 

@@ -423,6 +423,20 @@ pub fn set_model(id: &str, pin: &ChatModel) -> Result<(), ChatError> {
     }
 }
 
+/// Replaces the chat's pin only while it still names `was` — a substitution
+/// computed from a read must not overwrite a pick made since that read.
+/// Whether the row was rewritten.
+pub fn replace_model(id: &str, was: &str, pin: &ChatModel) -> Result<bool, ChatError> {
+    chat_record::check_id(id)?;
+    let changed = open()?
+        .execute(
+            "UPDATE chats SET model_provider = ?2, model = ?3 WHERE id = ?1 AND model_provider = ?4",
+            params![id, pin.provider, pin.model, was],
+        )
+        .map_err(store)?;
+    Ok(changed > 0)
+}
+
 /// Stamps the pin on a chat that has none — its first save. A chat already
 /// pinned keeps its pin: a repeated save is a no-op, and a chat saved before
 /// the columns is stamped only once, by whichever save comes first.
@@ -1939,6 +1953,25 @@ mod tests {
             set_model("one", &chat_pin("picked", Some("m"))).unwrap();
             stamp_model_if_absent("one", &chat_pin("third", None)).unwrap();
             assert_eq!(model("one").unwrap(), Some(chat_pin("picked", Some("m"))), "a pick stands too");
+        });
+    }
+
+    /// The substitution of a removed provider is conditional: a pick that
+    /// landed since the read stands, and only the pin still naming the
+    /// removed provider is rewritten.
+    #[test]
+    fn a_substitute_does_not_overwrite_a_newer_pick() {
+        with_app_dir("chat-store-model-replace", || {
+            save_one("one", "/repo", "first");
+            set_model("one", &chat_pin("gone", Some("m"))).unwrap();
+            set_model("one", &chat_pin("picked", Some("x"))).unwrap();
+
+            assert!(!replace_model("one", "gone", &chat_pin("active", Some("y"))).unwrap());
+            assert_eq!(model("one").unwrap(), Some(chat_pin("picked", Some("x"))), "the pick stands");
+
+            set_model("one", &chat_pin("gone", Some("m"))).unwrap();
+            assert!(replace_model("one", "gone", &chat_pin("active", Some("y"))).unwrap());
+            assert_eq!(model("one").unwrap(), Some(chat_pin("active", Some("y"))));
         });
     }
 

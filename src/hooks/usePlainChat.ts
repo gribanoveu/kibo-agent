@@ -262,7 +262,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, model?: strin
   const refreshContext = useCallback(
     (session: Session) => {
       const seq = ++session.contextSeq;
-      plainChatContextUsage(session.role, kubeFor(session, lastKubeconfig), session.history)
+      plainChatContextUsage(session.role, kubeFor(session, lastKubeconfig), session.history, session.chatId)
         .then((context) => {
           if (seq !== session.contextSeq) return;
           session.context = context;

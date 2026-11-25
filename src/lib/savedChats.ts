@@ -26,6 +26,12 @@ export type ChatSummary = {
   gitBranch?: string | null;
 };
 
+/** The provider and model a chat speaks with — its own pin; `model: null` is "auto", the provider's own pin. */
+export type ChatModel = {
+  provider: string;
+  model?: string | null;
+};
+
 /** A folder the sidebar files chats under — a theme of work, not a date. */
 export type ChatGroup = {
   id: string;
@@ -65,6 +71,9 @@ export type ChatRecord = {
    * "what this chat did" starts from it. Absent in older chats and in those
    * begun before their folder's first commit. */
   headAtStart?: string | null;
+  /** The provider and model this chat speaks with; absent for a chat not
+   * pinned yet — one saved before pins existed. The global choice speaks for it. */
+  model?: ChatModel | null;
 };
 
 /** Chats of the folder `workspace` names, newest first. `null` (Chat mode), no folder, no backend: no rows. */
@@ -154,6 +163,13 @@ export async function moveChatToWorktree(id: string): Promise<string> {
 export async function setChatArchived(id: string, archived: boolean): Promise<void> {
   requireBackend();
   return invoke("chat_set_archived", { id, archived });
+}
+
+/** A pick made in this chat's chip: the chat speaks through it from the next
+ * turn. `null` model is "auto" — the provider's own pin decides. */
+export async function setChatModel(id: string, provider: string, model: string | null): Promise<void> {
+  requireBackend();
+  return invoke("chat_model_set", { id, provider, model });
 }
 
 /** Holds the chat above the list in its own "Pinned" group, or lets it sink back to its day. */

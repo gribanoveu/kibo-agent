@@ -49,7 +49,15 @@ pub fn resolve(provider_id: Option<&str>) -> Result<LlmSession, LlmError> {
 /// through the turn's session, so they count with it.
 pub fn resolve_for(provider_id: Option<&str>, chat: Option<&str>) -> Result<LlmSession, LlmError> {
     let settings = settings_store::load().map_err(settings_error)?.llm;
-    let config = match provider_id {
+    // The chat's own pin speaks for it (docs/64-chat-model.md): a turn, a
+    // recovery, a title and a compaction all resolve through here, so they
+    // agree without each knowing about pins. An explicit id — the settings
+    // form asking about one provider — outranks it.
+    let pin = match (provider_id, chat) {
+        (None, Some(chat)) => crate::services::chat_model::pin(chat, &settings).map_err(|e| LlmError::Message(e.to_string()))?,
+        _ => None,
+    };
+    let config = match provider_id.or(pin.as_ref().map(|pin| pin.provider.as_str())) {
         Some(id) => settings
             .provider(id)
             .ok_or_else(|| LlmError::Message(format!("no provider is configured with id \"{id}\"")))?,
@@ -60,7 +68,13 @@ pub fn resolve_for(provider_id: Option<&str>, chat: Option<&str>) -> Result<LlmS
 
     let api_key = llm_credentials_store::get_api_key(&config.id).map_err(|e| LlmError::Message(e.to_string()))?;
     let provider: Arc<dyn LlmProvider> = Arc::from(llm_providers::provider_for(config, api_key)?);
-    let model = effective_model(config, provider.as_ref())?;
+    // An explicit model on the pin is the chat's choice; "auto" and an
+    // unpinned chat follow the provider's own pin, discovered once and
+    // written back.
+    let model = match pin.as_ref().and_then(|pin| pin.model.as_ref()) {
+        Some(model) => model.clone(),
+        None => effective_model(config, provider.as_ref())?,
+    };
 
     Ok(LlmSession {
         provider: Arc::new(Counted(provider, model.clone(), chat.map(str::to_string))),
@@ -269,8 +283,9 @@ mod tests {
     use super::*;
     use crate::domain::llm::ChatUsage;
     use crate::domain::metrics::{DailyMetric, Metric};
+    use crate::domain::chat_record::ChatModel;
     use crate::domain::settings::{AppSettings, LlmSettings};
-    use crate::infra::llm_credentials_store;
+    use crate::infra::{chat_store, llm_credentials_store};
     use crate::testing::with_app_dir;
 
     /// A provider that answers `list_models` and nothing else — enough for
@@ -452,6 +467,111 @@ mod tests {
             let stored = settings_store::load().unwrap();
             assert_eq!(stored.llm.providers.len(), 1);
             assert_eq!(stored.llm.provider("local").unwrap().model.as_deref(), Some("qwen"));
+        });
+    }
+
+    // ------------------------------------------------- a chat's own pin (CM-2)
+
+    fn saved_chat(id: &str) {
+        chat_store::save(id, "/repo", &[], &serde_json::json!([]), &[], None, None, None).unwrap();
+    }
+
+    fn two_providers_keyed() {
+        configure(vec![provider("local", Some("qwen")), provider("openai", Some("gpt"))], Some("openai"));
+        llm_credentials_store::save_api_key("local", "sk-local").unwrap();
+        llm_credentials_store::save_api_key("openai", "sk-openai").unwrap();
+    }
+
+    /// The turn speaks through the chat's own pair, not the global choice —
+    /// and the global choice is untouched, so a new chat starts where it did.
+    #[test]
+    fn a_pinned_chat_resolves_its_own_provider_and_model() {
+        with_app_dir("session-chat-pin", || {
+            two_providers_keyed();
+            saved_chat("c1");
+            chat_store::set_model("c1", &ChatModel { provider: "local".into(), model: Some("llama".into()) }).unwrap();
+
+            let session = resolve_for(None, Some("c1")).unwrap();
+            assert_eq!((session.provider_id.as_str(), session.model.as_str()), ("local", "llama"));
+            assert_eq!(resolve(None).unwrap().provider_id, "openai", "the global choice stands");
+        });
+    }
+
+    /// A chat saved before pins existed speaks through the active provider,
+    /// and resolving invents no pin for it.
+    #[test]
+    fn an_unpinned_chat_resolves_the_active_provider() {
+        with_app_dir("session-chat-unpinned", || {
+            two_providers_keyed();
+            saved_chat("c1");
+
+            let session = resolve_for(None, Some("c1")).unwrap();
+            assert_eq!((session.provider_id.as_str(), session.model.as_str()), ("openai", "gpt"));
+            assert_eq!(chat_store::model("c1").unwrap(), None, "resolving does not stamp");
+        });
+    }
+
+    /// An explicit id is the settings form asking about one provider; the
+    /// chat's pin must not answer for it.
+    #[test]
+    fn an_explicit_provider_outranks_the_chats_pin() {
+        with_app_dir("session-chat-explicit", || {
+            two_providers_keyed();
+            saved_chat("c1");
+            chat_store::set_model("c1", &ChatModel { provider: "local".into(), model: Some("llama".into()) }).unwrap();
+
+            let session = resolve_for(Some("openai"), Some("c1")).unwrap();
+            assert_eq!((session.provider_id.as_str(), session.model.as_str()), ("openai", "gpt"));
+        });
+    }
+
+    /// "auto" stays "auto": the chat follows its provider's own pin, even
+    /// when a pick in another chat moves that pin.
+    #[test]
+    fn an_auto_pin_follows_its_providers_own_model() {
+        with_app_dir("session-chat-auto", || {
+            two_providers_keyed();
+            saved_chat("c1");
+            chat_store::set_model("c1", &ChatModel { provider: "local".into(), model: None }).unwrap();
+
+            assert_eq!(resolve_for(None, Some("c1")).unwrap().model, "qwen");
+            pin_model("local", "llama").unwrap();
+            assert_eq!(resolve_for(None, Some("c1")).unwrap().model, "llama", "auto follows the provider's pin");
+        });
+    }
+
+    /// Removal walks no chats: the pin stands until a read substitutes it —
+    /// once, written, and the id's return does not pull the chat back.
+    #[test]
+    fn a_removed_providers_chat_switches_once_to_the_active() {
+        with_app_dir("session-chat-removed", || {
+            two_providers_keyed();
+            saved_chat("c1");
+            chat_store::set_model("c1", &ChatModel { provider: "local".into(), model: Some("llama".into()) }).unwrap();
+
+            remove_provider("local").unwrap();
+            assert_eq!(chat_store::model("c1").unwrap().unwrap().provider, "local", "removal itself touches no chat");
+
+            let session = resolve_for(None, Some("c1")).unwrap();
+            assert_eq!((session.provider_id.as_str(), session.model.as_str()), ("openai", "gpt"));
+            assert_eq!(chat_store::model("c1").unwrap(), Some(ChatModel { provider: "openai".into(), model: Some("gpt".into()) }), "written into the chat");
+
+            save_provider(provider("local", Some("qwen")), None).unwrap();
+            llm_credentials_store::save_api_key("local", "sk-local").unwrap();
+            assert_eq!(resolve_for(None, Some("c1")).unwrap().provider_id, "openai", "the id's return changes nothing");
+        });
+    }
+
+    /// Chat mode's rows are rows of the same table: the same resolution.
+    #[test]
+    fn a_chat_mode_chat_resolves_its_own_pin() {
+        with_app_dir("session-chat-plain", || {
+            two_providers_keyed();
+            chat_store::save_plain("p1", crate::domain::chat_role::ChatRole::Assistant, None, &[], &serde_json::json!([])).unwrap();
+            chat_store::set_model("p1", &ChatModel { provider: "local".into(), model: Some("llama".into()) }).unwrap();
+
+            let session = resolve_for(None, Some("p1")).unwrap();
+            assert_eq!((session.provider_id.as_str(), session.model.as_str()), ("local", "llama"));
         });
     }
 
