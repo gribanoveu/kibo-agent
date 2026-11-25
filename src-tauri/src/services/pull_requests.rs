@@ -577,6 +577,9 @@ mod tests {
         /// How long a call takes to answer, by name: a read in flight, or a
         /// server slow to answer.
         slow: Mutex<HashMap<&'static str, Duration>>,
+        /// A call held in flight until the test lets it go: the first call of
+        /// this name parks, every later one answers at once.
+        park: Mutex<Park>,
         /// What the default branch answers instead: a server that does not.
         down: Mutex<Option<CodeHostError>>,
         /// The branch each pull request was asked for.
@@ -607,6 +610,15 @@ mod tests {
         overlapped: Vec<(String, String)>,
     }
 
+    /// The call a test holds in flight: its name, whether the first call has
+    /// arrived, and whether the test has let it go.
+    #[derive(Default)]
+    struct Park {
+        name: Option<&'static str>,
+        parked: bool,
+        released: bool,
+    }
+
     /// Two calls, in one order whichever way round they met.
     fn pair(one: &str, other: &str) -> (String, String) {
         if one <= other {
@@ -622,6 +634,14 @@ mod tests {
             self.together(what);
             let slow = lock(&self.slow).get(what).copied();
             std::thread::sleep(slow.unwrap_or_default());
+            let mut park = lock(&self.park);
+            if park.name.is_some_and(|name| name == what) && !park.parked {
+                park.parked = true;
+                self.woken.notify_all();
+                while !park.released {
+                    park = self.woken.wait(park).unwrap_or_else(PoisonError::into_inner);
+                }
+            }
         }
         fn asked(&self, what: &str) -> usize {
             lock(&self.asked).iter().filter(|asked| *asked == what).count()
@@ -1403,8 +1423,16 @@ mod tests {
             // The watcher's first read is news to a window that has read nothing.
             assert!(eventually(Duration::from_secs(5), || lock(&events).len() == 1));
 
+            // The watcher reaches the pushed branch first, but its read is held
+            // in flight while the window reads the same answer and publishes it:
+            // the watcher's answer is then not news. The hold, not a tick's
+            // length, is what orders the two reads — however slow the machine.
+            *lock(&double.park) = Park { name: Some("builds"), ..Park::default() };
             *lock(&double.commit) = Some("94beed9".to_string());
+            assert!(eventually(Duration::from_secs(5), || lock(&double.park).parked), "the watcher reads the change");
             service.strip(&root).unwrap();
+            lock(&double.park).released = true;
+            double.woken.notify_all();
             let ticks = double.asked("default_branch");
             assert!(eventually(Duration::from_secs(5), || double.asked("default_branch") >= ticks + 3));
             assert_eq!(lock(&events).len(), 1, "the window read the change itself");
