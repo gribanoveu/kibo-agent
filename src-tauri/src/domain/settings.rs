@@ -175,6 +175,20 @@ impl ReplyLanguage {
     }
 }
 
+/// The language the app writes its own texts in — pages, menus, errors,
+/// notifications (`docs/64-interface-language.md`). `Auto` follows the
+/// system; a system language that is neither English nor Russian reads as
+/// English. Separate from [`ReplyLanguage`]: what the model writes is asked
+/// per reply, not per app.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UiLanguage {
+    #[default]
+    Auto,
+    English,
+    Russian,
+}
+
 impl LlmSettings {
     pub fn provider(&self, id: &str) -> Option<&ProviderConfig> {
         self.providers.iter().find(|p| p.id == id)
@@ -249,6 +263,8 @@ pub struct AppSettings {
     /// (`domain::recording::Microphone`); `None`, or one not plugged in, is
     /// the system's default.
     pub meeting_microphone: Option<String>,
+    /// The language the app's own texts are written in; `Auto` until chosen.
+    pub ui_language: UiLanguage,
 }
 
 impl AppSettings {
@@ -816,5 +832,27 @@ mod tests {
         assert_eq!(serde_json::to_value(Searxng).unwrap(), "searxng");
         // Saved while it was DuckDuckGo: the keyless search it meant is SearXNG now.
         assert_eq!(serde_json::from_str::<WebSearchBackend>("\"builtin\"").unwrap(), Searxng);
+    }
+
+    /// Files written before there was a choice follow the system; a chosen
+    /// language survives the round trip under its camelCase name.
+    #[test]
+    fn the_interface_language_defaults_to_auto_and_round_trips() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.ui_language, UiLanguage::Auto);
+        for language in [UiLanguage::Auto, UiLanguage::English, UiLanguage::Russian] {
+            let wire = serde_json::to_value(language).unwrap();
+            assert_eq!(wire, serde_json::json!(match language {
+                UiLanguage::Auto => "auto",
+                UiLanguage::English => "english",
+                UiLanguage::Russian => "russian",
+            }));
+            let mut settings = AppSettings::default();
+            settings.ui_language = language;
+            let json = serde_json::to_value(&settings).unwrap();
+            assert_eq!(json["uiLanguage"], wire, "the field keeps the wire name older files were written with");
+            let back: AppSettings = serde_json::from_value(json).unwrap();
+            assert_eq!(back.ui_language, language);
+        }
     }
 }

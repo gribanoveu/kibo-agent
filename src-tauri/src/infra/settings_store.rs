@@ -124,6 +124,7 @@ mod tests {
             shell: Some(crate::domain::command_exec::ShellKind::GitBash),
             catalog_sources: vec!["https://cat.example/".to_string()],
             web_search_agent: Some(crate::domain::settings::WebSearchBackend::Tavily),
+            ui_language: crate::domain::settings::UiLanguage::Russian,
         }
     }
 

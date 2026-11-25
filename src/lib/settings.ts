@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inTauri, requireBackend } from "./backend";
 
 // Settings: providers, keys, web search, the shell, how replies are written.
@@ -31,6 +32,9 @@ export type ProviderView = ProviderConfig & { hasApiKey: boolean };
 
 /** Mirrors `domain::settings::ReplyLanguage`: what the model writes in; `auto` asks nothing. */
 export type ReplyLanguage = "auto" | "english" | "russian";
+
+/** Mirrors `domain::settings::UiLanguage`: the language the app's own texts are written in; `auto` follows the system. */
+export type UiLanguage = "auto" | "english" | "russian";
 
 /**
  * A `/` command's prompt with the reply language said at its end, as
@@ -193,6 +197,26 @@ export async function setDebugLogging(enabled: boolean): Promise<void> {
 export async function setReplyLanguage(language: ReplyLanguage): Promise<void> {
   requireBackend();
   return invoke<void>("llm_reply_language_set", { language });
+}
+
+/** The interface language, as saved; `auto` is the system's. */
+export async function uiLanguage(): Promise<UiLanguage> {
+  if (!inTauri()) return "auto";
+  return invoke<UiLanguage>("ui_language_get");
+}
+
+/** Every window re-reads it on `ui-language:changed`. */
+export async function setUiLanguage(language: UiLanguage): Promise<void> {
+  requireBackend();
+  return invoke<void>("ui_language_set", { language });
+}
+
+/** Mirrors `commands::settings::UI_LANGUAGE_EVENT`: the language was saved. */
+export const UI_LANGUAGE_EVENT = "ui-language:changed";
+
+export async function onUiLanguageChanged(handler: () => void): Promise<UnlistenFn> {
+  if (!inTauri()) return () => {};
+  return listen(UI_LANGUAGE_EVENT, () => handler());
 }
 
 /** From the next turn on; each limit is at least 1. */

@@ -7,6 +7,7 @@
 //! being that window: a viewer reads the one file it was opened on, never a
 //! path the page names.
 
+use crate::domain::settings::UiLanguage;
 use crate::sync::lock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -175,6 +176,14 @@ pub fn viewer_text_scale_get() -> Result<Option<f64>, String> {
     Ok(settings.text_scale.filter(|s| TEXT_SCALES.contains(s)))
 }
 
+/// The interface language a viewer writes its own texts in: the same setting
+/// the main window reads. A settings file that does not read is `auto` — a
+/// README must open even with a damaged settings.json.
+#[tauri::command]
+pub fn viewer_ui_language_get() -> UiLanguage {
+    crate::infra::settings_store::load().unwrap_or_default().ui_language
+}
+
 #[tauri::command]
 pub fn viewer_text_scale_set(scale: f64) -> Result<(), String> {
     if !TEXT_SCALES.contains(&scale) {
@@ -215,6 +224,17 @@ mod tests {
             assert_eq!(viewer_text_scale_get().unwrap(), None);
             std::fs::write(settings_path().unwrap(), b"not json").unwrap();
             assert_eq!(viewer_text_scale_get().unwrap(), None);
+        });
+    }
+
+    #[test]
+    fn the_viewer_reads_the_interface_language_and_defaults_on_a_broken_file() {
+        crate::testing::with_app_dir("viewer-ui-language", || {
+            assert_eq!(viewer_ui_language_get(), UiLanguage::Auto);
+            crate::infra::settings_store::update(|s| s.ui_language = UiLanguage::Russian).unwrap();
+            assert_eq!(viewer_ui_language_get(), UiLanguage::Russian);
+            std::fs::write(crate::infra::settings_store::path().unwrap(), b"not json").unwrap();
+            assert_eq!(viewer_ui_language_get(), UiLanguage::Auto);
         });
     }
 

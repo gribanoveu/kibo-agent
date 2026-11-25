@@ -8,6 +8,7 @@
     "allow-viewer-file",
     "allow-viewer-text-scale-get",
     "allow-viewer-text-scale-set",
+    "allow-viewer-ui-language-get",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",

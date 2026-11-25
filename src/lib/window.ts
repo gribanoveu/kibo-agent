@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Effect, EffectState, getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { inTauri } from "./backend";
+import type { UiLanguage } from "./settings";
 
 // The window is undecorated and transparent (tauri.conf.json), so the app's own
 // titlebar drives it. Components call these wrappers, never the API directly.
@@ -47,6 +48,9 @@ export const viewerFile = () => invoke<{ name: string; text: string }>("viewer_f
 /** The viewers' text size as last set — `null` before any was — and setting it. */
 export const viewerTextScale = () => invoke<number | null>("viewer_text_scale_get");
 export const setViewerTextScale = (scale: number) => invoke<void>("viewer_text_scale_set", { scale });
+
+/** The interface language a viewer writes its own texts in. */
+export const viewerUiLanguage = () => invoke<UiLanguage>("viewer_ui_language_get");
 
 /**
  * A state of the window that only a resize can change: `onChange` gets it once
