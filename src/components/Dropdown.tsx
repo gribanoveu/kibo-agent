@@ -163,12 +163,18 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
       </button>
       {open &&
         createPortal(
+          // Portaled out of the trigger's own element, but a press in the menu
+          // is a press on that element's control: a panel, sheet or dialog that
+          // closes itself on a press outside it would otherwise close on the
+          // option — and take the option with it before the click lands, so the
+          // pick was lost.
           <div
             ref={menu}
             className="dropdown-menu"
             role="listbox"
             aria-label={heading}
             style={{ position: "fixed", top: at?.top ?? 0, left: at?.left ?? 0, minWidth: at?.minWidth, maxWidth: at?.maxWidth }}
+            onPointerDown={(e) => e.stopPropagation()}
           >
             {heading && <div className="dropdown-heading">{heading}</div>}
             {custom && (

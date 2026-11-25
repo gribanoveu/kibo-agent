@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-25 Choosing in the message box's settings panel works again: the menu is drawn in the viewport, so a press on an option counted as a press outside the panel — the panel closed and took the option with it, leaving the mode one-way (an Analyst that could not go back to Agent) and every model or thinking pick lost; the same press no longer closes a sheet or a dialog the menu belongs to, the branch list in Create pull request included
 - 2026-11-25 The macOS build ships signed with a Developer ID and notarized by Apple: the DMG opens on a machine that did not build it, without the Gatekeeper warning and the right-click → Open detour, and the microphone and system sound, once allowed, stay allowed after an update instead of macOS asking again; the workflow signs only when the certificate is in the repository's secrets, and an ad-hoc build stays what it was
 - 2026-11-24 Meeting notes tell the voices apart by a diarization — pyannote's segmentation and campplus, the model arriving by script — rather than by the words' embeddings alone, so a short reply joins the person who was interrupted instead of becoming a speaker of its own; the segmentation model is 5.7 MB, and a build without it keeps the old clustering
 - 2026-11-24 The context panel says what the window holds and nothing more — the line under the total naming where the number came from ("The provider's count for the last request, plus what was added since") is gone from the ring's popover and from Overview alike

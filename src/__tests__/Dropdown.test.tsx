@@ -35,6 +35,26 @@ test("closes on an outside pointerdown", () => {
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
+// The menu is drawn in the viewport, outside the element its trigger sits in,
+// but a press in it is a press on that element's control. A panel or dialog that
+// closes itself on a press outside it must not close on the option — it would
+// take the option with it before the click landed.
+test("a press in the menu is not a press outside what opened it", () => {
+  const outside: string[] = [];
+  const onDown = () => outside.push("outside");
+  document.addEventListener("pointerdown", onDown);
+  try {
+    const picked = open();
+    const option = screen.getByRole("option", { name: /fix\/npe-tax-calc/ });
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+    expect(outside).toEqual([]);
+    expect(picked).toEqual(["fix/npe-tax-calc"]);
+  } finally {
+    document.removeEventListener("pointerdown", onDown);
+  }
+});
+
 test("closes on Escape", () => {
   open();
   fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
