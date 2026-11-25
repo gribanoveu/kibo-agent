@@ -103,8 +103,8 @@ describe("grouping", () => {
   });
 
   test("with nothing said yet the empty state fills the thread", () => {
-    panel(state([]));
-    expect(screen.getByText("Start the conversation")).toBeDefined();
+    const { container } = panel(state([]));
+    expect(container.querySelector(".thread-empty .chat-empty .kibo-brand")).toBeTruthy();
     // It already is a new chat: offering another one does nothing.
     expect(screen.queryByRole("button", { name: /New chat/ })).toBeNull();
   });
@@ -374,6 +374,22 @@ describe("how long the agent worked", () => {
     expect(screen.getByText("Worked for 1m 23s")).toBeTruthy();
   });
 
+  /// The last turn's line takes the ticking clock's box: the two swap the
+  /// moment the turn ends, and the thread pinned to its end would pull the
+  /// answer down by the difference. An earlier turn's line keeps its own size.
+  test("the last turn's line keeps the clock's box, an earlier one does not", () => {
+    const { container } = panel(state(turn, { status: "done" }));
+    expect(container.querySelector(".turn-clock")?.classList.contains("tail")).toBe(true);
+    const earlier = [
+      { kind: "user" as const, id: "u0", text: "first", workedMs: 5_000 },
+      { kind: "message" as const, id: "m0", round: 0, text: "done" },
+      ...turn,
+    ];
+    const { container: two } = panel(state(earlier, { status: "done" }));
+    const clocks = [...two.querySelectorAll(".turn-clock")];
+    expect(clocks.map((c) => c.classList.contains("tail"))).toEqual([false, true]);
+  });
+
   test("ticks at the end of the thread while the turn runs", () => {
     panel(state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 }));
     expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
@@ -482,11 +498,13 @@ describe("how long the agent worked", () => {
 
 describe("the header", () => {
   /// It is the window's title bar: the chat is named in the sidebar, the
-  /// folder, its branch and its changes on the composer's tab.
+  /// folder on the composer's tab — and, before the first message, on the
+  /// empty screen — its branch and its changes on the tab too.
   test("names neither the chat nor the folder", () => {
     const { container } = panel(state([]));
-    expect(container.querySelector(".head-left")?.textContent).toBe("");
-    expect(screen.queryByTitle("/tmp/project")).toBeNull();
+    const head = container.querySelector<HTMLElement>(".chat-head");
+    expect(head?.querySelector(".head-left")?.textContent).toBe("");
+    expect(head?.querySelector('[title="/tmp/project"]')).toBeNull();
   });
 
   /// With no sidebar, the IDE layout's menu of chats is drawn there.
@@ -901,11 +919,11 @@ describe("a review while it runs", () => {
 });
 
 describe("a background process that ended", () => {
-  const ended = (code: number, description?: string) =>
+  const ended = (code: number, description?: string, command = "cargo build") =>
     ({
       kind: "processEnded",
       id: "ended:0",
-      process: { id: 4, command: "cargo build", description, cwd: "src-tauri", state: { state: "exited", code } },
+      process: { id: 4, command, description, cwd: "src-tauri", state: { state: "exited", code } },
     }) as Block;
 
   test("is a two-line row — the command, the folder and how it ended — that opens the Terminal tab", () => {
@@ -948,6 +966,51 @@ describe("a background process that ended", () => {
     const command = container.querySelector(".process-ended-command");
     expect(command?.textContent).toBe("cargo build");
     expect(command?.className).not.toContain("solo");
+  });
+
+  /// A script started in the background is a wall of text: the row keeps its
+  /// first three lines, and Show more opens the rest where it stands.
+  test("a command past three lines is cut, with Show more to open it in place", () => {
+    // happy-dom lays nothing out: a command says it is cut when it holds more than one line.
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("process-ended-command") && this.textContent!.includes("\n") ? 100 : 0;
+      },
+    });
+    try {
+      const script = "cp src/a.tsx /tmp/a.bak\nperl -pi -e 's/x/y/' src/a.tsx\nbun test -t 'one' >/tmp/a.log\ntail -3 /tmp/a.log";
+      const { container } = render(
+        <ChatPanel
+          workspace="/tmp/project"
+          turn={state([ended(0, undefined, script)])}
+          onDecide={() => {}}
+          onOpenRepo={() => {}}
+          onOpenProcess={() => {}}
+        />,
+      );
+      const card = container.querySelector(".process-ended")!;
+      const more = screen.getByRole("button", { name: "Show more" });
+      expect(more.getAttribute("aria-expanded")).toBe("false");
+      expect(card.className).not.toContain("open");
+
+      fireEvent.click(more);
+      expect(card.className).toContain("open");
+      const less = screen.getByRole("button", { name: "Show less" });
+      expect(less.getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.click(less);
+      expect(card.className).not.toContain("open");
+    } finally {
+      if (height) Object.defineProperty(HTMLElement.prototype, "scrollHeight", height);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+    }
+  });
+
+  test("a command that fits has no Show more", () => {
+    panel(state([ended(0)]));
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
   });
 
   test("a clean exit is not drawn as a failure", () => {

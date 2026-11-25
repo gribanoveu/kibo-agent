@@ -8,6 +8,7 @@ import { DiffView } from "./DiffView";
 import { Modal } from "./Modal";
 import { CodeHostServers } from "./CodeHostServers";
 import { Page, PageEmpty, PageSheet } from "./Page";
+import { PAGES, type PageDef } from "./pages";
 import { sameEntry, useCatalog, useCatalogPreview, useCatalogUpdatePreview, type EntryKey } from "../hooks/useCatalog";
 import { useFeatures } from "../hooks/useFeatures";
 import { Switch } from "./Switch";
@@ -32,6 +33,12 @@ const TABS: { value: Tab; label: string }[] = [
   ...KINDS.map(({ kind, label }) => ({ value: kind, label })),
 ];
 
+/** The two halves of a feature's sheet: what it adds to the window, and what it gives the model. */
+const SHEET_TABS = [
+  { value: "settings", label: "Settings" },
+  { value: "tools", label: "Tools" },
+] as const;
+
 /** A feature's icon, by its id; one without its own gets the generic piece. */
 const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
   board: SquareKanban,
@@ -47,7 +54,7 @@ const FEATURE_ICONS: Record<string, ComponentType<{ size?: number }>> = {
 const featureIcon = (id: string) => FEATURE_ICONS[id] ?? Puzzle;
 const featureMatches = (feature: FeatureView, query: string) => {
   const q = query.trim().toLowerCase();
-  return !q || [feature.id, feature.name, feature.description].some((text) => text.toLowerCase().includes(q));
+  return !q || [feature.id, feature.name, feature.summary, feature.description].some((text) => text.toLowerCase().includes(q));
 };
 
 /** How many cells a kind fills under All: a row is one to four wide, so eight is two rows of four — seven cards and "Show all" in the eighth's place. */
@@ -321,7 +328,7 @@ function FeatureCard({ feature, selected, onOpen, onTurnOn }: { feature: Feature
       </div>
       <div className="catalog-card-body">
         <h3>{feature.name}</h3>
-        <p title={feature.description}>{feature.description}</p>
+        <p title={feature.description}>{feature.summary}</p>
         <div className="catalog-card-meta">Built into the app</div>
       </div>
       {feature.on ? (
@@ -365,68 +372,114 @@ function FeatureDetails({
   onClose: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  // Settings first: turning a feature on is what most openings are about.
+  const [tab, setTab] = useState<(typeof SHEET_TABS)[number]["value"]>("settings");
+  // Whether it brings a page of its own — what the Tools tab says when there are no tools.
+  const hasPage = PAGES.some((page) => (page as PageDef).feature === feature.id);
   return (
     <PageSheet icon={featureIcon(feature.id)} title="Feature" label={`${feature.name} details`} onClose={onClose}>
       <h3 className="catalog-detail-name">{feature.name}</h3>
-      <p className="catalog-detail-desc">{feature.description}</p>
+      <p className="catalog-detail-desc">{feature.summary}</p>
 
-      <div className="catalog-detail-actions">
-        <button type="button" className={`btn ${feature.on ? "btn-ghost" : "btn-primary"}`} onClick={() => onSet(!feature.on)}>
-          {feature.on ? "Turn off" : "Turn on"}
-        </button>
-        {!feature.on && feature.hasData && (
-          <button type="button" className="btn btn-ghost" onClick={() => setConfirming(true)}>
-            Delete data
-          </button>
-        )}
-        {feature.on && <span className="catalog-detail-state installed">{feature.tools.length > 0 ? "On — from the next message" : "On"}</span>}
-      </div>
+      {/* Above the tabs: a switch on either tab can fail, and the message about it
+          must be read where it was clicked. */}
       {error && <div className="catalog-detail-error">{error}</div>}
-      {feature.tools.length > 0 && (
-        <p className="catalog-detail-note">
-          {feature.on
-            ? "Turned off, the model stops getting its tools and its page leaves the sidebar; what it kept stays until you delete it."
-            : "Turned on, the model gets the tools below from its next message, and its page appears in the sidebar."}
-        </p>
-      )}
-      {feature.tools.length > 0 && (
-        <label className="catalog-detail-switch">
-          <span>Tools for the model</span>
-          <Switch label="Tools for the model" on={feature.toolsOn} onChange={onSetTools} />
-        </label>
-      )}
-      {feature.id === "layout-correction" && feature.layoutSwitchSupported && (
-        <label className="catalog-detail-switch">
-          <span>Switch keyboard layout after Fix</span>
-          <Switch label="Switch keyboard layout after Fix" on={feature.layoutSwitchOn} onChange={onSetLayoutSwitch} />
-        </label>
-      )}
-      {/* Its servers where it is turned on, rather than a trip to Settings after. */}
-      {feature.id === "pull-requests" && feature.on && <CodeHostServers />}
 
-      <dl className="catalog-detail-facts">
-        <dt>Source</dt>
-        <dd>Built into the app</dd>
-        {feature.places.length > 0 && (
-          <>
-            <dt>Where</dt>
-            <dd>{feature.places.join(", ")}</dd>
-          </>
-        )}
-        {feature.data && (
-          <>
-            <dt>Keeps</dt>
-            <dd className="mono">{feature.data}</dd>
-          </>
-        )}
-      </dl>
+      <div className="catalog-sheet-tabs" role="tablist" aria-label={`${feature.name} sections`}>
+        {SHEET_TABS.map(({ value, label }) => (
+          <button key={value} type="button" role="tab" aria-selected={tab === value} className={tab === value ? "active" : ""} onClick={() => setTab(value)}>
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {feature.tools.map((tool) => (
-        <div key={tool.name}>
-          <h4 className="catalog-detail-file">{tool.name}</h4>
-          <div className="catalog-detail-text">{tool.description}</div>
+      {tab === "settings" && (
+        <div role="tabpanel" aria-label="Settings">
+          {/* The state and its control in one row, as the switches below it: a button
+              named for the opposite of the state made the reader work out which it was. */}
+          <label className="catalog-detail-switch">
+            <span>Enabled</span>
+            <Switch label={`${feature.name} enabled`} on={feature.on} onChange={onSet} />
+          </label>
+          {feature.tools.length > 0 && (
+            <p className="catalog-detail-note">
+              {/* Only a feature with a page in PAGES can promise one: Bitbucket adds a row
+                  in Overview, not a sidebar entry. And tools the switch on the Tools tab
+                  turned off are not promised either. */}
+              {!feature.on
+                ? hasPage
+                  ? "Off: the model gets no tools from it, and its page leaves the sidebar."
+                  : "Off: the model gets no tools from it."
+                : feature.toolsOn
+                  ? "The model gets its tools from your next message."
+                  : "On, but the model gets no tools: they are switched off on the Tools tab."}
+            </p>
+          )}
+          {!feature.on && feature.hasData && (
+            <div className="catalog-detail-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirming(true)}>
+                Delete data
+              </button>
+            </div>
+          )}
+          {feature.id === "layout-correction" && feature.layoutSwitchSupported && (
+            <label className="catalog-detail-switch">
+              <span>Switch keyboard layout after Fix</span>
+              <Switch label="Switch keyboard layout after Fix" on={feature.layoutSwitchOn} onChange={onSetLayoutSwitch} />
+            </label>
+          )}
+          {/* Its servers where it is turned on, rather than a trip to Settings after. */}
+          {feature.id === "pull-requests" && feature.on && <CodeHostServers />}
+
+          {/* The long text and the facts about the build: read when wanted, out of the
+              way of the switch and the servers above. */}
+          <details className="catalog-detail-more">
+            <summary>More about {feature.name}</summary>
+            <div className="catalog-detail-text">{feature.description}</div>
+            <dl className="catalog-detail-facts">
+              <dt>Source</dt>
+              <dd>Built into the app</dd>
+              {/* What it is until the user decides — the answer to "why is this on?" */}
+              <dt>Default</dt>
+              <dd>{feature.defaultOn ? "On — until you choose otherwise" : "Off — as it ships"}</dd>
+              {feature.data && (
+                <>
+                  <dt>Keeps</dt>
+                  <dd className="mono">{feature.data}</dd>
+                </>
+              )}
+            </dl>
+          </details>
         </div>
-      ))}
+      )}
+
+      {tab === "tools" && (
+        <div role="tabpanel" aria-label="Tools">
+          {feature.tools.length === 0 ? (
+            // Said rather than hidden: no tools is a fact about the feature, and an
+            // empty list would read as something that failed to load.
+            <p className="catalog-detail-text">
+              {hasPage
+                ? "No tools for the model: this feature adds its page to the sidebar, and nothing to the model."
+                : "No tools for the model: everything this feature adds is for you in the window."}
+            </p>
+          ) : (
+            <>
+              <label className="catalog-detail-switch">
+                <span>Tools for the model</span>
+                <Switch label="Tools for the model" on={feature.toolsOn} onChange={onSetTools} />
+              </label>
+              {feature.places.length > 0 && <p className="catalog-detail-note">Where: {feature.places.join(", ")}</p>}
+              {feature.tools.map((tool) => (
+                <div key={tool.name}>
+                  <h4 className="catalog-detail-file">{tool.name}</h4>
+                  <div className="catalog-detail-text">{tool.description}</div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
 
       <Modal
         title={`Delete ${feature.name}'s data?`}

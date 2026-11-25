@@ -26,6 +26,11 @@
   gap: 10px;
   text-align: center;
 }
+/* The mark is the start screen's, the same size as the agent's: a greeting
+   under it, not a logo in a list. */
+.plain-welcome .kibo-brand {
+  height: calc(var(--fs-lg) * 4.4);
+}
 /* As in the agent's empty chat: the logo, then the greeting. */
 .plain-welcome h2 {
   font-size: var(--fs-lg);
@@ -106,15 +111,60 @@
 .plain-tab .chip.open {
   color: var(--text);
 }
-.plain-tab .plain-chip-label {
+/* Who the model is, under the card: small chips, each its own press — the row
+   a ChatGPT box has under it. In a narrow window the row gives up width and
+   scrolls, rather than pushing the card wider or growing it a second row. */
+.plain-roles {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: none;
   min-width: 0;
-  white-space: nowrap;
+  margin: 8px 14px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-/* The label is a flex row, and only a block ellipsises: the name is its own box. */
-.plain-tab .plain-chip-label > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.plain-roles::-webkit-scrollbar {
+  display: none;
+}
+.plain-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--control) / 2);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.plain-role svg {
+  flex: none;
+}
+.plain-role:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.plain-role.on {
+  background: var(--bg-active);
+  border-color: var(--border);
+  color: var(--text);
+}
+/* A chat under way keeps its role: the chip says which, and is not a press. */
+.plain-role[aria-disabled="true"] {
+  cursor: default;
+}
+.plain-role[aria-disabled="true"]:hover {
+  background: none;
+  color: var(--text-faint);
+}
+.plain-role.on[aria-disabled="true"]:hover {
+  background: var(--bg-active);
+  color: var(--text);
 }
 
 .plain-preview-toggle {
@@ -186,15 +236,6 @@
   gap: 6px;
 }
 .plain-composer-bar > :not(textarea) {
-  flex: none;
-}
-.plain-chip-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-/* The name gives up width in a narrow window; its icon does not. */
-.plain-chip-label svg {
   flex: none;
 }
 /* As tall as the buttons beside it. */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HEATMAP_WEEKS, usageHeatmap, usageStats, usageStrip, type DailyMetric } from "../lib/usage";
+import { HEATMAP_WEEKS, tokensToday, usageHeatmap, usageStats, type DailyMetric } from "../lib/usage";
 
 // The usage pane's arithmetic: the weeks the heatmap draws and how
 // dark each day is, and the figures for the range picked under it.
@@ -30,17 +30,41 @@ describe("usageHeatmap", () => {
   });
 });
 
-describe("usageStrip", () => {
-  test("the last fourteen days in a row, today last, shaded as the heatmap is", () => {
-    const strip = usageStrip([spent("2026-09-26", 100), spent("2026-10-09", 400), spent("2026-09-25", 999)], today, 14);
-    expect(strip.map((d) => d.day)[0]).toBe("2026-09-26");
-    expect(strip.map((d) => d.day)[13]).toBe("2026-10-09");
-    expect(strip).toHaveLength(14);
-    expect([strip[0].level, strip[1].level, strip[13].level]).toEqual([1, 0, 4]);
+describe("tokensToday", () => {
+  /// Sent and received, as a day's tokens are counted: the cache is inside the
+  /// prompt, not beside it, and another day is not today.
+  test("today's sent and received, and nothing of another day or counter", () => {
+    const rows = [
+      row("2026-10-09", "promptTokens", 1000),
+      row("2026-10-09", "completionTokens", 50),
+      row("2026-10-09", "cachedTokens", 800),
+      row("2026-10-09", "toolCalls", 9, "grep"),
+      row("2026-10-08", "promptTokens", 999),
+    ];
+    expect(tokensToday(rows, today)).toBe(1050);
+    expect(tokensToday([], today)).toBe(0);
   });
 });
 
 describe("usageStats", () => {
+  /// A week is the calendar's, Monday first: what the Sunday before it spent is
+  /// not this week's, however few days ago that was. `today` is a Friday.
+  test("a week starts at its Monday, not seven days back", () => {
+    const rows = [spent("2026-10-04", 999), spent("2026-10-05", 100), spent("2026-10-09", 50)];
+    const week = usageStats(rows, "week", today);
+    expect([week.total, week.days]).toEqual([150, 5]);
+    expect(usageStats(rows, "7", today).total).toBe(1149);
+  });
+
+  /// On a Monday the week starts again; on a Sunday it is the whole seven days.
+  test("a Monday counts one day, a Sunday the seven of its week", () => {
+    const rows = [spent("2026-10-04", 999), spent("2026-10-05", 100), spent("2026-10-11", 20)];
+    const monday = usageStats(rows, "week", new Date(2026, 9, 5));
+    expect([monday.total, monday.days]).toEqual([100, 1]);
+    const sunday = usageStats(rows, "week", new Date(2026, 9, 11));
+    expect([sunday.total, sunday.days]).toEqual([120, 7]);
+  });
+
   test("a day's tokens are prompt plus output, cached counted inside them", () => {
     const stats = usageStats(
       [row("2026-10-09", "cachedTokens", 800), row("2026-10-09", "completionTokens", 50), row("2026-10-09", "promptTokens", 1000)],

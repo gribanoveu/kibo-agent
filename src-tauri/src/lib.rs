@@ -431,6 +431,7 @@ pub fn run() {
             commands::pull_requests::code_host_save,
             commands::pull_requests::code_host_delete,
             commands::pull_requests::code_host_detect,
+            commands::pull_requests::code_host_fetch_cert,
             commands::pull_requests::pull_request,
             commands::pull_requests::pull_request_create,
             commands::pull_requests::pull_request_approve,

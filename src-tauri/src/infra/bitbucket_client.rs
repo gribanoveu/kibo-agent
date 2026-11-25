@@ -396,6 +396,11 @@ fn classify(error: ureq::Error) -> CodeHostError {
         ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) => {
             CodeHostError::Unreachable(error.to_string())
         }
+        // A name the machine cannot resolve never reaches a server either: off
+        // the VPN, or with a DNS that is. It arrives as an io error of an
+        // unstable kind, so std's own words are what tells it — see
+        // [`name_not_found`].
+        ureq::Error::Io(e) if name_not_found(&e.to_string()) => CodeHostError::Unreachable(e.to_string()),
         ureq::Error::Io(e)
             if matches!(
                 e.kind(),
@@ -406,6 +411,17 @@ fn classify(error: ureq::Error) -> CodeHostError {
         }
         other => CodeHostError::Network(other.to_string()),
     }
+}
+
+/// Whether an io error is the machine failing to look the server's name up:
+/// no answer was possible, so only the branch can be shown. None of this is
+/// an [`std::io::ErrorKind`] worth matching — a `getaddrinfo` failure has the
+/// unstable `Uncategorized` — so it is the text: `failed to lookup address
+/// information: …` on macOS and Linux, a Windows socket error (11001, host
+/// not found) on Windows.
+fn name_not_found(text: &str) -> bool {
+    let text = text.to_lowercase();
+    text.contains("failed to lookup address information") || text.contains("os error 11001") || text.contains("no such host is known")
 }
 
 /// `http` is allowed only to this machine, where a test's own server listens.
@@ -1262,6 +1278,17 @@ mod tests {
             assert!(matches!(error, CodeHostError::Unreachable(_)), "{kind:?}: {error}");
         }
         assert!(matches!(classify(ureq::Error::HostNotFound), CodeHostError::Unreachable(_)));
+        // A name that does not resolve is the same no-route case, in the words
+        // std and the OS put it in.
+        for text in [
+            "failed to lookup address information: nodename nor servname provided, or not known",
+            "failed to lookup address information: Name or service not known",
+            "failed to lookup address information: Temporary failure in name resolution",
+            "No such host is known. (os error 11001)",
+        ] {
+            let error = classify(ureq::Error::Io(Error::other(text)));
+            assert!(matches!(error, CodeHostError::Unreachable(_)), "{text}: {error}");
+        }
         assert!(matches!(classify(ureq::Error::ConnectionFailed), CodeHostError::Unreachable(_)));
         assert!(matches!(classify(ureq::Error::Timeout(ureq::Timeout::Connect)), CodeHostError::Unreachable(_)));
         let alert = classify(ureq::Error::Io(Error::new(ErrorKind::InvalidData, "received fatal alert: HandshakeFailure")));

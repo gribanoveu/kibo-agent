@@ -20,7 +20,12 @@ pub struct FeatureView {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// One line for the card and the top of the sheet; `description` is the long text.
+    pub summary: String,
     pub on: bool,
+    /// What the build says it should be until the user chooses — the manifest's
+    /// `enabled_by_default`, shown in the sheet so a feature that came on is not a mystery.
+    pub default_on: bool,
     /// What the model is given, as it is told.
     pub tools: Vec<FeatureTool>,
     /// Whether the model gets them while the feature is on.
@@ -121,7 +126,9 @@ fn views(settings: &AppSettings, app_dir: Option<&Path>) -> Vec<FeatureView> {
                 id: manifest.id.to_string(),
                 name: manifest.name.to_string(),
                 description: manifest.description.to_string(),
+                summary: manifest.summary.to_string(),
                 on: on.is_on(feature),
+                default_on: manifest.enabled_by_default,
                 tools,
                 tools_on: settings.feature_tools.is_enabled(manifest.id),
                 layout_switch_on: settings.layout_correction_switch,
@@ -159,10 +166,15 @@ mod tests {
     #[test]
     fn the_board_card_says_what_it_adds_and_where() {
         let dir = temp_dir("features-views");
-        let off = views(&AppSettings::default(), Some(&dir));
-        let board = &off[0];
-        assert_eq!((board.id.as_str(), board.on, board.has_data), ("board", false, false));
+        // No choice stored: a feature is what its manifest says it is.
+        let plain = views(&AppSettings::default(), Some(&dir));
+        let board = &plain[0];
+        assert_eq!((board.id.as_str(), board.on, board.has_data), ("board", true, false));
+        // The default is the manifest's, and what a feature with no choice stored is.
+        assert_eq!(board.default_on, Feature::Board.manifest().enabled_by_default);
+        assert!(Feature::ALL.iter().zip(plain.iter()).all(|(feature, view)| view.default_on == feature.manifest().enabled_by_default));
         assert_eq!(board.tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["board"]);
+        assert!(board.summary.len() < board.description.len(), "the card reads a line, not the whole text");
         assert!(board.tools[0].description.contains("remind"), "{}", board.tools[0].description);
         assert_eq!(board.places, ["Assistant chat", "Agent", "Analyst"]);
         assert_eq!(board.data.as_deref(), Some("~/.kibo/board.db"));
@@ -218,6 +230,8 @@ mod tests {
     fn a_choice_is_saved_and_its_data_deleted_only_while_off() {
         crate::testing::with_app_dir("features-set", || {
             let dir = app_dir::dir().unwrap();
+            // On until chosen since 2026-11-24, so the data is deleted only after turning it off.
+            set("board", false).unwrap();
             assert!(!enabled().is_on(Feature::Board));
             set("board", true).unwrap();
             assert!(enabled().is_on(Feature::Board));

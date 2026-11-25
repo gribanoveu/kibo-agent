@@ -5,12 +5,14 @@ name: Tests
 # differently on Windows. Ignored tests (the model, the benches, the live
 # cluster) stay out, as they do locally.
 # On what lands in main, and on a pull request: when it is opened, reopened,
-# and on every push to it — a commit after the first is checked too.
+# and on every push to it — a commit after the first is checked too. A draft
+# skips the job (skipped counts as passed for required checks, an untriggered
+# workflow would stay pending); marking it ready runs everything.
 on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: tests-${{ github.ref }}
@@ -18,6 +20,7 @@ concurrency:
 
 jobs:
   test:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     strategy:
       fail-fast: false
       matrix:

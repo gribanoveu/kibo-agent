@@ -630,9 +630,12 @@
     var(--glass-ground);
 }
 /* What lies on the page and painted the page's colour again to look the same
-   — the chat under its thread, the terminal under its last row — would be a
-   second layer of it, a band lighter or darker than what is round it. */
-[data-glass] :is(.chat-panel, .terminal-view .xterm .xterm-viewport) {
+   — the chat under its thread, either mode's, the terminal under its last row —
+   would be a second layer of it, a band lighter or darker than what is round it.
+   Both modes' panels are the same tint over the same column: with the empty
+   chat's group centred, the panel is only as tall as what it holds, and the
+   layer's edge shows as a band across the window. */
+[data-glass] :is(.chat-panel, .plain-panel, .terminal-view .xterm .xterm-viewport) {
   background: transparent;
 }
 /* What floats: it blurs what it covers. */

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   AppWindow,
@@ -68,7 +68,7 @@ import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
 import type { ImagePart } from "../lib/images";
-import { type FileDiffStats, type PendingToolCall, previewCalls, type Task, type ToolCallDecision, type ToolPreview } from "../lib/chat";
+import { type FileDiffStats, type PendingToolCall, previewCalls, type RecentFolder, type Task, type ToolCallDecision, type ToolPreview } from "../lib/chat";
 import type { McpAnswer } from "../lib/mcp";
 import { type ProcessInfo, processStatus } from "../lib/processes";
 import { dragOrMaximize } from "./Titlebar";
@@ -115,41 +115,70 @@ type OpenAgent = (agent: AgentFocus) => void;
  * A background process that ended, as the model was told of it: what it was
  * for first, the command and the folder under it, how it ended in the badge.
  * A quiet row, not a card — it is news, not an object. Opens the process in
- * the Terminal tab, where its output is.
+ * the Terminal tab, where its output is. A command of more than three lines is
+ * cut, the rest behind "Show more": a script started in the background would
+ * otherwise fill the transcript.
  */
 function ProcessEndedCard({ process, onOpen }: { process: ProcessInfo; onOpen?: OpenProcess }) {
   const state = process.state;
   const tone = state.state === "exited" && state.code !== 0 ? "failed" : state.state === "stopped" ? "stopped" : "ended";
+  const command = useRef<HTMLElement>(null);
+  const [cut, setCut] = useState(false);
+  const [open, setOpen] = useState(false);
+  // Measured while cut, and again as the panel's width changes: the same
+  // command takes more lines in a narrow chat than in a wide one.
+  useLayoutEffect(() => {
+    const el = command.current;
+    if (!el || open) return;
+    const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [process.command, open]);
   return (
-    <button
-      type="button"
-      className={`process-ended ${tone}`}
-      title={onOpen ? "Show in Terminal" : undefined}
-      disabled={!onOpen}
-      onClick={() => onOpen?.(process.id)}
-    >
-      <span className="process-ended-eyebrow">
-        Background process
-        <span className="process-ended-exit">{processStatus(state)}</span>
-      </span>
-      <span className="process-ended-head">
-        {/* The title is the model's words when there are any; otherwise the line itself. */}
-        {process.description ? (
-          <span className="process-ended-name">{process.description}</span>
-        ) : (
-          <code className="process-ended-command solo">{process.command}</code>
-        )}
-        {onOpen && <ArrowUpRight className="process-ended-open" size={13} aria-hidden />}
-      </span>
-      {process.description && <code className="process-ended-command">{process.command}</code>}
-      <span className="process-ended-detail">
-        <span className="process-ended-num">#{process.id}</span>
-        <span className="process-ended-cwd">
-          <Folder size={11} aria-hidden />
-          {process.cwd === "." ? "project root" : process.cwd}
+    <div className="process-ended-wrap">
+      <button
+        type="button"
+        className={`process-ended ${tone}${open ? " open" : ""}`}
+        title={onOpen ? "Show in Terminal" : undefined}
+        disabled={!onOpen}
+        onClick={() => onOpen?.(process.id)}
+      >
+        <span className="process-ended-eyebrow">
+          Background process
+          <span className="process-ended-exit">{processStatus(state)}</span>
         </span>
-      </span>
-    </button>
+        <span className="process-ended-head">
+          {/* The title is the model's words when there are any; otherwise the line itself. */}
+          {process.description ? (
+            <span className="process-ended-name">{process.description}</span>
+          ) : (
+            <code ref={command} className="process-ended-command solo">
+              {process.command}
+            </code>
+          )}
+          {onOpen && <ArrowUpRight className="process-ended-open" size={13} aria-hidden />}
+        </span>
+        {process.description && (
+          <code ref={command} className="process-ended-command">
+            {process.command}
+          </code>
+        )}
+        <span className="process-ended-detail">
+          <span className="process-ended-num">#{process.id}</span>
+          <span className="process-ended-cwd">
+            <Folder size={11} aria-hidden />
+            {process.cwd === "." ? "project root" : process.cwd}
+          </span>
+        </span>
+      </button>
+      {(cut || open) && (
+        <button type="button" className="process-ended-more" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -789,7 +818,7 @@ function workedFooter(groups: Group[], index: number, turn: TurnState, extra?: R
   const worked = turnMessage(groups, index)?.workedMs;
   if (live || !worked) return null;
   return (
-    <div className="turn-clock">
+    <div className={`turn-clock${next ? "" : " tail"}`}>
       <span>Worked for {formatDuration(worked)}</span>
       {extra}
     </div>
@@ -924,6 +953,9 @@ type Props = {
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
   onOpenRepo: () => void;
+  /** Folders opened lately, offered on the empty screen when nothing is open. */
+  recent?: RecentFolder[];
+  onOpenFolder?: (path: string) => void;
   /** The agent's checklist, drawn above the clock while a turn runs. */
   checklist?: Task[];
   /** Opens the Terminal tab on a background process a call started. */
@@ -1135,6 +1167,8 @@ export function ChatPanel({
   turn,
   onDecide,
   onOpenRepo,
+  recent,
+  onOpenFolder,
   checklist = [],
   onOpenProcess,
   onOpenAgent,
@@ -1260,7 +1294,7 @@ export function ChatPanel({
 
       <div ref={scrollRef} className={`thread chat-text${groups.length === 0 ? " thread-empty" : ""}`}>
         {groups.length === 0 ? (
-          <ChatEmptyState workspace={workspace} onOpenRepo={onOpenRepo} />
+          <ChatEmptyState workspace={workspace} onOpenRepo={onOpenRepo} recent={recent} onOpenFolder={onOpenFolder} />
         ) : (
           <div ref={contentRef} className="thread-content">
             <Transcript

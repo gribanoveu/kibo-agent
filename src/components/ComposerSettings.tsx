@@ -172,7 +172,10 @@ export function ComposerSettings({ models, onModel, onEffort, onLoadModels, mode
         value={models.current ? choiceKey(models.current) : ""}
         options={models.choices.map((choice) => ({
           value: choiceKey(choice),
-          label: choice.label,
+          // The provider is the group's name over its rows, said once instead of
+          // on every one: what is left on the row is the model alone.
+          label: choice.label.slice(choice.providerId.length + 1),
+          group: choice.providerId,
           hint: choice.model ? undefined : "The first model the provider lists",
         }))}
         emptyLabel="No provider yet — add one in Settings → Models"

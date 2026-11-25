@@ -159,7 +159,7 @@ pub fn run_in_folder(
     let mongo = app.mongo.filter(|_| features.is_on(Feature::Mongodb));
     let pull_requests = app.pull_requests.filter(|_| features.is_on(Feature::PullRequests));
     let deepseek = app.embeddings.as_ref().and_then(|model| web_search::deepseek_for(&features, model));
-    let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)());
+    let parallel = crate::domain::prompt::parallel_block(&(folder.parallel)(), folder.mode);
     let frozen = frozen_for(folder.chat_id, workspace, Frozen { rules: rules.clone(), parallel });
 
     let turn = Turn {

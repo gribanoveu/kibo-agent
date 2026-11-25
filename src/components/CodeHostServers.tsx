@@ -10,23 +10,20 @@ import "./CodeHostServers.css";
 const NEW: CodeHostServer = { id: "", baseUrl: "", hosts: [], trustedCertPem: null, tokenSet: false };
 
 /**
- * The Pull requests feature's panel in Catalog: the servers the pull request
+ * The Bitbucket feature's panel in Catalog: the servers the pull request
  * under the branch is read from, each
  * with its address, the hosts learnt from its clone links, its certificate and
  * whether a token is kept. The token goes in and never comes back.
  */
 export function CodeHostServers() {
-  const { servers, error, save, remove, detect } = useCodeHosts();
+  const { servers, error, save, remove, detect, fetchCert } = useCodeHosts();
   const [editing, setEditing] = useState<CodeHostServer | null>(null);
   const [deleting, setDeleting] = useState<CodeHostServer | null>(null);
 
   return (
     <section className="code-hosts-section" aria-label="Bitbucket servers">
       <h4 className="code-hosts-title">Bitbucket servers</h4>
-      <p className="code-hosts-intro">
-        The Bitbucket Data Center servers the pull request under the branch in Overview is read from. A folder finds its server by
-        its remote: by the address, or by a host the server's clone links have shown it answers to.
-      </p>
+      <p className="code-hosts-intro">Servers the pull request in Overview is read from. A folder finds its server by its remote.</p>
       {error && <p className="code-hosts-error">{error}</p>}
       <ul className="code-hosts">
         {servers.map((server) => {
@@ -67,6 +64,7 @@ export function CodeHostServers() {
         onClose={() => setEditing(null)}
         onSave={save}
         onDetect={detect}
+        onFetch={fetchCert}
       />
       <Modal
         title="Delete server"

@@ -1,14 +1,16 @@
 // The models of meeting notes (docs/36-meeting-notes-research.md), bundled
 // with the app: GigaAM v3 with punctuation, as sherpa-onnx exported it,
-// campplus for telling voices apart, and DPDFNet-2 for taking the noise out of
-// a recorded call's microphone, and Silero VAD for dictation's phrases. Pinned to a commit and checked by hash;
+// campplus for telling voices apart, pyannote's segmentation for saying when
+// each of them speaks, and DPDFNet-2 for taking the noise out of a recorded
+// call's microphone, and Silero VAD for dictation's phrases. Pinned to a commit and checked by hash;
 // a file already here with the right hash is not fetched again.
 //
 //   bun scripts/fetch-meeting-models.ts [out dir]   (default: src-tauri/models/meeting)
 //
-// The names here are the ones `infra::speech::MODEL_FILES` and `DICTATION_FILES` read.
+// The names here are the ones `infra::speech::MODEL_FILES`, `DICTATION_FILES`
+// and `DIARIZATION_MODEL` read.
 
-import { mkdirSync, renameSync, existsSync } from "node:fs";
+import { mkdirSync, renameSync, existsSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const out = resolve(process.argv[2] ?? "src-tauri/models/meeting");
@@ -29,6 +31,14 @@ const dpdfnet = "https://raw.githubusercontent.com/ceva-ip/DPDFNet/9bd9844a227bb
 // sherpa-onnx's copy of Silero VAD. A release asset, held by its hash; MIT, as Silero's repository says.
 const sileroVad = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
 const silero = "https://raw.githubusercontent.com/snakers4/silero-vad/066409f3d9db45a30d21dfcbf9147826ffdd7052";
+// pyannote's segmentation ships as a .tar.bz2 with export scripts and a second,
+// int8 weight beside it; only `model.onnx` and its licence are kept, under the
+// flat name `infra::speech::DIARIZATION_MODEL` reads. The hash of what comes out
+// is what holds it, as with the release assets above. MIT, as the archive's
+// LICENSE says.
+const segmentation = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2";
+const pyannoteModel = "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079";
+const pyannoteLicense = "14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba";
 
 const files: [name: string, url: string, sha256: string][] = [
   ["encoder.int8.onnx", `${gigaam}/encoder.int8.onnx`, "369f35a71bf288d3b8e0391fabd8dba5f2314088d440bca474056b7b4b6e66bf"],
@@ -67,5 +77,27 @@ for (const [name, url, hash] of files) {
   const got = await sha256(partial);
   if (got !== hash) throw new Error(`${name}: sha256 ${got}, expected ${hash}`);
   renameSync(partial, path);
+}
+const diarization = join(out, "pyannote_segmentation.onnx");
+const pyannoteLicence = join(out, "pyannote-LICENSE");
+if (!existsSync(diarization) || (await sha256(diarization)) !== pyannoteModel || !existsSync(pyannoteLicence)) {
+  console.log("fetching pyannote_segmentation.onnx");
+  const archive = join(out, "pyannote.tar.bz2");
+  const response = await fetch(segmentation);
+  if (!response.ok) throw new Error(`${segmentation}: ${response.status}`);
+  await Bun.write(archive, await response.arrayBuffer());
+  const unpacked = Bun.spawnSync(["tar", "xjf", archive, "-C", out]);
+  if (unpacked.exitCode !== 0) throw new Error(`tar: ${unpacked.stderr.toString()}`);
+  const dir = join(out, "sherpa-onnx-pyannote-segmentation-3-0");
+  rmSync(diarization, { force: true });
+  rmSync(pyannoteLicence, { force: true });
+  renameSync(join(dir, "model.onnx"), diarization);
+  renameSync(join(dir, "LICENSE"), pyannoteLicence);
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(archive, { force: true });
+  const modelHash = await sha256(diarization);
+  if (modelHash !== pyannoteModel) throw new Error(`pyannote_segmentation.onnx: sha256 ${modelHash}, expected ${pyannoteModel}`);
+  const licenceHash = await sha256(pyannoteLicence);
+  if (licenceHash !== pyannoteLicense) throw new Error(`pyannote-LICENSE: sha256 ${licenceHash}, expected ${pyannoteLicense}`);
 }
 console.log(`meeting models in ${out}`);

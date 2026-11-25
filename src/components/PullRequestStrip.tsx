@@ -114,6 +114,7 @@ export function PullRequestStrip(props: Props) {
           onClose={() => setConnecting(false)}
           onSave={props.connect}
           onDetect={props.detect}
+          onFetch={props.fetchCert}
         />
         {failed}
       </>
