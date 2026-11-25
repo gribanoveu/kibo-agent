@@ -98,4 +98,26 @@ describe("the role chips under Chat mode's card", () => {
     expect(wrap.querySelector(".plain-tab")!.contains(row)).toBe(false);
     expect([...wrap.children].indexOf(row)).toBeGreaterThan([...wrap.children].indexOf(wrap.querySelector(".plain-tab")!));
   });
+
+  /// A radio group is one tab stop and answers the arrows: the choice moves,
+  /// and the focus with it — wrapping at either end.
+  test("the arrows move the choice round the group, which is one tab stop", () => {
+    const picked = screenWith(false);
+    expect(chips().map((c) => c.getAttribute("tabindex"))).toEqual(["0", "-1", "-1"]);
+
+    fireEvent.keyDown(chips()[0], { code: "ArrowRight", key: "ArrowRight" });
+    expect(picked).toEqual(["kubernetes"]);
+    fireEvent.keyDown(chips()[0], { code: "ArrowLeft", key: "ArrowLeft" });
+    expect(picked).toEqual(["kubernetes", "prototype"]);
+    // Up and down belong to the / menu, not to this row: they are left alone.
+    fireEvent.keyDown(chips()[0], { code: "ArrowDown", key: "ArrowDown" });
+    fireEvent.keyDown(chips()[0], { code: "KeyA", key: "a" });
+    expect(picked).toHaveLength(2);
+  });
+
+  test("a chat under way answers no arrow: its role is fixed", () => {
+    const picked = screenWith(true);
+    fireEvent.keyDown(chips()[0], { code: "ArrowRight", key: "ArrowRight" });
+    expect(picked).toEqual([]);
+  });
 });

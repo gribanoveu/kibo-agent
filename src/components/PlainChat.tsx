@@ -112,6 +112,8 @@ export function PlainChat({
   // `key` is what keeps one chat's attached pictures off the next one's.
   const attachments = useAttachments(boxTakesPictures(imagesEnabled, chat.role), draftKey);
   const input = useRef<HTMLTextAreaElement>(null);
+  /** The role chips, so an arrow can put the focus on the one it picked. */
+  const rolesRef = useRef<HTMLDivElement>(null);
   // The box measures itself on every change of the text, so there is nothing to tell it.
   const dictation = useDictation({ on: dictate, draftKey, text: draft, setText: setDraft, area: input, onChange: () => {} });
   const correction = useLayoutCorrection({
@@ -364,8 +366,8 @@ export function PlainChat({
             as the tools under a ChatGPT box are. One role per chat — what was
             said was said to it — so once it has started only its own is left. */}
         {chat.roles.length > 0 && (
-          <div className="plain-roles" role="radiogroup" aria-label="Role">
-            {(empty ? chat.roles : chat.roles.filter((r) => r.id === chat.role)).map((r) => {
+          <div className="plain-roles" role="radiogroup" aria-label="Role" ref={rolesRef}>
+            {(empty ? chat.roles : chat.roles.filter((r) => r.id === chat.role)).map((r, at) => {
               const Icon = ROLE_ICONS[r.id];
               const on = r.id === chat.role;
               return (
@@ -375,10 +377,22 @@ export function PlainChat({
                   role="radio"
                   aria-checked={on}
                   aria-disabled={!empty}
+                  // One stop for the group, as a radio group is: the arrows
+                  // move the choice, and the focus follows it.
+                  tabIndex={on ? 0 : -1}
                   className={`plain-role${on ? " on" : ""}`}
                   title={empty ? r.description : "The chat's role — start a new chat for another"}
                   onClick={() => {
                     if (empty) chat.setRole(r.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!empty) return;
+                    const step = matches(e, "roleNext") ? 1 : matches(e, "rolePrev") ? -1 : 0;
+                    if (!step) return;
+                    e.preventDefault();
+                    const next = (at + step + chat.roles.length) % chat.roles.length;
+                    chat.setRole(chat.roles[next].id);
+                    rolesRef.current?.querySelectorAll<HTMLButtonElement>(".plain-role")[next]?.focus();
                   }}
                 >
                   <Icon size={12} />
