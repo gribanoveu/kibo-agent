@@ -181,13 +181,21 @@ export function PlainChat({
   }, [pointed]);
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
   // The box fits what is in it, wherever it came from.
-  const fit = useCallback(() => {
+  const grownAt = useRef(0);
+  const fit = useCallback((remeasure = false) => {
     const el = input.current;
     if (!el) return;
     // The cap is the stylesheet's — a narrow column gets a taller box — not a
     // number kept in step with it here.
     const cap = parseFloat(getComputedStyle(el).maxHeight) || 160;
-    el.style.height = "auto";
+    // Collapsed to "auto" to be measured, the box takes the thread above it
+    // along: the thread grows, one read at its end is clamped there, and the
+    // scroll read that follows is re-stuck as if the user had scrolled — the
+    // answer's tail popping out and back with every letter typed. Text that
+    // only got longer cannot need less room, so a keystroke is measured in
+    // place; deleting, and a column that changed width, measure as before.
+    if (remeasure || el.value.length < grownAt.current) el.style.height = "auto";
+    grownAt.current = el.value.length;
     el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
     el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
@@ -207,7 +215,8 @@ export function PlainChat({
     const sized = new ResizeObserver(() => {
       if (el.clientWidth === width) return;
       width = el.clientWidth;
-      fit();
+      // A wrapped line may fit now, and a freed one may not: fitted anew.
+      fit(true);
     });
     sized.observe(el);
     return () => sized.disconnect();
