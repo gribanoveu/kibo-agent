@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-25 The macOS build ships signed with a Developer ID and notarized by Apple: the DMG opens on a machine that did not build it, without the Gatekeeper warning and the right-click → Open detour, and the microphone and system sound, once allowed, stay allowed after an update instead of macOS asking again; the workflow signs only when the certificate is in the repository's secrets, and an ad-hoc build stays what it was
 - 2026-11-24 Meeting notes tell the voices apart by a diarization — pyannote's segmentation and campplus, the model arriving by script — rather than by the words' embeddings alone, so a short reply joins the person who was interrupted instead of becoming a speaker of its own; the segmentation model is 5.7 MB, and a build without it keeps the old clustering
 - 2026-11-24 The context panel says what the window holds and nothing more — the line under the total naming where the number came from ("The provider's count for the last request, plus what was added since") is gone from the ring's popover and from Overview alike
 - 2026-11-24 A background process that ends in the chat keeps its command to three lines, the rest behind "Show more" — a script started in the background no longer fills the thread with a wall of text
