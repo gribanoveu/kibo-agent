@@ -49,6 +49,8 @@ export const SHORTCUTS = {
   commandNext: { label: "Next command in the / menu", group: "Chat", combos: [{ code: "ArrowDown" }] },
   commandPrev: { label: "Previous command in the / menu", group: "Chat", combos: [{ code: "ArrowUp" }] },
   commandComplete: { label: "Complete the command's name", group: "Chat", combos: [{ code: "Tab" }] },
+  roleNext: { label: "Next role in a new chat", group: "Chat", combos: [{ code: "ArrowRight" }] },
+  rolePrev: { label: "Previous role in a new chat", group: "Chat", combos: [{ code: "ArrowLeft" }] },
   closeFile: { label: "Close the file tab", group: "Files", combos: [{ code: "KeyE", mod: true }] },
   nextFile: { label: "Next changed file", group: "Files", combos: [{ code: "ArrowDown", alt: true }] },
   prevFile: { label: "Previous changed file", group: "Files", combos: [{ code: "ArrowUp", alt: true }] },

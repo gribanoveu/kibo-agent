@@ -28,6 +28,8 @@ type Props = {
   tab?: ReactNode;
   /** At the right end of the line under the box — the provider's balance. */
   end?: ReactNode;
+  /** Under that line — what a new chat offers to start with; gone once it has. */
+  below?: ReactNode;
   /** The open folder's index, said in the settings panel; `null` until anything is known about it. */
   index?: IndexState | null;
   /** Sends the box, with the pictures attached to it. While a turn is running
@@ -77,6 +79,9 @@ type Props = {
   pendingCommands?: string;
   /** Each change puts the cursor in the box. */
   focus?: number;
+  /** What the empty box says instead of its own line — a start screen asks
+      differently from a conversation under way. */
+  placeholder?: string;
   /** Where this chat's unsent message is kept: the box belongs to a chat, not
       to the window, so it comes back to the one it was typed in. */
   draftKey: string;
@@ -92,6 +97,7 @@ type Props = {
 export function Composer({
   tab,
   end,
+  below,
   index = null,
   onSend,
   imagesEnabled = false,
@@ -117,6 +123,7 @@ export function Composer({
   onCommandsOpen,
   pendingCommands,
   focus = 0,
+  placeholder,
   draftKey,
   dictate = false,
   layoutCorrection = false,
@@ -386,7 +393,7 @@ export function Composer({
               placeholder={
                 running
                   ? `Add something — ${shortcutText("queue")} to send it after`
-                  : "Describe your task…"
+                  : placeholder ?? "Describe your task…"
               }
               value={text}
               onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
@@ -443,8 +450,8 @@ export function Composer({
               }}
             />
           </div>
-          {/* Shown from the first render, before anything has been said: an
-              empty conversation already costs the prompt and the schemas. */}
+          {/* What the next request costs, once the caller has a conversation to
+              measure: an empty chat's prompt and schemas are read in Overview. */}
           {context && (
             <span className="composer-meter">
               <ContextMeter context={context} usage={usage} running={running} onCompact={onCompact} up />
@@ -493,6 +500,7 @@ export function Composer({
         />
         {end}
       </div>
+      {below}
     </div>
   );
 }

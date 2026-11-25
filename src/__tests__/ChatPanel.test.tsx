@@ -103,8 +103,8 @@ describe("grouping", () => {
   });
 
   test("with nothing said yet the empty state fills the thread", () => {
-    panel(state([]));
-    expect(screen.getByText("Start the conversation")).toBeDefined();
+    const { container } = panel(state([]));
+    expect(container.querySelector(".thread-empty .chat-empty .kibo-brand")).toBeTruthy();
     // It already is a new chat: offering another one does nothing.
     expect(screen.queryByRole("button", { name: /New chat/ })).toBeNull();
   });
@@ -374,6 +374,22 @@ describe("how long the agent worked", () => {
     expect(screen.getByText("Worked for 1m 23s")).toBeTruthy();
   });
 
+  /// The last turn's line takes the ticking clock's box: the two swap the
+  /// moment the turn ends, and the thread pinned to its end would pull the
+  /// answer down by the difference. An earlier turn's line keeps its own size.
+  test("the last turn's line keeps the clock's box, an earlier one does not", () => {
+    const { container } = panel(state(turn, { status: "done" }));
+    expect(container.querySelector(".turn-clock")?.classList.contains("tail")).toBe(true);
+    const earlier = [
+      { kind: "user" as const, id: "u0", text: "first", workedMs: 5_000 },
+      { kind: "message" as const, id: "m0", round: 0, text: "done" },
+      ...turn,
+    ];
+    const { container: two } = panel(state(earlier, { status: "done" }));
+    const clocks = [...two.querySelectorAll(".turn-clock")];
+    expect(clocks.map((c) => c.classList.contains("tail"))).toEqual([false, true]);
+  });
+
   test("ticks at the end of the thread while the turn runs", () => {
     panel(state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 }));
     expect(screen.getByRole("timer").textContent).toBe("Working… 5s");
@@ -482,11 +498,13 @@ describe("how long the agent worked", () => {
 
 describe("the header", () => {
   /// It is the window's title bar: the chat is named in the sidebar, the
-  /// folder, its branch and its changes on the composer's tab.
+  /// folder on the composer's tab — and, before the first message, on the
+  /// empty screen — its branch and its changes on the tab too.
   test("names neither the chat nor the folder", () => {
     const { container } = panel(state([]));
-    expect(container.querySelector(".head-left")?.textContent).toBe("");
-    expect(screen.queryByTitle("/tmp/project")).toBeNull();
+    const head = container.querySelector<HTMLElement>(".chat-head");
+    expect(head?.querySelector(".head-left")?.textContent).toBe("");
+    expect(head?.querySelector('[title="/tmp/project"]')).toBeNull();
   });
 
   /// With no sidebar, the IDE layout's menu of chats is drawn there.

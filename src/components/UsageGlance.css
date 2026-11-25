@@ -1,0 +1,16 @@
+/* Under a new chat's box: one quiet line of the two numbers worth glancing at
+   before the next message — what the fortnight cost, and the run of days. */
+.usage-glance {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 0;
+  margin: 12px auto 0;
+  padding: 0 14px;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.usage-glance span + span::before {
+  content: "·";
+  margin: 0 6px;
+}
