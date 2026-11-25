@@ -818,7 +818,7 @@ function workedFooter(groups: Group[], index: number, turn: TurnState, extra?: R
   const worked = turnMessage(groups, index)?.workedMs;
   if (live || !worked) return null;
   return (
-    <div className="turn-clock">
+    <div className={`turn-clock${next ? "" : " tail"}`}>
       <span>Worked for {formatDuration(worked)}</span>
       {extra}
     </div>

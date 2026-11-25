@@ -401,6 +401,14 @@
   margin-top: 14px;
   color: var(--text-dim);
 }
+/* The last turn's line keeps the ticking clock's box — the paw's height and
+   its gap. The two swap places the moment the turn ends, and the thread is
+   pinned to its end: a shorter line pulls the whole answer down by the
+   difference, which reads as the answer jumping as it finishes. */
+.turn-clock.tail {
+  min-height: 26px;
+  margin-top: 14px;
+}
 .turn-clock-paw {
   display: inline-flex;
   width: 26px;
