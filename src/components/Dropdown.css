@@ -70,9 +70,13 @@
   color: var(--text-box-hint);
 }
 /* The name of a group of options, over the first of them — the provider a model
-   belongs to. Fainter than the menu's own heading, which says what is listed. */
+   belongs to. A band across the menu, a shade off its own ground: a shelf over
+   the models under it, not another row among them. The negative side margins
+   carry it past the menu's padding to its edges. */
 .dropdown-group {
-  padding: 8px 9px 3px;
+  margin: 0 -4px;
+  padding: 6px 13px 5px;
+  background: var(--bg-panel-soft);
   font-size: var(--fs-2xs);
   font-weight: 500;
   letter-spacing: var(--tracking-label);
@@ -81,7 +85,7 @@
   user-select: none;
 }
 .dropdown-group:first-child {
-  padding-top: 3px;
+  padding-top: 5px;
 }
 .dropdown-custom {
   display: block;
