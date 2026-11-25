@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import "./Dropdown.css";
@@ -12,6 +12,9 @@ type Option = {
   hint?: string;
   /** Drawn under the option before it, as something that belongs to it. */
   nested?: boolean;
+  /** What the option belongs to, said once over the first of its group — a
+      provider's name over its own models, in a list long enough to need it. */
+  group?: string;
   /** A button at the row's right edge, doing something to the option rather
       than picking it. Unavailable, it stays in place and its `title` says why. */
   action?: { icon: ReactNode; title: string; unavailable?: boolean; onRun: () => void };
@@ -202,7 +205,7 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
             {shown.length === 0 && (said || !custom) && (
               <div className="dropdown-empty">{said ? `Nothing matches “${typed.trim()}”` : emptyLabel ?? "Nothing here yet"}</div>
             )}
-            {shown.map((opt) => {
+            {shown.map((opt, index) => {
               const item = (
                 <button
                   key={opt.value}
@@ -223,9 +226,10 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
                 </button>
               );
               const action = opt.action;
-              if (!action) return item;
               // Beside the option, not inside it: a button in a button is not valid HTML.
-              return (
+              const row = !action ? (
+                item
+              ) : (
                 <div key={opt.value} className="dropdown-row">
                   {item}
                   <button
@@ -245,6 +249,15 @@ export function Dropdown({ label, title, options, value, onPick, emptyLabel, bel
                     {action.icon}
                   </button>
                 </div>
+              );
+              // A group's name is said once, over the first of its options —
+              // and again where what was typed leaves a gap between them.
+              if (!opt.group || opt.group === shown[index - 1]?.group) return row;
+              return (
+                <Fragment key={`group:${opt.group}`}>
+                  <div className="dropdown-group">{opt.group}</div>
+                  {row}
+                </Fragment>
               );
             })}
           </div>,

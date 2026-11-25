@@ -652,7 +652,16 @@ describe("the model row", () => {
     expect(screen.getByTitle("Model").textContent).toContain("openrouter/anthropic/claude-sonnet-5");
     fireEvent.click(screen.getByTitle("Model"));
     expect(loads).toBe(1);
-    press(screen.getByRole("option", { name: /openrouter\/openai\/gpt-5/ }));
+    // Read by provider: the name once, its models under it, the provider no
+    // longer repeated on every row.
+    const groups = () => [...document.querySelectorAll(".dropdown-group")].map((el) => el.textContent);
+    expect(groups()).toEqual(["OpenRouter", "local"]);
+    expect(screen.getAllByRole("option").map((option) => option.querySelector(".dropdown-item-label")?.textContent)).toEqual([
+      "anthropic/claude-sonnet-5",
+      "openai/gpt-5",
+      "auto",
+    ]);
+    press(screen.getByRole("option", { name: /openai\/gpt-5/ }));
     expect(picked).toEqual(["OpenRouter|openai/gpt-5"]);
   });
 

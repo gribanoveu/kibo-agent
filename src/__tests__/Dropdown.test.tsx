@@ -154,3 +154,30 @@ test("a locked one does not open", () => {
   fireEvent.click(screen.getByRole("button", { name: /role/ }));
   expect(screen.queryByRole("listbox")).toBeNull();
 });
+
+// A long list is read by what its entries belong to — a provider's models:
+// its name once over the first of them, not on every row. Filtering the list
+// says it again wherever the gap leaves a group's start.
+test("a group's name is said once, over the first of its options", () => {
+  render(
+    <Dropdown
+      label="model"
+      options={[
+        { value: "opus", group: "OpenRouter" },
+        { value: "sonnet", group: "OpenRouter" },
+        { value: "qwen", group: "local" },
+      ]}
+      value="opus"
+      onPick={() => {}}
+      custom={{ placeholder: "Another model", onEnter: () => {} }}
+    />,
+  );
+  const groups = () => [...document.querySelectorAll(".dropdown-group")].map((el) => el.textContent);
+  fireEvent.click(screen.getByRole("button", { name: /model/ }));
+  expect(groups()).toEqual(["OpenRouter", "local"]);
+
+  // Narrowed to the second group alone, its name comes with it.
+  fireEvent.change(screen.getByLabelText("Another model"), { target: { value: "qw" } });
+  expect(groups()).toEqual(["local"]);
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["qwen"]);
+});
