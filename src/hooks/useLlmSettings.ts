@@ -138,6 +138,22 @@ export type ModelChoice = { providerId: string; model: string | null; label: str
 export const choiceKey = (choice: Pick<ModelChoice, "providerId" | "model">) =>
   `${choice.providerId}\n${choice.model ?? ""}`;
 
+/** The model a turn speaks with, as one comparable string — for the cache-miss
+ * hint, which compares it across rounds. Auto resolves through the provider's
+ * own pin, so a stamp or a pick in another chat compares equal when the model
+ * did not change and different when it did. Not the chip's display label:
+ * "(auto)" in it would break the comparison. */
+export function modelIdentity(
+  pin: ChatModel | null,
+  choice: ModelChoice | null,
+  providerModels: Record<string, string | null>,
+): string | undefined {
+  const provider = pin?.provider ?? choice?.providerId;
+  if (!provider) return undefined;
+  const model = (pin ? pin.model : choice?.model) ?? providerModels[provider] ?? null;
+  return `${provider}/${model ?? "auto"}`.toLowerCase();
+}
+
 /**
  * Every model the composer can switch to, as `provider/model` in lower case,
  * with the open chat's own first-class: `current` is what the chip shows —

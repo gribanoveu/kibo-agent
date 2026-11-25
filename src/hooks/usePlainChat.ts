@@ -27,8 +27,8 @@ import {
   plainChatSave,
   plainChatSend,
 } from "../lib/plainChat";
-import { chatModelLabel, type ChatModel, type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived, setChatGroup, setChatModel, setChatPinned } from "../lib/savedChats";
-import type { ModelChoice } from "./useLlmSettings";
+import { type ChatModel, type ChatSummary, deleteChat, generateChatTitle, loadChat, setChatArchived, setChatGroup, setChatModel, setChatPinned } from "../lib/savedChats";
+import { modelIdentity, type ModelChoice } from "./useLlmSettings";
 import {
   acceptEvent,
   acceptOutcome,
@@ -163,7 +163,13 @@ const mint = (session: Session, prefix: string) => {
  * and approval card, so leaving one does not stop it or mix its events into
  * the next chat opened. The active session is the one the panels draw.
  */
-export function usePlainChat(lastKubeconfig: string | null = null, choice: ModelChoice | null = null, shown = false) {
+export function usePlainChat(
+  lastKubeconfig: string | null = null,
+  choice: ModelChoice | null = null,
+  shown = false,
+  /** Each provider's own model pin (auto resolved), for the cache-miss hint. */
+  providerModels: Record<string, string | null> = {},
+) {
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [openId, setOpenId] = useStoredState<string | null>("plain-chat-open", null, isId);
   const [roles, setRoles] = useState<ChatRoleView[]>([]);
@@ -177,6 +183,8 @@ export function usePlainChat(lastKubeconfig: string | null = null, choice: Model
   const [spentTick, spentChanged] = useReducer((n: number) => n + 1, 0);
   const choiceRef = useRef(choice);
   choiceRef.current = choice;
+  const providerModelsRef = useRef(providerModels);
+  providerModelsRef.current = providerModels;
 
   const changed = useCallback((session: Session, force = false) => {
     if (force || session === active.current) redraw();
@@ -221,7 +229,7 @@ export function usePlainChat(lastKubeconfig: string | null = null, choice: Model
       stopListening(session);
       session.subscribed = await onTurnEvent(id, (event) => {
         const now = Date.now();
-        setTurn(session, (state) => acceptEvent(state, event, now, session.chatModel ? chatModelLabel(session.chatModel) : choiceRef.current?.label));
+        setTurn(session, (state) => acceptEvent(state, event, now, modelIdentity(session.chatModel, choiceRef.current, providerModelsRef.current)));
       });
     },
     [setTurn, stopListening],

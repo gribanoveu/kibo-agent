@@ -109,9 +109,12 @@ export default function App() {
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
-  // The global choice goes to the chat hooks: its label says a cache miss
-  // came with a switch, and its pair is what a new chat's first save stamps.
-  const plain = usePlainChat(kube.active?.name ?? null, llm.models.current, !agentMode && !onPage);
+  // Each provider's own model pin, auto resolved: the cache-miss hint compares
+  // the model a turn actually sends, not the chip's display label.
+  const providerModels = Object.fromEntries((llm.settings?.providers ?? []).map((p) => [p.id, p.model ?? llm.served[p.id]?.[0] ?? null]));
+  // The global choice goes to the chat hooks: its pair is what a new chat's
+  // first save stamps.
+  const plain = usePlainChat(kube.active?.name ?? null, llm.models.current, !agentMode && !onPage, providerModels);
   const prototypePreview = usePrototypePreview(plain.chatId, plain.role === "prototype" ? plain.turn.blocks : null, plain.turn.status === "running");
   // Held here, not in the Changes pane: closing the pane, or moving it to the
   // other dock, would otherwise throw away a message half written. A different
@@ -198,6 +201,7 @@ export default function App() {
   // Queued messages that will not be sent after all go back to the box.
   const agent = useAgentTurn({
     choice: llm.models.current,
+    providerModels,
     folder: workspace.path,
     onSaved: history.refresh,
     onGiveBack: giveBack,

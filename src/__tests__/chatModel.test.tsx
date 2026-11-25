@@ -247,6 +247,76 @@ describe("a pick in the chat's chip", () => {
     expect(notice?.text).not.toContain("after the model switch");
   });
 
+  test("an old auto chat does not cry 'model switch' when its first stamp lands", async () => {
+    results.chat_load = { id: "c1", messages: [], blocks: [], todos: [] };
+    let finishTurn: (value: unknown) => void = () => {};
+    results.chat_start = new Promise((resolve) => {
+      finishTurn = resolve;
+    });
+    const { result } = renderHook(() =>
+      useAgentTurn({ choice: { providerId: "a", model: null, label: "a/qwen (auto)" }, providerModels: { a: "qwen" } }),
+    );
+    await act(async () => {
+      await result.current.open("c1");
+    });
+    act(() => {
+      void result.current.send("hi");
+    });
+    await waitFor(() => expect(called("chat_start").length).toBe(1));
+    const turnId = called("chat_start")[0].args.turnId as string;
+    const emit = (payload: Record<string, unknown>, id: string) => {
+      act(() => {
+        for (const cb of listeners) cb({ payload: { ...payload, turnId: id } });
+      });
+    };
+    emit({ type: "contextUsage", seq: 1, round: 1, payload: { promptTokens: 30_000, completionTokens: 10, cachedTokens: 15_000 } }, turnId);
+    // The turn ends: the done-save stamps the auto pin the chat now carries.
+    await act(async () => {
+      finishTurn({ status: "done", value: { text: "ok", todos: [], history: [{ role: "user", content: "hi" }, { role: "assistant", content: "ok" }] } });
+    });
+    await waitFor(() => expect(result.current.chatModel).toEqual({ provider: "a", model: null }));
+
+    results.chat_start = new Promise(() => {});
+    act(() => {
+      void result.current.send("again");
+    });
+    await waitFor(() => expect(called("chat_start").length).toBe(2));
+    const second = called("chat_start")[1].args.turnId as string;
+    emit({ type: "contextUsage", seq: 1, round: 1, payload: { promptTokens: 30_000, completionTokens: 10, cachedTokens: 0 } }, second);
+
+    const notice = result.current.turn.blocks.find((b) => b.kind === "notice");
+    expect(notice?.text).toContain("Cache miss");
+    expect(notice?.text).not.toContain("after the model switch");
+  });
+
+  test("an auto chat names the switch when its provider's pin moves in a neighbouring chat", async () => {
+    results.chat_load = { id: "c1", messages: [], blocks: [], todos: [], model: { provider: "a", model: null } };
+    results.chat_start = new Promise(() => {});
+    const { result, rerender } = renderHook(
+      ({ providerModels }) => useAgentTurn({ choice: { providerId: "b", model: "mb", label: "b/mb" }, providerModels }),
+      { initialProps: { providerModels: { a: "qwen" } as Record<string, string | null> } },
+    );
+    await act(async () => {
+      await result.current.open("c1");
+    });
+    act(() => {
+      void result.current.send("hi");
+    });
+    await waitFor(() => expect(called("chat_start").length).toBe(1));
+    const turnId = called("chat_start")[0].args.turnId as string;
+    const emit = (payload: Record<string, unknown>) => {
+      act(() => {
+        for (const cb of listeners) cb({ payload: { ...payload, turnId } });
+      });
+    };
+    emit({ type: "contextUsage", seq: 1, round: 1, payload: { promptTokens: 30_000, completionTokens: 10, cachedTokens: 15_000 } });
+    rerender({ providerModels: { a: "llama" } });
+    emit({ type: "contextUsage", seq: 2, round: 2, payload: { promptTokens: 30_000, completionTokens: 10, cachedTokens: 0 } });
+
+    const notice = result.current.turn.blocks.find((b) => b.kind === "notice");
+    expect(notice?.text).toContain("after the model switch");
+  });
+
   test("an unsaved agent chat is stamped by its first save, not by a pick", () => {
     const choice = { providerId: "a", model: "ma", label: "a/ma" };
     const { result } = renderHook(() => useAgentTurn({ choice }));

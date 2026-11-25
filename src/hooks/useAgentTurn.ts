@@ -26,8 +26,8 @@ import {
 import type { ImagePart } from "../lib/images";
 import { answerMcpQuestion, type McpAnswer } from "../lib/mcp";
 import { useChatTokens, useSubagentTokens } from "./useChatTokens";
-import { chatModelLabel, generateChatTitle, journalBlocks, loadChat, logNextPrompt, nextPromptSent, saveChat, setChatModel, type ChatModel, type ChatRecord } from "../lib/savedChats";
-import type { ModelChoice } from "./useLlmSettings";
+import { generateChatTitle, journalBlocks, loadChat, logNextPrompt, nextPromptSent, saveChat, setChatModel, type ChatModel, type ChatRecord } from "../lib/savedChats";
+import { modelIdentity, type ModelChoice } from "./useLlmSettings";
 import {
   acceptEvent,
   acceptOutcome,
@@ -140,6 +140,7 @@ const turnCounts = new Map<string, number>();
 
 export function useAgentTurn({
   choice = null,
+  providerModels = {},
   folder = null,
   onSaved,
   onGiveBack,
@@ -147,9 +148,11 @@ export function useAgentTurn({
 }: {
   /** The folder the window shows — where a new chat's message is typed. */
   folder?: string | null;
-  /** The global model choice — its label says when a cache miss came with a
-   * switch, and its pair is what the first save stamps a new chat with. */
+  /** The global model choice — its pair is what the first save stamps a new
+   * chat with, and its provider answers when the chat has no pin yet. */
   choice?: ModelChoice | null;
+  /** Each provider's own model pin (auto resolved), for the cache-miss hint. */
+  providerModels?: Record<string, string | null>;
   onSaved?: () => void;
   /** Queued text that will not be sent after all, for the composer to take back —
       and the pictures a withdrawn note carried, which go back with it. */
@@ -171,6 +174,8 @@ export function useAgentTurn({
   giveBackRef.current = onGiveBack;
   const choiceRef = useRef(choice);
   choiceRef.current = choice;
+  const providerModelsRef = useRef(providerModels);
+  providerModelsRef.current = providerModels;
   const folderRef = useRef(folder);
   folderRef.current = folder;
 
@@ -220,7 +225,7 @@ export function useAgentTurn({
       session.subscribed = await onTurnEvent(id, (event) => {
         // Stamped on arrival: the updater may run renders later, and the speed is timed from these.
         const now = Date.now();
-        setTurn(session, (state) => acceptEvent(state, event, now, session.chatModel ? chatModelLabel(session.chatModel) : choiceRef.current?.label));
+        setTurn(session, (state) => acceptEvent(state, event, now, modelIdentity(session.chatModel, choiceRef.current, providerModelsRef.current)));
         // The transcript so far, journaled once a round: a crash keeps what
         // the window drew, as the loop keeps what the model said. Queued
         // with the saves, so the turn's last save folds it, never races it.
