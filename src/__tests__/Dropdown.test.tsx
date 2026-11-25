@@ -35,6 +35,26 @@ test("closes on an outside pointerdown", () => {
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
+// The menu is drawn in the viewport, outside the element its trigger sits in,
+// but a press in it is a press on that element's control. A panel or dialog that
+// closes itself on a press outside it must not close on the option — it would
+// take the option with it before the click landed.
+test("a press in the menu is not a press outside what opened it", () => {
+  const outside: string[] = [];
+  const onDown = () => outside.push("outside");
+  document.addEventListener("pointerdown", onDown);
+  try {
+    const picked = open();
+    const option = screen.getByRole("option", { name: /fix\/npe-tax-calc/ });
+    fireEvent.pointerDown(option);
+    fireEvent.click(option);
+    expect(outside).toEqual([]);
+    expect(picked).toEqual(["fix/npe-tax-calc"]);
+  } finally {
+    document.removeEventListener("pointerdown", onDown);
+  }
+});
+
 test("closes on Escape", () => {
   open();
   fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
@@ -133,4 +153,31 @@ test("a locked one does not open", () => {
   render(<Dropdown label="role" options={OPTIONS} value="main" onPick={() => {}} locked />);
   fireEvent.click(screen.getByRole("button", { name: /role/ }));
   expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+// A long list is read by what its entries belong to — a provider's models:
+// its name once over the first of them, not on every row. Filtering the list
+// says it again wherever the gap leaves a group's start.
+test("a group's name is said once, over the first of its options", () => {
+  render(
+    <Dropdown
+      label="model"
+      options={[
+        { value: "opus", group: "OpenRouter" },
+        { value: "sonnet", group: "OpenRouter" },
+        { value: "qwen", group: "local" },
+      ]}
+      value="opus"
+      onPick={() => {}}
+      custom={{ placeholder: "Another model", onEnter: () => {} }}
+    />,
+  );
+  const groups = () => [...document.querySelectorAll(".dropdown-group")].map((el) => el.textContent);
+  fireEvent.click(screen.getByRole("button", { name: /model/ }));
+  expect(groups()).toEqual(["OpenRouter", "local"]);
+
+  // Narrowed to the second group alone, its name comes with it.
+  fireEvent.change(screen.getByLabelText("Another model"), { target: { value: "qw" } });
+  expect(groups()).toEqual(["local"]);
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["qwen"]);
 });

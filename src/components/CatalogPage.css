@@ -22,6 +22,49 @@
   background: var(--bg-active);
   color: var(--text);
 }
+/* The two halves of a feature's sheet — Settings and Tools — read as tabs of the
+   sheet itself, a step smaller than the page's own. */
+.catalog-sheet-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.catalog-sheet-tabs button {
+  height: var(--control-sm);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.catalog-sheet-tabs button:hover {
+  color: var(--text);
+}
+.catalog-sheet-tabs button.active {
+  background: var(--bg-active);
+  color: var(--text);
+}
+/* The long text and the facts about the build: read when wanted, not in the way
+   of the switch and the servers above them. */
+.catalog-detail-more {
+  margin-top: 14px;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.catalog-detail-more summary {
+  cursor: pointer;
+}
+.catalog-detail-more .catalog-detail-text {
+  margin-top: 8px;
+}
+.catalog-detail-more .catalog-detail-facts {
+  margin: 10px 0 0;
+}
 .catalog-search {
   flex: 0 1 260px;
   min-width: 160px;

@@ -16,7 +16,7 @@ use crate::infra::{git_head, repository_identity};
 pub fn pull_request_create(scope: &ToolScope, args: &PullRequestCreateArgs, deps: &ToolDeps) -> Result<ToolResult, ToolError> {
     let prs = deps.pull_requests.as_deref().ok_or_else(|| ToolError::FeatureOff {
         tool: "pullRequestCreate".to_string(),
-        feature: "Pull requests".to_string(),
+        feature: crate::domain::features::Feature::PullRequests.manifest().name.to_string(),
     })?;
     let title = title(args)?;
     let description = args.body.as_deref().unwrap_or("");
@@ -223,7 +223,7 @@ mod tests {
         let (result, _) = run(Err(CodeHostError::NotPushed("feature/x".into())), &args("t", None, None, None));
         assert!(result.unwrap_err().to_string().contains("not on the server — push it first"));
         let (result, _) = run(Err(CodeHostError::NoServer("git.corp.example".into())), &args("t", None, None, None));
-        assert!(result.unwrap_err().to_string().contains("Catalog → Pull requests"));
+        assert!(result.unwrap_err().to_string().contains("Catalog → Bitbucket"));
     }
 
     #[test]

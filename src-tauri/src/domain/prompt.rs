@@ -22,13 +22,13 @@ use std::path::Path;
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::KubeSetup;
 use crate::domain::runbooks::{self, Runbook};
-use crate::domain::conversation_mode::ConversationMode;
+use crate::domain::conversation_mode::{self, ConversationMode};
 use crate::domain::features::Features;
 use crate::domain::llm::LlmMessage;
 use crate::domain::mcp::ServerNote;
 use crate::domain::project_rules::{MEMORY_NAME, RuleFile};
 use crate::domain::skills::Skill;
-use crate::domain::tools::{Task, TodoStatus};
+use crate::domain::tools::{Task, TodoStatus, ToolName};
 
 /// The half that never varies.
 ///
@@ -280,16 +280,23 @@ pub fn context_block(ctx: &TurnContext) -> String {
 
 /// The shared-tree etiquette, named for the chats running beside this one.
 /// Kept whole in `Frozen`: the prompt never follows a session starting or ending.
-pub fn parallel_block(chats: &[String]) -> Option<String> {
+/// The move to a worktree is asked for only where `offer` is offered: a rule a
+/// mode cannot carry out is one it can only break.
+pub fn parallel_block(chats: &[String], mode: ConversationMode) -> Option<String> {
     let (first, rest) = chats.split_first()?;
     let names = std::iter::once(first).chain(rest).map(|title| format!("\"{}\"", title.replace(['\n', '\r'], " "))).collect::<Vec<_>>().join(", ");
+    let move_it = match conversation_mode::offers(mode, ToolName::Offer) {
+        true => " If your task is likely to touch the same files, put a move of this chat to a separate worktree \
+                 to the user with `offer`, kind `worktree` — a button after your answer, not a question written in \
+                 it. Until they press it, keep working in this folder; the move has not happened yet, so do not go \
+                 on as if it had.",
+        false => "",
+    };
     Some(format!(
         "- Other agent turns are running in this folder right now (chat {names}). Their edits can land while you work: \
          a file you read earlier may have changed since, and a write that finds it changed is refused — re-read the file \
          and apply your change to what is there now. Never revert, delete or commit changes you did not make; branches and \
-         the git index are shared — do not run git checkout, switch, restore, reset, clean, rebase or merge. If your task is \
-         likely to touch the same files, offer the user a move of this chat to a separate worktree (offer `worktree`) and \
-         carry on there."
+         the git index are shared — do not run git checkout, switch, restore, reset, clean, rebase or merge.{move_it}"
     ))
 }
 
@@ -562,14 +569,26 @@ mod tests {
 
     #[test]
     fn a_parallel_chat_is_named_with_the_shared_tree_rules() {
-        assert_eq!(parallel_block(&[]), None);
-        let block = parallel_block(&["Fix\nlogin".into()]).expect("a running neighbour is named");
+        assert_eq!(parallel_block(&[], ConversationMode::Agent), None);
+        let block = parallel_block(&["Fix\nlogin".into()], ConversationMode::Agent).expect("a running neighbour is named");
         assert!(block.contains("chat \"Fix login\""), "{block}");
         assert!(block.contains("do not run git checkout") && block.contains("reset") && block.contains("merge"), "{block}");
-        assert!(block.contains("offer `worktree`"), "{block}");
+        assert!(block.contains("`offer`, kind `worktree`"), "{block}");
+        assert!(block.contains("not a question written in it"), "{block}");
         let workspace = PathBuf::from("/tmp/p");
         let parallel = Some(block.as_str());
         assert!(context_block(&TurnContext { parallel, ..ctx(&workspace) }).contains(&block));
+    }
+
+    /// A mode that cannot offer the move is not told to: the shared-tree rules
+    /// stay, and only the mode that has `offer` names it.
+    #[test]
+    fn only_the_mode_that_can_move_the_chat_is_told_to() {
+        for &mode in ConversationMode::ALL {
+            let block = parallel_block(&["Other".into()], mode).expect("a running neighbour is named");
+            assert!(block.contains("do not run git checkout"), "{mode:?} keeps the shared-tree rules: {block}");
+            assert_eq!(block.contains("`offer`"), conversation_mode::offers(mode, ToolName::Offer), "{mode:?}: {block}");
+        }
     }
 
     /// A server's instructions are their own message, said to be the

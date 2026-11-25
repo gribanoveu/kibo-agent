@@ -57,8 +57,10 @@ export async function subagentTokens(chatId: string): Promise<number> {
   return rows.reduce((sum, { key, value }) => (key === chatId ? sum + value : sum), 0);
 }
 
-/** `14` is the new chat's strip; Settings offers the other three. */
-export type UsageRange = "all" | "30" | "14" | "7";
+/** The ranges the usage pane offers, and `week` — the calendar week the day is
+    in, Monday first, which the new chat's line counts. `all` starts at the
+    first day counted. */
+export type UsageRange = "all" | "week" | "30" | "7";
 
 /** How far back the heatmap reaches: half a year, enough columns to fill the card at a small cell. */
 export const HEATMAP_WEEKS = 26;
@@ -124,6 +126,8 @@ const format = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const addDays = (date: Date, n: number) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
 const midnight = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+/** The Monday of the week `date` is in: the week is read Monday first. */
+const mondayOf = (date: Date) => addDays(date, -((date.getDay() + 6) % 7));
 
 /** Every day from `start` to `end`, each with what it spent. */
 function spentDays(rows: DailyMetric[], start: Date, end: Date): UsageDay[] {
@@ -162,16 +166,20 @@ function shade(days: UsageDay[]): UsageDay[] {
   return days;
 }
 
-/** The last `count` days in a row, today last — the new chat's strip. */
-export function usageStrip(rows: DailyMetric[], today: Date, count: number): UsageDay[] {
-  const end = midnight(today);
-  return shade(spentDays(rows, addDays(end, -(count - 1)), end));
+/** What `today` has spent so far — sent and received, as a day's tokens are counted. */
+export function tokensToday(rows: DailyMetric[], today: Date): number {
+  const day = format(today);
+  return rows.reduce(
+    (sum, row) =>
+      row.day === day && (row.metric === "promptTokens" || row.metric === "completionTokens") ? sum + row.value : sum,
+    0,
+  );
 }
 
 /** The last [`HEATMAP_WEEKS`] weeks, this one on the right. */
 export function usageHeatmap(rows: DailyMetric[], today: Date): UsageHeatmap {
   const end = midnight(today);
-  const monday = addDays(end, -((end.getDay() + 6) % 7));
+  const monday = mondayOf(end);
   const days = shade(spentDays(rows, addDays(monday, -7 * (HEATMAP_WEEKS - 1)), end));
 
   const cells: (UsageDay | null)[] = [...days];
@@ -189,11 +197,16 @@ export function usageHeatmap(rows: DailyMetric[], today: Date): UsageHeatmap {
   return { weeks, months };
 }
 
-/** What `range` up to `today` spent. All time starts at the first day counted. */
+/** What `range` up to `today` spent. All time starts at the first day counted;
+    a week at the Monday of the one today is in, however far back that is. */
 export function usageStats(rows: DailyMetric[], range: UsageRange, today: Date): UsageStats {
   const end = midnight(today);
   const start =
-    range === "all" ? (rows.length ? parse(rows[0].day) : end) : addDays(end, -(Number(range) - 1));
+    range === "all"
+      ? (rows.length ? parse(rows[0].day) : end)
+      : range === "week"
+        ? mondayOf(end)
+        : addDays(end, -(Number(range) - 1));
   const days = spentDays(rows, start, end);
 
   let run = 0;

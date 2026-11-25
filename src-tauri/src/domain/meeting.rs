@@ -685,6 +685,34 @@ pub fn windows_over(words: &[Word]) -> Vec<(f32, f32)> {
     out
 }
 
+/// Each window's speaker as a diarization heard it: the segment it overlaps
+/// most, and for a window no segment covers — an interjection too short for the
+/// segmentation to keep — the nearest segment in time. Speakers come back dense,
+/// numbered by first appearance, as [`spectral`] numbers them.
+pub fn labels_over(windows: &[(f32, f32)], segments: &[(f32, f32, usize)]) -> Vec<usize> {
+    let labels: Vec<usize> = windows
+        .iter()
+        .map(|&(start, end)| {
+            let mut best: Option<(f32, f32, usize)> = None;
+            for &(from, to, speaker) in segments {
+                let overlap = (end.min(to) - start.max(from)).max(0.0);
+                // A window touching a segment's edge overlaps it by nothing and
+                // is as near as it gets; further away, the distance decides.
+                let gap = (start - to).max(from - end).max(0.0);
+                let better = match best {
+                    None => true,
+                    Some((was_overlap, was_gap, _)) => overlap > was_overlap || (overlap == was_overlap && gap < was_gap),
+                };
+                if better {
+                    best = Some((overlap, gap, speaker));
+                }
+            }
+            best.map_or(0, |(_, _, speaker)| speaker)
+        })
+        .collect();
+    first_seen_order(&labels)
+}
+
 /// Spectral clustering of embeddings: cosine affinity, each row pruned to its
 /// `p` nearest, the speaker count the largest gap among the Laplacian's
 /// smallest eigenvalues, k-means on that many eigenvectors. `p` is the one that
@@ -1126,6 +1154,48 @@ mod tests {
         );
         meeting.rename(1, "Альбина").unwrap();
         assert_eq!(render_transcript(&meeting)[1], "[01:05] Альбина: Да.\n");
+    }
+
+    #[test]
+    fn a_window_takes_the_voice_of_the_segment_it_sits_in() {
+        let labels = labels_over(&[(1.0, 2.0), (6.0, 7.0), (2.0, 3.0)], &[(0.0, 5.0, 0), (5.0, 9.0, 1)]);
+        assert_eq!(labels[0], labels[2], "two windows of one segment are one voice");
+        assert_ne!(labels[1], labels[0], "and another segment is another voice");
+    }
+
+    #[test]
+    fn a_window_between_two_segments_takes_the_one_it_overlaps_further() {
+        // 4.0–7.0 lies a second in the first segment and two in the second.
+        let labels = labels_over(&[(4.0, 7.0), (1.0, 2.0)], &[(0.0, 5.0, 0), (5.0, 9.0, 1)]);
+        assert_ne!(labels[0], labels[1], "two seconds in the second segment beat one in the first");
+    }
+
+    #[test]
+    fn a_window_no_segment_covers_takes_the_nearest_voice() {
+        // Two words the segmentation left out: one just after the first voice,
+        // one just before the second.
+        let labels = labels_over(&[(10.5, 11.0), (17.0, 17.5)], &[(10.0, 12.0, 0), (18.0, 19.5, 1)]);
+        assert_ne!(labels[0], labels[1], "each joins the voice it is nearer to");
+        let same = labels_over(&[(10.5, 11.0), (13.0, 13.5)], &[(10.0, 12.0, 0), (18.0, 19.5, 1)]);
+        assert_eq!(same[0], same[1], "both nearer the first");
+    }
+
+    #[test]
+    fn a_window_two_overlapping_segments_both_hold_goes_to_the_first() {
+        // Segmentation does not emit turns that overlap; were it to, the window
+        // between them must not flicker: the segment that starts first has it.
+        let labels = labels_over(&[(6.0, 9.0), (1.0, 2.0)], &[(0.0, 10.0, 0), (4.0, 20.0, 1)]);
+        assert_eq!(labels, [0, 0]);
+    }
+
+    #[test]
+    fn speakers_come_back_dense_in_the_order_they_first_speak() {
+        assert_eq!(labels_over(&[(1.0, 2.0), (6.0, 7.0)], &[(0.0, 5.0, 3), (5.0, 9.0, 9)]), [0, 1]);
+    }
+
+    #[test]
+    fn a_diarization_that_heard_nothing_apart_is_one_voice() {
+        assert_eq!(labels_over(&[(0.0, 1.0), (2.0, 3.0)], &[]), [0, 0]);
     }
 
     #[test]

@@ -39,6 +39,17 @@ afterEach(() => {
 /** The panel the mode, the model and the switches live in. */
 const openSettings = () => fireEvent.click(screen.getByTitle("Mode, model and thinking"));
 
+/**
+ * A press as the browser sends it: pointerdown, then click. Worth spelling out:
+ * the panel closes itself on a pointerdown outside it, and the menu is drawn in
+ * the viewport rather than in the panel — so a bare `click`, which no pointer
+ * ever preceded, is a press that cannot happen and a bug it cannot see.
+ */
+const press = (el: Element) => {
+  fireEvent.pointerDown(el);
+  fireEvent.click(el);
+};
+
 function composer(
   conversation: "agent" | "analyst",
   onConversation: (mode: "agent" | "analyst") => void = () => {},
@@ -133,7 +144,7 @@ describe("the settings panel", () => {
 
     openSettings();
     fireEvent.click(screen.getByTitle("What the agent may do"));
-    fireEvent.click(screen.getByRole("option", { name: /Analyst/ }));
+    press(screen.getByRole("option", { name: /Analyst/ }));
     expect(picked).toEqual(["analyst"]);
     expect(screen.getByRole("dialog")).toBeTruthy();
 
@@ -176,8 +187,21 @@ describe("the conversation mode", () => {
     fireEvent.click(screen.getByTitle("What the agent may do"));
     expect(screen.getAllByRole("option").map((option) => option.textContent?.split(/(?<=[a-z])(?=[A-Z])/)[0])).toEqual(["Agent", "Analyst"]);
 
-    fireEvent.click(screen.getByRole("option", { name: /Analyst/ }));
+    press(screen.getByRole("option", { name: /Analyst/ }));
     expect(picked).toEqual(["analyst"]);
+  });
+
+  /// Back the other way, with a press that also lands on the panel's own
+  /// outside-press listener: an analyst that cannot return to Agent is stuck.
+  test("switches back from analyst with a real press", () => {
+    const picked: string[] = [];
+    composer("analyst", (mode) => picked.push(mode));
+
+    openSettings();
+    fireEvent.click(screen.getByTitle("What the agent may do"));
+    press(screen.getByRole("option", { name: /Agent/ }));
+    expect(picked).toEqual(["agent"]);
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   /// The wire value and the word on screen are different things: "analyst" is
@@ -628,7 +652,16 @@ describe("the model row", () => {
     expect(screen.getByTitle("Model").textContent).toContain("openrouter/anthropic/claude-sonnet-5");
     fireEvent.click(screen.getByTitle("Model"));
     expect(loads).toBe(1);
-    fireEvent.click(screen.getByRole("option", { name: /openrouter\/openai\/gpt-5/ }));
+    // Read by provider: the name once, its models under it, the provider no
+    // longer repeated on every row.
+    const groups = () => [...document.querySelectorAll(".dropdown-group")].map((el) => el.textContent);
+    expect(groups()).toEqual(["OpenRouter", "local"]);
+    expect(screen.getAllByRole("option").map((option) => option.querySelector(".dropdown-item-label")?.textContent)).toEqual([
+      "anthropic/claude-sonnet-5",
+      "openai/gpt-5",
+      "auto",
+    ]);
+    press(screen.getByRole("option", { name: /openai\/gpt-5/ }));
     expect(picked).toEqual(["OpenRouter|openai/gpt-5"]);
   });
 
@@ -662,9 +695,9 @@ describe("the model row", () => {
     // A level typed by hand in Settings is still the one shown as chosen.
     expect(screen.getByTitle("Thinking level").textContent).toContain("max");
     fireEvent.click(screen.getByTitle("Thinking level"));
-    fireEvent.click(screen.getByRole("option", { name: /High/ }));
+    press(screen.getByRole("option", { name: /High/ }));
     fireEvent.click(screen.getByTitle("Thinking level"));
-    fireEvent.click(screen.getByRole("option", { name: /Default/ }));
+    press(screen.getByRole("option", { name: /Default/ }));
     expect(picked).toEqual(["high", null]);
   });
 
@@ -1258,5 +1291,43 @@ describe("the draft a chat keeps", () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { code: "Enter", key: "Enter" });
     expect(readChatDraft(first)).toBe("");
     expect(value()).toBe("");
+  });
+});
+
+describe("what the empty box asks for", () => {
+  const box = (props: { placeholder?: string; running?: boolean } = {}) =>
+    render(
+      <Composer
+        draftKey="draft"
+        onSend={() => {}}
+        onStop={() => {}}
+        running={props.running ?? false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+        placeholder={props.placeholder}
+      />,
+    );
+
+  test("its own line by default, and the one it is given on a start screen", () => {
+    const { unmount } = box();
+    expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe("Describe your task…");
+    unmount();
+    box({ placeholder: "Ask anything, or describe a task…" });
+    expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe("Ask anything, or describe a task…");
+  });
+
+  /// A turn under way is about adding to it, whatever the screen was asking.
+  test("a running turn says how to add to it, start screen or not", () => {
+    box({ placeholder: "Ask anything, or describe a task…", running: true });
+    expect(screen.getByRole("textbox").getAttribute("placeholder")).toMatch(/^Add something — /);
   });
 });

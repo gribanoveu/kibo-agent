@@ -105,14 +105,6 @@ export function ContextDetails({
         </p>
       )}
 
-      {context && (
-        <p className="ctx-note">
-          {context.anchored
-            ? "The provider's count for the last request, plus what was added since."
-            : "An estimate from the text."}
-        </p>
-      )}
-
       <dl className="ctx-rows">
         {PARTS.map(({ key, label }) => {
           const pane = PANE_OF[key];

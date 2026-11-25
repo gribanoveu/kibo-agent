@@ -83,6 +83,127 @@
   background: var(--bg-panel);
 }
 
+/* A chat before its first message: the greeting and the box are one group,
+   centred in the column as a landing page's field is — so the box sits in the
+   middle of the window and the first message takes the thread's height back as
+   it is sent. The two `auto` margins split the free space between them: the
+   panel's top and the composer wrap's bottom, so the terminal under the box
+   keeps the very bottom. `auto` rather than `justify-content`: the IDE layout's
+   column is short, and a group that cannot fit gives up its centring instead of
+   losing its top. */
+.main.chat-new > .chat-panel,
+.main.chat-new > .plain-panel {
+  flex: 0 0 auto;
+  margin-top: auto;
+}
+/* A column too short for the whole screen — the IDE layout's, or a window at
+   its smallest — scrolls rather than cutting the greeting's top away. */
+.main.chat-new {
+  overflow-y: auto;
+}
+.main.chat-new > .chat-panel > .thread-empty,
+.main.chat-new > .plain-panel > .plain-thread {
+  flex: 0 0 auto;
+}
+/* The screen is as tall as it is: the box's own place in the column decides
+   where the group sits. */
+.main.chat-new .chat-empty {
+  height: auto;
+}
+.main.chat-new .plain-welcome {
+  min-height: 0;
+}
+/* The box and the line under it are one card in a new chat — the field a start
+   screen has, with what the message goes out with drawn inside its lower edge —
+   so the two are glued: the box keeps only its top corners, and the line closes
+   the card at the bottom. */
+.main.chat-new .composer,
+.main.chat-new .plain-composer {
+  margin: 0 14px;
+  padding-bottom: 2px;
+  border-radius: calc(var(--radius) * 2.4) calc(var(--radius) * 2.4) 0 0;
+  border-bottom: 0;
+  background: var(--bg-box);
+}
+.main.chat-new .composer-strip,
+.main.chat-new .plain-tab {
+  margin: 0 14px;
+  padding: 4px 8px 8px;
+  border: 1px solid var(--border-soft);
+  border-top: 0;
+  border-radius: 0 0 calc(var(--radius) * 2.4) calc(var(--radius) * 2.4);
+  background: var(--bg-box);
+}
+/* The card says it is being written in as the box alone did: one ring round the
+   whole of it, and one background. Both halves answer to the whole card — a
+   press on the folder or the model below is a press on the card, and the box's
+   own focus rule is outranked by the card's, so both are named here. */
+.main.chat-new .composer-wrap:focus-within .composer,
+.main.chat-new .plain-composer-wrap:focus-within .plain-composer,
+.main.chat-new .composer-wrap:focus-within .composer-strip,
+.main.chat-new .plain-composer-wrap:focus-within .plain-tab {
+  background: var(--bg-panel);
+  border-color: var(--border-box-focus);
+}
+/* A start screen's field is narrower than the column a conversation is read
+   at: the card is the middle of the screen, not the width of the thread. The
+   strip inside it gives up width the way it always does, down to its icons. */
+.main.chat-new > .composer-wrap,
+.main.chat-new > .plain-composer-wrap {
+  max-width: min(100%, calc(var(--thread-width) * 0.8 + 28px));
+  margin-bottom: auto;
+}
+/* Room to write in, three lines of it: a start screen's field is a place, not
+   a line. The box measures itself as it always does — this is only its floor. */
+.main.chat-new .composer textarea,
+.main.chat-new .plain-composer textarea {
+  min-height: calc(var(--fs-md) * 4.5);
+}
+/* The one button that sends, filled and round: on a start screen it is the
+   screen's own action, not a control among controls. */
+.main.chat-new .composer .send,
+.main.chat-new .plain-send {
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.main.chat-new .composer .send:hover,
+.main.chat-new .plain-send:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  filter: brightness(1.08);
+}
+/* The two buttons at the ends of the box: the one that sends is filled and
+   stays by the last line, the one that attaches is a bare glyph by the first —
+   where the text begins, not where it ends up. Only its hover is round. */
+.main.chat-new .attach-images {
+  align-self: flex-start;
+  border-radius: 50%;
+}
+
+/* A narrow column (the chat's minimum is 400). The card keeps the ordinary
+   box's margins there — the wide card's 14px are width nothing else has — and
+   its strip wraps instead of squeezing four chips into one row: a folder read
+   as "k." beside a branch read as "feat/ne…" is neither of them named. The
+   folder and its branch take a row, what the message goes out with the next. */
+@container (max-width: 500px) {
+  .main.chat-new .composer,
+  .main.chat-new .plain-composer,
+  .main.chat-new .composer-strip,
+  .main.chat-new .plain-tab {
+    margin-left: 8px;
+    margin-right: 8px;
+  }
+  .main.chat-new .composer-strip,
+  .main.chat-new .plain-tab {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .main.chat-new .composer-strip > .folder-tab {
+    flex: 1 1 100%;
+  }
+}
+
 /* The main window's traffic lights sit in the bar's middle
    (tauri.macos.conf.json), so its title does too — not raised to meet them,
    as the viewer's is. */

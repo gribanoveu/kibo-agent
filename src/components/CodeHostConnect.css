@@ -18,6 +18,88 @@
 .code-host-spin {
   animation: code-host-spin 0.8s linear infinite;
 }
+/* The certificate the address presented (BB-10, BB-11): who it names is what
+   the user recognises, the fingerprint is what they compare. */
+.code-host-fetched {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-soft);
+}
+.code-host-fetched-title {
+  margin: 0 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text);
+}
+.code-host-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.code-host-facts dt {
+  color: var(--text-faint);
+}
+.code-host-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.code-host-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-active);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+.code-host-fingerprint {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+.code-host-fingerprint code {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+/* The copy button keeps its own line rather than being squeezed into a column
+   of letters next to the fingerprint. */
+.code-host-fingerprint .copy-action {
+  flex: 0 0 auto;
+  margin-left: 0;
+  white-space: nowrap;
+}
+.code-host-caution {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+}
+/* The icon keeps its size: as a flex item beside a long line it would otherwise
+   be squeezed to a dot. */
+.code-host-caution svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.code-host-fetched-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+.code-host-fetched-actions .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 @keyframes code-host-spin {
   to {
     transform: rotate(360deg);

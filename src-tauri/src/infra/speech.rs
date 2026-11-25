@@ -10,8 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use sherpa_onnx::{
-    LinearResampler, OfflineRecognizer, OfflineRecognizerConfig, OfflineSpeechDenoiser, OfflineSpeechDenoiserConfig, SileroVadModelConfig,
-    SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig, VadModelConfig, VoiceActivityDetector,
+    FastClusteringConfig, LinearResampler, OfflineRecognizer, OfflineRecognizerConfig, OfflineSpeechDenoiser, OfflineSpeechDenoiserConfig,
+    OfflineSpeakerDiarization, OfflineSpeakerDiarizationConfig, OfflineSpeakerSegmentationModelConfig,
+    OfflineSpeakerSegmentationPyannoteModelConfig, SileroVadModelConfig, SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig,
+    VadModelConfig, VoiceActivityDetector,
 };
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as AudioError;
@@ -47,6 +49,18 @@ const DENOISE_PREROLL_SECONDS: usize = 1;
 /// GigaAM v3 with punctuation, the voice model, the denoiser — the files
 /// `scripts/fetch-meeting-models.ts` puts in `models/meeting/`.
 pub const MODEL_FILES: [&str; 6] = ["encoder.int8.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt", "campplus.onnx", "dpdfnet2.onnx"];
+
+/// The segmentation that says when each voice speaks, beside the models above.
+/// Without it the voices are grouped by their embeddings alone
+/// ([`meeting::spectral`]) — the app works, it just confuses short replies.
+pub const DIARIZATION_MODEL: &str = "pyannote_segmentation.onnx";
+
+/// How unlike two voices have to sound to be two people, for campplus: on
+/// 20 minutes of one real call 0.5 found 41 voices, 0.9 five — as many as the
+/// words found — and 1.1 one, so 0.9 sits on a cliff. One recording's number:
+/// past it the threshold is tuned per meeting, or the count passed instead when
+/// it is known (a call has two sides, not two people).
+const DIARIZATION_THRESHOLD: f32 = 0.9;
 
 /// The bundled models, or the source tree's in a dev build. A release has
 /// only its bundle: a path on the machine that built it is no one's here, and
@@ -181,7 +195,7 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, sound: Sound, progres
             let (before, total) = (yours.len(), yours.len() + theirs.len());
             let (_, own) = embed(&extractor, mic, yours, (0, total), progress);
             let (windows, heard) = embed(&extractor, call, theirs, (before, total), progress);
-            let labels = meeting::spectral(&heard);
+            let labels = labels_by_diarization(models, call, &windows, threads).unwrap_or_else(|| meeting::spectral(&heard));
             // Yours one voice, speaker 0; none when nothing was said here — no speaker then.
             let mut voices = meeting::centroids(&own, &vec![0; own.len()]);
             voices.resize(1, Vec::new());
@@ -192,7 +206,8 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, sound: Sound, progres
             let windows = meeting::windows_over(&words);
             let total = windows.len();
             let (windows, embeddings) = embed(&extractor, &samples, windows, (0, total), progress);
-            let labels = meeting::spectral(&embeddings);
+            let labels = voices_told_apart(labels_by_diarization(models, &samples, &windows, threads))
+                .unwrap_or_else(|| meeting::spectral(&embeddings));
             let voices = meeting::centroids(&embeddings, &labels);
             (meeting::utterances(&words, &segments_of(windows, labels)), voices)
         }
@@ -464,9 +479,96 @@ fn segments_of(windows: Vec<(f32, f32)>, labels: Vec<usize>) -> Vec<Segment> {
     windows.into_iter().zip(labels).map(|((start, end), speaker)| Segment { start, end, speaker }).collect()
 }
 
+/// The voices as pyannote's segmentation and campplus hear them, over the same
+/// windows the words were cut into: the segmentation says when each voice
+/// speaks, campplus and sherpa's clustering say which of them are one person.
+/// `None` — the segmentation model is not bundled, or it will not load — leaves
+/// [`meeting::spectral`] to cluster the windows by their embeddings alone.
+fn labels_by_diarization(models: &Path, samples: &[f32], windows: &[(f32, f32)], threads: i32) -> Option<Vec<usize>> {
+    let model = diarization_model(models)?;
+    // Under a second there is nothing to hear twice, and sherpa aborts on it.
+    if samples.len() < SAMPLE_RATE as usize {
+        return None;
+    }
+    let config = OfflineSpeakerDiarizationConfig {
+        segmentation: OfflineSpeakerSegmentationModelConfig {
+            pyannote: OfflineSpeakerSegmentationPyannoteModelConfig { model: Some(model.to_string_lossy().into_owned()), ..Default::default() },
+            num_threads: threads,
+            ..Default::default()
+        },
+        embedding: SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[4]), num_threads: threads, ..Default::default() },
+        clustering: FastClusteringConfig { threshold: DIARIZATION_THRESHOLD, ..Default::default() },
+        min_duration_on: 0.3,
+        min_duration_off: 0.5,
+    };
+    let diarizer = OfflineSpeakerDiarization::create(&config)?;
+    if diarizer.sample_rate() != SAMPLE_RATE as i32 {
+        return None;
+    }
+    let result = diarizer.process(samples)?;
+    let segments: Vec<(f32, f32, usize)> = result
+        .sort_by_start_time()
+        .iter()
+        .map(|s| (s.start, s.end, usize::try_from(s.speaker).unwrap_or(0)))
+        .collect();
+    Some(meeting::labels_over(windows, &segments))
+}
+
+/// A diarization that heard one voice where a meeting cannot have one is a
+/// threshold that fell over the cliff `DIARIZATION_THRESHOLD` sits on, so the
+/// words' clustering answers instead (`None`). One person is no sign of trouble
+/// on a call: its second track is regularly one other voice.
+fn voices_told_apart(labels: Option<Vec<usize>>) -> Option<Vec<usize>> {
+    let labels = labels?;
+    labels.iter().any(|&label| label > 0).then_some(labels)
+}
+
+/// The segmentation model, when the bundle carries it: a build without it
+/// groups the voices by their embeddings, which `domain::meeting` does. Its
+/// absence is answered here, before sherpa is asked to load a file that is
+/// not there.
+fn diarization_model(models: &Path) -> Option<PathBuf> {
+    let model = models.join(DIARIZATION_MODEL);
+    model.is_file().then_some(model)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Without the segmentation model meeting notes still tell voices apart —
+    /// by the words' embeddings, as they did before it existed.
+    #[test]
+    fn without_the_segmentation_model_the_domain_clusters_the_voices() {
+        let dir = crate::testing::temp_dir("speech-no-segmentation");
+        std::fs::create_dir_all(&dir).unwrap();
+        MODEL_FILES.iter().for_each(|f| std::fs::write(dir.join(f), "").unwrap());
+        let windows = vec![(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)];
+        let samples = vec![0.0; SAMPLE_RATE as usize];
+        assert_eq!(labels_by_diarization(&dir, &samples, &windows, 1), None, "the words' clustering takes it");
+    }
+
+    #[test]
+    fn the_segmentation_model_is_read_from_the_bundle_when_it_is_there() {
+        let dir = crate::testing::temp_dir("speech-diarization-model");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(diarization_model(&dir), None, "a bundle without it has no diarization");
+        std::fs::write(dir.join(DIARIZATION_MODEL), "").unwrap();
+        assert_eq!(diarization_model(&dir), Some(dir.join(DIARIZATION_MODEL)));
+    }
+
+    /// A meeting is not a monologue: one voice there means the threshold fell
+    /// over, and the words cluster the voices as they did before.
+    #[test]
+    fn a_recording_of_a_room_with_one_voice_is_clustered_by_the_words() {
+        assert_eq!(voices_told_apart(Some(vec![0, 0, 0])), None);
+        assert_eq!(voices_told_apart(None), None, "no diarization stays none");
+    }
+
+    #[test]
+    fn voices_the_diarization_did_hear_are_kept() {
+        assert_eq!(voices_told_apart(Some(vec![0, 1, 1, 0])), Some(vec![0, 1, 1, 0]));
+    }
 
     #[test]
     fn the_bundle_is_where_the_models_are_and_only_a_dev_build_looks_further() {

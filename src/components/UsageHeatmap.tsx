@@ -5,7 +5,6 @@ import {
   shortDay,
   usageHeatmap,
   usageStats,
-  usageStrip,
   type Ranked,
   type UsageDay,
   type UsageRange,
@@ -20,9 +19,6 @@ const RANGES: { value: UsageRange; label: string }[] = [
 ];
 
 const WEEKDAYS = ["Mon", "", "Wed", "", "Fri", "", ""];
-
-/** How many days the new chat's strip shows. */
-const STRIP_DAYS = 14;
 
 const days = (n: number) => `${n} ${n === 1 ? "day" : "days"}`;
 const percent = (part: number, whole: number) => `${whole ? Math.round((part / whole) * 100) : 0}%`;
@@ -45,42 +41,6 @@ function Cell({ day, at }: { day: UsageDay; at?: CSSProperties }) {
           : `${shortDay(day.day)}: no tokens`
       }
     />
-  );
-}
-
-/**
- * The new agent chat's glance: one strip of the last fourteen days and one
- * line for them. Nothing at all until something has been counted, and no
- * error line on a page that is about something else.
- */
-export function UsageStrip() {
-  const { rows } = useUsage();
-  const strip = useMemo(() => usageStrip(rows ?? [], new Date(), STRIP_DAYS), [rows]);
-  const stats = useMemo(() => usageStats(rows ?? [], "14", new Date()), [rows]);
-  if (!rows?.length) return null;
-
-  const line = [
-    `${formatTokens(stats.total)} tokens`,
-    `${stats.sessions} ${stats.sessions === 1 ? "session" : "sessions"}`,
-    stats.favoriteModel,
-    stats.currentStreak > 1 ? `${stats.currentStreak}-day streak` : null,
-  ].filter(Boolean);
-  return (
-    <div className="usage-glance">
-      <div className="usage-strip" role="grid" aria-label="Tokens per day">
-        <div role="row">
-          {strip.map((day) => (
-            <Cell key={day.day} day={day} />
-          ))}
-        </div>
-      </div>
-      <p className="usage-line">
-        <span>Last {STRIP_DAYS} days</span>
-        {line.map((part) => (
-          <span key={part}>{part}</span>
-        ))}
-      </p>
-    </div>
   );
 }
 

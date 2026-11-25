@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AppWindow, MessagesSquare, MousePointerClick, SendHorizontal, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
-import { Dropdown } from "./Dropdown";
 import { KubePanel } from "./KubePanel";
 import { ContextMeter } from "./ContextMeter";
 import { ProviderBalance } from "./ProviderBalance";
@@ -30,7 +29,7 @@ import type { KubeconfigsState } from "../hooks/useKubeconfigs";
 import "./PlainChat.css";
 
 
-/** Each role's sign, on its chip above the message box and in the role's menu. */
+/** Each role's sign, on its chip under the message box. */
 const ROLE_ICONS: Record<ChatRoleId, LucideIcon> = {
   assistant: MessagesSquare,
   kubernetes: ShipWheel,
@@ -113,6 +112,8 @@ export function PlainChat({
   // `key` is what keeps one chat's attached pictures off the next one's.
   const attachments = useAttachments(boxTakesPictures(imagesEnabled, chat.role), draftKey);
   const input = useRef<HTMLTextAreaElement>(null);
+  /** The role chips, so an arrow can put the focus on the one it picked. */
+  const rolesRef = useRef<HTMLDivElement>(null);
   // The box measures itself on every change of the text, so there is nothing to tell it.
   const dictation = useDictation({ on: dictate, draftKey, text: draft, setText: setDraft, area: input, onChange: () => {} });
   const correction = useLayoutCorrection({
@@ -127,7 +128,6 @@ export function PlainChat({
   /** A send waiting for a picture to be read: a second Enter is the same message, not a copy of it. */
   const waiting = useRef(false);
   const running = chat.turn.status === "running";
-  const RoleIcon = ROLE_ICONS[chat.role];
   const empty = chat.turn.blocks.length === 0;
   // Two of the role's set, picked again each time an empty chat opens or the role changes.
   const suggestions = useMemo(() => pickSuggestions(ROLE_SUGGESTIONS[chat.role], 2), [chat.chatId, chat.role, empty]);
@@ -181,13 +181,21 @@ export function PlainChat({
   }, [pointed]);
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
   // The box fits what is in it, wherever it came from.
-  const fit = useCallback(() => {
+  const grownAt = useRef(0);
+  const fit = useCallback((remeasure = false) => {
     const el = input.current;
     if (!el) return;
     // The cap is the stylesheet's — a narrow column gets a taller box — not a
     // number kept in step with it here.
     const cap = parseFloat(getComputedStyle(el).maxHeight) || 160;
-    el.style.height = "auto";
+    // Collapsed to "auto" to be measured, the box takes the thread above it
+    // along: the thread grows, one read at its end is clamped there, and the
+    // scroll read that follows is re-stuck as if the user had scrolled — the
+    // answer's tail popping out and back with every letter typed. Text that
+    // only got longer cannot need less room, so a keystroke is measured in
+    // place; deleting, and a column that changed width, measure as before.
+    if (remeasure || el.value.length < grownAt.current) el.style.height = "auto";
+    grownAt.current = el.value.length;
     el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
     el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
@@ -207,7 +215,8 @@ export function PlainChat({
     const sized = new ResizeObserver(() => {
       if (el.clientWidth === width) return;
       width = el.clientWidth;
-      fit();
+      // A wrapped line may fit now, and a freed one may not: fitted anew.
+      fit(true);
     });
     sized.observe(el);
     return () => sized.disconnect();
@@ -307,7 +316,9 @@ export function PlainChat({
                 }
               }}
             />
-            {chat.context && (
+            {/* The ring waits for the first message: an empty chat's prompt and
+                schemas are read in Overview, not on a start screen. */}
+            {!empty && chat.context && (
               <span className="plain-meter">
                 <ContextMeter context={chat.context} usage={chat.turn.usage} running={chat.busy} onCompact={onCompact} up spent={chat.spent} />
               </span>
@@ -331,24 +342,9 @@ export function PlainChat({
           </div>
           {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
         </section>
-        {/* Under the box, where the agent's says which folder: here, who the
-            model is. The chat's own settings go on this strip as they come. */}
+        {/* Under the box, where the agent's says which folder: here, what the
+            message goes out with. The chat's own settings go on this strip. */}
         <div className="plain-tab">
-          {/* One role per chat: what was said was said to it. */}
-          <Dropdown
-            title={empty ? "Who the model is in this chat" : "The chat's role — start a new chat for another"}
-            locked={!empty}
-            heading="Role"
-            label={
-              <span className="plain-chip-label">
-                <RoleIcon size={13} />
-                <span>{roleName}</span>
-              </span>
-            }
-            value={chat.role}
-            options={chat.roles.map((r) => ({ value: r.id, label: r.name, hint: r.description }))}
-            onPick={(value) => chat.setRole(value as ChatRoleId)}
-          />
           {chat.role === "kubernetes" && (
             <KubePanel pin={chat.kube} onPin={chat.setPin} kube={kube} onSetUpKube={onSetUpKube} />
           )}
@@ -366,6 +362,46 @@ export function PlainChat({
           <ComposerSettings models={models} onModel={onModel} onEffort={onEffort} onLoadModels={onLoadModels} />
           <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
         </div>
+        {/* Who the model is, under the card: small chips, each its own press,
+            as the tools under a ChatGPT box are. One role per chat — what was
+            said was said to it — so once it has started only its own is left. */}
+        {chat.roles.length > 0 && (
+          <div className="plain-roles" role="radiogroup" aria-label="Role" ref={rolesRef}>
+            {(empty ? chat.roles : chat.roles.filter((r) => r.id === chat.role)).map((r, at) => {
+              const Icon = ROLE_ICONS[r.id];
+              const on = r.id === chat.role;
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  aria-disabled={!empty}
+                  // One stop for the group, as a radio group is: the arrows
+                  // move the choice, and the focus follows it.
+                  tabIndex={on ? 0 : -1}
+                  className={`plain-role${on ? " on" : ""}`}
+                  title={empty ? r.description : "The chat's role — start a new chat for another"}
+                  onClick={() => {
+                    if (empty) chat.setRole(r.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (!empty) return;
+                    const step = matches(e, "roleNext") ? 1 : matches(e, "rolePrev") ? -1 : 0;
+                    if (!step) return;
+                    e.preventDefault();
+                    const next = (at + step + chat.roles.length) % chat.roles.length;
+                    chat.setRole(chat.roles[next].id);
+                    rolesRef.current?.querySelectorAll<HTMLButtonElement>(".plain-role")[next]?.focus();
+                  }}
+                >
+                  <Icon size={12} />
+                  <span>{r.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </>
   );

@@ -84,9 +84,9 @@ pub(super) fn standing_note(name: &str, now: Option<&str>) -> String {
 /// ([`Frozen`]) until a note has followed it — and otherwise leaves it alone.
 /// The latest note, not any: a file put back as it was is a change too.
 pub(super) fn restore_standing(history: &mut Vec<LlmMessage>, turn: &Turn) {
-    let (Some(frozen), Some(_mode)) = (turn.frozen, turn.place.mode()) else { return };
+    let (Some(frozen), Some(mode)) = (turn.frozen, turn.place.mode()) else { return };
     let parallel = match turn.place {
-        Place::Folder { parallel, .. } => prompt::parallel_block(&parallel()),
+        Place::Folder { parallel, .. } => prompt::parallel_block(&parallel(), mode),
         Place::Chat { .. } => None,
     };
     let parts = [

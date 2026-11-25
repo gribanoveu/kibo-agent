@@ -52,7 +52,7 @@ export function useChatRouting({
   giveBack: (text: string, images?: ImagePart[]) => void;
   /** The main checkout when the open folder is a worktree of it (`useWorktreeOf`). */
   worktreeMain: string | null;
-  /** Pull requests in Catalog is on: the PR offer names the app's own tool. */
+  /** Bitbucket in Catalog is on: the PR offer names the app's own tool. */
   pullRequestsOn: boolean;
   /** Opens the Plan tab: the plan card leads there, implementation starts in it. */
   openPlan: () => void;

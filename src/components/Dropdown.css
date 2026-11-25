@@ -69,6 +69,24 @@
   text-transform: uppercase;
   color: var(--text-box-hint);
 }
+/* The name of a group of options, over the first of them — the provider a model
+   belongs to. A band across the menu, a shade off its own ground: a shelf over
+   the models under it, not another row among them. The negative side margins
+   carry it past the menu's padding to its edges. */
+.dropdown-group {
+  margin: 0 -4px;
+  padding: 6px 13px 5px;
+  background: var(--bg-panel-soft);
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-faint);
+  user-select: none;
+}
+.dropdown-group:first-child {
+  padding-top: 5px;
+}
 .dropdown-custom {
   display: block;
   width: calc(100% - 8px);

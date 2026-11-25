@@ -28,6 +28,8 @@ type Props = {
   tab?: ReactNode;
   /** At the right end of the line under the box — the provider's balance. */
   end?: ReactNode;
+  /** Under that line — what a new chat offers to start with; gone once it has. */
+  below?: ReactNode;
   /** The open folder's index, said in the settings panel; `null` until anything is known about it. */
   index?: IndexState | null;
   /** Sends the box, with the pictures attached to it. While a turn is running
@@ -77,6 +79,9 @@ type Props = {
   pendingCommands?: string;
   /** Each change puts the cursor in the box. */
   focus?: number;
+  /** What the empty box says instead of its own line — a start screen asks
+      differently from a conversation under way. */
+  placeholder?: string;
   /** Where this chat's unsent message is kept: the box belongs to a chat, not
       to the window, so it comes back to the one it was typed in. */
   draftKey: string;
@@ -92,6 +97,7 @@ type Props = {
 export function Composer({
   tab,
   end,
+  below,
   index = null,
   onSend,
   imagesEnabled = false,
@@ -117,6 +123,7 @@ export function Composer({
   onCommandsOpen,
   pendingCommands,
   focus = 0,
+  placeholder,
   draftKey,
   dictate = false,
   layoutCorrection = false,
@@ -131,7 +138,9 @@ export function Composer({
   const attachments = useAttachments(boxTakesPictures(imagesEnabled), draftKey);
   const area = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLElement>(null);
-  const dictation = useDictation({ on: dictate, draftKey, text, setText, area, onChange: () => requestAnimationFrame(grow) });
+  /** How long the text was when the box's height was last measured for it. */
+  const grownAt = useRef(0);
+  const dictation = useDictation({ on: dictate, draftKey, text, setText, area, onChange: () => requestAnimationFrame(() => grow()) });
   const correction = useLayoutCorrection({
     on: layoutCorrection && !dictation.active,
     text,
@@ -165,13 +174,21 @@ export function Composer({
     return () => document.removeEventListener("pointerdown", onDown);
   }, [menuOpen]);
 
-  const grow = () => {
+  const grow = (remeasure = false) => {
     const el = area.current;
     if (!el) return;
     // The cap is the stylesheet's — a narrow column gets a taller box — not a
     // number kept in step with it here.
     const cap = parseFloat(getComputedStyle(el).maxHeight) || 120;
-    el.style.height = "auto";
+    // Measured the usual way — collapsed to "auto", then the content's own
+    // height — the box takes the thread above it along for that layout pass:
+    // the thread grows, one read at its end is clamped there, and the scroll
+    // read that follows is re-stuck as if the user had scrolled — the answer's
+    // tail popping out of view and back with every letter typed. Text that only
+    // got longer cannot need less room, so a keystroke is measured in place;
+    // deleting, and a column that changed width, measure from the top as before.
+    if (remeasure || el.value.length < grownAt.current) el.style.height = "auto";
+    grownAt.current = el.value.length;
     el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
     el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
@@ -181,7 +198,7 @@ export function Composer({
   // to be made to fit it — the textarea grew for the text it had before.
   useEffect(() => {
     setActive(0);
-    requestAnimationFrame(grow);
+    requestAnimationFrame(() => grow());
   }, [draftKey]);
 
   // The column's width moves with the layout — IDE layout narrows the chat: a
@@ -194,7 +211,8 @@ export function Composer({
     const sized = new ResizeObserver(() => {
       if (el.clientWidth === width) return;
       width = el.clientWidth;
-      grow();
+      // A wrapped line may fit now, and a freed one may not: measured anew.
+      grow(true);
     });
     sized.observe(el);
     return () => sized.disconnect();
@@ -206,7 +224,7 @@ export function Composer({
     // the box would otherwise ride along with the returned message.
     attachments.restore(draft.images ?? [], true);
     area.current?.focus();
-    requestAnimationFrame(grow);
+    requestAnimationFrame(() => grow());
   });
 
   useEffect(() => {
@@ -219,12 +237,12 @@ export function Composer({
     if (said) setText((typed) => (typed.trim() ? `${typed.trimEnd()}\n\n${said}` : said));
     attachments.restore(quote.images ?? []);
     area.current?.focus();
-    requestAnimationFrame(grow);
+    requestAnimationFrame(() => grow());
   });
 
   const clear = () => {
     take();
-    requestAnimationFrame(grow);
+    requestAnimationFrame(() => grow());
   };
 
   // A command that cannot run now stays in the box, its menu row saying why.
@@ -375,7 +393,7 @@ export function Composer({
               placeholder={
                 running
                   ? `Add something — ${shortcutText("queue")} to send it after`
-                  : "Describe your task…"
+                  : placeholder ?? "Describe your task…"
               }
               value={text}
               onPaste={(e) => attachments.paste(Array.from(e.clipboardData.files), e)}
@@ -432,8 +450,8 @@ export function Composer({
               }}
             />
           </div>
-          {/* Shown from the first render, before anything has been said: an
-              empty conversation already costs the prompt and the schemas. */}
+          {/* What the next request costs, once the caller has a conversation to
+              measure: an empty chat's prompt and schemas are read in Overview. */}
           {context && (
             <span className="composer-meter">
               <ContextMeter context={context} usage={usage} running={running} onCompact={onCompact} up />
@@ -482,6 +500,7 @@ export function Composer({
         />
         {end}
       </div>
+      {below}
     </div>
   );
 }

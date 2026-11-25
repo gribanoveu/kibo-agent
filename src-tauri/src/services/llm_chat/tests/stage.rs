@@ -271,7 +271,7 @@ fn parallel_sessions_change_in_notes_not_in_the_frozen_prompt() {
     let second = "second".to_string();
     let mut h = harness("standing-parallel", vec![text("one"), text("two"), text("three"), text("four")]);
     h.parallel = vec![first.clone()];
-    h.frozen = Some(Frozen { rules: Vec::new(), parallel: prompt::parallel_block(&h.parallel) });
+    h.frozen = Some(Frozen { rules: Vec::new(), parallel: prompt::parallel_block(&h.parallel, h.mode) });
 
     let one = done_history(h.run(|turn| stream(turn, vec![LlmMessage::user("go")], vec![])).expect("finishes"));
     h.parallel = vec![second.clone()];
