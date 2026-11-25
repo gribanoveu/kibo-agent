@@ -116,6 +116,7 @@ mod tests {
             worktree_base: None,
             git_branch: None,
             head_at_start: None,
+            model: None,
         }
     }
 

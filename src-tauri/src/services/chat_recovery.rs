@@ -133,6 +133,25 @@ mod tests {
         });
     }
 
+    /// CM-1: the pin is the row's — a recovery saves the conversation whole,
+    /// and the chat still speaks with its own provider afterwards, in the
+    /// record the window is told and in the store.
+    #[test]
+    fn a_recovered_chat_keeps_its_model() {
+        with_app_dir("recovery-model", || {
+            saved("c1");
+            let pin = crate::domain::chat_record::ChatModel { provider: "p".into(), model: Some("m".into()) };
+            chat_store::set_model("c1", &pin).unwrap();
+            chat_store::journal_append("c1", "c1/turn-1", "append", &json!([LlmMessage::assistant("working")]), 1).unwrap();
+
+            let record = load("c1", false).unwrap();
+
+            assert_eq!(record.messages.len(), 2, "the journal was replayed");
+            assert_eq!(record.model, Some(pin.clone()));
+            assert_eq!(chat_store::model("c1").unwrap(), Some(pin));
+        });
+    }
+
     /// No journal: the record stands, untouched.
     #[test]
     fn a_chat_without_a_journal_opens_as_saved() {

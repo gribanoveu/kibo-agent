@@ -84,6 +84,15 @@ pub enum ChatError {
     Naming(#[from] LlmError),
 }
 
+/// The provider and model a chat speaks with — its own, so a pick in
+/// another chat never moves it. `model: None` means "auto": the provider's
+/// own pin decides, as it does for a new chat.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChatModel {
+    pub provider: String,
+    pub model: Option<String>,
+}
+
 /// One conversation, whole.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,6 +145,13 @@ pub struct ChatRecord {
     /// and in those begun before their folder's first commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_at_start: Option<String>,
+    /// The provider and model this chat speaks with. Kept beside the record
+    /// in the store's columns, never in the body: `load` fills it from them,
+    /// `upsert` clears it before writing one, and a body that carries the key
+    /// anyway is not read. `None` for a chat not pinned yet — one saved
+    /// before the columns existed — and the global choice speaks for it.
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ChatModel>,
 }
 
 /// A row in the sidebar. Deliberately not the whole record: listing a folder
@@ -336,6 +352,7 @@ mod tests {
             worktree_base: None,
             git_branch: None,
             head_at_start: None,
+            model: None,
         }
     }
 
@@ -376,6 +393,21 @@ mod tests {
         value.as_object_mut().unwrap().remove("plan");
         let loaded: ChatRecord = serde_json::from_value(value).unwrap();
         assert_eq!(loaded.plan, None);
+    }
+
+    /// The pin travels to the window on the record, but the body is not
+    /// where it is read from: a body carrying the key — a foreign writer,
+    /// a hand edit — opens unpinned, and the store's column decides.
+    #[test]
+    fn a_pin_in_the_body_is_not_read() {
+        let mut value = serde_json::to_value(record()).unwrap();
+        value["model"] = serde_json::json!({ "provider": "p", "model": "m" });
+        assert_eq!(parse(&value.to_string()).unwrap().model, None);
+
+        let mut pinned = record();
+        pinned.model = Some(ChatModel { provider: "p".to_string(), model: None });
+        let value = serde_json::to_value(&pinned).unwrap();
+        assert_eq!(value["model"]["provider"], "p", "the window is told");
     }
 
     /// Every chat saved before branching existed is a chat that was not

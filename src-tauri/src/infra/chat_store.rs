@@ -28,7 +28,7 @@ use serde_json::Value;
 use crate::domain::chat_export;
 use crate::domain::compaction::SUMMARY_PREFIX;
 use crate::domain::chat_record::{
-    self, ChatError, ChatGroup, ChatRecord, ChatSummary, GroupList, CHAT_SCHEMA_VERSION, NO_FOLDER,
+    self, ChatError, ChatGroup, ChatModel, ChatRecord, ChatSummary, GroupList, CHAT_SCHEMA_VERSION, NO_FOLDER,
 };
 use crate::domain::chat_role::ChatRole;
 use crate::domain::kube::KubePin;
@@ -146,6 +146,12 @@ pub(crate) fn open() -> Result<Connection, ChatError> {
     // review counts as "this chat's work". NULL for rows saved before the
     // column and for chats begun before their folder's first commit.
     add_column(&conn, "head_at_start", "TEXT")?;
+    // The provider and model this chat speaks with — its own pin, so a pick
+    // in another chat never moves it. NULL for rows saved before the columns
+    // and until the first save stamps them; a NULL `model` under a provider
+    // means "auto", the provider's own pin.
+    add_column(&conn, "model_provider", "TEXT")?;
+    add_column(&conn, "model", "TEXT")?;
     share_project_folders(&conn)?;
     Ok(conn)
 }
@@ -276,11 +282,17 @@ fn rename_summary_titles(conn: &Connection, workspace: &str) -> Result<(), ChatE
 
 pub fn load(id: &str) -> Result<ChatRecord, ChatError> {
     chat_record::check_id(id)?;
-    let body: Option<String> = open()?
-        .query_row("SELECT body FROM chats WHERE id = ?1", params![id], |row| row.get(0))
+    let row: Option<(String, Option<String>, Option<String>)> = open()?
+        .query_row("SELECT body, model_provider, model FROM chats WHERE id = ?1", params![id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
         .optional()
         .map_err(store)?;
-    chat_record::parse(&body.ok_or_else(|| ChatError::NotFound(id.to_string()))?)
+    let (body, provider, model) = row.ok_or_else(|| ChatError::NotFound(id.to_string()))?;
+    let mut record = chat_record::parse(&body)?;
+    // The pin is the columns', never the body's — the window is told it here.
+    record.model = provider.map(|provider| ChatModel { provider, model });
+    Ok(record)
 }
 
 /// One row of a turn's journal (`domain::turn_journal`): the history's
@@ -379,6 +391,50 @@ pub fn head_at_start(id: &str) -> Result<Option<String>, ChatError> {
         .optional()
         .map(|found| found.flatten())
         .map_err(store)
+}
+
+/// The provider and model this chat speaks with — one column pair, no
+/// transcript. `None` for a chat not pinned yet: one saved before the
+/// columns existed, or before its first save stamped them.
+pub fn model(id: &str) -> Result<Option<ChatModel>, ChatError> {
+    chat_record::check_id(id)?;
+    open()?
+        .query_row("SELECT model_provider, model FROM chats WHERE id = ?1", params![id], |row| {
+            let provider: Option<String> = row.get(0)?;
+            let model: Option<String> = row.get(1)?;
+            Ok(provider.map(|provider| ChatModel { provider, model }))
+        })
+        .optional()
+        .map(|found| found.flatten())
+        .map_err(store)
+}
+
+/// Rewrites the chat's pin — a pick made in this chat. Like archiving, this
+/// is not something said in the chat: the transcript and `updated_at` are
+/// not touched, so a pick does not move the chat in the sidebar.
+pub fn set_model(id: &str, pin: &ChatModel) -> Result<(), ChatError> {
+    chat_record::check_id(id)?;
+    match open()?
+        .execute("UPDATE chats SET model_provider = ?2, model = ?3 WHERE id = ?1", params![id, pin.provider, pin.model])
+        .map_err(store)?
+    {
+        0 => Err(ChatError::NotFound(id.to_string())),
+        _ => Ok(()),
+    }
+}
+
+/// Stamps the pin on a chat that has none — its first save. A chat already
+/// pinned keeps its pin: a repeated save is a no-op, and a chat saved before
+/// the columns is stamped only once, by whichever save comes first.
+pub fn stamp_model_if_absent(id: &str, pin: &ChatModel) -> Result<(), ChatError> {
+    chat_record::check_id(id)?;
+    open()?
+        .execute(
+            "UPDATE chats SET model_provider = ?2, model = ?3 WHERE id = ?1 AND model_provider IS NULL",
+            params![id, pin.provider, pin.model],
+        )
+        .map_err(store)?;
+    Ok(())
 }
 
 /// Writes the conversation whole, keeping the moment it started, and folds
@@ -494,6 +550,7 @@ fn save_impl(
             worktree_base,
             git_branch,
             head_at_start,
+            model: None,
         },
         // A turn-ending save folds the journal into this record and deletes
         // it in the same transaction — a crash between the two would leave
@@ -531,6 +588,7 @@ pub fn save_plain(
         worktree_base: None,
         git_branch: None,
         head_at_start: None,
+        model: None,
     }, false, None)
 }
 
@@ -568,6 +626,11 @@ fn upsert(mut record: ChatRecord, fold_journal: bool, fold_turn: Option<&str>) -
     }
     let (archived, generated, pinned, group) = stored.map_or((false, None, false, None), |s| (s.1, s.2, s.3, s.4));
 
+    // The pin lives in the columns, never in the body: a relocate upserts a
+    // loaded record, whose field `load` filled from the column. Clearing it
+    // here keeps the body the documented shape; the columns are not named
+    // below, so the pin itself stays as it was.
+    record.model = None;
     let body = serde_json::to_string(&record).map_err(ChatError::Parse)?;
     // An upsert, not INSERT OR REPLACE: a replaced row would lose `archived`,
     // `pinned`, `group_id` and `generated_title`. A new branch starts with its
@@ -1768,6 +1831,128 @@ mod tests {
 
             assert_eq!(head_at_start("old").unwrap(), None);
             assert!(!body("old").contains("headAtStart"), "the body stays without the key");
+        });
+    }
+
+    fn chat_pin(provider: &str, model: Option<&str>) -> ChatModel {
+        ChatModel { provider: provider.to_string(), model: model.map(str::to_string) }
+    }
+
+    /// CM-1: the pin is the row's, not the body's. Every writer that saves
+    /// the conversation whole leaves it as it was — an agent's save, a move
+    /// to a worktree — and none of them puts it into the body.
+    #[test]
+    fn a_pin_survives_every_save_and_never_enters_the_body() {
+        with_app_dir("chat-store-model-saves", || {
+            save_one("one", "/repo", "first");
+            set_model("one", &chat_pin("deepseek", Some("deepseek-chat"))).unwrap();
+
+            save_one("one", "/repo", "second");
+            assert_eq!(model("one").unwrap(), Some(chat_pin("deepseek", Some("deepseek-chat"))));
+            assert_eq!(load("one").unwrap().model, Some(chat_pin("deepseek", Some("deepseek-chat"))), "the window is told");
+
+            relocate("one", "/repo-wt", "main").unwrap();
+            assert_eq!(model("one").unwrap(), Some(chat_pin("deepseek", Some("deepseek-chat"))), "a move keeps it");
+            let value: Value = serde_json::from_str(&body("one")).unwrap();
+            assert!(value.get("model").is_none(), "the body stays without the pin: {value}");
+        });
+    }
+
+    /// Chat mode's conversations are rows of the same table: a save of one
+    /// keeps its pin the same way.
+    #[test]
+    fn a_plain_chat_keeps_its_model_too() {
+        with_app_dir("chat-store-model-plain", || {
+            let said = [LlmMessage::user("what is a monad?")];
+            save_plain("plain", ChatRole::Assistant, None, &said, &blocks("what is a monad?")).unwrap();
+            set_model("plain", &chat_pin("alfagen", None)).unwrap();
+
+            save_plain("plain", ChatRole::Assistant, None, &said, &blocks("what is a monad?")).unwrap();
+
+            assert_eq!(model("plain").unwrap(), Some(chat_pin("alfagen", None)), "auto is a pin, not an absence");
+            assert_eq!(load("plain").unwrap().model, Some(chat_pin("alfagen", None)));
+        });
+    }
+
+    /// A pick is not something said in the chat: the transcript and
+    /// `updated_at` are not touched, so the sidebar's order does not move.
+    #[test]
+    fn picking_a_model_does_not_move_the_chat_in_the_list() {
+        with_app_dir("chat-store-model-quiet", || {
+            save_one("one", "/repo", "first");
+            // A moment old enough that any rewrite would show.
+            open().unwrap().execute("UPDATE chats SET updated_at = 1 WHERE id = 'one'", []).unwrap();
+            let before = body("one");
+
+            set_model("one", &chat_pin("p", Some("m"))).unwrap();
+
+            let at: i64 = open().unwrap().query_row("SELECT updated_at FROM chats WHERE id = 'one'", [], |r| r.get(0)).unwrap();
+            assert_eq!(at, 1, "updated_at stands");
+            assert_eq!(body("one"), before, "the transcript stands");
+        });
+    }
+
+    /// A database written before chat models existed gains the columns and
+    /// keeps its chats, none of them pinned; the first stamp pins one.
+    #[test]
+    fn a_database_from_before_chat_models_opens_unpinned() {
+        with_app_dir("chat-store-model-upgrade", || {
+            let path = app_dir::ensure().unwrap().join(FILE);
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE chats (
+                   id TEXT PRIMARY KEY, workspace TEXT NOT NULL, schema_version INTEGER NOT NULL,
+                   title TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                   branched_from TEXT, body TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);",
+            )
+            .unwrap();
+            let old_body = serde_json::json!({
+                "schemaVersion": 1, "id": "old", "workspace": "/repo", "title": "old",
+                "createdAt": 1, "updatedAt": 1, "messages": [], "blocks": [], "todos": []
+            });
+            conn.execute(
+                "INSERT INTO chats VALUES ('old', '/repo', 1, 'old', 1, 1, NULL, ?1, 0)",
+                params![old_body.to_string()],
+            )
+            .unwrap();
+            drop(conn);
+
+            assert_eq!(list("/repo").unwrap().len(), 1);
+            assert_eq!(model("old").unwrap(), None);
+            assert_eq!(load("old").unwrap().model, None);
+
+            stamp_model_if_absent("old", &chat_pin("p", None)).unwrap();
+            assert_eq!(model("old").unwrap(), Some(chat_pin("p", None)));
+        });
+    }
+
+    /// The first save stamps; a repeated save is a no-op, and a pick made
+    /// in the chat is never stamped over.
+    #[test]
+    fn a_stamp_never_rewrites_a_pin_already_set() {
+        with_app_dir("chat-store-model-stamp", || {
+            save_one("one", "/repo", "first");
+            stamp_model_if_absent("one", &chat_pin("first-provider", None)).unwrap();
+            stamp_model_if_absent("one", &chat_pin("second-provider", Some("m"))).unwrap();
+            assert_eq!(model("one").unwrap(), Some(chat_pin("first-provider", None)), "the first stamp stands");
+
+            set_model("one", &chat_pin("picked", Some("m"))).unwrap();
+            stamp_model_if_absent("one", &chat_pin("third", None)).unwrap();
+            assert_eq!(model("one").unwrap(), Some(chat_pin("picked", Some("m"))), "a pick stands too");
+        });
+    }
+
+    #[test]
+    fn a_model_pick_on_a_chat_that_is_not_there_says_so() {
+        with_app_dir("chat-store-model-missing", || {
+            assert!(matches!(set_model("nope", &chat_pin("p", None)), Err(ChatError::NotFound(_))));
+            assert!(matches!(set_model("../x", &chat_pin("p", None)), Err(ChatError::BadId(_))));
+            assert!(matches!(model("../x"), Err(ChatError::BadId(_))));
+            assert_eq!(model("nope").unwrap(), None);
+            // A stamp on a missing row is a no-op, not an error: the first
+            // save has already written the row it stamps.
+            stamp_model_if_absent("nope", &chat_pin("p", None)).unwrap();
+            assert_eq!(model("nope").unwrap(), None);
         });
     }
 }
