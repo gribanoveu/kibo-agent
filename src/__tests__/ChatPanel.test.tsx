@@ -103,8 +103,8 @@ describe("grouping", () => {
   });
 
   test("with nothing said yet the empty state fills the thread", () => {
-    panel(state([]));
-    expect(screen.getByText("Start the conversation")).toBeDefined();
+    const { container } = panel(state([]));
+    expect(container.querySelector(".thread-empty .chat-empty .kibo-brand")).toBeTruthy();
     // It already is a new chat: offering another one does nothing.
     expect(screen.queryByRole("button", { name: /New chat/ })).toBeNull();
   });
@@ -482,11 +482,13 @@ describe("how long the agent worked", () => {
 
 describe("the header", () => {
   /// It is the window's title bar: the chat is named in the sidebar, the
-  /// folder, its branch and its changes on the composer's tab.
+  /// folder on the composer's tab — and, before the first message, on the
+  /// empty screen — its branch and its changes on the tab too.
   test("names neither the chat nor the folder", () => {
     const { container } = panel(state([]));
-    expect(container.querySelector(".head-left")?.textContent).toBe("");
-    expect(screen.queryByTitle("/tmp/project")).toBeNull();
+    const head = container.querySelector<HTMLElement>(".chat-head");
+    expect(head?.querySelector(".head-left")?.textContent).toBe("");
+    expect(head?.querySelector('[title="/tmp/project"]')).toBeNull();
   });
 
   /// With no sidebar, the IDE layout's menu of chats is drawn there.

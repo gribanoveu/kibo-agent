@@ -68,7 +68,7 @@ import { useFollowBottom } from "../hooks/useFollowBottom";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
 import type { ImagePart } from "../lib/images";
-import { type FileDiffStats, type PendingToolCall, previewCalls, type Task, type ToolCallDecision, type ToolPreview } from "../lib/chat";
+import { type FileDiffStats, type PendingToolCall, previewCalls, type RecentFolder, type Task, type ToolCallDecision, type ToolPreview } from "../lib/chat";
 import type { McpAnswer } from "../lib/mcp";
 import { type ProcessInfo, processStatus } from "../lib/processes";
 import { dragOrMaximize } from "./Titlebar";
@@ -953,6 +953,9 @@ type Props = {
   turn: TurnState;
   onDecide: (decisions: ToolCallDecision[], always: string[]) => void;
   onOpenRepo: () => void;
+  /** Folders opened lately, offered on the empty screen when nothing is open. */
+  recent?: RecentFolder[];
+  onOpenFolder?: (path: string) => void;
   /** The agent's checklist, drawn above the clock while a turn runs. */
   checklist?: Task[];
   /** Opens the Terminal tab on a background process a call started. */
@@ -1164,6 +1167,8 @@ export function ChatPanel({
   turn,
   onDecide,
   onOpenRepo,
+  recent,
+  onOpenFolder,
   checklist = [],
   onOpenProcess,
   onOpenAgent,
@@ -1289,7 +1294,7 @@ export function ChatPanel({
 
       <div ref={scrollRef} className={`thread chat-text${groups.length === 0 ? " thread-empty" : ""}`}>
         {groups.length === 0 ? (
-          <ChatEmptyState workspace={workspace} onOpenRepo={onOpenRepo} />
+          <ChatEmptyState workspace={workspace} onOpenRepo={onOpenRepo} recent={recent} onOpenFolder={onOpenFolder} />
         ) : (
           <div ref={contentRef} className="thread-content">
             <Transcript

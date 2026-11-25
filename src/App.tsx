@@ -4,6 +4,7 @@ import { ChatPanel } from "./components/ChatPanel";
 import { AgentSheet } from "./components/AgentSheet";
 import { PlanSheet } from "./components/PlanSheet";
 import { Composer } from "./components/Composer";
+import { UsageGlance } from "./components/UsageGlance";
 import { ProviderBalance } from "./components/ProviderBalance";
 import { PlainChat } from "./components/PlainChat";
 import { FolderTab } from "./components/FolderTab";
@@ -356,6 +357,15 @@ export default function App() {
       ? "An agent is working in this folder — wait for its turns to finish, or use Worktree for a new chat"
       : undefined;
   const unstarted = agent.turn.blocks.length === 0 && agent.turn.status !== "running";
+  // Either mode's chat before its first message: the empty screen and the box
+  // are drawn as one group, centred (App.css, `.chat-new`).
+  const unstartedChat = agentMode ? unstarted : plain.turn.blocks.length === 0 && plain.turn.status !== "running";
+  // A chat that has not started is where the cursor goes at once: the box is
+  // the screen's one control, as Chat mode's own box does on mount.
+  useEffect(() => {
+    if (agentMode && unstarted && !onPage) focusComposer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const turnBusy = agent.turn.status === "running" || agent.turn.status === "awaitingApproval";
   // The provider turns go to now: its own switch in Settings → Models.
   const imagesEnabled = !!llm.settings?.providers.find((p) => p.id === llm.models.current?.providerId)?.supportsImages;
@@ -454,7 +464,7 @@ export default function App() {
   );
 
   const chat = (
-    <main key="chat" className="main">
+    <main key="chat" className={`main${unstartedChat && !onPage ? " chat-new" : ""}`}>
       {agentMode ? (
         <>
           <ChatPanel
@@ -472,6 +482,8 @@ export default function App() {
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}
             onOpenRepo={chooseFolder}
+            recent={workspace.recent}
+            onOpenFolder={openFolder}
             overviewOpen={shown("overview")}
             onToggleOverview={() => setDocks(togglePane(docks, "overview", "right"))}
             terminalOpen={bottomShown === "terminal"}
@@ -527,7 +539,11 @@ export default function App() {
               />
             }
             end={<ProviderBalance providerId={llm.models.current?.providerId ?? null} running={agent.turn.status === "running"} />}
+            // Today's spend, the week's, and the run of days, under the card —
+            // once anything has been counted, and only before the chat starts.
+            below={unstarted && workspace.path ? <UsageGlance /> : null}
             index={workspace.path ? index : null}
+            placeholder={unstarted ? "Ask anything, or describe a task…" : undefined}
             onSend={(text, images) => send(text, undefined, images)}
             imagesEnabled={imagesEnabled}
             onQueue={agent.queue}

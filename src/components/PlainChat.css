@@ -26,6 +26,11 @@
   gap: 10px;
   text-align: center;
 }
+/* The mark is the start screen's, the same size as the agent's: a greeting
+   under it, not a logo in a list. */
+.plain-welcome .kibo-brand {
+  height: calc(var(--fs-lg) * 4.4);
+}
 /* As in the agent's empty chat: the logo, then the greeting. */
 .plain-welcome h2 {
   font-size: var(--fs-lg);

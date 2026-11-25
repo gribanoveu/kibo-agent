@@ -1293,3 +1293,41 @@ describe("the draft a chat keeps", () => {
     expect(value()).toBe("");
   });
 });
+
+describe("what the empty box asks for", () => {
+  const box = (props: { placeholder?: string; running?: boolean } = {}) =>
+    render(
+      <Composer
+        draftKey="draft"
+        onSend={() => {}}
+        onStop={() => {}}
+        running={props.running ?? false}
+        conversation="agent"
+        onConversation={() => {}}
+        unattended={false}
+        onUnattended={() => {}}
+        models={{ choices: [], current: null }}
+        onModel={() => {}}
+        onEffort={() => {}}
+        onLoadModels={() => {}}
+        context={null}
+        usage={null}
+        onCompact={() => {}}
+        placeholder={props.placeholder}
+      />,
+    );
+
+  test("its own line by default, and the one it is given on a start screen", () => {
+    const { unmount } = box();
+    expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe("Describe your task…");
+    unmount();
+    box({ placeholder: "Ask anything, or describe a task…" });
+    expect(screen.getByRole("textbox").getAttribute("placeholder")).toBe("Ask anything, or describe a task…");
+  });
+
+  /// A turn under way is about adding to it, whatever the screen was asking.
+  test("a running turn says how to add to it, start screen or not", () => {
+    box({ placeholder: "Ask anything, or describe a task…", running: true });
+    expect(screen.getByRole("textbox").getAttribute("placeholder")).toMatch(/^Add something — /);
+  });
+});

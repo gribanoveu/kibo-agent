@@ -57,8 +57,8 @@ export async function subagentTokens(chatId: string): Promise<number> {
   return rows.reduce((sum, { key, value }) => (key === chatId ? sum + value : sum), 0);
 }
 
-/** `14` is the new chat's strip; Settings offers the other three. */
-export type UsageRange = "all" | "30" | "14" | "7";
+/** The ranges the usage pane offers; `all` starts at the first day counted. */
+export type UsageRange = "all" | "30" | "7";
 
 /** How far back the heatmap reaches: half a year, enough columns to fill the card at a small cell. */
 export const HEATMAP_WEEKS = 26;
@@ -162,10 +162,14 @@ function shade(days: UsageDay[]): UsageDay[] {
   return days;
 }
 
-/** The last `count` days in a row, today last — the new chat's strip. */
-export function usageStrip(rows: DailyMetric[], today: Date, count: number): UsageDay[] {
-  const end = midnight(today);
-  return shade(spentDays(rows, addDays(end, -(count - 1)), end));
+/** What `today` has spent so far — sent and received, as a day's tokens are counted. */
+export function tokensToday(rows: DailyMetric[], today: Date): number {
+  const day = format(today);
+  return rows.reduce(
+    (sum, row) =>
+      row.day === day && (row.metric === "promptTokens" || row.metric === "completionTokens") ? sum + row.value : sum,
+    0,
+  );
 }
 
 /** The last [`HEATMAP_WEEKS`] weeks, this one on the right. */
