@@ -307,6 +307,35 @@ fn every_event_name_matches_the_window() {
     assert!(missing.is_empty(), "events the window does not listen for by this name: {missing:?}");
 }
 
+/// The Russian bundle localization carries exactly the two access phrases
+/// the base Info.plist asks with, non-empty, and the config places it where
+/// macOS reads it — `Resources/ru.lproj`, not `Resources/infoplist/…` — while
+/// the models and prototype libs keep the places the app resolves them at
+/// (`docs/65-interface-language.md`, LC-4).
+#[test]
+fn the_russian_access_phrases_are_bundled_where_macos_reads_them() {
+    let plist = fs::read_to_string(crate_dir().join("Info.plist")).unwrap();
+    let strings = fs::read_to_string(crate_dir().join("infoplist/ru.lproj/InfoPlist.strings")).unwrap();
+    for key in ["NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription"] {
+        assert!(plist.contains(&format!("<key>{key}</key>")), "the base Info.plist lost {key}");
+        let line = strings.lines().find(|line| line.starts_with(&format!("\"{key}\""))).unwrap_or_else(|| panic!("ru.lproj lacks {key}"));
+        let value = line.split_once("\" = \"").unwrap_or_else(|| panic!("{key} is not a strings entry")).1;
+        assert!(value.trim_end_matches("\";").len() > 1, "{key} is empty");
+    }
+    let conf: serde_json::Value = serde_json::from_str(&fs::read_to_string(crate_dir().join("tauri.conf.json")).unwrap()).unwrap();
+    let resources = conf["bundle"]["resources"].as_object().expect("resources is a map: source → target");
+    let places = [
+        ("infoplist/ru.lproj/InfoPlist.strings", "ru.lproj/InfoPlist.strings"),
+        ("models/potion-multilingual-128M-int8-ru-en", "models/potion-multilingual-128M-int8-ru-en"),
+        ("models/meeting/", "models/meeting/"),
+        ("prototype-libs/", "prototype-libs/"),
+    ];
+    for (source, target) in places {
+        assert_eq!(resources.get(source).and_then(|v| v.as_str()), Some(target), "{source} is not placed at {target}");
+    }
+    assert_eq!(resources.len(), places.len(), "a resource the test does not know of");
+}
+
 /// Every variant of an error with `UiText` has a sample in its `ui_samples`,
 /// so the catalog test (`domain::ui_text`) checks every code: the count of
 /// `#[error]` attributes in the type's block is the count of variants, and a

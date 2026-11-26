@@ -1,0 +1,4 @@
+/* The Russian access phrases macOS draws on a Russian system (docs/65, LC-4).
+   The English ones live in Info.plist; this file localizes exactly those two. */
+"NSMicrophoneUsageDescription" = "Kibo Agent записывает ваш голос во время звонка на странице встреч (между кнопками записи и остановки) и распознаёт речь, которую вы диктуете в поле сообщения. Продиктованный звук не сохраняется.";
+"NSAudioCaptureUsageDescription" = "Kibo Agent записывает звук звонка на странице встреч (между кнопками записи и остановки).";
