@@ -222,6 +222,49 @@ export function PlainChat({
     return () => sized.disconnect();
   }, [fit]);
 
+  // Who the model is: small chips, each its own press, as the tools under a
+  // ChatGPT box are. One role per chat — what was said was said to it — so
+  // once it has started only its own is left, marked and not a press: on the
+  // strip beside the model, where the role's menu was; the row under the card
+  // is the empty chat's pick.
+  const rolesRow = chat.roles.length > 0 && (
+    <div className="plain-roles" role="radiogroup" aria-label="Role" ref={rolesRef}>
+      {(empty ? chat.roles : chat.roles.filter((r) => r.id === chat.role)).map((r, at) => {
+        const Icon = ROLE_ICONS[r.id];
+        const on = r.id === chat.role;
+        return (
+          <button
+            key={r.id}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            aria-disabled={!empty}
+            // One stop for the group, as a radio group is: the arrows
+            // move the choice, and the focus follows it.
+            tabIndex={on ? 0 : -1}
+            className={`plain-role${on ? " on" : ""}`}
+            title={empty ? r.description : "The chat's role — start a new chat for another"}
+            onClick={() => {
+              if (empty) chat.setRole(r.id);
+            }}
+            onKeyDown={(e) => {
+              if (!empty) return;
+              const step = matches(e, "roleNext") ? 1 : matches(e, "rolePrev") ? -1 : 0;
+              if (!step) return;
+              e.preventDefault();
+              const next = (at + step + chat.roles.length) % chat.roles.length;
+              chat.setRole(chat.roles[next].id);
+              rolesRef.current?.querySelectorAll<HTMLButtonElement>(".plain-role")[next]?.focus();
+            }}
+          >
+            <Icon size={12} />
+            <span>{r.name}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <>
       <section className="plain-panel">
@@ -343,8 +386,10 @@ export function PlainChat({
           {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
         </section>
         {/* Under the box, where the agent's says which folder: here, what the
-            message goes out with. The chat's own settings go on this strip. */}
+            message goes out with — and, once the chat has started, who it
+            goes to. The chat's own settings go on this strip. */}
         <div className="plain-tab">
+          {!empty && rolesRow}
           {chat.role === "kubernetes" && (
             <KubePanel pin={chat.kube} onPin={chat.setPin} kube={kube} onSetUpKube={onSetUpKube} />
           )}
@@ -362,46 +407,7 @@ export function PlainChat({
           <ComposerSettings models={models} onModel={onModel} onEffort={onEffort} onLoadModels={onLoadModels} />
           <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
         </div>
-        {/* Who the model is, under the card: small chips, each its own press,
-            as the tools under a ChatGPT box are. One role per chat — what was
-            said was said to it — so once it has started only its own is left. */}
-        {chat.roles.length > 0 && (
-          <div className="plain-roles" role="radiogroup" aria-label="Role" ref={rolesRef}>
-            {(empty ? chat.roles : chat.roles.filter((r) => r.id === chat.role)).map((r, at) => {
-              const Icon = ROLE_ICONS[r.id];
-              const on = r.id === chat.role;
-              return (
-                <button
-                  key={r.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  aria-disabled={!empty}
-                  // One stop for the group, as a radio group is: the arrows
-                  // move the choice, and the focus follows it.
-                  tabIndex={on ? 0 : -1}
-                  className={`plain-role${on ? " on" : ""}`}
-                  title={empty ? r.description : "The chat's role — start a new chat for another"}
-                  onClick={() => {
-                    if (empty) chat.setRole(r.id);
-                  }}
-                  onKeyDown={(e) => {
-                    if (!empty) return;
-                    const step = matches(e, "roleNext") ? 1 : matches(e, "rolePrev") ? -1 : 0;
-                    if (!step) return;
-                    e.preventDefault();
-                    const next = (at + step + chat.roles.length) % chat.roles.length;
-                    chat.setRole(chat.roles[next].id);
-                    rolesRef.current?.querySelectorAll<HTMLButtonElement>(".plain-role")[next]?.focus();
-                  }}
-                >
-                  <Icon size={12} />
-                  <span>{r.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
+        {empty && rolesRow}
       </div>
     </>
   );

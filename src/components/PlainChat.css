@@ -128,6 +128,13 @@
 .plain-roles::-webkit-scrollbar {
   display: none;
 }
+/* A chat under way: its one chip sits on the strip beside the model, where
+   the role's menu was — the row under the card is the empty chat's pick. */
+.plain-tab .plain-roles {
+  margin: 0;
+  justify-content: flex-start;
+  overflow: visible;
+}
 .plain-role {
   display: inline-flex;
   align-items: center;
@@ -154,17 +161,19 @@
   border-color: var(--border);
   color: var(--text);
 }
-/* A chat under way keeps its role: the chip says which, and is not a press. */
+/* A chat under way keeps its role: the chip says which, and is not a press —
+   no highlight either, it is a fact on the strip, not a choice. */
 .plain-role[aria-disabled="true"] {
   cursor: default;
+}
+.plain-role.on[aria-disabled="true"] {
+  background: none;
+  border-color: transparent;
+  color: var(--text-faint);
 }
 .plain-role[aria-disabled="true"]:hover {
   background: none;
   color: var(--text-faint);
-}
-.plain-role.on[aria-disabled="true"]:hover {
-  background: var(--bg-active);
-  color: var(--text);
 }
 
 .plain-preview-toggle {
