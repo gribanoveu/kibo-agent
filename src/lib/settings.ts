@@ -70,6 +70,12 @@ export type LlmSettings = {
   keyError?: string | null;
 };
 
+/** The provider the data policy names: the open chat's own, else the active
+ * one — "where do these messages go" is about the chat in front of you. */
+export function policyProvider(settings: LlmSettings | null, chatProviderId: string | null | undefined): ProviderView | null {
+  return settings?.providers.find((p) => p.id === (chatProviderId ?? settings.activeProviderId)) ?? null;
+}
+
 export async function llmSettings(): Promise<LlmSettings> {
   if (!inTauri()) return { providers: [], activeProviderId: null, debugLogging: false, replyLanguage: "auto", turnLimits: DEFAULT_TURN_LIMITS, keyStore: "file" };
   return invoke<LlmSettings>("llm_settings_get");

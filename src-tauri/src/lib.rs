@@ -324,6 +324,7 @@ pub fn run() {
             commands::chat_history::chat_move_to_worktree,
             commands::chat_history::chat_generate_title,
             commands::chat_history::chat_set_archived,
+            commands::chat_history::chat_model_set,
             commands::chat_history::chat_set_pinned,
             commands::chat_history::chat_group_list,
             commands::chat_history::chat_group_create,

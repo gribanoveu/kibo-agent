@@ -23,7 +23,7 @@ use crate::infra::{http_agent, llm_credentials_store, settings_store};
 use crate::services::{kube_changes, kubeconfigs, llm_session, web_search};
 
 /// The interface language was saved: every window re-reads it and rewrites
-/// its own texts (`docs/64-interface-language.md`).
+/// its own texts (`docs/65-interface-language.md`).
 pub const UI_LANGUAGE_EVENT: &str = "ui-language:changed";
 
 #[derive(Serialize)]

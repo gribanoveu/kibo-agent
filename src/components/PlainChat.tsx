@@ -40,7 +40,7 @@ type Props = {
   chat: PlainChatState;
   /** Each change puts the cursor in the box. */
   focus: number;
-  /** The same models as the agent's box: the provider is the app's, not the mode's. */
+  /** The same models as the agent's box: each chat speaks with its own provider, not the mode's. */
   models: { choices: ModelChoice[]; current: ModelChoice | null; effort?: string | null };
   /** Whether that model is set to see pictures — the composer's own rule. */
   imagesEnabled?: boolean;

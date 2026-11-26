@@ -176,7 +176,7 @@ impl ReplyLanguage {
 }
 
 /// The language the app writes its own texts in — pages, menus, errors,
-/// notifications (`docs/64-interface-language.md`). `Auto` follows the
+/// notifications (`docs/65-interface-language.md`). `Auto` follows the
 /// system; a system language that is neither English nor Russian reads as
 /// English. Separate from [`ReplyLanguage`]: what the model writes is asked
 /// per reply, not per app.

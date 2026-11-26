@@ -199,6 +199,9 @@ export function ProviderSettings({
               role="radio"
               aria-checked={provider.id === editing}
               className={`provider-tab${provider.id === editing ? " active" : ""}`}
+              // The active provider is where a new chat starts; an open chat
+              // keeps its own (docs/64-chat-model.md).
+              title={provider.id === settings?.activeProviderId ? "New chats start with this provider" : "Start new chats with this provider"}
               onClick={() => pick(provider.id)}
             >
               {provider.id}
@@ -509,8 +512,9 @@ function KeyStorage({
 }
 
 /**
- * The models to choose the default from. "Auto" leaves it to the provider's
- * first; a name the list does not have can still be typed into the search.
+ * The model new chats start with. "Auto" leaves it to the provider's first;
+ * a name the list does not have can still be typed into the search. An open
+ * chat keeps the model it was begun on — this pick is for the next new chat.
  */
 function ModelList({
   models,
@@ -544,7 +548,7 @@ function ModelList({
       )}
       <span className="model-name">{label}</span>
       {hint && <span className="model-hint">{hint}</span>}
-      {model === current && <span className="model-badge">default</span>}
+      {model === current && <span className="model-badge">for new chats</span>}
     </button>
   );
 

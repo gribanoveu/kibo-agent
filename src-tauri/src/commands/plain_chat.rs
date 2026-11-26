@@ -195,10 +195,13 @@ pub async fn plain_chat_context_usage<R: Runtime>(
     role: ChatRole,
     kube: Option<KubePin>,
     messages: Vec<LlmMessage>,
+    chat_id: Option<String>,
 ) -> Result<ContextUsage, String> {
     let clusters = app.state::<Arc<Clusters>>().inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (session, frame) = chat_frame(&clusters, role, kube.as_ref(), None)?;
+        // The chat's own provider, when it is saved yet: the meter measures
+        // the session the turn will use (docs/64-chat-model.md).
+        let (session, frame) = chat_frame(&clusters, role, kube.as_ref(), chat_id.as_deref())?;
         Ok(context_compaction::usage(&session, frame, &messages))
     })
     .await
@@ -283,7 +286,15 @@ pub async fn plain_chat_save(
     messages: Vec<LlmMessage>,
     blocks: serde_json::Value,
 ) -> Result<ChatSummary, String> {
-    super::blocking(move || chat_store::save_plain(&id, role, kube, &messages, &blocks)).await
+    super::blocking(move || -> Result<ChatSummary, crate::domain::chat_record::ChatError> {
+        let saved = chat_store::save_plain(&id, role, kube, &messages, &blocks)?;
+        // The chat speaks through the provider it was begun on, as the
+        // agent's does: the first save stamps it, later ones are a no-op.
+        // Best effort — the chat is saved either way.
+        let _ = crate::services::chat_model::stamp_if_absent(&id);
+        Ok(saved)
+    })
+    .await
 }
 
 /// Returns at once; this chat's reply stops at its next chunk.
@@ -343,6 +354,60 @@ mod tests {
             ));
             assert!(compacted.expect("compacted").is_some());
             assert_eq!(crate::testing::chat_tokens("p8"), 46);
+        });
+    }
+
+    /// CM-2: the Chat mode meter measures the chat's own provider once it is
+    /// saved — its context window, not the active provider's.
+    #[test]
+    fn a_plain_chats_meter_measures_its_own_provider() {
+        crate::testing::with_app_dir("plain-meter-pin", || {
+            use crate::domain::settings::{AppSettings, LlmSettings, ProviderConfig};
+            let provider = |id: &str, limit: u32| ProviderConfig {
+                id: id.into(),
+                base_url: format!("https://{id}.example/v1"),
+                model: Some("m".into()),
+                context_limit: Some(limit),
+                ..Default::default()
+            };
+            crate::infra::settings_store::save(&AppSettings {
+                llm: LlmSettings {
+                    active_provider_id: Some("b".into()),
+                    providers: vec![provider("a", 111_111), provider("b", 222_222)],
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+            crate::infra::llm_credentials_store::save_api_key("a", "sk-a").unwrap();
+            chat_store::save_plain("p1", ChatRole::Assistant, None, &[LlmMessage::user("hi")], &serde_json::json!([])).unwrap();
+            chat_store::set_model("p1", &crate::domain::chat_record::ChatModel { provider: "a".into(), model: Some("m".into()) }).unwrap();
+            let app = tauri::test::mock_app();
+            app.manage(Arc::new(Clusters::default()));
+
+            let usage = tauri::async_runtime::block_on(plain_chat_context_usage(
+                app.handle().clone(), ChatRole::Assistant, None, vec![LlmMessage::user("hi")], Some("p1".into()),
+            ))
+            .unwrap();
+
+            assert_eq!(usage.limit, Some(111_111), "the chat's provider's window, not the active one's");
+        });
+    }
+
+    /// CM-2: a Chat mode conversation is pinned by its first save, as the
+    /// agent's is — the active provider and its model.
+    #[test]
+    fn a_plain_chats_first_save_pins_the_active_provider() {
+        crate::testing::with_app_dir("plain-model-stamp", || {
+            crate::testing::spending_provider("hi", 1, 1);
+            tauri::async_runtime::block_on(plain_chat_save(
+                "p1".into(), ChatRole::Assistant, None, vec![LlmMessage::user("hi")], serde_json::json!([]),
+            ))
+            .unwrap();
+            assert_eq!(
+                chat_store::model("p1").unwrap(),
+                Some(crate::domain::chat_record::ChatModel { provider: "local".into(), model: Some("qwen".into()) })
+            );
         });
     }
 
