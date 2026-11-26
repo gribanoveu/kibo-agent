@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::ui_text::{reason, UiText};
+
 /// The context window assumed for a provider that never set one — large
 /// enough for today's frontier models, so compaction runs rather than
 /// staying off until someone looks for the setting.
@@ -175,6 +177,35 @@ impl ReplyLanguage {
     }
 }
 
+/// The language the app writes its own texts in — pages, menus, errors,
+/// notifications (`docs/65-interface-language.md`). `Auto` follows the
+/// system; a system language that is neither English nor Russian reads as
+/// English. Separate from [`ReplyLanguage`]: what the model writes is asked
+/// per reply, not per app.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UiLanguage {
+    #[default]
+    Auto,
+    English,
+    Russian,
+}
+
+impl UiLanguage {
+    /// The language `auto` follows: the system locale's own language —
+    /// Russian for any `ru…`, English for everything else, including no
+    /// locale at all. A picked language ignores the system.
+    pub fn resolve(self, system_locale: Option<&str>) -> Self {
+        match self {
+            Self::Auto => match system_locale.and_then(|locale| locale.split(['-', '_']).next()) {
+                Some(language) if language.eq_ignore_ascii_case("ru") => Self::Russian,
+                _ => Self::English,
+            },
+            picked => picked,
+        }
+    }
+}
+
 impl LlmSettings {
     pub fn provider(&self, id: &str) -> Option<&ProviderConfig> {
         self.providers.iter().find(|p| p.id == id)
@@ -249,6 +280,8 @@ pub struct AppSettings {
     /// (`domain::recording::Microphone`); `None`, or one not plugged in, is
     /// the system's default.
     pub meeting_microphone: Option<String>,
+    /// The language the app's own texts are written in; `Auto` until chosen.
+    pub ui_language: UiLanguage,
 }
 
 impl AppSettings {
@@ -570,6 +603,123 @@ pub enum SettingsError {
     Credentials(#[from] CredentialsError),
 }
 
+impl UiText for AppDirError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::NoHome => "settings.no_home",
+            // A test that forgot its throwaway directory — never a user's.
+            Self::NotInstalled => "internal",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::NoHome => Vec::new(),
+            Self::NotInstalled => vec![("detail", self.to_string())],
+        }
+    }
+}
+
+impl UiText for CredentialsError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::AppDir(e) => e.code(),
+            Self::Read { .. } => "keys.read",
+            Self::MasterKey(_) => "keys.master_key",
+            Self::Foreign(_) => "keys.foreign",
+            Self::Damaged(_) => "keys.damaged",
+            Self::Save(_) => "keys.save",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::AppDir(e) => e.params(),
+            Self::Read { path, reason } => vec![("path", path.clone()), ("reason", reason.clone())],
+            Self::MasterKey(detail) | Self::Save(detail) => vec![("detail", detail.clone())],
+            Self::Foreign(path) | Self::Damaged(path) => vec![("path", path.clone())],
+        }
+    }
+}
+
+impl UiText for SettingsError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::AppDir(e) => e.code(),
+            Self::Read(_) => "settings.read",
+            Self::Write(_) => "settings.write",
+            Self::Parse(_) => "settings.parse",
+            Self::Serialize(_) => "settings.serialize",
+            Self::NameTaken(_) => "settings.name_taken",
+            Self::Credentials(e) => e.code(),
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::AppDir(e) => e.params(),
+            Self::Read(e) => reason(e),
+            Self::Write(detail) => vec![("reason", detail.clone())],
+            Self::Parse(e) | Self::Serialize(e) => reason(e),
+            Self::NameTaken(name) => vec![("name", name.clone())],
+            Self::Credentials(e) => e.params(),
+        }
+    }
+}
+
+impl UiText for RecentFoldersError {
+    fn code(&self) -> &'static str {
+        "workspace.recent_save"
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        vec![("detail", self.0.clone())]
+    }
+}
+
+#[cfg(test)]
+impl AppDirError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![Self::NoHome, Self::NotInstalled]
+    }
+}
+
+#[cfg(test)]
+impl CredentialsError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::AppDir(AppDirError::NoHome),
+            Self::Read { path: "/keys".into(), reason: "locked".into() },
+            Self::MasterKey("out of reach".into()),
+            Self::Foreign("/keys".into()),
+            Self::Damaged("/keys".into()),
+            Self::Save("disk full".into()),
+        ]
+    }
+}
+
+#[cfg(test)]
+impl SettingsError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::AppDir(AppDirError::NoHome),
+            Self::Read(std::io::Error::new(std::io::ErrorKind::Other, "locked")),
+            Self::Write("disk full".into()),
+            Self::Parse(serde_json::from_str::<u8>("x").unwrap_err()),
+            Self::Serialize(serde_json::from_str::<u8>("x").unwrap_err()),
+            Self::NameTaken("local".into()),
+            Self::Credentials(CredentialsError::Save("disk full".into())),
+        ]
+    }
+}
+
+#[cfg(test)]
+impl RecentFoldersError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![Self("disk full".into())]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -816,5 +966,40 @@ mod tests {
         assert_eq!(serde_json::to_value(Searxng).unwrap(), "searxng");
         // Saved while it was DuckDuckGo: the keyless search it meant is SearXNG now.
         assert_eq!(serde_json::from_str::<WebSearchBackend>("\"builtin\"").unwrap(), Searxng);
+    }
+
+    #[test]
+    fn auto_follows_the_system_language_and_everything_else_is_english() {
+        for locale in ["ru", "ru-RU", "ru_RU", "RU"] {
+            assert_eq!(UiLanguage::Auto.resolve(Some(locale)), UiLanguage::Russian, "{locale}");
+        }
+        for locale in ["en", "en-US", "fr-FR", "zh-Hans", ""] {
+            assert_eq!(UiLanguage::Auto.resolve(Some(locale)), UiLanguage::English, "{locale}");
+        }
+        assert_eq!(UiLanguage::Auto.resolve(None), UiLanguage::English);
+        assert_eq!(UiLanguage::English.resolve(Some("ru-RU")), UiLanguage::English);
+        assert_eq!(UiLanguage::Russian.resolve(Some("en-US")), UiLanguage::Russian);
+    }
+
+    /// Files written before there was a choice follow the system; a chosen
+    /// language survives the round trip under its camelCase name.
+    #[test]
+    fn the_interface_language_defaults_to_auto_and_round_trips() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.ui_language, UiLanguage::Auto);
+        for language in [UiLanguage::Auto, UiLanguage::English, UiLanguage::Russian] {
+            let wire = serde_json::to_value(language).unwrap();
+            assert_eq!(wire, serde_json::json!(match language {
+                UiLanguage::Auto => "auto",
+                UiLanguage::English => "english",
+                UiLanguage::Russian => "russian",
+            }));
+            let mut settings = AppSettings::default();
+            settings.ui_language = language;
+            let json = serde_json::to_value(&settings).unwrap();
+            assert_eq!(json["uiLanguage"], wire, "the field keeps the wire name older files were written with");
+            let back: AppSettings = serde_json::from_value(json).unwrap();
+            assert_eq!(back.ui_language, language);
+        }
     }
 }

@@ -82,6 +82,60 @@ pub enum ChatError {
     EmptyName,
     #[error("could not name the chat: {0}")]
     Naming(#[from] LlmError),
+    /// A move or delete asked of a chat whose turn is still running.
+    #[error("this chat's turn is running — wait for it to finish before moving or deleting it")]
+    TurnRunning,
+}
+
+impl crate::domain::ui_text::UiText for ChatError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::AppDir(_) => "chat.app_dir",
+            Self::Store(_) => "chat.store",
+            Self::Write(_) => "chat.write",
+            Self::Parse(_) => "chat.parse",
+            Self::UnsupportedVersion(_) => "chat.unsupported_version",
+            Self::BadId(_) => "chat.bad_id",
+            Self::NotFound(_) => "chat.not_found",
+            Self::AlreadyExists(_) => "chat.already_exists",
+            Self::EmptyName => "chat.empty_name",
+            Self::Naming(_) => "chat.naming",
+            Self::TurnRunning => "chat.turn_running",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::AppDir(detail) | Self::Store(detail) | Self::Write(detail) => {
+                vec![("reason", detail.clone())]
+            }
+            Self::Parse(e) => crate::domain::ui_text::reason(e),
+            Self::UnsupportedVersion(format) => vec![("format", format.to_string())],
+            Self::BadId(id) | Self::NotFound(id) => vec![("id", id.clone())],
+            Self::AlreadyExists(name) => vec![("name", name.clone())],
+            Self::Naming(e) => crate::domain::ui_text::reason(e),
+            Self::EmptyName | Self::TurnRunning => Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl ChatError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::AppDir("no home".into()),
+            Self::Store("locked".into()),
+            Self::Write("disk full".into()),
+            Self::Parse(serde_json::from_str::<u8>("x").unwrap_err()),
+            Self::UnsupportedVersion(99),
+            Self::BadId("../x".into()),
+            Self::NotFound("c1".into()),
+            Self::AlreadyExists("group".into()),
+            Self::EmptyName,
+            Self::Naming(LlmError::Message("no model".into())),
+            Self::TurnRunning,
+        ]
+    }
 }
 
 /// The provider and model a chat speaks with — its own, so a pick in

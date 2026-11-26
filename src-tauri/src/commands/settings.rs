@@ -9,18 +9,22 @@ use std::sync::Arc;
 
 use secrecy::SecretString;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use std::path::{Path, PathBuf};
 
 use crate::domain::command_exec::{ShellKind, ShellOption};
 use crate::domain::kube::{KubeContexts, KubePin};
 use crate::domain::provider_balance::ProviderBalance;
-use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, WebSearchBackend, WebSearchPlace};
+use crate::domain::settings::{KubeSettings, Kubeconfig, ProviderConfig, ReplyLanguage, TurnLimits, UiLanguage, WebSearchBackend, WebSearchPlace};
 use crate::infra::kube_client::Clusters;
 use crate::infra::master_key::{self, KeyStore};
 use crate::infra::{http_agent, llm_credentials_store, settings_store};
 use crate::services::{kube_changes, kubeconfigs, llm_session, web_search};
+
+/// The interface language was saved: every window re-reads it and rewrites
+/// its own texts (`docs/65-interface-language.md`).
+pub const UI_LANGUAGE_EVENT: &str = "ui-language:changed";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,6 +231,33 @@ pub fn llm_reply_language_set(language: ReplyLanguage) -> Result<(), String> {
     llm_session::set_reply_language(language).map_err(|e| e.to_string())
 }
 
+/// The interface language, as saved; `auto` is the system's.
+#[tauri::command]
+pub fn ui_language_get() -> Result<UiLanguage, String> {
+    Ok(settings_store::load().map_err(|e| e.to_string())?.ui_language)
+}
+
+/// The language every window writes its own texts in, from the moment it is
+/// saved: the others re-read on [`UI_LANGUAGE_EVENT`].
+#[tauri::command]
+pub fn ui_language_set<R: Runtime>(app: AppHandle<R>, language: UiLanguage) -> Result<(), String> {
+    settings_store::update(|s| s.ui_language = language).map_err(|e| e.to_string())?;
+    // The menu bar is the app's own text the window cannot draw: rebuild it
+    // in the new language. The setting is saved either way; a menu that did
+    // not rebuild is logged, not a failed save (docs/65, LC-3). muda makes
+    // menu items only on the main thread — a sync command runs there in the
+    // app; a test calls it from its own thread, and there the rebuild is
+    // skipped (the menu's texts are tested in menu.rs).
+    #[cfg(target_os = "macos")]
+    if objc2::MainThreadMarker::new().is_some() {
+        if let Err(e) = crate::menu::build(&app).and_then(|menu| app.set_menu(menu)) {
+            eprintln!("the menu did not rebuild: {e}");
+        }
+    }
+    let _ = app.emit(UI_LANGUAGE_EVENT, ());
+    Ok(())
+}
+
 /// How far an agent turn may run, from the next turn on.
 #[tauri::command]
 pub fn llm_turn_limits_set(limits: TurnLimits) -> Result<(), String> {
@@ -394,6 +425,39 @@ mod tests {
                 assert!(llm_turn_limits_set(zero).is_err(), "{zero:?} must be refused");
             }
             llm_turn_limits_set(limits).expect("all ones and up are fine");
+        });
+    }
+
+    /// `src/lib/settings.ts` listens on this name.
+    #[test]
+    fn the_ui_language_channel_name_is_pinned() {
+        assert_eq!(UI_LANGUAGE_EVENT, "ui-language:changed");
+    }
+
+    #[test]
+    fn the_interface_language_is_saved_read_back_and_signalled() {
+        use tauri::Listener;
+        with_app_dir("ui-language", || {
+            assert_eq!(ui_language_get().unwrap(), UiLanguage::Auto);
+            let app = tauri::test::mock_app();
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.handle().listen(UI_LANGUAGE_EVENT, move |_| { let _ = tx.send(()); });
+            ui_language_set(app.handle().clone(), UiLanguage::Russian).unwrap();
+            assert_eq!(ui_language_get().unwrap(), UiLanguage::Russian);
+            rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the change is signalled");
+        });
+    }
+
+    /// A file that does not parse is reported, never overwritten with the
+    /// defaults — the same rule `settings_store::update` keeps for every save.
+    #[test]
+    fn a_damaged_settings_file_refuses_the_language_save() {
+        with_app_dir("ui-language-damaged", || {
+            crate::infra::app_dir::ensure().unwrap();
+            std::fs::write(settings_store::path().unwrap(), "{ not json").unwrap();
+            let app = tauri::test::mock_app();
+            assert!(ui_language_set(app.handle().clone(), UiLanguage::Russian).is_err());
+            assert_eq!(std::fs::read_to_string(settings_store::path().unwrap()).unwrap(), "{ not json");
         });
     }
 

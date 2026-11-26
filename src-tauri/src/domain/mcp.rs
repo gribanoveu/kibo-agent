@@ -251,6 +251,33 @@ pub enum McpConfigError {
     NotFound(String),
 }
 
+impl crate::domain::ui_text::UiText for McpConfigError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Read(_) => "mcp.config_read",
+            Self::Parse(_) => "mcp.config_parse",
+            Self::Write(_) => "mcp.config_write",
+            Self::NotFound(_) => "mcp.not_found",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Read(detail) | Self::Parse(detail) | Self::Write(detail) => {
+                crate::domain::ui_text::reason(detail)
+            }
+            Self::NotFound(name) => vec![("name", name.clone())],
+        }
+    }
+}
+
+#[cfg(test)]
+impl McpConfigError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![Self::Read("locked".into()), Self::Parse("bad json".into()), Self::Write("disk full".into()), Self::NotFound("s".into())]
+    }
+}
+
 /// The server's part of a tool name, `mcp__<key>__<tool>`: what the
 /// providers accept in a name (`[A-Za-z0-9_-]`), lowercased so two spellings
 /// of one server cannot become two prefixes.
@@ -391,6 +418,64 @@ pub enum McpError {
     Protocol(String),
     #[error("the MCP server stopped again after its restart this turn; it is started once more with the next turn")]
     NotRestarted,
+}
+
+impl crate::domain::ui_text::UiText for McpError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::NotStarted(_) => "mcp.not_started",
+            Self::Exited { .. } => "mcp.exited",
+            Self::Http { .. } => "mcp.http",
+            Self::Unreachable(_) => "mcp.unreachable",
+            Self::Timeout(_) => "mcp.timeout",
+            Self::Cancelled => "mcp.cancelled",
+            Self::Handshake(_) => "mcp.handshake",
+            Self::Server { .. } => "mcp.server_error",
+            Self::Protocol(_) => "mcp.protocol",
+            Self::NotRestarted => "mcp.not_restarted",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::NotStarted(detail) | Self::Unreachable(detail) | Self::Handshake(detail) | Self::Protocol(detail) => {
+                crate::domain::ui_text::reason(detail)
+            }
+            // The exit-code fragment and the HTTP hint are pre-rendered app
+            // text riding as parameters — the catalog's ceiling until it grows
+            // a richer syntax (docs/65, LC-2).
+            Self::Exited { code, stderr } => vec![
+                ("code", code.map(|c| format!(" with code {c}")).unwrap_or_default()),
+                ("output", last_output(stderr)),
+            ],
+            Self::Http { status, body } => vec![
+                ("status", status.to_string()),
+                ("hint", status_hint(*status).to_string()),
+                ("output", last_output(body)),
+            ],
+            Self::Timeout(seconds) => vec![("seconds", seconds.to_string())],
+            Self::Server { code, message } => vec![("code", code.to_string()), ("message", message.clone())],
+            Self::Cancelled | Self::NotRestarted => Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl McpError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::NotStarted("no such command".into()),
+            Self::Exited { code: Some(3), stderr: "boom".into() },
+            Self::Http { status: 401, body: "denied".into() },
+            Self::Unreachable("connection refused".into()),
+            Self::Timeout(30),
+            Self::Cancelled,
+            Self::Handshake("bad session".into()),
+            Self::Server { code: -32601, message: "no such method".into() },
+            Self::Protocol("not json-rpc".into()),
+            Self::NotRestarted,
+        ]
+    }
 }
 
 /// 401 is how a server says it wants OAuth, which is not built yet;

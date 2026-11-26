@@ -73,6 +73,32 @@ pub enum RepoSyncError {
     Store(#[from] IndexStoreError),
 }
 
+impl crate::domain::ui_text::UiText for RepoSyncError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Scan(_) => "index.scan",
+            Self::Store(e) => e.code(),
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Scan(e) => crate::domain::ui_text::reason(e),
+            Self::Store(e) => e.params(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl RepoSyncError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::Scan(io::Error::new(io::ErrorKind::Other, "permission denied")),
+            Self::Store(IndexStoreError::LockPoisoned),
+        ]
+    }
+}
+
 /// Brings `store` in line with the files under `root`.
 ///
 /// Also carries out the store's cheap rebuild: when

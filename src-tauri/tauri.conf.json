@@ -50,11 +50,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "models/potion-multilingual-128M-int8-ru-en",
-      "models/meeting/",
-      "prototype-libs/"
-    ],
+    "resources": {
+      "models/potion-multilingual-128M-int8-ru-en": "models/potion-multilingual-128M-int8-ru-en",
+      "models/meeting/": "models/meeting/",
+      "prototype-libs/": "prototype-libs/",
+      "infoplist/ru.lproj/InfoPlist.strings": "ru.lproj/InfoPlist.strings"
+    },
     "macOS": {
       "signingIdentity": "-",
       "entitlements": "Entitlements.plist"

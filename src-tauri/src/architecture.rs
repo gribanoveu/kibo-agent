@@ -307,6 +307,77 @@ fn every_event_name_matches_the_window() {
     assert!(missing.is_empty(), "events the window does not listen for by this name: {missing:?}");
 }
 
+/// The Russian bundle localization carries exactly the two access phrases
+/// the base Info.plist asks with, non-empty, and the config places it where
+/// macOS reads it — `Resources/ru.lproj`, not `Resources/infoplist/…` — while
+/// the models and prototype libs keep the places the app resolves them at
+/// (`docs/65-interface-language.md`, LC-4).
+#[test]
+fn the_russian_access_phrases_are_bundled_where_macos_reads_them() {
+    let plist = fs::read_to_string(crate_dir().join("Info.plist")).unwrap();
+    let strings = fs::read_to_string(crate_dir().join("infoplist/ru.lproj/InfoPlist.strings")).unwrap();
+    for key in ["NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription"] {
+        assert!(plist.contains(&format!("<key>{key}</key>")), "the base Info.plist lost {key}");
+        let line = strings.lines().find(|line| line.starts_with(&format!("\"{key}\""))).unwrap_or_else(|| panic!("ru.lproj lacks {key}"));
+        let value = line.split_once("\" = \"").unwrap_or_else(|| panic!("{key} is not a strings entry")).1;
+        assert!(value.trim_end_matches("\";").len() > 1, "{key} is empty");
+    }
+    let conf: serde_json::Value = serde_json::from_str(&fs::read_to_string(crate_dir().join("tauri.conf.json")).unwrap()).unwrap();
+    let resources = conf["bundle"]["resources"].as_object().expect("resources is a map: source → target");
+    let places = [
+        ("infoplist/ru.lproj/InfoPlist.strings", "ru.lproj/InfoPlist.strings"),
+        ("models/potion-multilingual-128M-int8-ru-en", "models/potion-multilingual-128M-int8-ru-en"),
+        ("models/meeting/", "models/meeting/"),
+        ("prototype-libs/", "prototype-libs/"),
+    ];
+    for (source, target) in places {
+        assert_eq!(resources.get(source).and_then(|v| v.as_str()), Some(target), "{source} is not placed at {target}");
+    }
+    assert_eq!(resources.len(), places.len(), "a resource the test does not know of");
+}
+
+/// Every variant of an error with `UiText` has a sample in its `ui_samples`,
+/// so the catalog test (`domain::ui_text`) checks every code: the count of
+/// `#[error]` attributes in the type's block is the count of variants, and a
+/// new variant without a sample fails here. Completeness of the codes is held
+/// by the exhaustive `match` in `UiText::code`, their correctness by the
+/// catalog test rendering each code's text back to the error's own `Display`.
+#[test]
+fn every_ui_text_variant_has_a_sample() {
+    let cases: &[(&str, &str, &str, usize)] = &[
+        ("domain/settings.rs", "pub enum AppDirError", "AppDirError", crate::domain::settings::AppDirError::ui_samples().len()),
+        ("domain/settings.rs", "pub enum CredentialsError", "CredentialsError", crate::domain::settings::CredentialsError::ui_samples().len()),
+        ("domain/settings.rs", "pub enum SettingsError", "SettingsError", crate::domain::settings::SettingsError::ui_samples().len()),
+        ("domain/settings.rs", "pub struct RecentFoldersError", "RecentFoldersError", crate::domain::settings::RecentFoldersError::ui_samples().len()),
+        ("domain/workspace.rs", "pub enum WorkspaceError", "WorkspaceError", crate::domain::workspace::WorkspaceError::ui_samples().len()),
+        ("domain/llm.rs", "pub enum LlmError", "LlmError", crate::domain::llm::LlmError::ui_samples().len()),
+        ("domain/mcp.rs", "pub enum McpConfigError", "McpConfigError", crate::domain::mcp::McpConfigError::ui_samples().len()),
+        ("domain/mcp.rs", "pub enum McpError", "McpError", crate::domain::mcp::McpError::ui_samples().len()),
+        ("infra/index_store.rs", "pub enum IndexStoreError", "IndexStoreError", crate::infra::index_store::IndexStoreError::ui_samples().len()),
+        ("services/repo_index.rs", "pub enum RepoSyncError", "RepoSyncError", crate::services::repo_index::RepoSyncError::ui_samples().len()),
+        ("services/workspace_index.rs", "pub enum WorkspaceIndexError", "WorkspaceIndexError", crate::services::workspace_index::WorkspaceIndexError::ui_samples().len()),
+        ("domain/turn.rs", "pub enum DecisionError", "DecisionError", crate::domain::turn::DecisionError::ui_samples().len()),
+        ("services/llm_chat/mod.rs", "pub enum TurnError", "TurnError", crate::services::llm_chat::TurnError::ui_samples().len()),
+        ("services/turn_setup.rs", "pub enum TurnSetupError", "TurnSetupError", crate::services::turn_setup::TurnSetupError::ui_samples().len()),
+        ("domain/chat_record.rs", "pub enum ChatError", "ChatError", crate::domain::chat_record::ChatError::ui_samples().len()),
+    ];
+    let mut failures = Vec::new();
+    for (file, decl, name, samples) in cases {
+        let text = fs::read_to_string(crate_dir().join("src").join(file)).unwrap();
+        let at = text.find(decl).unwrap_or_else(|| panic!("{decl} not found in {file}"));
+        // A tuple struct's `#[error]` sits above its one-line declaration.
+        let above = text[..at].lines().rev().take_while(|line| line.trim_start().starts_with("#[")).filter(|line| line.contains("#[error")).count();
+        let rest = &text[at..];
+        let first = rest.lines().next().unwrap();
+        let block = if first.ends_with(';') { first } else { rest.split("\n}").next().unwrap() };
+        let variants = block.matches("#[error").count() + above;
+        if variants != *samples {
+            failures.push(format!("{name}: {variants} variants, {samples} samples"));
+        }
+    }
+    assert!(failures.is_empty(), "ui_samples is out of step with the enums:\n{}", failures.join("\n"));
+}
+
 /// Which window may call which command, as the built app resolves it from
 /// `capabilities/` and the commands `build.rs` declares: the main window all
 /// of them, a Markdown viewer only its own — it shows a file and nothing more,

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 
 use crate::domain::conversation_mode::{ConversationMode, PickedMode};
+use crate::domain::workspace::WorkspaceError;
 use crate::domain::tools::ApprovalPolicy;
 use crate::domain::next_prompt::{FinishedTurn, TurnFeatures};
 use crate::domain::turn::{ChatEventPayload, ChatStreamOutcome};
@@ -223,7 +224,7 @@ impl AgentState {
 
     pub(crate) fn ensure_chat_idle(&self, chat_id: &str) -> Result<(), String> {
         if self.session(chat_id).is_running() {
-            Err("this chat's turn is running — wait for it to finish before moving or deleting it".into())
+            Err(crate::domain::chat_record::ChatError::TurnRunning.to_string())
         } else {
             Ok(())
         }
@@ -251,16 +252,16 @@ impl AgentState {
         if self.root_is_idle(root) {
             Ok(())
         } else {
-            Err("an agent turn is running in this folder — wait for it to finish, or start a worktree for the new chat".to_string())
+            Err(WorkspaceError::FolderBusy.to_string())
         }
     }
 
     pub(crate) fn workspace(&self) -> Result<PathBuf, String> {
         self.workspace
             .lock()
-            .map_err(|_| "workspace lock poisoned".to_string())?
+            .map_err(|_| WorkspaceError::LockPoisoned { what: "workspace".into() }.to_string())?
             .clone()
-            .ok_or_else(|| "no folder is open".to_string())
+            .ok_or_else(|| WorkspaceError::NoFolderOpen.to_string())
     }
 
     /// The open folders (F-8), the last added first.
@@ -305,7 +306,7 @@ impl AgentState {
     pub(super) fn allow_always(&self, root: &std::path::Path, tool: &str) -> Result<(), String> {
         let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
         if !open.iter().any(|known| known == root) {
-            return Err(format!("{} is not an open folder", root.display()));
+            return Err(WorkspaceError::NotOpen { path: root.display().to_string() }.to_string());
         }
         let mut allowed = self.allowed.lock().unwrap_or_else(PoisonError::into_inner);
         allowed.entry(root.to_path_buf()).or_default().allow_always(tool)
@@ -316,7 +317,7 @@ impl AgentState {
     pub(crate) fn still_open(&self, root: &std::path::Path) -> Result<(), String> {
         match self.is_open(root) {
             true => Ok(()),
-            false => Err(format!("{} is not an open folder — open it to work in this chat", root.display())),
+            false => Err(WorkspaceError::NotOpenForChat { path: root.display().to_string() }.to_string()),
         }
     }
 
@@ -326,11 +327,11 @@ impl AgentState {
     /// one of the open folders.
     pub(crate) fn require_open(&self, path: &str) -> Result<PathBuf, String> {
         let asked = crate::infra::paths::canonicalize_plain(std::path::Path::new(path))
-            .map_err(|e| format!("cannot use {path}: {e}"))?;
+            .map_err(|e| WorkspaceError::CannotUse { path: path.to_string(), reason: e.to_string() }.to_string())?;
         if self.is_open(&asked) {
             Ok(asked)
         } else {
-            Err(format!("{path} is not an open folder"))
+            Err(WorkspaceError::NotOpen { path: path.to_string() }.to_string())
         }
     }
 
@@ -421,7 +422,7 @@ impl AgentState {
     /// The policy a turn in `root` runs under: Auto as the app has it, and
     /// "always allow" as given in that folder.
     pub(super) fn approval(&self, root: &std::path::Path) -> Result<ApprovalPolicy, String> {
-        let mut policy = self.approval.lock().map_err(|_| "approval lock poisoned".to_string())?.clone();
+        let mut policy = self.approval.lock().map_err(|_| WorkspaceError::LockPoisoned { what: "approval".into() }.to_string())?.clone();
         let allowed = self.allowed.lock().unwrap_or_else(PoisonError::into_inner);
         let here = allowed.get(root);
         policy.always_allowed = here.map(|here| here.always_allowed.clone()).unwrap_or_default();

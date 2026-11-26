@@ -250,6 +250,44 @@ pub enum LlmError {
     Message(String),
 }
 
+impl crate::domain::ui_text::UiText for LlmError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Provider(_) => "provider.error",
+            Self::RateLimited { .. } => "provider.rate_limited",
+            Self::Unavailable { .. } => "provider.unavailable",
+            Self::Http(_) => "provider.http",
+            Self::Tls(_) => "provider.tls",
+            Self::Message(_) => "provider.message",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Provider(detail) | Self::Http(detail) | Self::Tls(detail) | Self::Message(detail) => {
+                vec![("detail", detail.clone())]
+            }
+            Self::RateLimited { message, .. } | Self::Unavailable { message, .. } => {
+                vec![("message", message.clone())]
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+impl LlmError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::Provider("http status 400: bad request".into()),
+            Self::RateLimited { retry_after_seconds: Some(30), message: "http status 429".into() },
+            Self::Unavailable { retry_after_seconds: None, message: "http status 503".into() },
+            Self::Http("http status 404: not found".into()),
+            Self::Tls("bad certificate".into()),
+            Self::Message("no model is configured".into()),
+        ]
+    }
+}
+
 /// Replaces `arguments` with `"{}"` on any call whose arguments do not parse
 /// as a JSON object, before they are echoed back in the next request.
 ///

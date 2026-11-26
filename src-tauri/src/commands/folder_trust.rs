@@ -23,6 +23,6 @@ pub fn folder_trust_set(
 ) -> Result<(), String> {
     let workspace = state
         .ui_workspace(&workspace)?
-        .ok_or_else(|| "no folder is open".to_string())?;
+        .ok_or_else(|| crate::domain::workspace::WorkspaceError::NoFolderOpen.to_string())?;
     folder_trust::set(&workspace, trusted).map_err(|e| e.to_string())
 }

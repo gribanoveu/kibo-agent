@@ -61,3 +61,5 @@ pub mod code_host;
 pub mod commit_message;
 pub mod file_tree;
 pub mod file_write;
+pub mod ui_text;
+pub mod workspace;

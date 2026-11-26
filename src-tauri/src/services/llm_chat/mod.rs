@@ -331,6 +331,38 @@ pub enum TurnError {
     Decision(#[from] DecisionError),
 }
 
+impl crate::domain::ui_text::UiText for TurnError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Provider(e) => e.code(),
+            Self::Failed { error, .. } => error.code(),
+            Self::BadResume(_) => "turn.bad_resume",
+            Self::Decision(e) => e.code(),
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Provider(e) => e.params(),
+            Self::Failed { error, .. } => error.params(),
+            Self::BadResume(detail) => crate::domain::ui_text::reason(detail),
+            Self::Decision(e) => e.params(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl TurnError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::Provider(LlmError::Message("no model".into())),
+            Self::Failed { error: LlmError::Message("no model".into()), history: vec![], todos: vec![], plan: None },
+            Self::BadResume("no checkpoint".into()),
+            Self::Decision(DecisionError::Missing("call-1".into())),
+        ]
+    }
+}
+
 /// Assigns each event its place in the stream. The cursor is restored from the
 /// checkpoint on resume, which is what keeps one turn's numbering monotonic
 /// across the gap.
