@@ -119,6 +119,7 @@ A clock that only redraws elapsed time (`ChatPanel`) is not polling.
 
 ## Style
 
+- Design and work with a maintainer's eye: maintainability over cleverness, the hidden couplings and contracts that will break as the codebase evolves, and tests complete enough to catch that breakage.
 - Prefer immutable data and explicit, exhaustive error handling (`match` over ignoring `Err`).
 - Keep abstractions proportionate to actual need — don't add a layer, trait, or generic parameter for a hypothetical future case.
 - Match existing patterns in the file/module you're editing before introducing a new one.

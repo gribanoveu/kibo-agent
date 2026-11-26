@@ -51,6 +51,13 @@ describe("where your data goes", () => {
     expect(row("MCP servers")).toContain("over the network");
   });
 
+  /// CM-4: the row answers "where do these messages go" — each chat keeps its own provider.
+  test("the provider row says each chat keeps the provider it started on", () => {
+    render(<DataPolicy provider={provider} debugLogging={false} mcpServers={[]} hooks={[]} />);
+    expect(row("Model provider")).toContain("Each chat keeps the provider it started on");
+    expect(row("Model provider")).toContain("a new chat starts on the active one");
+  });
+
   test("says when nothing is set up, and when the request log writes to disk", () => {
     render(<DataPolicy provider={null} debugLogging mcpServers={[server("github", false)]} hooks={[]} />);
 

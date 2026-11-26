@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::State;
 
-use crate::domain::chat_record::{ChatGroup, ChatRecord, ChatSummary, GroupList};
+use crate::domain::chat_record::{ChatGroup, ChatModel, ChatRecord, ChatSummary, GroupList};
 use crate::domain::llm::LlmMessage;
 use crate::domain::tools::Task;
 use crate::infra::chat_store;
@@ -127,6 +127,11 @@ pub async fn chat_save(
             )
         };
         let summary = saved.map_err(|e| e.to_string())?;
+        // The chat speaks through the provider it was begun on: the first
+        // save stamps it, later ones are a no-op. Best effort — the chat is
+        // saved; an unpinned chat speaks through the active provider, as
+        // every chat did before pins.
+        let _ = crate::services::chat_model::stamp_if_absent(&id);
         if first {
             super::approval::remember_new_chat(&state, &id);
         }
@@ -190,6 +195,14 @@ pub async fn chat_export(id: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn chat_set_archived(id: String, archived: bool) -> Result<(), String> {
     blocking(move || chat_store::set_archived(&id, archived)).await
+}
+
+/// The provider and model this chat speaks with — a pick made in its chip.
+/// `model: None` is "auto": the provider's own pin decides. Like pinning a
+/// chat to the sidebar, this is not conversation: `updated_at` stands.
+#[tauri::command]
+pub async fn chat_model_set(id: String, provider: String, model: Option<String>) -> Result<(), String> {
+    blocking(move || chat_store::set_model(&id, &ChatModel { provider, model })).await
 }
 
 #[tauri::command]
@@ -480,6 +493,67 @@ mod tests {
             .unwrap();
             assert_eq!(chat_store::journal_message_count("c1", "c1/turn-1").unwrap(), 0, "the ended turn folded");
             assert_eq!(chat_store::journal_message_count("c1", "c1/turn-2").unwrap(), 1, "the live turn's base survives");
+        });
+    }
+
+    /// CM-2: the first save pins the chat to the provider the conversation
+    /// started on; a later save under another active provider does not move
+    /// it, and a pick made in the chat stands through saves too.
+    #[test]
+    fn the_first_save_pins_the_chat_to_the_active_provider() {
+        use tauri::Manager;
+        use crate::domain::settings::{AppSettings, LlmSettings, ProviderConfig};
+        crate::testing::with_app_dir("cmd-chat-model-stamp", || {
+            let app = tauri::test::mock_app();
+            let state = Arc::new(AgentState::default());
+            app.manage(Arc::clone(&state));
+            let root = crate::infra::paths::canonicalize_plain(&temp_dir("cmd-chat-model-stamp-root")).unwrap();
+            state.register_open(root.clone());
+            state.set_workspace_for_test(root.clone());
+            let settings = |active: &str| AppSettings {
+                llm: LlmSettings {
+                    active_provider_id: Some(active.into()),
+                    providers: ["a", "b"].iter().map(|id| ProviderConfig {
+                        id: id.to_string(),
+                        base_url: format!("https://{id}.example/v1"),
+                        model: Some(format!("m{id}")),
+                        ..Default::default()
+                    }).collect(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            crate::infra::settings_store::save(&settings("a")).unwrap();
+            let save = || tauri::async_runtime::block_on(chat_save(
+                app.state(), "c1".into(), vec![LlmMessage::user("go")], serde_json::json!([]), vec![], None, None, None, None,
+            )).unwrap();
+
+            save();
+            assert_eq!(chat_store::model("c1").unwrap(), Some(ChatModel { provider: "a".into(), model: Some("ma".into()) }));
+
+            crate::infra::settings_store::save(&settings("b")).unwrap();
+            save();
+            assert_eq!(chat_store::model("c1").unwrap().unwrap().provider, "a", "a later save does not move the pin");
+
+            chat_store::set_model("c1", &ChatModel { provider: "b".into(), model: None }).unwrap();
+            save();
+            assert_eq!(chat_store::model("c1").unwrap(), Some(ChatModel { provider: "b".into(), model: None }), "a pick stands");
+        });
+    }
+
+    /// CM-2: the chip's pick reaches the chat's row, auto included.
+    #[test]
+    fn a_pick_in_the_chip_reaches_the_chats_row() {
+        crate::testing::with_app_dir("cmd-chat-model-set", || {
+            chat_store::save("c1", "/repo", &[LlmMessage::user("go")], &serde_json::json!([]), &[], None, None, None).unwrap();
+
+            tauri::async_runtime::block_on(chat_model_set("c1".into(), "local".into(), Some("llama".into()))).unwrap();
+            assert_eq!(chat_store::model("c1").unwrap(), Some(ChatModel { provider: "local".into(), model: Some("llama".into()) }));
+
+            tauri::async_runtime::block_on(chat_model_set("c1".into(), "local".into(), None)).unwrap();
+            assert_eq!(chat_store::model("c1").unwrap(), Some(ChatModel { provider: "local".into(), model: None }), "auto is a pin");
+
+            assert!(tauri::async_runtime::block_on(chat_model_set("nope".into(), "local".into(), None)).is_err());
         });
     }
 

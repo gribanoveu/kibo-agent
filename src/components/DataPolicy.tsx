@@ -38,7 +38,7 @@ export function DataPolicy({ provider, debugLogging, mcpServers, hooks }: Props)
     {
       name: "Model provider",
       value: provider ? `${host(provider.baseUrl)} (${provider.id})` : "none set up",
-      note: "Gets the conversation, including what the agent read from files. Besides MCP servers at a URL, the only place the app itself sends anything.",
+      note: "Gets the conversation, including what the agent read from files. Besides MCP servers at a URL, the only place the app itself sends anything. Each chat keeps the provider it started on; a new chat starts on the active one.",
     },
     {
       name: "MCP servers",
