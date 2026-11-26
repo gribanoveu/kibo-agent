@@ -1,9 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-// Who the model is in Chat mode: small chips under the card, each its own
-// press. One role per chat — what was said was said to it — so once the chat
-// has started only its own chip is left, and it is not a press.
+// Who the model is in Chat mode: small chips under the empty card, each its
+// own press. One role per chat — what was said was said to it — so once the
+// chat has started only its own chip is left, not a press, on the strip
+// beside the model where the role's menu was.
 
 mock.module("@tauri-apps/api/core", () => ({
   invoke: () => Promise.resolve(null),
@@ -97,6 +98,18 @@ describe("the role chips under Chat mode's card", () => {
     expect(row.parentElement).toBe(wrap);
     expect(wrap.querySelector(".plain-tab")!.contains(row)).toBe(false);
     expect([...wrap.children].indexOf(row)).toBeGreaterThan([...wrap.children].indexOf(wrap.querySelector(".plain-tab")!));
+  });
+
+  /// A chat under way: its one chip is on the strip beside the model, where
+  /// the role's menu was — not a row under the card.
+  test("a chat under way keeps its chip on the strip, first before the model", () => {
+    screenWith(true);
+    const wrap = document.querySelector(".plain-composer-wrap")!;
+    const tab = wrap.querySelector(".plain-tab")!;
+    const row = tab.querySelector(".plain-roles")!;
+    expect(row).toBeTruthy();
+    expect(tab.firstElementChild).toBe(row);
+    expect(wrap.querySelectorAll(".plain-roles").length).toBe(1);
   });
 
   /// A radio group is one tab stop and answers the arrows: the choice moves,
