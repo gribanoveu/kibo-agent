@@ -1,5 +1,19 @@
 import { useCallback, useRef } from "react";
 
+/** How long a position we wrote stays cancellable: a commit lagging the stick
+ *  by more than this reads as the user's. Six hundred milliseconds is tens of
+ *  frames of streaming — far past any commit lag seen under load. */
+const LOG_MS = 600;
+/** How long after a let go its own writes may still arrive as scroll events.
+ *  A frame or two; a user's return to the end comes later than this. */
+const ECHO_MS = 150;
+/** How many sticks the log keeps: a couple of seconds at a frame each. An echo
+ *  is a frame old, and an answer at rest keeps its last stick however long the
+ *  rest — so the log is capped by count, not pruned by age. */
+const LOG_MAX = 128;
+/** A pixel of slack: scrollTop is fractional on a Retina screen. */
+const SLACK = 2;
+
 /**
  * Keeps a scrolling box at its end while it grows — until the user scrolls
  * away from the end; scrolling back to it picks it up again.
@@ -15,84 +29,77 @@ import { useCallback, useRef } from "react";
  * `scrollRef` goes on the scrolling box, `contentRef` on the one child that
  * holds everything inside it.
  *
- * Letting go cannot wait for the scroll event alone. WebKit scrolls a box off
- * the main thread and reports it a frame or more later; a stream grows the
- * thread every frame, and the stick in between put the box back at the end
- * before the user's scroll was ever seen. So a wheel turned up (or a key that
- * scrolls up) lets go at once.
+ * A scroll event cannot be read as the user's while we write the box ourselves:
+ * WebKit scrolls off the main thread and reports a position a frame or more
+ * later, so under load an event reads a stick of ours — or the clamp a shrink
+ * put on one — and taking that for the user stopped the thread mid-stream, or
+ * froze the stick while a second read confirmed it. What we wrote is known, so
+ * it is cancelled instead of guessed at: every stick logs the position it left,
+ * and a read matching a recent entry is ours. A read at a position we never
+ * wrote is the user's — a drag, a lone scrollbar click — and lets go at once,
+ * with no second read and no pause in the sticking. A wheel turned up (or a key
+ * that scrolls up) lets go before any scroll event, as it always did.
  *
- * Nor can a scroll event away from the end be taken for the user's on its
- * own: under load the scrolling thread's commit lags the stick, and the event
- * reads a position older than the last stick — or a commit clobbers the stick
- * itself. Both read as a scroll away while the answer streams. So an
- * ambiguous read holds the stick and waits for the next scroll event to
- * confirm it: a drag keeps sending them, a stale commit does not. A short
- * timeout re-sticks when nothing confirms.
+ * While not following we write nothing, but the DOM does: a shrink clamps the
+ * box to the new end. For a frame after a let go the echoes of our own writes
+ * arrive too, so reads in that window are ignored; after it, a read at the end
+ * picks the thread back up — the reader is at the end again, whether they
+ * scrolled there or the clamp put them there.
  *
- * ponytail: a lone scrollbar-track click sends one event and is re-stuck —
- * it reads exactly like a stale commit, and letting the first event go is
- * the bug this confirmation fixes. The way past it is a scrollbar-intent
- * signal WebKit does not give; wheel, keys and a drag already let go.
+ * ponytail: the windows and the slack are the ceiling. A commit older than
+ * LOG_MS reads as the user's and lets go; a read within SLACK of a position we
+ * logged is cancelled even if the user put the box there (a drag sends many
+ * reads, so one match costs nothing); a return to the end within ECHO_MS of a
+ * let go is taken for an echo and waits for the next read. The way past them is
+ * a scroll-intent signal WebKit does not give; wheel, keys, drags and scrollbar
+ * clicks already let go on their first read.
  */
 export function useFollowBottom() {
   const box = useRef<HTMLElement | null>(null);
   const following = useRef(true);
-  // Where the last stick left the box, as the box reports it back.
-  const stuckAt = useRef<number | null>(null);
-  // The ambiguous read awaiting confirmation, and its re-stick timeout.
-  const suspect = useRef<number | null>(null);
-  const timer = useRef(0);
+  // Where our sticks left the box, and when: the reads that are ours.
+  const writes = useRef<{ top: number; at: number }[]>([]);
+  // When we last let go: the echo window runs from it, not from a write — an
+  // answer at rest lets go over a stick of a second ago, and its echo is still
+  // an echo.
+  const letGoAt = useRef(0);
 
   const stick = useCallback(() => {
     const el = box.current;
-    if (!following.current || !el || suspect.current !== null) return;
+    if (!following.current || !el) return;
     el.scrollTop = el.scrollHeight;
-    stuckAt.current = el.scrollTop;
-  }, []);
-
-  const settled = useCallback(() => {
-    suspect.current = null;
-    window.clearTimeout(timer.current);
+    const log = writes.current;
+    log.push({ top: el.scrollTop, at: performance.now() });
+    if (log.length > LOG_MAX) log.shift();
   }, []);
 
   const scrollRef = useCallback(
     (el: HTMLElement | null) => {
       if (!el) return;
       box.current = el;
-      // A pixel of slack: scrollTop is fractional on a Retina screen.
+      const ours = (top: number, now: number, withinMs = Number.POSITIVE_INFINITY) =>
+        writes.current.some((w) => now - w.at <= withinMs && Math.abs(w.top - top) < SLACK);
       const onScroll = () => {
         const top = el.scrollTop;
-        if (el.scrollHeight - el.clientHeight - top < 2) {
-          // A read at the end right after a wheel let go is the commit still
-          // catching up, not the user back: stuckAt is null until a read away
-          // from the end arms it again.
-          if (stuckAt.current === null) return;
-          settled();
+        const now = performance.now();
+        const atEnd = el.scrollHeight - el.clientHeight - top < SLACK;
+        if (following.current) {
+          // Our own echo, or the clamp a shrink put on one: not the user.
+          if (atEnd || ours(top, now, LOG_MS)) return;
+          following.current = false;
+          letGoAt.current = now;
+          return;
+        }
+        // Not following: we write nothing, but the DOM's clamp and the echoes
+        // of the let go still arrive. Within the echo window only our own
+        // positions are cancelled — a return to a new end is the user's even
+        // now; past it a read at the end is the reader at the end again, clamp
+        // or return alike.
+        if (now - letGoAt.current <= ECHO_MS && ours(top, now)) return;
+        if (atEnd) {
           following.current = true;
-          stuckAt.current = top;
-          return;
-        }
-        // The first read away after a let go arms the end-check again: the
-        // user has moved, so a later read at the end is them back.
-        if (stuckAt.current === null) stuckAt.current = top;
-        if (top === stuckAt.current) return;
-        if (suspect.current !== null) {
-          // A second read still up confirms the user; one back at the stick's
-          // position was the commit catching up.
-          if (top <= suspect.current + 2) {
-            following.current = false;
-            settled();
-          } else {
-            settled();
-            stick();
-          }
-          return;
-        }
-        suspect.current = top;
-        timer.current = window.setTimeout(() => {
-          suspect.current = null;
           stick();
-        }, 150);
+        }
       };
       // Only where there is something to scroll up to: a wheel turned up at
       // the top moves nothing, and letting go there would stop the thread
@@ -102,8 +109,7 @@ export function useFollowBottom() {
       const letGo = () => {
         if (el.scrollTop <= 0 || el.scrollHeight - el.clientHeight < 2) return;
         following.current = false;
-        stuckAt.current = null;
-        settled();
+        letGoAt.current = performance.now();
       };
       const onWheel = (e: WheelEvent) => {
         if (e.deltaY < 0) letGo();
@@ -115,14 +121,13 @@ export function useFollowBottom() {
       el.addEventListener("wheel", onWheel, { passive: true });
       el.addEventListener("keydown", onKey);
       return () => {
-        settled();
         el.removeEventListener("scroll", onScroll);
         el.removeEventListener("wheel", onWheel);
         el.removeEventListener("keydown", onKey);
         box.current = null;
       };
     },
-    [stick, settled],
+    [stick],
   );
 
   const contentRef = useCallback(
@@ -138,9 +143,8 @@ export function useFollowBottom() {
   /** Back to the end, following again — for when the user just sent something. */
   const scrollToBottom = useCallback(() => {
     following.current = true;
-    settled();
     stick();
-  }, [stick, settled]);
+  }, [stick]);
 
   return { scrollRef, contentRef, scrollToBottom };
 }
