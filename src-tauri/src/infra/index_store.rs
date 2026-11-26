@@ -161,6 +161,35 @@ pub enum IndexStoreError {
     LockPoisoned,
 }
 
+impl crate::domain::ui_text::UiText for IndexStoreError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Sqlite(_) => "index.sqlite",
+            Self::Io(_) => "index.io",
+            Self::LockPoisoned => "index.lock_poisoned",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Sqlite(e) => crate::domain::ui_text::reason(e),
+            Self::Io(e) => crate::domain::ui_text::reason(e),
+            Self::LockPoisoned => Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl IndexStoreError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::Sqlite(rusqlite::Error::InvalidParameterName("x".into())),
+            Self::Io(std::io::Error::new(std::io::ErrorKind::Other, "locked")),
+            Self::LockPoisoned,
+        ]
+    }
+}
+
 /// One connection per repository, shared by everything that reads or writes
 /// that repository's index.
 pub struct IndexStore {

@@ -22,7 +22,7 @@ pub async fn workspace_list(
 ) -> Result<FolderListing, String> {
     let root = state
         .ui_workspace(&workspace)?
-        .ok_or_else(|| "no folder is open".to_string())?;
+        .ok_or_else(|| crate::domain::workspace::WorkspaceError::NoFolderOpen.to_string())?;
     tauri::async_runtime::spawn_blocking(move || file_tree::list(&root, &dir))
         .await
         .map_err(|e| e.to_string())?

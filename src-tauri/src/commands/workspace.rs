@@ -6,6 +6,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Runtime, State};
 
+use crate::domain::workspace::WorkspaceError;
 use crate::infra::background::Processes;
 use crate::infra::terminal::Terminals;
 use crate::services::mcp_servers::McpServers;
@@ -60,7 +61,7 @@ async fn close_folder<R: Runtime>(
     index: &Arc<WorkspaceIndex>,
 ) -> Result<(), String> {
     if !state.unregister_if_idle(&root) {
-        return Err("an agent turn is running in this folder — stop it before closing the folder".to_string());
+        return Err(WorkspaceError::TurnRunning.to_string());
     }
     forget_open(&root);
     let processes = app.try_state::<Arc<Processes>>().map(|processes| Arc::clone(&processes));
@@ -113,9 +114,9 @@ async fn add<R: Runtime>(
     // opens in `C:\Windows`), the tools' root, the index's events, the keys
     // chats and trust are saved under.
     let resolved = crate::infra::paths::canonicalize_plain(Path::new(&path))
-        .map_err(|e| format!("cannot open {path}: {e}"))?;
+        .map_err(|e| WorkspaceError::CannotOpen { path: path.clone(), reason: e.to_string() }.to_string())?;
     if !resolved.is_dir() {
-        return Err(format!("{path} is not a folder"));
+        return Err(WorkspaceError::NotAFolder { path }.to_string());
     }
     state.register_open(resolved.clone());
     // Only a convenience for the next launch: an open folder stays open even
@@ -139,7 +140,7 @@ async fn activate<R: Runtime>(
     *state
         .workspace
         .lock()
-        .map_err(|_| "workspace lock poisoned".to_string())? = Some(root.clone());
+        .map_err(|_| WorkspaceError::LockPoisoned { what: "workspace".into() }.to_string())? = Some(root.clone());
     let shown = root.display().to_string();
     super::git::watch_git(app, git_watch, &root, shown.clone());
     let index = Arc::clone(index);
@@ -172,7 +173,7 @@ pub async fn workspace_close<R: Runtime>(
         *state
             .workspace
             .lock()
-            .map_err(|_| "workspace lock poisoned".to_string())? = next.clone();
+            .map_err(|_| WorkspaceError::LockPoisoned { what: "workspace".into() }.to_string())? = next.clone();
         match next {
             Some(next) => drop(activate(next, &app, &state, &index, &git_watch).await?),
             None => git_watch.stop(),

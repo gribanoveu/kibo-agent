@@ -63,6 +63,49 @@ pub enum TurnSetupError {
     ChatFolder(#[from] crate::domain::prototype::PrototypeError),
 }
 
+impl crate::domain::ui_text::UiText for TurnSetupError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Session(e) => e.code(),
+            // Errors of the tool surface, hooks, web search and Prototype are
+            // outside LC-2's six areas: their text rides as `reason`.
+            Self::Folder(_) => "turn.folder",
+            Self::Hooks { .. } => "turn.hooks",
+            Self::Web(_) => "turn.web",
+            Self::Settings(e) => e.code(),
+            Self::Turn(e) => e.code(),
+            Self::ChatFolder(_) => "turn.chat_folder",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Session(e) => e.params(),
+            Self::Folder(e) => crate::domain::ui_text::reason(e),
+            Self::Hooks { error, path } => vec![("reason", error.to_string()), ("path", path.clone())],
+            Self::Web(e) => crate::domain::ui_text::reason(e),
+            Self::Settings(e) => e.params(),
+            Self::Turn(e) => e.params(),
+            Self::ChatFolder(e) => crate::domain::ui_text::reason(e),
+        }
+    }
+}
+
+#[cfg(test)]
+impl TurnSetupError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::Session(LlmError::Message("no model".into())),
+            Self::Folder(ToolError::PathEscape("../x".into())),
+            Self::Hooks { error: HooksConfigError::Read("locked".into()), path: "/hooks.json".into() },
+            Self::Web(WebSetupError::Keys(crate::domain::settings::CredentialsError::Save("disk full".into()))),
+            Self::Settings(crate::domain::settings::SettingsError::Write("disk full".into())),
+            Self::Turn(TurnError::BadResume("no checkpoint".into())),
+            Self::ChatFolder(crate::domain::prototype::PrototypeError::NotAChatId("../x".into())),
+        ]
+    }
+}
+
 /// What a turn in a folder gets from the running app — each `None` where the
 /// app has none of it, as under a mock runtime.
 #[derive(Default)]

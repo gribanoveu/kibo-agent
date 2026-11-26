@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::ui_text::{reason, UiText};
+
 /// The context window assumed for a provider that never set one — large
 /// enough for today's frontier models, so compaction runs rather than
 /// staying off until someone looks for the setting.
@@ -584,6 +586,123 @@ pub enum SettingsError {
     /// renamed, so the user can retry once it is reachable.
     #[error(transparent)]
     Credentials(#[from] CredentialsError),
+}
+
+impl UiText for AppDirError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::NoHome => "settings.no_home",
+            // A test that forgot its throwaway directory — never a user's.
+            Self::NotInstalled => "internal",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::NoHome => Vec::new(),
+            Self::NotInstalled => vec![("detail", self.to_string())],
+        }
+    }
+}
+
+impl UiText for CredentialsError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::AppDir(e) => e.code(),
+            Self::Read { .. } => "keys.read",
+            Self::MasterKey(_) => "keys.master_key",
+            Self::Foreign(_) => "keys.foreign",
+            Self::Damaged(_) => "keys.damaged",
+            Self::Save(_) => "keys.save",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::AppDir(e) => e.params(),
+            Self::Read { path, reason } => vec![("path", path.clone()), ("reason", reason.clone())],
+            Self::MasterKey(detail) | Self::Save(detail) => vec![("detail", detail.clone())],
+            Self::Foreign(path) | Self::Damaged(path) => vec![("path", path.clone())],
+        }
+    }
+}
+
+impl UiText for SettingsError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::AppDir(e) => e.code(),
+            Self::Read(_) => "settings.read",
+            Self::Write(_) => "settings.write",
+            Self::Parse(_) => "settings.parse",
+            Self::Serialize(_) => "settings.serialize",
+            Self::NameTaken(_) => "settings.name_taken",
+            Self::Credentials(e) => e.code(),
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::AppDir(e) => e.params(),
+            Self::Read(e) => reason(e),
+            Self::Write(detail) => vec![("reason", detail.clone())],
+            Self::Parse(e) | Self::Serialize(e) => reason(e),
+            Self::NameTaken(name) => vec![("name", name.clone())],
+            Self::Credentials(e) => e.params(),
+        }
+    }
+}
+
+impl UiText for RecentFoldersError {
+    fn code(&self) -> &'static str {
+        "workspace.recent_save"
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        vec![("detail", self.0.clone())]
+    }
+}
+
+#[cfg(test)]
+impl AppDirError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![Self::NoHome, Self::NotInstalled]
+    }
+}
+
+#[cfg(test)]
+impl CredentialsError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::AppDir(AppDirError::NoHome),
+            Self::Read { path: "/keys".into(), reason: "locked".into() },
+            Self::MasterKey("out of reach".into()),
+            Self::Foreign("/keys".into()),
+            Self::Damaged("/keys".into()),
+            Self::Save("disk full".into()),
+        ]
+    }
+}
+
+#[cfg(test)]
+impl SettingsError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::AppDir(AppDirError::NoHome),
+            Self::Read(std::io::Error::new(std::io::ErrorKind::Other, "locked")),
+            Self::Write("disk full".into()),
+            Self::Parse(serde_json::from_str::<u8>("x").unwrap_err()),
+            Self::Serialize(serde_json::from_str::<u8>("x").unwrap_err()),
+            Self::NameTaken("local".into()),
+            Self::Credentials(CredentialsError::Save("disk full".into())),
+        ]
+    }
+}
+
+#[cfg(test)]
+impl RecentFoldersError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![Self("disk full".into())]
+    }
 }
 
 #[cfg(test)]

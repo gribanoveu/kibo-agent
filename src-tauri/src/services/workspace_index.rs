@@ -40,6 +40,32 @@ pub enum WorkspaceIndexError {
     Watch(#[from] notify::Error),
 }
 
+impl crate::domain::ui_text::UiText for WorkspaceIndexError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Store(_) => "index.open",
+            Self::Watch(_) => "index.watch",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Store(e) => crate::domain::ui_text::reason(e),
+            Self::Watch(e) => crate::domain::ui_text::reason(e),
+        }
+    }
+}
+
+#[cfg(test)]
+impl WorkspaceIndexError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![
+            Self::Store(IndexStoreError::LockPoisoned),
+            Self::Watch(notify::Error::generic("watch failed")),
+        ]
+    }
+}
+
 pub struct WorkspaceIndex {
     index_dir: PathBuf,
     provider: Arc<dyn EmbeddingProvider>,

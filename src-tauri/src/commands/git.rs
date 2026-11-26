@@ -67,7 +67,7 @@ async fn in_repo<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
     workspace: &Option<String>,
     op: impl FnOnce(PathBuf) -> Result<T, E> + Send + 'static,
 ) -> Result<T, String> {
-    let root = state.ui_workspace(workspace)?.ok_or_else(|| "no folder is open".to_string())?;
+    let root = state.ui_workspace(workspace)?.ok_or_else(|| crate::domain::workspace::WorkspaceError::NoFolderOpen.to_string())?;
     super::blocking(move || op(root)).await
 }
 
@@ -107,7 +107,7 @@ pub async fn git_commit(message: String, workspace: Option<String>, state: State
 /// model; `draft` is what the box already holds.
 #[tauri::command]
 pub async fn git_commit_message(draft: String, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<String, String> {
-    let root = state.ui_workspace(&workspace)?.ok_or_else(|| "no folder is open".to_string())?;
+    let root = state.ui_workspace(&workspace)?.ok_or_else(|| crate::domain::workspace::WorkspaceError::NoFolderOpen.to_string())?;
     // A request to the provider, which would freeze the IPC loop for its duration.
     tauri::async_runtime::spawn_blocking(move || {
         let session = llm_session::resolve(None).map_err(|e| e.to_string())?;
@@ -142,7 +142,7 @@ pub async fn git_branches(workspace: Option<String>, state: State<'_, Arc<AgentS
 /// one around or inside it, holds it (F-8); one in an unrelated folder does not.
 #[tauri::command]
 pub async fn git_checkout(branch: String, workspace: Option<String>, state: State<'_, Arc<AgentState>>) -> Result<CheckoutOutcome, String> {
-    let root = state.ui_workspace(&workspace)?.ok_or_else(|| "no folder is open".to_string())?;
+    let root = state.ui_workspace(&workspace)?.ok_or_else(|| crate::domain::workspace::WorkspaceError::NoFolderOpen.to_string())?;
     state.ensure_folder_idle(&root)?;
     super::blocking(move || git_branches::checkout(&root, &branch)).await
 }

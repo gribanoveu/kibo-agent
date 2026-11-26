@@ -185,6 +185,28 @@ pub enum DecisionError {
     Unknown(String),
 }
 
+impl crate::domain::ui_text::UiText for DecisionError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Missing(_) => "turn.decision_missing",
+            Self::Unknown(_) => "turn.decision_unknown",
+        }
+    }
+
+    fn params(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Missing(call) | Self::Unknown(call) => vec![("call", call.clone())],
+        }
+    }
+}
+
+#[cfg(test)]
+impl DecisionError {
+    pub fn ui_samples() -> Vec<Self> {
+        vec![Self::Missing("call-1".into()), Self::Unknown("call-1".into())]
+    }
+}
+
 /// What the model is told a mid-turn note is: a clarification of the work in
 /// progress, not a new task. Without the distinction a note like "use the
 /// existing helper" reads as a fresh instruction, and the model starts over.
