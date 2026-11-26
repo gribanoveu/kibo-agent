@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 2026-11-26 The macOS menu bar and the prompts for the microphone and the call's sound speak Russian on a Russian system; the menu follows the interface language kept in settings — the system's by default — ahead of the picker and the translated screens
 - 2026-11-25 A chat keeps the provider and model it was begun on: switching the model in one chat leaves its neighbours and the next new chat where they were, and a chat whose provider was removed switches once to the active one and stays there. The chip, the thinking level, the balance, the context meter and the data policy follow the open chat's own provider; "auto" keeps following its provider's pin, and Settings → Models says its pick is for new chats
 - 2026-11-25 A provider's name in the model menu is a band across it, a shade darker than the menu's own ground, edge to edge — a shelf over its own models rather than another row among them
 - 2026-11-25 The answer no longer steps down as the agent finishes: the ticking clock and the "Worked for…" line that takes its place were 14px apart in height, and a thread pinned to its end pulled the whole answer down by the difference — the last turn's line now keeps the clock's box, so the swap moves nothing
