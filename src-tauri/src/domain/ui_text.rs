@@ -114,12 +114,12 @@ mod tests {
     }
 
     /// A key no error produces is a leftover — the catalog and the domain
-    /// say the same thing.
+    /// say the same thing. `menu.*` is the menu bar's, held by `menu.rs`.
     #[test]
     fn the_catalog_has_no_orphan_keys() {
         let produced = all_codes();
         let catalog = catalog();
-        let orphans: Vec<&String> = catalog.keys().filter(|key| !produced.contains(key.as_str())).collect();
+        let orphans: Vec<&String> = catalog.keys().filter(|key| !key.starts_with("menu.") && !produced.contains(key.as_str())).collect();
         assert!(orphans.is_empty(), "catalog keys no UiText produces: {orphans:?}");
     }
 }

@@ -115,6 +115,7 @@ fs4 = { version = "1.1.0", default-features = false }
 # ring, as `kube`'s is; `mongodb+srv://` needs its DNS resolver (a default).
 mongodb = { version = "3.9.1", features = ["sync"] }
 x509-parser = "0.18.1"
+sys-locale = "0.3.2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

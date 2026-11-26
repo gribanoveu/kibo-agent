@@ -242,6 +242,18 @@ pub fn ui_language_get() -> Result<UiLanguage, String> {
 #[tauri::command]
 pub fn ui_language_set<R: Runtime>(app: AppHandle<R>, language: UiLanguage) -> Result<(), String> {
     settings_store::update(|s| s.ui_language = language).map_err(|e| e.to_string())?;
+    // The menu bar is the app's own text the window cannot draw: rebuild it
+    // in the new language. The setting is saved either way; a menu that did
+    // not rebuild is logged, not a failed save (docs/65, LC-3). muda makes
+    // menu items only on the main thread — a sync command runs there in the
+    // app; a test calls it from its own thread, and there the rebuild is
+    // skipped (the menu's texts are tested in menu.rs).
+    #[cfg(target_os = "macos")]
+    if objc2::MainThreadMarker::new().is_some() {
+        if let Err(e) = crate::menu::build(&app).and_then(|menu| app.set_menu(menu)) {
+            eprintln!("the menu did not rebuild: {e}");
+        }
+    }
     let _ = app.emit(UI_LANGUAGE_EVENT, ());
     Ok(())
 }

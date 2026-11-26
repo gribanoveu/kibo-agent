@@ -191,6 +191,21 @@ pub enum UiLanguage {
     Russian,
 }
 
+impl UiLanguage {
+    /// The language `auto` follows: the system locale's own language —
+    /// Russian for any `ru…`, English for everything else, including no
+    /// locale at all. A picked language ignores the system.
+    pub fn resolve(self, system_locale: Option<&str>) -> Self {
+        match self {
+            Self::Auto => match system_locale.and_then(|locale| locale.split(['-', '_']).next()) {
+                Some(language) if language.eq_ignore_ascii_case("ru") => Self::Russian,
+                _ => Self::English,
+            },
+            picked => picked,
+        }
+    }
+}
+
 impl LlmSettings {
     pub fn provider(&self, id: &str) -> Option<&ProviderConfig> {
         self.providers.iter().find(|p| p.id == id)
@@ -951,6 +966,19 @@ mod tests {
         assert_eq!(serde_json::to_value(Searxng).unwrap(), "searxng");
         // Saved while it was DuckDuckGo: the keyless search it meant is SearXNG now.
         assert_eq!(serde_json::from_str::<WebSearchBackend>("\"builtin\"").unwrap(), Searxng);
+    }
+
+    #[test]
+    fn auto_follows_the_system_language_and_everything_else_is_english() {
+        for locale in ["ru", "ru-RU", "ru_RU", "RU"] {
+            assert_eq!(UiLanguage::Auto.resolve(Some(locale)), UiLanguage::Russian, "{locale}");
+        }
+        for locale in ["en", "en-US", "fr-FR", "zh-Hans", ""] {
+            assert_eq!(UiLanguage::Auto.resolve(Some(locale)), UiLanguage::English, "{locale}");
+        }
+        assert_eq!(UiLanguage::Auto.resolve(None), UiLanguage::English);
+        assert_eq!(UiLanguage::English.resolve(Some("ru-RU")), UiLanguage::English);
+        assert_eq!(UiLanguage::Russian.resolve(Some("en-US")), UiLanguage::Russian);
     }
 
     /// Files written before there was a choice follow the system; a chosen
