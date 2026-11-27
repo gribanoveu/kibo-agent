@@ -1285,7 +1285,7 @@ export function ChatPanel({
 
       <div ref={scrollRef} className={`thread chat-text${groups.length === 0 ? " thread-empty" : ""}`}>
         {groups.length === 0 ? (
-          <ChatEmptyState />
+          <ChatEmptyState chatId={chatId} />
         ) : (
           <div ref={contentRef} className="thread-content">
             <Transcript

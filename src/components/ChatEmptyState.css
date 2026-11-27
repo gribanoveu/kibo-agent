@@ -14,4 +14,11 @@
 .chat-empty .kibo-brand {
   height: calc(var(--fs-lg) * 4.4);
 }
+/* The hour's greeting under the mark, as Chat mode's empty chat has it. */
+.chat-empty h2 {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
 
