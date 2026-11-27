@@ -294,6 +294,22 @@ mod tests {
         );
     }
 
+    /// An event naming a slot the table does not have loses it without a word,
+    /// and a slot named twice writes two values into one column. Both are found
+    /// here — for the events of the next stage too, this being over `ALL` —
+    /// rather than in a column of somebody else's table that stays empty.
+    #[test]
+    fn every_events_slots_are_known_and_named_once() {
+        for event in ProductEvent::ALL {
+            let mut names = Vec::new();
+            for (name, _) in event.dimensions() {
+                assert!(slot(name).is_some(), "{} fills a slot no table has: {name}", event.name());
+                assert!(!names.contains(&name), "{} names {name} twice", event.name());
+                names.push(name);
+            }
+        }
+    }
+
     #[test]
     fn a_value_that_looks_like_a_path_or_runs_long_is_cut() {
         assert_eq!(redacted("agent"), "agent");
