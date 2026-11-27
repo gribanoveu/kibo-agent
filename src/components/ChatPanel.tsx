@@ -65,6 +65,7 @@ import { type AgentInfo, type AgentTokens, agentSpeed, tokensLive, tokensSpent }
 import { compactTokens } from "../lib/usage";
 import { useAgents } from "../hooks/useAgents";
 import { useFollowBottom } from "../hooks/useFollowBottom";
+import { ScrollToBottomButton } from "./ScrollToBottomButton";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
 import type { ImagePart } from "../lib/images";
@@ -1185,7 +1186,7 @@ export function ChatPanel({
   const { agents: subagents } = useAgents(turn.status === "running", chatId);
   // The thread follows the answer as it grows, until the user scrolls up to
   // read; scrolling back to the end picks it up again.
-  const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
+  const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useFollowBottom();
   // A new message, or another chat, is where the user is looking now —
   // follow it even if they had scrolled away.
   const lastUserId = turn.blocks.filter((block) => block.kind === "user").pop()?.id;
@@ -1313,6 +1314,7 @@ export function ChatPanel({
           </div>
         )}
       </div>
+      <ScrollToBottomButton atBottom={isAtBottom} onClick={scrollToBottom} />
     </section>
   );
 }

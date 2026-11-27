@@ -21,6 +21,7 @@ import { DictationLine } from "./VoiceWave";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import type { ModelChoice } from "../hooks/useLlmSettings";
 import { useFollowBottom } from "../hooks/useFollowBottom";
+import { ScrollToBottomButton } from "./ScrollToBottomButton";
 import { useArrival } from "../hooks/useArrival";
 import { chatDraftKey, useChatDraft } from "../hooks/useChatDraft";
 import { useDictation } from "../hooks/useDictation";
@@ -145,7 +146,7 @@ export function PlainChat({
   });
   // Kept at the newest line while it is written, until the user scrolls up to
   // read; a message they send, or another chat, follows the end again.
-  const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
+  const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useFollowBottom();
   const sent = chat.turn.blocks.filter((b) => b.kind === "user").length;
   useEffect(() => {
     scrollToBottom();
@@ -349,6 +350,7 @@ export function PlainChat({
             </div>
           )}
         </div>
+        <ScrollToBottomButton atBottom={isAtBottom} onClick={scrollToBottom} />
       </section>
 
       <div className="plain-composer-wrap">

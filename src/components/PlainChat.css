@@ -1,4 +1,7 @@
 .plain-panel {
+  /* The back-to-bottom button floats against the panel's bottom edge — the
+     thread's, the thread being the last child. */
+  position: relative;
   flex: 1;
   min-height: 0;
   background: var(--bg-panel);

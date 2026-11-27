@@ -1,22 +1,25 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { useFollowBottom } from "../hooks/useFollowBottom";
+import { ScrollToBottomButton } from "../components/ScrollToBottomButton";
 
 // The chat thread stays at its end while the answer grows, and lets go of it
-// the moment the user scrolls up to read. The hook knows every position it
-// wrote itself and cancels those reads; a read at a position it never wrote is
-// the user's, and lets go at once — no second read, no pause in the sticking.
+// the moment the user scrolls up to read. The hook delegates to
+// use-stick-to-bottom, which writes the scroll in animation frames and reads
+// the direction of every scroll it did not write — so these tests let the
+// frames run before reading the box, and the end is the library's own
+// (scrollHeight - 1 - clientHeight).
 
-// One entry per observed node, so a test can grow the content and resize the
-// box apart — they mean different things to the hook.
-let resized: { target: Element; cb: () => void }[] = [];
+// One entry per observed node, carrying the height the test last gave it:
+// the library reads contentRect.height from the record, not the element.
+let resized: { target: Element; cb: ResizeObserverCallback; height: number }[] = [];
 const RealObserver = globalThis.ResizeObserver;
 beforeEach(() => {
   resized = [];
   globalThis.ResizeObserver = class {
-    constructor(private cb: () => void) {}
+    constructor(private cb: ResizeObserverCallback) {}
     observe(target: Element) {
-      resized.push({ target, cb: this.cb });
+      resized.push({ target, cb: this.cb, height: 0 });
     }
     unobserve() {}
     disconnect() {}
@@ -30,253 +33,234 @@ function Thread({ onReady }: { onReady: (api: ReturnType<typeof useFollowBottom>
   const api = useFollowBottom();
   onReady(api);
   return (
-    <div ref={api.scrollRef} data-testid="box">
+    // As the real thread: overflow-y auto with overflow-x hidden, so the
+    // computed overflow shorthand is not a bare "auto" — the library's own
+    // wheel path walks past it, and the hook's own listener must let go.
+    <div ref={api.scrollRef} data-testid="box" style={{ overflowY: "auto", overflowX: "hidden" }}>
       <div ref={api.contentRef} data-testid="content" />
     </div>
   );
 }
 
+/** Let the library's frames and its 1ms scroll reads run. */
+const settle = () => act(async () => void (await Bun.sleep(80)));
+
 function setup(start = 1000) {
   let api!: ReturnType<typeof useFollowBottom>;
-  const { getByTestId } = render(<Thread onReady={(a) => (api = a)} />);
+  const { getByTestId, unmount } = render(<Thread onReady={(a) => (api = a)} />);
   const box = getByTestId("box");
   const content = getByTestId("content");
-  const fire = (target: Element) => {
-    for (const { target: node, cb } of resized) if (node === target) cb();
-  };
   let height = start;
-  let shown = 300;
+  const shown = 300;
   Object.defineProperty(box, "scrollHeight", { get: () => height });
   Object.defineProperty(box, "clientHeight", { get: () => shown });
-  // The answer grows a word longer.
-  const grow = (by: number) => {
+  const fire = (target: Element) => {
+    for (const entry of resized) {
+      if (entry.target !== target) continue;
+      entry.height = height;
+      entry.cb([{ contentRect: { height } } as ResizeObserverEntry], {} as ResizeObserver);
+    }
+  };
+  // The answer grows a word longer; the frames pin the box to the new end.
+  const grow = async (by: number) => {
     height += by;
-    fire(content);
+    act(() => fire(content));
+    await settle();
   };
   // A tool card swapping its preview for a result: the thread shorter.
-  const shrink = (by: number) => {
+  const shrink = async (by: number) => {
     height -= by;
-    fire(content);
+    act(() => fire(content));
+    await settle();
   };
-  // The message box takes its height from the thread: a line typed, a line sent.
-  const resizeBox = (by: number) => {
-    shown += by;
-    fire(box);
-  };
-  const userScrollsTo = (top: number) => {
+  const userScrollsTo = async (top: number) => {
     box.scrollTop = top;
-    box.dispatchEvent(new Event("scroll"));
+    act(() => {
+      box.dispatchEvent(new Event("scroll"));
+    });
+    await settle();
   };
-  return { box, grow, shrink, resizeBox, userScrollsTo, api: () => api };
+  const wheelUp = async () => {
+    act(() => {
+      box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+    });
+    await settle();
+  };
+  // The library's end: a pixel above the very bottom.
+  const end = () => height - 1 - shown;
+  return { box, grow, shrink, userScrollsTo, wheelUp, end, unmount, api: () => api };
 }
 
 describe("following the end of the thread", () => {
-  test("scrolls to the end as the content grows", () => {
+  test("scrolls to the end as the content grows, instantly", async () => {
+    const { box, grow, end } = setup();
+    await grow(200); // the first growth takes the initial animation
+    expect(box.scrollTop).toBe(end());
+    await grow(400); // and the next one the resize animation
+    expect(box.scrollTop).toBe(end());
+  });
+
+  test("a wheel turned up lets go, and growth leaves the reader put", async () => {
+    const { box, grow, wheelUp } = setup();
+    await grow(0);
+    await wheelUp();
+    const put = box.scrollTop;
+    await grow(200);
+    expect(box.scrollTop).toBe(put);
+  });
+
+  test("a key that scrolls up lets go at once", async () => {
     const { box, grow } = setup();
-    grow(200);
-    expect(box.scrollTop).toBe(1200);
+    await grow(0);
+    act(() => {
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp" }));
+    });
+    await settle();
+    const put = box.scrollTop;
+    await grow(200);
+    expect(box.scrollTop).toBe(put);
   });
 
-  /// Typing grows the message box, which takes its height from the thread. That
-  /// is not the answer growing: what is being read must not move by a line for
-  /// every line typed, and the end waits for the next word of the answer.
-  test("a taller message box leaves the thread where it is", () => {
-    const { box, grow, resizeBox } = setup();
-    grow(0);
-    box.scrollTop = 700; // the end: 1000 - 300
-    resizeBox(-42); // two lines typed
-    expect(box.scrollTop).toBe(700);
-    resizeBox(42); // sent, and the box back to one line
-    expect(box.scrollTop).toBe(700);
-    grow(200); // the answer's next word takes the end again
-    expect(box.scrollTop).toBe(1200);
+  /// A thread shorter than its box has nowhere to scroll up to: a let go
+  /// there would stop the following with no scroll able to pick it back up.
+  test("a wheel turned up on a thread shorter than its box keeps following", async () => {
+    const { box, grow, wheelUp, end } = setup(200);
+    await grow(0);
+    await wheelUp();
+    await grow(500);
+    expect(box.scrollTop).toBe(end());
   });
 
-  /// A drag sends a run of reads at positions the hook never wrote: the first
-  /// is the user, and the thread stays where they left it.
-  test("a drag up lets go on its first read, and the thread stays put", () => {
+  test("a drag up lets go, and the thread stays where the reader left it", async () => {
     const { box, grow, userScrollsTo } = setup();
-    grow(200);
-    userScrollsTo(400);
-    userScrollsTo(380);
-    grow(200);
+    await grow(200);
+    await userScrollsTo(400);
+    await userScrollsTo(380);
+    await grow(200);
     expect(box.scrollTop).toBe(380);
   });
 
-  /// A lone scrollbar-track click sends one read at a position we never wrote.
-  /// It is the user as much as a drag is: no second read to confirm it.
-  test("a lone scrollbar click lets go on its single read", () => {
+  test("a lone scrollbar click lets go on its single read", async () => {
     const { box, grow, userScrollsTo } = setup();
-    grow(0);
-    userScrollsTo(400);
-    grow(200);
+    await grow(0);
+    await userScrollsTo(400);
+    await grow(200);
     expect(box.scrollTop).toBe(400);
   });
 
-  test("returning to the end picks following back up", () => {
-    const { box, grow, userScrollsTo } = setup();
-    grow(0);
-    userScrollsTo(400);
-    grow(200);
-    userScrollsTo(900); // 1200 - 300: the end again, a position we never wrote
-    grow(100);
-    expect(box.scrollTop).toBe(1300);
+  test("returning to the end picks following back up", async () => {
+    const { box, grow, userScrollsTo, end } = setup();
+    await grow(0);
+    await userScrollsTo(400);
+    await grow(200);
+    await userScrollsTo(end());
+    await grow(100);
+    expect(box.scrollTop).toBe(end());
   });
 
-  /// The end may be the very position a stick left, with the answer at rest:
-  /// past the echo window that read is the user's return, not our echo.
-  test("a return to the same end after the echo window follows again", async () => {
-    const { box, grow, userScrollsTo } = setup();
-    grow(0);
-    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
-    await Bun.sleep(200);
-    userScrollsTo(1000);
-    grow(100);
-    expect(box.scrollTop).toBe(1100);
+  test("a shrink that clamps the reader onto the end resumes following", async () => {
+    const { box, grow, shrink, wheelUp, end } = setup();
+    await grow(0);
+    await wheelUp();
+    await shrink(650); // the end moves above the reader; the box is clamped onto it
+    expect(box.scrollTop).toBe(end());
+    await grow(100);
+    expect(box.scrollTop).toBe(end());
   });
 
-  /// Under load WebKit's scroll event reads a commit older than the last
-  /// stick — a position we wrote a frame ago. It is ours, so it neither lets
-  /// go nor pauses the stick: the next word still takes the end at once.
-  test("a stale commit of our own write neither lets go nor pauses the stick", () => {
-    const { box, grow } = setup();
-    grow(200); // the stick leaves the box at 1200
-    grow(400); // and at 1600
-    box.scrollTop = 1200; // the event reads the older commit
-    box.dispatchEvent(new Event("scroll"));
-    grow(400);
-    expect(box.scrollTop).toBe(2000);
-    grow(100);
-    expect(box.scrollTop).toBe(2100);
+  test("scrollToBottom follows again even from far up, instantly", async () => {
+    const { box, grow, userScrollsTo, end, api } = setup();
+    await grow(0);
+    await userScrollsTo(0);
+    await act(async () => {
+      api().scrollToBottom();
+      await Bun.sleep(80);
+    });
+    expect(box.scrollTop).toBe(end());
+    await grow(50);
+    expect(box.scrollTop).toBe(end());
   });
 
-  /// A tool card swapping its preview for a result shortens the thread and
-  /// clamps the box onto the end the stick just wrote. happy-dom does not
-  /// clamp scrollTop, so the clamp's read is played as a read of that logged
-  /// position once growth has made it away from the end — the `ours` path; in
-  /// a real DOM the same read is at the end as well.
-  test("a read of the position the shrink's stick wrote is ours, not the user", () => {
-    const { box, grow, shrink } = setup();
-    grow(600);
-    shrink(600); // the stick takes the shorter end, 1000
-    grow(800); // the end moves on to 1800; 1000 is now away from it
-    box.scrollTop = 1000; // the clamp's read, a position we wrote
-    box.dispatchEvent(new Event("scroll"));
-    grow(100);
-    expect(box.scrollTop).toBe(1900);
+  test("isAtBottom is false away from the end and true back at it", async () => {
+    const { grow, userScrollsTo, end, api } = setup();
+    await grow(0);
+    expect(api().isAtBottom).toBe(true);
+    await userScrollsTo(400);
+    expect(api().isAtBottom).toBe(false);
+    await userScrollsTo(end());
+    expect(api().isAtBottom).toBe(true);
   });
 
-  /// The answer at rest: the last stick is older than the echo window when the
-  /// user lets go, and the commit's echo still reads the end. The window runs
-  /// from the let go, not from the write, or the echo re-follows and the next
-  /// word yanks the reader back down.
-  test("an end echo after a let go over an old stick does not re-follow", async () => {
-    const { box, grow } = setup();
-    grow(0);
-    await Bun.sleep(200); // the stick is now older than the echo window
-    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
-    box.dispatchEvent(new Event("scroll")); // the echo reads the end
-    grow(200);
-    expect(box.scrollTop).toBe(1000);
-    // The user's own return to the end, past the window: following again.
-    await Bun.sleep(200);
-    box.scrollTop = 1200;
-    box.dispatchEvent(new Event("scroll"));
-    grow(100);
-    expect(box.scrollTop).toBe(1300);
+  /// Typing grows the message box, which takes its height from the thread.
+  /// That is not the answer growing: the hook observes the content alone, so
+  /// the box's own resize is nothing to it.
+  test("only the content is observed, never the scrolling box", async () => {
+    const { box } = setup();
+    expect(resized.map((r) => r.target)).toEqual([box.firstChild]);
   });
 
-  /// A shrink while the user reads above can clamp their position onto the new
-  /// end: they are at the end again, and following resumes. A pinned choice —
-  /// the reader was in the tail the shrink removed — not an accident.
-  test("a clamp to the end while reading resumes following", async () => {
-    const { box, grow, shrink, userScrollsTo } = setup();
-    grow(200);
-    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
-    await Bun.sleep(200); // past the echo window
-    userScrollsTo(400);
-    shrink(700); // height 500: the end is 200, and the clamp puts the box there
-    box.scrollTop = 200;
-    box.dispatchEvent(new Event("scroll"));
-    grow(100);
-    expect(box.scrollTop).toBe(600);
+  /// The hook's ref returns a cleanup, so React never calls it with null:
+  /// the listeners the hook added must be removed by that cleanup, or a
+  /// closed chat keeps answering the wheel and the keys. The library's own
+  /// scroll/wheel stay on the detached element — its useRefCallback nulls
+  /// current before removing, so its unmount removes nothing either; they
+  /// ride off with the element's garbage, inert against a null current.
+  test("unmount removes the hook's own listeners from the box", () => {
+    const ops: { target: EventTarget; type: string; delta: number }[] = [];
+    // The method lives on happy-dom's internal EventTarget prototype, which
+    // the global EventTarget does not name — find its real owner by the chain.
+    let owner: object = document.createElement("div");
+    while (!Object.prototype.hasOwnProperty.call(owner, "addEventListener")) {
+      owner = Object.getPrototypeOf(owner);
+    }
+    const proto = owner as { addEventListener: typeof EventTarget.prototype.addEventListener; removeEventListener: typeof EventTarget.prototype.removeEventListener };
+    const realAdd = proto.addEventListener;
+    const realRemove = proto.removeEventListener;
+    proto.addEventListener = function (type: string, ...rest: unknown[]) {
+      ops.push({ target: this, type, delta: 1 });
+      return (realAdd as (...a: unknown[]) => void).call(this, type, ...rest);
+    } as typeof realAdd;
+    proto.removeEventListener = function (type: string, ...rest: unknown[]) {
+      ops.push({ target: this, type, delta: -1 });
+      return (realRemove as (...a: unknown[]) => void).call(this, type, ...rest);
+    } as typeof realRemove;
+    try {
+      const rendered = setup();
+      rendered.unmount();
+      const balance = new Map<string, number>();
+      for (const op of ops) {
+        if (op.target !== rendered.box) continue;
+        balance.set(op.type, (balance.get(op.type) ?? 0) + op.delta);
+      }
+      // The hook's wheel and keydown are removed by its cleanup. The
+      // library's scroll/wheel physically stay on the detached element (its
+      // unmount removes nothing), but its attach removes from the just-set
+      // current first, so those phantom removals balance the count to zero.
+      expect([...balance.keys()].sort()).toEqual(["keydown", "scroll", "wheel"]);
+      expect([...balance.values()].every((n) => n === 0)).toBe(true);
+    } finally {
+      proto.addEventListener = realAdd;
+      proto.removeEventListener = realRemove;
+    }
+  });
+});
+
+describe("the back-to-bottom button", () => {
+  test("is hidden at the end and shown away from it", () => {
+    const { queryByTitle, rerender } = render(
+      <ScrollToBottomButton atBottom={true} onClick={() => {}} />,
+    );
+    expect(queryByTitle("Back to the end of the conversation")).toBeNull();
+    rerender(<ScrollToBottomButton atBottom={false} onClick={() => {}} />);
+    expect(queryByTitle("Back to the end of the conversation")).not.toBeNull();
   });
 
-  /// A wheel turned up where the box cannot move (the top, or a thread still
-  /// shorter than the box) is not a scroll away: letting go there would stop
-  /// the following with no scroll event ever able to pick it back up.
-  test("a wheel turned up at the top keeps following", () => {
-    const { box, grow } = setup();
-    grow(0);
-    box.scrollTop = 0;
-    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
-    grow(200);
-    expect(box.scrollTop).toBe(1200);
-  });
-
-  /// An overflow of a pixel or two leaves the box at the end within the
-  /// slack: a wheel up there moves nothing worth reading, and a let go would
-  /// never be picked back up.
-  test("a wheel turned up with a pixel of overflow keeps following", () => {
-    const { box, grow } = setup(301);
-    grow(0);
-    box.scrollTop = 1; // the most a pixel of overflow allows
-    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
-    grow(500);
-    expect(box.scrollTop).toBe(801);
-  });
-
-  test("a key that scrolls up lets go at once", () => {
-    const { box, grow } = setup();
-    grow(0);
-    box.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp" }));
-    grow(200);
-    expect(box.scrollTop).toBe(1000);
-  });
-
-  /// After a wheel let go the commit still reads the end for a frame; that
-  /// echo must not pick the thread back up before the user's scroll arrives.
-  test("an end echo right after a wheel let go does not re-follow", () => {
-    const { box, grow } = setup();
-    grow(0);
-    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
-    box.dispatchEvent(new Event("scroll")); // still reads where the stick left it
-    grow(200);
-    expect(box.scrollTop).toBe(1000);
-    // The user's scroll arrives, then they return to the end: following again.
-    box.scrollTop = 800;
-    box.dispatchEvent(new Event("scroll"));
-    box.scrollTop = 1200;
-    box.dispatchEvent(new Event("scroll"));
-    grow(100);
-    expect(box.scrollTop).toBe(1300);
-  });
-
-  test("a wheel turned up lets go before the scroll event arrives", () => {
-    const { box, grow } = setup();
-    grow(0);
-    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
-    // WebKit's scroll event still reads where the stick left the box.
-    box.dispatchEvent(new Event("scroll"));
-    grow(200);
-    expect(box.scrollTop).toBe(1000);
-  });
-
-  test("a wheel turned down does not let go", () => {
-    const { box, grow } = setup();
-    grow(0);
-    box.dispatchEvent(new WheelEvent("wheel", { deltaY: 40 }));
-    grow(200);
-    expect(box.scrollTop).toBe(1200);
-  });
-
-  test("scrollToBottom follows again even from far up", () => {
-    const { box, grow, userScrollsTo, api } = setup();
-    grow(0);
-    userScrollsTo(0);
-    api().scrollToBottom();
-    expect(box.scrollTop).toBe(1000);
-    grow(50);
-    expect(box.scrollTop).toBe(1050);
+  test("a click asks for the end", () => {
+    let asked = 0;
+    const { getByTitle } = render(
+      <ScrollToBottomButton atBottom={false} onClick={() => (asked += 1)} />,
+    );
+    fireEvent.click(getByTitle("Back to the end of the conversation"));
+    expect(asked).toBe(1);
   });
 });

@@ -1,0 +1,23 @@
+/* Floats over the thread's bottom edge: the panel it is rendered in is
+   positioned, and the thread is the panel's last child. A menu's surface —
+   it stands off the panel it covers, in either scheme. */
+.scroll-to-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg-menu);
+  color: var(--text-dim);
+  cursor: pointer;
+  box-shadow: var(--shadow-raised);
+}
+.scroll-to-bottom:hover {
+  background: var(--bg-menu-hover);
+  color: var(--text);
+}
