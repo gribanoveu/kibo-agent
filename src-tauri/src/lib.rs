@@ -232,6 +232,11 @@ pub fn run() {
                 index_dir,
                 std::sync::Arc::new(model),
             )));
+            // One product metric per launch (`docs/67-app-metrics.md`), off
+            // the main thread: the window does not wait for a disk write.
+            tauri::async_runtime::spawn_blocking(|| {
+                infra::product_metrics::record(domain::product_metrics::ProductEvent::AppLaunched)
+            });
             // The main window, or a viewer per Markdown file the launch was
             // for: on the command line, or — macOS — sent before `Ready`.
             let mut files = app.state::<std::sync::Arc<commands::viewer::Viewers>>().take_early();
