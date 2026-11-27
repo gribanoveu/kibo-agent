@@ -64,7 +64,7 @@ import { highlight, splitLines, type Token } from "../lib/highlight";
 import { type AgentInfo, type AgentTokens, agentSpeed, tokensLive, tokensSpent } from "../lib/agents";
 import { compactTokens } from "../lib/usage";
 import { useAgents } from "../hooks/useAgents";
-import { useFollowBottom } from "../hooks/useFollowBottom";
+import { FollowThread } from "./FollowThread";
 import { useSteadyValue } from "../hooks/useSteadyValue";
 import { liveSpeed, type Block, type TurnState } from "../lib/chatTurnReducer";
 import type { ImagePart } from "../lib/images";
@@ -1184,15 +1184,11 @@ export function ChatPanel({
   // running ones', and a turn at rest has none.
   const { agents: subagents } = useAgents(turn.status === "running", chatId);
   // The thread follows the answer as it grows, until the user scrolls up to
-  // read; scrolling back to the end picks it up again.
-  const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
-  // A new message, or another chat, is where the user is looking now —
-  // follow it even if they had scrolled away.
+  // read; scrolling back to the end picks it up again. A new message, or
+  // another chat, is where the user is looking now — follow it even if they
+  // had scrolled away.
   const lastUserId = turn.blocks.filter((block) => block.kind === "user").pop()?.id;
   const lastNoteId = steered[steered.length - 1]?.id;
-  useEffect(() => {
-    scrollToBottom();
-  }, [lastUserId, lastNoteId, scrollToBottom]);
 
   // The side panels first — they are what the menu is opened for — then what
   // can be done to the conversation itself.
@@ -1283,36 +1279,37 @@ export function ChatPanel({
     <section className="chat-panel">
       {headSlot ? createPortal(head, headSlot) : head}
 
-      <div ref={scrollRef} className={`thread chat-text${groups.length === 0 ? " thread-empty" : ""}`}>
-        {groups.length === 0 ? (
-          <ChatEmptyState chatId={chatId} />
-        ) : (
-          <div ref={contentRef} className="thread-content">
-            <Transcript
-              turn={turn}
-              onDecide={onDecide}
-              onOpenProcess={onOpenProcess}
-              onOpenAgent={onOpenAgent}
-              runningProcesses={runningProcesses}
-              onPasteCommand={onPasteCommand}
-              onOpenFile={onOpenFile}
-              branchable={branchable}
-              onBranch={onBranch}
-              onRewind={onRewind}
-              onAnswerQuestion={onAnswerQuestion}
-              onFix={onFix}
-              preview={preview}
-              onOffer={onOffer}
-              prTasks={prTasks}
-              onPrTask={onPrTask}
-              checklist={checklist}
-              steered={steered}
-              onWithdraw={onWithdraw}
-              subagents={subagents}
-            />
-          </div>
-        )}
-      </div>
+      <FollowThread
+        className={`thread chat-text${groups.length === 0 ? " thread-empty" : ""}`}
+        empty={groups.length === 0 ? <ChatEmptyState chatId={chatId} /> : undefined}
+        open={chatId}
+        // Either is where the reader is looking now: what they sent, or the
+        // note they steered into the running turn.
+        sent={`${lastUserId ?? ""}|${lastNoteId ?? ""}`}
+      >
+        <Transcript
+          turn={turn}
+          onDecide={onDecide}
+          onOpenProcess={onOpenProcess}
+          onOpenAgent={onOpenAgent}
+          runningProcesses={runningProcesses}
+          onPasteCommand={onPasteCommand}
+          onOpenFile={onOpenFile}
+          branchable={branchable}
+          onBranch={onBranch}
+          onRewind={onRewind}
+          onAnswerQuestion={onAnswerQuestion}
+          onFix={onFix}
+          preview={preview}
+          onOffer={onOffer}
+          prTasks={prTasks}
+          onPrTask={onPrTask}
+          checklist={checklist}
+          steered={steered}
+          onWithdraw={onWithdraw}
+          subagents={subagents}
+        />
+      </FollowThread>
     </section>
   );
 }

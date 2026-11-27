@@ -20,7 +20,7 @@ import { ErrorNote } from "./ErrorNote";
 import { DictationLine } from "./VoiceWave";
 import type { PlainChatState } from "../hooks/usePlainChat";
 import type { ModelChoice } from "../hooks/useLlmSettings";
-import { useFollowBottom } from "../hooks/useFollowBottom";
+import { FollowThread } from "./FollowThread";
 import { useArrival } from "../hooks/useArrival";
 import { chatDraftKey, useChatDraft } from "../hooks/useChatDraft";
 import { useDictation } from "../hooks/useDictation";
@@ -145,11 +145,7 @@ export function PlainChat({
   });
   // Kept at the newest line while it is written, until the user scrolls up to
   // read; a message they send, or another chat, follows the end again.
-  const { scrollRef, contentRef, scrollToBottom } = useFollowBottom();
   const sent = chat.turn.blocks.filter((b) => b.kind === "user").length;
-  useEffect(() => {
-    scrollToBottom();
-  }, [chat.chatId, sent, scrollToBottom]);
 
   const send = async () => {
     if (chat.busy || waiting.current || dictation.active) return;
@@ -327,28 +323,30 @@ export function PlainChat({
   return (
     <>
       <section className="plain-panel">
-
-        <div ref={scrollRef} className="plain-thread chat-text">
-          {empty ? (
-            <div className="plain-welcome">
-              <KiboBrand />
-              <h2>{greeting}</h2>
-            </div>
-          ) : (
-            <div ref={contentRef} className="thread-content">
-              <Transcript
-                turn={chat.turn}
-                onDecide={chat.decide}
-                speaker={roleName}
-                preview={chat.preview}
-                branchable={chat.branchable}
-                onRewind={onRewind}
-                onOpenVersion={pages?.onOpenVersion}
-              />
-              {chat.error && <div className="plain-error">{chat.error}</div>}
-            </div>
-          )}
-        </div>
+        <FollowThread
+          className="plain-thread chat-text"
+          empty={
+            empty ? (
+              <div className="plain-welcome">
+                <KiboBrand />
+                <h2>{greeting}</h2>
+              </div>
+            ) : undefined
+          }
+          open={chat.chatId}
+          sent={String(sent)}
+        >
+          <Transcript
+            turn={chat.turn}
+            onDecide={chat.decide}
+            speaker={roleName}
+            preview={chat.preview}
+            branchable={chat.branchable}
+            onRewind={onRewind}
+            onOpenVersion={pages?.onOpenVersion}
+          />
+          {chat.error && <div className="plain-error">{chat.error}</div>}
+        </FollowThread>
       </section>
 
       <div className="plain-composer-wrap">
