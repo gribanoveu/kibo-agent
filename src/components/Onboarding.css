@@ -1,0 +1,295 @@
+/* The first-run layer over the body: opaque, centred, and the only way past
+   it is the Skip in its corner. The title bar above it is the window's own —
+   drag handle and buttons — so this starts under it, over `.body`. */
+.onboarding {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-window);
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+.onboarding-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px 4px;
+}
+.onboarding-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.onboarding-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--bg-active);
+}
+.onboarding-dot.active {
+  background: var(--accent);
+}
+.onboarding-skip {
+  background: none;
+  border: 0;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.onboarding-skip:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.onboarding-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.onboarding-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 4px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* A step's heading, a step above the prose it opens. */
+.onboarding-title {
+  margin: 0;
+  font-size: calc(var(--fs-lg) * 1.3);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.onboarding-lead {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.onboarding-points {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.onboarding-points li::marker {
+  color: var(--accent);
+}
+.onboarding-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+/* The providers the app carries, as cards: what one is, and where it answers. */
+.onboarding-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.onboarding-provider {
+  flex: 1 1 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 12px;
+  text-align: left;
+  background: var(--bg-panel-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: inherit;
+}
+.onboarding-provider:hover {
+  background: var(--bg-hover);
+}
+.onboarding-provider.active {
+  border-color: var(--accent);
+  background: var(--bg-panel);
+}
+.onboarding-provider-name {
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+.onboarding-provider-host {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The rest of the catalog, searched — the same list Settings offers. */
+.onboarding-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onboarding-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+}
+.onboarding-search .entry-input {
+  flex: 1;
+}
+.onboarding-catalog-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.onboarding-catalog-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.onboarding-catalog-row:last-child {
+  border-bottom: 0;
+}
+.onboarding-catalog-row:hover {
+  background: var(--bg-hover);
+}
+.onboarding-catalog-host {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+.onboarding-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* What the provider said it serves, and which one is the default. */
+.onboarding-models {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.onboarding-models-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.onboarding-count {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.onboarding-model-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.onboarding-model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+}
+.onboarding-model:hover {
+  background: var(--bg-hover);
+}
+.onboarding-model.active {
+  color: var(--text);
+  background: var(--bg-panel-soft);
+}
+
+/* What the provider said when it refused: the address and the key, as it saw them. */
+.onboarding-refusal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.onboarding-refusal p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.onboarding-refusal p:first-child {
+  color: var(--red);
+  word-break: break-word;
+}
+.onboarding-error {
+  max-width: 280px;
+  font-size: var(--fs-xs);
+  color: var(--red);
+}
+
+/* The step's own buttons: on the screen's edge, so the eye finds them in the
+   same place on every step. */
+.onboarding-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  max-width: 620px;
+  margin: 0 auto;
+  padding: 12px 24px 18px;
+  border-top: 1px solid var(--border-soft);
+}
+.onboarding-foot-end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+/* A first-run press is the screen's one action, so the buttons are a step
+   bigger than the app's own. */
+.onboarding-btn {
+  padding: 8px 16px;
+  font-size: var(--fs-md);
+}

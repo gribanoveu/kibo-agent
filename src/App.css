@@ -49,10 +49,19 @@
   flex: 1;
   display: flex;
   min-height: 0;
+  /* What the first-run screen is laid over: its layer fills the body, not the
+     window, so the title bar above it stays the window's own. */
+  position: relative;
   /* The hairline under the titlebar and between the panels. */
   padding-top: var(--gutter);
   background: var(--border-soft);
   overflow-x: clip;
+}
+
+/* While the first-run screen is up, the app behind it is out of reach: not
+   painted, not in the tab order, and nothing of it laid out again. */
+.body.onboarding-open > :not(.onboarding) {
+  display: none;
 }
 
 /* Over the hairline: the title bar and the columns are one surface. */

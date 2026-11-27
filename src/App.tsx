@@ -41,6 +41,8 @@ import { useChatGroups } from "./hooks/useChatGroups";
 import { modelChoices, useLlmSettings } from "./hooks/useLlmSettings";
 import { useKubeconfigs } from "./hooks/useKubeconfigs";
 import { useWorkspace } from "./hooks/useWorkspace";
+import { useOnboarding } from "./hooks/useOnboarding";
+import { Onboarding } from "./components/Onboarding";
 import { useIndexStatus } from "./hooks/useIndexStatus";
 import { useMcp } from "./hooks/useMcp";
 import { useHooks } from "./hooks/useHooks";
@@ -109,6 +111,9 @@ export default function App() {
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
+  // The first-run screen: up when the settings say no provider is saved, and
+  // never asked twice in one launch (docs/66-onboarding.md).
+  const onboarding = useOnboarding(llm.settings);
   // Each provider's own model pin, auto resolved: the cache-miss hint compares
   // the model a turn actually sends, not the chip's display label.
   const providerModels = Object.fromEntries((llm.settings?.providers ?? []).map((p) => [p.id, p.model ?? llm.served[p.id]?.[0] ?? null]));
@@ -296,14 +301,21 @@ export default function App() {
     },
   });
 
-  // The window's own keys; a pane's key lives in `useDocks`.
-  useShortcuts({
-    newChat: () => newChat(),
-    focusInput: focusComposer,
-    sidebar: toggleSidebar,
-    settings: () => openSettings(),
-    ideLayout: agentMode ? toggleIde : undefined,
-  });
+  // The window's own keys; a pane's key lives in `useDocks`. The first-run
+  // screen has the window to itself: nothing behind it answers a key, so the
+  // Settings dialog cannot be opened over it and a provider saved there cannot
+  // slip past what the screen assumes.
+  useShortcuts(
+    onboarding.open
+      ? {}
+      : {
+          newChat: () => newChat(),
+          focusInput: focusComposer,
+          sidebar: toggleSidebar,
+          settings: () => openSettings(),
+          ideLayout: agentMode ? toggleIde : undefined,
+        },
+  );
 
   // A deleted chat takes its unsent message with it — the sidebar's own path
   // and the Artifacts page's prototype, which deletes its chat through the same
@@ -745,7 +757,7 @@ export default function App() {
           "Kibo Agent"}
       </Titlebar>
 
-      <div className="body">
+      <div className={`body${onboarding.open ? " onboarding-open" : ""}`}>
         <Sidebar
           mode={mode}
           onMode={(next) => {
@@ -806,6 +818,13 @@ export default function App() {
           topShown={dockShown}
           panels={panels}
         />
+        {onboarding.open && (
+          <Onboarding
+            onSkip={onboarding.dismiss}
+            onFinish={onboarding.finish}
+            provider={{ busy: llm.busy, error: llm.error, onSave: llm.save, onProbe: llm.probe }}
+          />
+        )}
       </div>
 
       <FolderSwitchDialog
