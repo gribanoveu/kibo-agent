@@ -393,16 +393,9 @@ function ProviderStep({
         {refused && (
           <div className="onboarding-refusal" role="alert">
             <p>{refused}</p>
-            <p className="onboarding-note">
-              The provider refused the address and the key above. Both stay editable — the key can also be saved
-              anyway and checked later in Settings → Models.
-            </p>
+            <p className="onboarding-note">The provider refused the address and the key above. Both stay editable.</p>
           </div>
         )}
-
-        <p className="onboarding-note">
-          Protocol, certificate, sampling and the context window live in Settings → Models, once this is done.
-        </p>
       </div>
 
       <footer className="onboarding-foot">
