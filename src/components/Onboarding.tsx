@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { Check, Folder, FolderOpen, Search } from "lucide-react";
+import { Check, Search } from "lucide-react";
 import { KiboBrand } from "./KiboBrand";
 import { Field } from "./EntryField";
 import { BUILTIN_PROVIDERS, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
 import { filterBy } from "../lib/providerForm";
-import { ONBOARDING_STEPS } from "../lib/onboarding";
+import { ONBOARDING_STEPS, extrasFor, isDeepSeek } from "../lib/onboarding";
 import { matches } from "../lib/shortcuts";
-import type { RecentFolder } from "../lib/chat";
+import type { FeatureView } from "../lib/features";
 import type { ProviderConfig, ProviderKind } from "../lib/settings";
 import "./Onboarding.css";
 
@@ -20,19 +20,18 @@ export type ProviderOps = {
   onProbe: (provider: ProviderConfig, apiKey: string | null) => Promise<string[]>;
 };
 
-/** Where the agent will work, offered at the end: a folder opened lately, or the picker. */
-export type FolderOps = {
-  recent: RecentFolder[];
-  /** Opens one of them; `false` when it could not be opened. */
-  onOpen: (path: string) => Promise<boolean>;
-  /** Asks for a folder; `false` also means the picker was cancelled. */
-  onPick: () => Promise<boolean>;
+/** The features the app leaves off until asked for, and a switch for each. */
+export type FeatureOps = {
+  /** What the build says it should be until the user chooses: the list carries both. */
+  list: FeatureView[];
+  /** Turns one on or off; the app reads the list back itself. */
+  onSet: (id: string, on: boolean) => void | Promise<void>;
   error?: string | null;
 };
 
 type Props = {
   provider: ProviderOps;
-  folder: FolderOps;
+  features: FeatureOps;
   /** Not now: remembered, so the next launch opens the app as it is. */
   onSkip: () => void;
   /** A provider is saved and the screen is done with. */
@@ -50,7 +49,7 @@ type Props = {
  * the address and the model list want the whole window, not the room left
  * under a grid of them.
  */
-export function Onboarding({ provider, folder, onSkip, onFinish }: Props) {
+export function Onboarding({ provider, features, onSkip, onFinish }: Props) {
   const [step, setStep] = useState(0);
   // What is being connected, and the key it takes — here rather than in a step,
   // so going back to the cards and returning finds both as they were: a blank
@@ -96,7 +95,17 @@ export function Onboarding({ provider, folder, onSkip, onFinish }: Props) {
           onDone={() => setStep(3)}
         />
       )}
-      {step === 3 && <ReadyStep folder={folder} onBack={() => setStep(2)} onFinish={onFinish} />}
+      {step === 3 && (
+        <ExtrasStep
+          features={features}
+          // A balance and a search are DeepSeek's own endpoints: with another
+          // provider the two switches would change nothing, so they are not
+          // offered here — the Catalog still has them.
+          deepseek={isDeepSeek(draft.baseUrl)}
+          onBack={() => setStep(2)}
+          onFinish={onFinish}
+        />
+      )}
     </div>
   );
 }
@@ -123,70 +132,55 @@ function Welcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
   );
 }
 
-/** A folder's own name, as the sidebar and the folder menu write it. */
-const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-
 /**
- * The last step: where the agent works, and what to do with it. A folder is not
- * required — Chat mode has none — so the screen closes either way.
+ * The last step: the parts of the app that stay off until asked for —
+ * dictation, a MongoDB page, notes from a call. A shortcut, not a gate: every
+ * one of them is a switch in the Catalog afterwards, and the agent works
+ * without any of them.
  */
-function ReadyStep({ folder, onBack, onFinish }: { folder: FolderOps; onBack: () => void; onFinish: () => void }) {
-  const [asking, setAsking] = useState(false);
-  // The picker's own refusal — a permission, a platform error — which no
-  // workspace call reports: it throws.
-  const [failure, setFailure] = useState<string | null>(null);
-
-  const open = async (path: string) => {
-    if ((await folder.onOpen(path)) !== false) onFinish();
-  };
-
-  const choose = async () => {
-    setAsking(true);
-    setFailure(null);
-    try {
-      // Cancelled is not a folder: the step stays, and Start is one press away.
-      if (await folder.onPick()) onFinish();
-    } catch (e) {
-      setFailure(String(e));
-    } finally {
-      setAsking(false);
-    }
-  };
+function ExtrasStep({
+  features,
+  deepseek,
+  onBack,
+  onFinish,
+}: {
+  features: FeatureOps;
+  /** Whether the provider just connected is DeepSeek itself. */
+  deepseek: boolean;
+  onBack: () => void;
+  onFinish: () => void;
+}) {
+  const extras = extrasFor(features.list, deepseek);
 
   return (
     <div className="onboarding-page">
       <div className="onboarding-body">
-        <h1 className="onboarding-title">You're set</h1>
+        <h1 className="onboarding-title">A few extras</h1>
         <p className="onboarding-lead">
-          Which folder should the agent work in? It reads, edits and runs there, and every change is a diff you can
-          read before it goes anywhere.
+          Some parts of Kibo stay off until you ask for them — dictation, a MongoDB page, notes from a call. Turn on
+          what you'll use.
         </p>
 
-        <div className="onboarding-folders">
-          {folder.recent.map((one) => (
-            <button key={one.path} type="button" className="onboarding-folder" onClick={() => void open(one.path)}>
-              <Folder size={13} aria-hidden />
-              <span className="onboarding-folder-name">{folderName(one.path)}</span>
-              <span className="onboarding-folder-path">{one.path}</span>
+        <div className="onboarding-extras">
+          {extras.map((one) => (
+            <button
+              key={one.id}
+              type="button"
+              aria-pressed={one.on}
+              className={`onboarding-extra${one.on ? " on" : ""}`}
+              onClick={() => void features.onSet(one.id, !one.on)}
+            >
+              <span className="onboarding-extra-text">
+                <span className="onboarding-extra-name">{one.name}</span>
+                <span className="onboarding-extra-summary">{one.summary}</span>
+              </span>
+              {/* Always there, so the text does not move when it appears. */}
+              <Check size={13} aria-hidden className={`onboarding-extra-check${one.on ? " on" : ""}`} />
             </button>
           ))}
-          <button type="button" className="onboarding-folder choose" disabled={asking} onClick={() => void choose()}>
-            <FolderOpen size={13} aria-hidden />
-            <span className="onboarding-folder-name">{asking ? "Opening…" : "Choose a folder…"}</span>
-          </button>
         </div>
-        {(failure ?? folder.error) && <p className="onboarding-error">{failure ?? folder.error}</p>}
-        <p className="onboarding-note">
-          Or leave it for now — the folder button under the message box opens one whenever you want.
-        </p>
-
-        <div className="onboarding-points">
-          <p className="onboarding-point">
-            Ask for a change in the message box: the agent reads the code, edits it, and says what it did.
-          </p>
-          <p className="onboarding-point">Read the diff in Changes, and commit from there when it looks right.</p>
-          <p className="onboarding-point">MCP servers, skills and commands live in Settings and the Catalog.</p>
-        </div>
+        {features.error && <p className="onboarding-error">{features.error}</p>}
+        <p className="onboarding-note">All of them, and the rest, are in the Catalog whenever you want them.</p>
       </div>
 
       <footer className="onboarding-foot">

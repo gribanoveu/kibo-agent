@@ -304,58 +304,59 @@
   color: var(--text);
 }
 
-/* The folders opened lately, as a press each, and the picker under them. */
-.onboarding-folders {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+/* The extras, as cards: a press is the choice, and the card chosen says so. */
+.onboarding-extras {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
   width: 100%;
   text-align: left;
 }
-.onboarding-folder {
+.onboarding-extra {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 12px;
-  text-align: left;
-  background: var(--bg-panel-soft);
-  border: 1px solid var(--border-soft);
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 13px;
+  background: none;
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   font-family: inherit;
-  color: var(--text);
+  text-align: left;
   cursor: pointer;
 }
-.onboarding-folder:hover {
+.onboarding-extra:hover {
   background: var(--bg-hover);
 }
-.onboarding-folder.choose {
-  color: var(--text-dim);
-  background: none;
-  border-style: dashed;
+.onboarding-extra.on {
+  border-color: var(--accent);
+  background: var(--bg-panel-soft);
 }
-.onboarding-folder.choose:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.onboarding-folder svg {
-  flex: none;
-  align-self: center;
-  color: var(--text-faint);
-}
-.onboarding-folder-name {
-  flex: none;
-  font-size: var(--fs-md);
-}
-/* The whole path is the one thing that tells two folders of the same name apart. */
-.onboarding-folder-path {
-  flex: 1;
+.onboarding-extra-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   min-width: 0;
+}
+.onboarding-extra-name {
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+/* The mark of a chosen card, on its right: there whether the card is on or
+   not, so the words do not shift when it appears. */
+.onboarding-extra-check {
+  flex: none;
+  color: var(--accent);
+  opacity: 0;
+}
+.onboarding-extra-check.on {
+  opacity: 1;
+}
+.onboarding-extra-summary {
   font-size: var(--fs-xs);
+  line-height: 1.45;
   color: var(--text-faint);
-  text-align: right;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* What the provider said it serves, and which one is the default. */
