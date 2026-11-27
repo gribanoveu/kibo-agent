@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, Search } from "lucide-react";
 import { KiboBrand } from "./KiboBrand";
+import { ProviderLogo } from "./ProviderLogo";
 import { useHeldShortcuts } from "../hooks/useShortcuts";
 import { Field } from "./EntryField";
 import { BUILTIN_PROVIDERS, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
@@ -416,6 +417,7 @@ function ConnectStep({
           submit();
         }}
       >
+        <ProviderLogo id={custom ? undefined : draft.entry?.id} className="onboarding-logo" />
         <h1 className="onboarding-title">{custom ? "Your own endpoint" : `Connect ${draft.entry?.name ?? "a model"}`}</h1>
         <p className="onboarding-lead">
           The key is sealed on this machine, and messages go to the provider you pick — nowhere else.

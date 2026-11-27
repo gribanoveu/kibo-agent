@@ -1,0 +1,9 @@
+/* A provider's mark in the first-run screen: its own proportions, the height
+   its own asset needs to sit level with a heading, and the theme's text
+   colour — except AlfaGen, whose red is the mark itself. */
+.provider-logo {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  color: var(--text);
+}

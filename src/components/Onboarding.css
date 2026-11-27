@@ -78,6 +78,11 @@
   align-items: center;
   gap: 18px;
 }
+/* A provider's mark over the step's heading, closed up to the words it belongs
+   to: the body's gap is the distance between one block and the next. */
+.onboarding-logo {
+  margin-bottom: -4px;
+}
 /* The content sits in the middle of the window, by the two auto margins at its
    ends — which go to zero when it is taller than the window, so nothing is cut
    off the scroll the way `justify-content: center` would cut it. */
