@@ -26,32 +26,32 @@ describe("a provider's mark", () => {
   });
 
   test("a symbol is given its name inside the same drawing", () => {
-    // AlfaGen and Ollama are marks without letters: the name is drawn beside
-    // the mark, in the mark's own box, rather than as a line of the page.
-    for (const [id, name, width] of [
-      ["alfagen", "AlfaGen", 372.72 + 60 + 780],
-      ["ollama", "Ollama", 17 + 4 + 40],
+    // Ollama's llama is a mark without letters: the name is drawn beside the
+    // mark, in the mark's own box, rather than as a line of the page.
+    const { container } = render(<ProviderLogo id="ollama" name="Ollama" />);
+    const svg = container.querySelector("svg.provider-logo")!;
+    expect(svg.querySelector("text")?.textContent).toBe("Ollama");
+    // The words are the drawing's label, so a reader hears them once.
+    expect(svg.getAttribute("aria-label")).toBe("Ollama");
+    expect(svg.getAttribute("aria-hidden")).toBeNull();
+    // The box grew by the room the letters were given, beside the mark.
+    expect(Number(svg.getAttribute("viewBox")!.split(" ")[2])).toBeCloseTo(17 + 4 + 40, 5);
+  });
+
+  test("a wordmark already says the name, and is not told it twice", () => {
+    for (const [id, name] of [
+      ["openai", "OpenAI"],
+      ["alfagen", "AlfaGen"],
     ] as const) {
       const { container, unmount } = render(<ProviderLogo id={id} name={name} />);
       const svg = container.querySelector("svg.provider-logo")!;
-      expect(svg.querySelector("text")?.textContent).toBe(name);
-      // The words are the drawing's label, so a reader hears them once.
-      expect(svg.getAttribute("aria-label")).toBe(name);
-      expect(svg.getAttribute("aria-hidden")).toBeNull();
-      // The box grew by the room the letters were given, beside the mark.
-      expect(Number(svg.getAttribute("viewBox")!.split(" ")[2])).toBeCloseTo(width, 5);
+      expect(svg.querySelector("text")).toBeNull();
+      expect(svg.getAttribute("aria-hidden")).toBe("true");
       unmount();
     }
   });
 
-  test("a wordmark already says the name, and is not told it twice", () => {
-    const { container } = render(<ProviderLogo id="openai" name="OpenAI" />);
-    const svg = container.querySelector("svg.provider-logo")!;
-    expect(svg.querySelector("text")).toBeNull();
-    expect(svg.getAttribute("aria-hidden")).toBe("true");
-  });
-
-  test("the wordmarks take the theme's colour and AlfaGen keeps its own", () => {
+  test("the wordmarks take the theme's colour and AlfaGen keeps the red of its mark", () => {
     // A theme change must not repaint a brand mark, and must not leave a
     // wordmark black on a dark panel.
     const { container: openai, unmount } = render(<ProviderLogo id="openai" />);
@@ -60,8 +60,11 @@ describe("a provider's mark", () => {
     expect(openai.querySelectorAll("path[fill]").length).toBe(0);
     unmount();
 
+    // AlfaGen's letters are the theme's text; the mark beside them is the
+    // brand's own gradient, the same in either theme.
     const { container: alfa } = render(<ProviderLogo id="alfagen" />);
-    const fills = [...alfa.querySelectorAll("[fill]")].map((one) => one.getAttribute("fill"));
-    expect(fills).toContain("#ef3124");
+    expect(alfa.querySelector("path[fill='currentColor']")).toBeTruthy();
+    const stops = [...alfa.querySelectorAll("stop")].map((one) => one.getAttribute("stop-color"));
+    expect(stops).toContain("#F0402C");
   });
 });
