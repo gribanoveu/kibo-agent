@@ -26,7 +26,7 @@ export const TOUR_STEPS: TourStep[] = [
     id: "panes",
     target: '[data-tour="panes"]',
     title: "The panels",
-    body: "This menu opens the panels of the window, each one closing again from its own header:",
+    body: "Everything about the folder and the work in it opens from this menu, beside the chat — and closes again from its own header.",
   },
   {
     id: "composer",

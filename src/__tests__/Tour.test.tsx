@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { Tour } from "../components/Tour";
 import { placeCard, placeCentred } from "../lib/tour";
-import { IS_MAC, shortcutText } from "../lib/shortcuts";
+import { IS_MAC } from "../lib/shortcuts";
 import { useShortcuts } from "../hooks/useShortcuts";
 
 const rect = (top: number, left: number, width: number, height: number) =>
@@ -19,6 +19,41 @@ const sidebar = () => {
 
 afterEach(() => {
   document.body.innerHTML = "";
+});
+
+/** The observers the tour opens on what it points at, so a test can say it resized. */
+let observers: Array<{ cb: () => void; targets: Set<Element> }> = [];
+const realObserver = globalThis.ResizeObserver;
+
+beforeEach(() => {
+  observers = [];
+  globalThis.ResizeObserver = class {
+    targets = new Set<Element>();
+    constructor(readonly cb: () => void) {
+      observers.push(this as unknown as { cb: () => void; targets: Set<Element> });
+    }
+    observe(el: Element) {
+      this.targets.add(el);
+    }
+    unobserve(el: Element) {
+      this.targets.delete(el);
+    }
+    disconnect() {
+      this.targets.clear();
+    }
+  } as unknown as typeof ResizeObserver;
+});
+
+/** A resize of everything the tour is watching — nothing it is not watching hears it. */
+const resized = () =>
+  act(() =>
+    observers
+      .filter((one) => one.targets.size > 0)
+      .forEach((one) => one.cb()),
+  );
+
+afterEach(() => {
+  globalThis.ResizeObserver = realObserver;
 });
 
 describe("where the card goes", () => {
@@ -64,6 +99,18 @@ describe("the tour", () => {
     expect(container.querySelector(".tour-catch-dim")).toBeNull();
   });
 
+  test("the ring follows the thing it points at as it grows", () => {
+    const el = sidebar();
+    const { container } = render(<Tour onDone={() => {}} />);
+    const ring = () => container.querySelector(".tour-ring") as HTMLElement;
+    expect(ring().style.width).toBe("112px");
+
+    // A panel opening animates its width: same step, a bigger box.
+    el.getBoundingClientRect = () => rect(10, 20, 300, 40);
+    resized();
+    expect(ring().style.width).toBe("312px");
+  });
+
   test("steps forward, and back to the one before", () => {
     render(<Tour onDone={() => {}} />);
     expect((screen.getByRole("button", { name: "Back" }) as HTMLButtonElement).disabled).toBe(true);
@@ -84,14 +131,14 @@ describe("the tour", () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  test("the panels step lists what the menu holds, with their keys", () => {
+  test("the panels step says what the menu is for, and lists nothing", () => {
     render(<Tour onDone={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
-    for (const label of ["Overview", "Changes", "Plan", "Files", "Rules", "Skills", "MCP", "Hooks", "Terminal"]) {
-      expect(screen.getByText(label)).toBeTruthy();
-    }
-    expect(screen.getByText(shortcutText("terminal"))).toBeTruthy();
+    expect(screen.getByText(/Everything about the folder and the work in it/)).toBeTruthy();
+    // Read as a sentence, not as the menu itself: the menu cannot be opened
+    // under the dim, and a list of nine is not what a tour is for.
+    expect(screen.queryByText("Terminal")).toBeNull();
   });
 
   test("the window's keys are held while it is up", () => {

@@ -829,7 +829,13 @@ export default function App() {
           <Onboarding
             onSkip={onboarding.dismiss}
             onFinish={onboarding.finish}
-            onTour={() => setTourOpen(true)}
+            onTour={() => {
+              setTourOpen(true);
+              // The tour's first step points at the chat list: a rail would
+              // have it point at icons. A window too narrow for the list keeps
+              // the rail — that is the layout's rule, not the tour's.
+              setCollapsed(false);
+            }}
             provider={{ busy: llm.busy, error: llm.error, onSave: llm.save, onProbe: llm.probe }}
             features={{ list: features.features, onSet: features.set, error: features.error }}
           />

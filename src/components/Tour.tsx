@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { placeCard, placeCentred, TOUR_STEPS, type Box } from "../lib/tour";
-import { matches, shortcutText, type ShortcutId } from "../lib/shortcuts";
+import { matches } from "../lib/shortcuts";
 import { useHeldShortcuts } from "../hooks/useShortcuts";
-import { PANES } from "./panes";
 import "./Tour.css";
 
 /** How far the ring stands off what it points at. */
@@ -63,7 +62,14 @@ export function Tour({ onDone }: { onDone: () => void }) {
     window.addEventListener("resize", measure);
     // Captured, so a pane scrolled inside the window moves the ring too.
     window.addEventListener("scroll", measure, true);
+    // A panel opening or closing animates its width — the sidebar does, and
+    // the tour opens it — so the ring follows the box as it grows rather than
+    // staying where it stood before the animation.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    const target = document.querySelector(step.target);
+    if (target) observer?.observe(target);
     return () => {
+      observer?.disconnect();
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
@@ -97,18 +103,6 @@ export function Tour({ onDone }: { onDone: () => void }) {
         </div>
         <h2 className="tour-title">{step.title}</h2>
         <p className="tour-body">{step.body}</p>
-        {/* What the menu behind the ring holds — read here, since it cannot be
-            opened under the dim. */}
-        {step.id === "panes" && (
-          <ul className="tour-panels">
-            {PANES.map((pane) => (
-              <li key={pane.id}>
-                <span>{pane.label}</span>
-                <span className="tour-panel-keys">{shortcutText(pane.id as ShortcutId)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
         <div className="tour-foot">
           <button
             className="btn btn-ghost"

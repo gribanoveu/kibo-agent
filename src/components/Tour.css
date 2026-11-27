@@ -78,28 +78,3 @@
   gap: 8px;
   margin-top: 12px;
 }
-
-/* What a menu behind the ring holds, as a list: the panels and the keys that
-   open them, read in the card since the menu cannot be opened under the dim. */
-.tour-panels {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin: 8px 0 0;
-  padding: 8px 0 0;
-  list-style: none;
-  border-top: 1px solid var(--border-soft);
-}
-.tour-panels li {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: var(--fs-xs);
-  color: var(--text-dim);
-}
-.tour-panel-keys {
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: var(--fs-2xs);
-}
