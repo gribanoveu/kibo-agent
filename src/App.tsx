@@ -484,14 +484,10 @@ export default function App() {
               ) : undefined
             }
             onOpenSettings={ide ? () => openSettings() : undefined}
-            workspace={workspace.path}
             chatId={agent.chatId}
             turn={agent.turn}
             onDecide={agent.decide}
             onAnswerQuestion={agent.answerQuestion}
-            onOpenRepo={chooseFolder}
-            recent={workspace.recent}
-            onOpenFolder={openFolder}
             overviewOpen={shown("overview")}
             onToggleOverview={() => setDocks(togglePane(docks, "overview", "right"))}
             terminalOpen={bottomShown === "terminal"}

@@ -89,10 +89,8 @@ describe("the rewind button", () => {
     const asked: string[] = [];
     render(
       <ChatPanel
-        workspace="/tmp/p"
         turn={{ ...emptyTurn(), status: "done", blocks: [{ kind: "user", id: "u0", text: "hi" }] }}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         branchable={new Set(["u0"])}
         onBranch={() => {}}
         onRewind={(id) => asked.push(id)}

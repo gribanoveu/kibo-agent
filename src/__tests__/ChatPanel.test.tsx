@@ -18,10 +18,8 @@ const state = (blocks: Block[], over: Partial<TurnState> = {}): TurnState => ({
 const panel = (turn: TurnState, onDecide = () => {}) =>
   render(
     <ChatPanel
-      workspace="/tmp/project"
       turn={turn}
       onDecide={onDecide}
-      onOpenRepo={() => {}}
     />,
   );
 
@@ -31,10 +29,8 @@ describe("the checklist while the agent works", () => {
   const withList = (over: Partial<TurnState>) =>
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([{ kind: "user", id: "u0", text: "fix it" }], over)}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         checklist={list}
       />,
     );
@@ -58,10 +54,8 @@ describe("the checklist while the agent works", () => {
   test("is not there once nothing on it is open", () => {
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() })}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         checklist={[task("1", "read", "completed"), { id: "2", title: "fix", status: "cancelled" as const }]}
       />,
     );
@@ -401,7 +395,7 @@ describe("how long the agent worked", () => {
   test("counts the background processes still running, and opens the newest", () => {
     const opened: number[] = [];
     const running = (turnState: TurnState, ids: number[]) =>
-      render(<ChatPanel workspace="/tmp/p" turn={turnState} onDecide={() => {}} onOpenRepo={() => {}} runningProcesses={ids} onOpenProcess={(id) => opened.push(id)} />);
+      render(<ChatPanel turn={turnState} onDecide={() => {}} runningProcesses={ids} onOpenProcess={(id) => opened.push(id)} />);
 
     const live = running(state([{ kind: "user", id: "u0", text: "fix it" }], { status: "running", runningSince: Date.now() - 5_000 }), [3]);
     expect(screen.getByRole("timer").textContent).toBe("Working… 5s·1 process");
@@ -512,10 +506,8 @@ describe("the header", () => {
     render(
       <ChatPanel
         heading={<button type="button">Chats</button>}
-        workspace="/tmp/project"
         turn={state([])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
       />,
     );
     expect(screen.getByRole("button", { name: "Chats" })).toBeTruthy();
@@ -525,10 +517,8 @@ describe("the header", () => {
     const opened: string[] = [];
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         onOpenPanel={(tab) => opened.push(tab)}
       />,
     );
@@ -544,10 +534,8 @@ describe("the header", () => {
     let toggled = 0;
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         onOpenPanel={() => {}}
         terminalOpen
         onToggleTerminal={() => toggled++}
@@ -566,10 +554,8 @@ describe("the header", () => {
     let toggled = 0;
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         onOpenPanel={() => {}}
         onToggleTerminal={() => {}}
         onToggleOverview={() => toggled++}
@@ -588,10 +574,8 @@ describe("the header", () => {
     let exported = 0;
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         onExport={() => exported++}
       />,
     );
@@ -607,10 +591,8 @@ describe("the header", () => {
   test("the … menu closes on Escape, and is not there with nothing in it", () => {
     const { unmount } = render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         onExport={() => {}}
       />,
     );
@@ -621,10 +603,8 @@ describe("the header", () => {
 
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
       />,
     );
     expect(screen.queryByTitle("More")).toBeNull();
@@ -702,10 +682,8 @@ describe("branching from a message", () => {
   const branchPanel = (branchable: ReadonlySet<string> | null, onBranch: (id: string) => void = () => {}) =>
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state(blocks, { status: "done" })}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         branchable={branchable}
         onBranch={onBranch}
       />,
@@ -815,10 +793,8 @@ describe("a background process started from the chat", () => {
     const opened: number[] = [];
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([started])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         onOpenProcess={(id) => opened.push(id)}
       />,
     );
@@ -867,7 +843,7 @@ describe("a helper's explore card", () => {
   test("its run is a click away in the sheet over the chat", () => {
     const opened: unknown[] = [];
     render(
-      <ChatPanel workspace="/tmp/project" turn={state([explored])} onDecide={() => {}} onOpenRepo={() => {}} onOpenAgent={(agent) => opened.push(agent)} />,
+      <ChatPanel turn={state([explored])} onDecide={() => {}} onOpenAgent={(agent) => opened.push(agent)} />,
     );
     expect(screen.queryByText("Show run")).toBeNull();
     fireEvent.click(screen.getByText("Where is X?"));
@@ -930,10 +906,8 @@ describe("a background process that ended", () => {
     const opened: number[] = [];
     const { container } = render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([ended(101)])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         onOpenProcess={(id) => opened.push(id)}
       />,
     );
@@ -954,10 +928,8 @@ describe("a background process that ended", () => {
   test("with a description, the description leads and the command sits under it", () => {
     const { container } = render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([ended(0, "build the crate")])}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         onOpenProcess={() => {}}
       />,
     );
@@ -983,10 +955,8 @@ describe("a background process that ended", () => {
       const script = "cp src/a.tsx /tmp/a.bak\nperl -pi -e 's/x/y/' src/a.tsx\nbun test -t 'one' >/tmp/a.log\ntail -3 /tmp/a.log";
       const { container } = render(
         <ChatPanel
-          workspace="/tmp/project"
           turn={state([ended(0, undefined, script)])}
           onDecide={() => {}}
-          onOpenRepo={() => {}}
           onOpenProcess={() => {}}
         />,
       );
@@ -1333,10 +1303,8 @@ describe("the pull request's tasks under the answer (BB-8)", () => {
     const said: string[] = [];
     render(
       <ChatPanel
-        workspace="/tmp/project"
         turn={state([{ kind: "user", id: "u0", text: "fix it" }, { kind: "message", id: "m1", round: 1, text: "done" }], over)}
         onDecide={() => {}}
-        onOpenRepo={() => {}}
         prTasks={prTasks}
         onPrTask={(text) => said.push(text)}
       />,
