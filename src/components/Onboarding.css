@@ -301,7 +301,7 @@
 }
 .onboarding-extra {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
@@ -330,10 +330,12 @@
   font-size: var(--fs-md);
   color: var(--text);
 }
-/* The mark of a chosen card, on its right: there whether the card is on or
-   not, so the words do not shift when it appears. */
+/* The mark of a chosen card, at its top right, on the line its name is read
+   on — there whether the card is on or not, so the words do not shift when it
+   appears. */
 .onboarding-extra-check {
   flex: none;
+  margin-top: 1px;
   color: var(--accent);
   opacity: 0;
 }
