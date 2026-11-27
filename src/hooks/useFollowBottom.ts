@@ -16,16 +16,22 @@ import { useStickToBottom } from "use-stick-to-bottom";
  * the box's own height changes whenever a line is typed into the message box,
  * and sticking on that shoves what is being read up by a line per line typed.
  *
- * The pin is instant, as it was before the library: `resize`/`initial` keep
- * the growing answer at the end without a spring, and `scrollToBottom` passes
- * "instant" explicitly — the library's default for a bare call is its spring.
+ * The growth is chased by the library's spring, not snapped to: an instant
+ * pin lands a frame after the ResizeObserver that saw the growth, so every
+ * streamed word paints one frame below the edge and then jumps. The spring
+ * writes every frame and glides after the answer instead. Opening a chat
+ * (`initial`) and an explicit `scrollToBottom` — a send, the button — stay
+ * instant: there the reader asked for the end, not a chase.
  *
  * The wheel and the scroll keys let go through listeners of our own, before
  * any scroll event: the library's wheel path finds the scrolling element by
  * its computed `overflow` shorthand, which the thread's `overflow-x: hidden`
  * turns into "hidden auto" — past the library's check — and it has no keyboard
  * path at all. Left to the scroll event alone, a let go waits a millisecond
- * while the instant pin keeps writing, and the wheel fights the stream.
+ * while the pin keeps writing, and the wheel fights the stream. The wheel
+ * only lets go when it is the thread's own: approval previews, diffs and tool
+ * output scroll inside their own boxes, and their wheel events bubble up here
+ * without the thread moving a pixel.
  *
  * `isAtBottom` is the library's own flag (true within its 70px of the end):
  * what the back-to-bottom button shows by.
@@ -38,7 +44,6 @@ export function useFollowBottom() {
     stopScroll,
     isAtBottom,
   } = useStickToBottom({
-    resize: "instant",
     initial: "instant",
   });
 
@@ -53,7 +58,26 @@ export function useFollowBottom() {
         if (el.scrollHeight > el.clientHeight) stopScroll();
       };
       const onWheel = (e: WheelEvent) => {
-        if (e.deltaY < 0) letGo();
+        // Up only, and only where the thread can move: a wheel turned up at
+        // the very top scrolls nothing, and a let go there would stop the
+        // following with no scroll able to pick it back up.
+        if (e.deltaY >= 0 || el.scrollTop <= 0) return;
+        // The wheel belongs to the innermost box it can scroll: a preview or
+        // a diff with its own scrollbar takes it, and the thread must not let
+        // go for a scroll that never moves it. At the inner box's own top the
+        // wheel chains up to the thread — that one is ours — unless the box
+        // keeps its overscroll to itself (contain/none): then the browser
+        // chains nothing past it, and the wheel stays its own even there.
+        let node = e.target as HTMLElement | null;
+        while (node && node !== el) {
+          const style = getComputedStyle(node);
+          if (style.overflowY === "auto" || style.overflowY === "scroll") {
+            const chains = style.overscrollBehaviorY !== "contain" && style.overscrollBehaviorY !== "none";
+            if (node.scrollHeight > node.clientHeight && (node.scrollTop > 0 || !chains)) return;
+          }
+          node = node.parentElement;
+        }
+        letGo();
       };
       // These keys scroll the box natively; the app answers to no shortcut
       // here — the hook only notices them to let go of the end.

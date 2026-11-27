@@ -43,7 +43,9 @@ function Thread({ onReady }: { onReady: (api: ReturnType<typeof useFollowBottom>
 }
 
 /** Let the library's frames and its 1ms scroll reads run. */
-const settle = () => act(async () => void (await Bun.sleep(80)));
+const settle = (ms = 80) => act(async () => void (await Bun.sleep(ms)));
+/** Let the spring catch up: from far up it approaches the end over ~1.5s. */
+const glide = () => settle(1600);
 
 function setup(start = 1000) {
   let api!: ReturnType<typeof useFollowBottom>;
@@ -88,16 +90,35 @@ function setup(start = 1000) {
   };
   // The library's end: a pixel above the very bottom.
   const end = () => height - 1 - shown;
-  return { box, grow, shrink, userScrollsTo, wheelUp, end, unmount, api: () => api };
+  // A preview or a diff inside the thread, scrolling inside its own box.
+  const nested = (top: number) => {
+    const inner = document.createElement("div");
+    inner.style.overflowY = "auto";
+    Object.defineProperty(inner, "scrollHeight", { get: () => 500 });
+    Object.defineProperty(inner, "clientHeight", { get: () => 100 });
+    inner.scrollTop = top;
+    content.appendChild(inner);
+    return inner;
+  };
+  const wheelOn = async (target: Element, deltaY = -40) => {
+    act(() => {
+      target.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
+    });
+    await settle();
+  };
+  return { box, grow, shrink, userScrollsTo, wheelUp, wheelOn, nested, end, unmount, api: () => api };
 }
 
 describe("following the end of the thread", () => {
-  test("scrolls to the end as the content grows, instantly", async () => {
+  test("the first growth snaps to the end, later growth glides after it", async () => {
     const { box, grow, end } = setup();
-    await grow(200); // the first growth takes the initial animation
+    await grow(200); // the first growth takes the initial animation: instant
     expect(box.scrollTop).toBe(end());
-    await grow(400); // and the next one the resize animation
-    expect(box.scrollTop).toBe(end());
+    await grow(400); // the next takes the resize spring: mid-glide, not snapped
+    expect(box.scrollTop).toBeGreaterThan(end() - 400);
+    expect(box.scrollTop).toBeLessThan(end());
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
   });
 
   test("a wheel turned up lets go, and growth leaves the reader put", async () => {
@@ -121,6 +142,74 @@ describe("following the end of the thread", () => {
     expect(box.scrollTop).toBe(put);
   });
 
+  test("a wheel turned down does not let go", async () => {
+    const { box, grow, wheelOn, end } = setup();
+    await grow(0);
+    await wheelOn(box, 40);
+    await grow(200);
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
+  });
+
+  /// At the very top the wheel moves nothing; a let go there would stop the
+  /// following with no scroll able to pick it back up.
+  test("a wheel turned up at the very top keeps following", async () => {
+    const { box, grow, wheelOn, end } = setup();
+    await grow(0);
+    box.scrollTop = 0; // no scroll event: the guard is about the wheel itself
+    await wheelOn(box);
+    await grow(200);
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
+  });
+
+  /// A preview or a diff scrolls inside its own box; its wheel bubbles up to
+  /// the thread without moving it, and must not stop the following.
+  test("a wheel over a nested scrollable is its own, not the thread's", async () => {
+    const { box, grow, wheelOn, nested, end } = setup();
+    await grow(0);
+    await wheelOn(nested(200));
+    await grow(200);
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
+  });
+
+  /// At the nested box's own top the wheel chains up to the thread — that
+  /// scroll is the thread's, and it lets go.
+  test("a wheel over a nested scrollable at its top chains to the thread", async () => {
+    const { box, grow, wheelOn, nested } = setup();
+    await grow(0);
+    const put = box.scrollTop;
+    await wheelOn(nested(0));
+    await grow(200);
+    expect(box.scrollTop).toBe(put);
+  });
+
+  /// A box that keeps its overscroll to itself chains nothing past its top:
+  /// the wheel there never moves the thread. happy-dom computes no
+  /// overscroll-behavior, so the style is posed as the real browser reports it.
+  test("a wheel over a nested scrollable with overscroll contain stays its own at its top", async () => {
+    const { box, grow, wheelOn, nested, end } = setup();
+    await grow(0);
+    const inner = nested(0);
+    const real = globalThis.getComputedStyle;
+    globalThis.getComputedStyle = ((el: Element) => {
+      const style = real(el);
+      if (el !== inner) return style;
+      return new Proxy(style, {
+        get: (t, k) => (k === "overscrollBehaviorY" ? "contain" : Reflect.get(t, k)),
+      });
+    }) as typeof real;
+    try {
+      await wheelOn(inner);
+      await grow(200);
+      await glide();
+      expect(box.scrollTop).toBeCloseTo(end(), 0);
+    } finally {
+      globalThis.getComputedStyle = real;
+    }
+  });
+
   /// A thread shorter than its box has nowhere to scroll up to: a let go
   /// there would stop the following with no scroll able to pick it back up.
   test("a wheel turned up on a thread shorter than its box keeps following", async () => {
@@ -128,7 +217,8 @@ describe("following the end of the thread", () => {
     await grow(0);
     await wheelUp();
     await grow(500);
-    expect(box.scrollTop).toBe(end());
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
   });
 
   test("a drag up lets go, and the thread stays where the reader left it", async () => {
@@ -155,7 +245,8 @@ describe("following the end of the thread", () => {
     await grow(200);
     await userScrollsTo(end());
     await grow(100);
-    expect(box.scrollTop).toBe(end());
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
   });
 
   test("a shrink that clamps the reader onto the end resumes following", async () => {
@@ -165,7 +256,8 @@ describe("following the end of the thread", () => {
     await shrink(650); // the end moves above the reader; the box is clamped onto it
     expect(box.scrollTop).toBe(end());
     await grow(100);
-    expect(box.scrollTop).toBe(end());
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
   });
 
   test("scrollToBottom follows again even from far up, instantly", async () => {
@@ -178,7 +270,8 @@ describe("following the end of the thread", () => {
     });
     expect(box.scrollTop).toBe(end());
     await grow(50);
-    expect(box.scrollTop).toBe(end());
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
   });
 
   test("isAtBottom is false away from the end and true back at it", async () => {
