@@ -260,7 +260,7 @@ describe("following the end of the thread", () => {
     expect(box.scrollTop).toBeCloseTo(end(), 0);
   });
 
-  test("scrollToBottom follows again even from far up, instantly", async () => {
+  test("scrollToBottom glides back to the end from far up, and follows again", async () => {
     const { box, grow, userScrollsTo, end, api } = setup();
     await grow(0);
     await userScrollsTo(0);
@@ -268,7 +268,11 @@ describe("following the end of the thread", () => {
       api().scrollToBottom();
       await Bun.sleep(80);
     });
-    expect(box.scrollTop).toBe(end());
+    // Mid-glide: the spring is on its way, not snapped to the end.
+    expect(box.scrollTop).toBeGreaterThan(0);
+    expect(box.scrollTop).toBeLessThan(end());
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
     await grow(50);
     await glide();
     expect(box.scrollTop).toBeCloseTo(end(), 0);

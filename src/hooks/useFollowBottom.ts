@@ -19,9 +19,11 @@ import { useStickToBottom } from "use-stick-to-bottom";
  * The growth is chased by the library's spring, not snapped to: an instant
  * pin lands a frame after the ResizeObserver that saw the growth, so every
  * streamed word paints one frame below the edge and then jumps. The spring
- * writes every frame and glides after the answer instead. Opening a chat
- * (`initial`) and an explicit `scrollToBottom` — a send, the button — stay
- * instant: there the reader asked for the end, not a chase.
+ * writes every frame and glides after the answer instead. An explicit
+ * `scrollToBottom` — a send, the button — rides the same spring, so the way
+ * back to the end is a glide the wheel can cancel. Opening a chat (`initial`)
+ * stays instant: a glide through a long history on every chat switch reads
+ * as a lag, not a delight.
  *
  * The wheel and the scroll keys let go through listeners of our own, before
  * any scroll event: the library's wheel path finds the scrolling element by
@@ -101,7 +103,7 @@ export function useFollowBottom() {
 
   /** Back to the end, following again — for when the user just sent something. */
   const scrollToBottom = useCallback(() => {
-    void stick("instant");
+    void stick("smooth");
   }, [stick]);
 
   return { scrollRef, contentRef, scrollToBottom, isAtBottom };
