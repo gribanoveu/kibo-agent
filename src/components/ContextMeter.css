@@ -61,6 +61,24 @@
   top: auto;
   bottom: calc(100% + 6px);
 }
+/* A narrow column wraps the box's buttons onto a second row, where the ring
+   sits left of centre: a panel anchored to its right edge then reaches past
+   the column's left and is cut by it. There the panel becomes a centred card
+   over the page instead — whole, and scrollable if the window is short. */
+@container (max-width: 500px) {
+  .ctx-pop,
+  .ctx-pop.up {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    transform: translate(-50%, -50%);
+    width: min(320px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+  }
+}
 .ctx-head {
   display: flex;
   justify-content: space-between;
