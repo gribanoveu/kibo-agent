@@ -9,6 +9,8 @@ type PageProps = {
   bar?: ReactNode;
   /** A `PageSheet` over the page while one is open: it moves nothing aside. */
   sheet?: ReactNode;
+  /** Names the page for the first-run tour, which rings it. */
+  tour?: string;
   children: ReactNode;
 };
 
@@ -18,9 +20,9 @@ type PageProps = {
  * window's title bar (App.tsx); `title` is what a screen reader calls the page.
  * Every page is drawn with it, so a new one only fills it in.
  */
-export function Page({ title, bar, sheet, children }: PageProps) {
+export function Page({ title, bar, sheet, tour, children }: PageProps) {
   return (
-    <section className="page" aria-label={title}>
+    <section className="page" aria-label={title} data-tour={tour}>
       {bar && <header className="page-bar">{bar}</header>}
       <div className="page-body">{children}</div>
       {sheet}

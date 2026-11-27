@@ -60,6 +60,7 @@ mock.module("../lib/sounds", () => ({
 const { useDictation } = await import("../hooks/useDictation");
 const { DictateButton } = await import("../components/DictateButton");
 const { HOLD_MS } = await import("../lib/dictation");
+const { holdShortcuts } = await import("../lib/shortcuts");
 const { Composer } = await import("../components/Composer");
 const { PlainChat } = await import("../components/PlainChat");
 
@@ -541,6 +542,23 @@ describe("the key", () => {
     fireEvent.keyUp(window, { code: "ShiftLeft" });
     await settled();
     expect(said("dictation_stop")).toBe(0);
+  });
+
+  test("a layer holding the window's keys keeps this one too", async () => {
+    box();
+    await settled();
+    // The first run is up: the key is the layer's, not the hidden box's.
+    const release = holdShortcuts();
+    fireEvent.keyDown(window, { code: "AltRight", altKey: true });
+    await pass(HOLD_MS * 1.2);
+    release();
+    expect(said("dictation_start")).toBe(0);
+
+    // Let go, the layer gone: the key dictates again.
+    fireEvent.keyUp(window, { code: "AltRight" });
+    fireEvent.keyDown(window, { code: "AltRight", altKey: true });
+    await pass(HOLD_MS * 1.2);
+    expect(said("dictation_start")).toBe(1);
   });
 
   test("the box gone while it is held starts nothing", async () => {

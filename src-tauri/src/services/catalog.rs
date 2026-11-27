@@ -28,7 +28,9 @@ pub struct ItemView {
     pub state: ItemState,
     /// Where it goes, as a path under the home folder reads
     /// (`~/.kibo/skills/review`, a server's `~/.kibo/mcp.json`, hooks'
-    /// `~/.kibo/hooks.json`). `None` only for an entry with no place.
+    /// `~/.kibo/hooks.json` — or the app directory `KIBO_APP_DIR` names, whole
+    /// when it is outside the home folder). `None` only for an entry with no
+    /// place.
     pub target: Option<String>,
     /// A runbook named as one the app ships: installed, it is read instead.
     pub replaces_built_in: bool,
@@ -95,9 +97,26 @@ fn place_of(relative: &std::path::Path) -> Result<PathBuf, CatalogError> {
     app_dir::dir().map(|dir| dir.join(relative)).map_err(|e| CatalogError::Disk(e.into()))
 }
 
-/// Where a server and hooks go, as the row says it.
-const MCP_TARGET: &str = "~/.kibo/mcp.json";
-const HOOKS_TARGET: &str = "~/.kibo/hooks.json";
+/// Where a server and hooks go, and where anything else lands, as the row
+/// says it: `~/.kibo/skills/review` from the home folder, the whole path when
+/// `KIBO_APP_DIR` names a directory outside it — the path is a place to look,
+/// so it has to be the one the entry was written to.
+fn shown_at(relative: &str) -> String {
+    let base = app_dir::dir().map_or_else(|_| "~/.kibo".to_string(), |dir| at_home(&dir, dirs::home_dir().as_deref()));
+    format!("{base}/{}", relative.replace('\\', "/"))
+}
+
+/// A directory as the window writes it: `~` for one under the home folder, its
+/// own path for anything else.
+fn at_home(dir: &Path, home: Option<&Path>) -> String {
+    let spelled = |path: &Path| path.to_string_lossy().replace('\\', "/");
+    let Some(under) = home.and_then(|home| dir.strip_prefix(home).ok()) else { return spelled(dir) };
+    if under.as_os_str().is_empty() {
+        "~".to_string()
+    } else {
+        format!("~/{}", spelled(under))
+    }
+}
 
 fn item_view(item: CatalogItem, source: &str, here: &Here) -> ItemView {
     let relative = catalog::target(item.kind, &item.id, item.role.as_deref());
@@ -112,9 +131,9 @@ fn item_view(item: CatalogItem, source: &str, here: &Here) -> ItemView {
         _ => ItemState::Available,
     };
     let target = match (relative, item.kind) {
-        (Some(path), _) => Some(format!("~/.kibo/{}", path.to_string_lossy().replace('\\', "/"))),
-        (None, ItemKind::Mcp) => Some(MCP_TARGET.to_string()),
-        (None, ItemKind::Hooks) => Some(HOOKS_TARGET.to_string()),
+        (Some(path), _) => Some(shown_at(&path.to_string_lossy())),
+        (None, ItemKind::Mcp) => Some(shown_at("mcp.json")),
+        (None, ItemKind::Hooks) => Some(shown_at("hooks.json")),
         (None, _) => None,
     };
     ItemView {
@@ -709,16 +728,41 @@ mod tests {
         with_app_dir("catalog-views", || {
             let items = listed_once(CAT);
             let at = |id: &str| items.iter().find(|v| v.item.id == id).unwrap();
-            assert_eq!(at("review").target.as_deref(), Some("~/.kibo/skills/review"));
-            assert_eq!(at("crashloop").target.as_deref(), Some("~/.kibo/runbooks/kubernetes/crashloop.md"));
-            assert_eq!(at("github").target.as_deref(), Some("~/.kibo/mcp.json"));
-            assert_eq!(at("no-force").target.as_deref(), Some("~/.kibo/hooks.json"));
+            // Under whichever directory this build keeps its own files —
+            // `~/.kibo`, or the one `KIBO_APP_DIR` names; how a path is
+            // spelled is `a_place_is_spelled_from_the_home_folder`.
+            let under = |view: &ItemView, relative: &str| {
+                let target = view.target.clone().unwrap_or_default();
+                assert!(target.ends_with(&format!("/{relative}")), "{target} does not end with {relative}");
+                // Under home it reads `~/…`; anywhere else the path is whole —
+                // `/…` on Unix, `C:/…` on Windows, as the app spells it.
+                assert!(target.starts_with("~/") || Path::new(&target).is_absolute(), "{target}");
+            };
+            under(at("review"), "skills/review");
+            under(at("crashloop"), "runbooks/kubernetes/crashloop.md");
+            under(at("github"), "mcp.json");
+            under(at("no-force"), "hooks.json");
             assert!(at("crashloop").replaces_built_in);
             assert!(!at("tls").replaces_built_in);
             // A built-in runbook's name on another kind replaces nothing.
             assert!(!at("probes").replaces_built_in);
             assert!(items.iter().all(|v| v.state == ItemState::Available));
         });
+    }
+
+    /// The row's path is a place to look, so it is the app directory this build
+    /// writes to — not the home one, which `KIBO_APP_DIR` may have replaced.
+    #[test]
+    fn a_place_is_spelled_from_the_home_folder_when_it_is_under_it() {
+        let home = Path::new("/Users/me");
+        assert_eq!(at_home(Path::new("/Users/me/.kibo"), Some(home)), "~/.kibo");
+        assert_eq!(at_home(Path::new("/Users/me/.kibo-dev"), Some(home)), "~/.kibo-dev");
+        // Another place entirely is named whole.
+        assert_eq!(at_home(Path::new("/tmp/kibo"), Some(home)), "/tmp/kibo");
+        // A name that merely starts the same is not under the home folder.
+        assert_eq!(at_home(Path::new("/Users/me2/.kibo"), Some(home)), "/Users/me2/.kibo");
+        assert_eq!(at_home(Path::new("/Users/me"), Some(home)), "~");
+        assert_eq!(at_home(Path::new("/tmp/kibo"), None), "/tmp/kibo");
     }
 
     #[test]

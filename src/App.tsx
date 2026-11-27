@@ -41,6 +41,9 @@ import { useChatGroups } from "./hooks/useChatGroups";
 import { modelChoices, useLlmSettings } from "./hooks/useLlmSettings";
 import { useKubeconfigs } from "./hooks/useKubeconfigs";
 import { useWorkspace } from "./hooks/useWorkspace";
+import { useOnboarding } from "./hooks/useOnboarding";
+import { Onboarding } from "./components/Onboarding";
+import { Tour } from "./components/Tour";
 import { useIndexStatus } from "./hooks/useIndexStatus";
 import { useMcp } from "./hooks/useMcp";
 import { useHooks } from "./hooks/useHooks";
@@ -109,6 +112,18 @@ export default function App() {
   // Before Chat mode: a new chat starts at the kubeconfig picked last.
   const kube = useKubeconfigs();
   const llm = useLlmSettings();
+  // The first-run screen: up when the settings say no provider is saved, and
+  // never asked twice in one launch (docs/66-onboarding.md).
+  const onboarding = useOnboarding(llm.settings);
+  // The first run hands the window over as the agent's: a chat mode left from
+  // an earlier launch has no panel menu, folder or Overview, and the wizard
+  // talks about the window the agent works in. Switched under the screen, so
+  // the tour that follows finds what it names.
+  useEffect(() => {
+    if (onboarding.open) setMode("agent");
+  }, [onboarding.open, setMode]);
+  // The window itself shown a step at a time, once, when the first run offers it.
+  const [tourOpen, setTourOpen] = useState(false);
   // Each provider's own model pin, auto resolved: the cache-miss hint compares
   // the model a turn actually sends, not the chip's display label.
   const providerModels = Object.fromEntries((llm.settings?.providers ?? []).map((p) => [p.id, p.model ?? llm.served[p.id]?.[0] ?? null]));
@@ -296,14 +311,21 @@ export default function App() {
     },
   });
 
-  // The window's own keys; a pane's key lives in `useDocks`.
-  useShortcuts({
-    newChat: () => newChat(),
-    focusInput: focusComposer,
-    sidebar: toggleSidebar,
-    settings: () => openSettings(),
-    ideLayout: agentMode ? toggleIde : undefined,
-  });
+  // The window's own keys; a pane's key lives in `useDocks`. The first-run
+  // screen has the window to itself: nothing behind it answers a key, so the
+  // Settings dialog cannot be opened over it and a provider saved there cannot
+  // slip past what the screen assumes.
+  useShortcuts(
+    onboarding.open
+      ? {}
+      : {
+          newChat: () => newChat(),
+          focusInput: focusComposer,
+          sidebar: toggleSidebar,
+          settings: () => openSettings(),
+          ideLayout: agentMode ? toggleIde : undefined,
+        },
+  );
 
   // A deleted chat takes its unsent message with it — the sidebar's own path
   // and the Artifacts page's prototype, which deletes its chat through the same
@@ -718,6 +740,11 @@ export default function App() {
       }
     >
       <Titlebar
+        // The first-run screen owns the window: the header it leaves in view —
+        // the chat's ⋮ and layout buttons, the sidebar's toggle — takes no
+        // press while it is up, or a panel opens behind a dimmed screen and is
+        // found already open when it closes.
+        held={onboarding.open}
         slot={setHeadSlot}
         leading={
           // The IDE layout has no sidebar to show.
@@ -732,7 +759,14 @@ export default function App() {
               >
                 <PanelLeft size={15} />
               </button>
-              <button className="iconbtn" type="button" title={`New chat (${shortcutText("newChat")})`} aria-label="New chat" onClick={newChat}>
+              <button
+                className="iconbtn"
+                type="button"
+                title={`New chat (${shortcutText("newChat")})`}
+                aria-label="New chat"
+                data-tour="new-chat"
+                onClick={newChat}
+              >
                 <SquarePen size={15} />
               </button>
             </>
@@ -745,7 +779,7 @@ export default function App() {
           "Kibo Agent"}
       </Titlebar>
 
-      <div className="body">
+      <div className={`body${onboarding.open ? " onboarding-open" : ""}`}>
         <Sidebar
           mode={mode}
           onMode={(next) => {
@@ -774,7 +808,6 @@ export default function App() {
           onSelectChat={selectChat}
           {...sidebarActions}
           onOpenSettings={() => openSettings()}
-          onOnboardingAction={openTab}
           themeSide={sideOf(theme.choice)}
           onToggleTheme={theme.toggle}
         />
@@ -806,6 +839,27 @@ export default function App() {
           topShown={dockShown}
           panels={panels}
         />
+        {onboarding.open && (
+          <Onboarding
+            onSkip={onboarding.dismiss}
+            onFinish={onboarding.finish}
+            onTour={() => {
+              setTourOpen(true);
+              // The tour's first step points at the chat list: a rail would
+              // have it point at icons. A window too narrow for the list keeps
+              // the rail — that is the layout's rule, not the tour's.
+              setCollapsed(false);
+            }}
+            provider={{ busy: llm.busy, error: llm.error, onSave: llm.save, onProbe: llm.probe }}
+            features={{ list: features.features, onSet: features.set, error: features.error }}
+          />
+        )}
+        {tourOpen && (
+          <Tour
+            onDone={() => setTourOpen(false)}
+            onOpen={(id) => (id === "catalog" ? openPage("catalog") : leavePage())}
+          />
+        )}
       </div>
 
       <FolderSwitchDialog

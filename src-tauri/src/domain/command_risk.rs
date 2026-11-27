@@ -584,10 +584,15 @@ fn is_secret(word: &str) -> bool {
     // The one part of the app directory that is not a secret: output of the
     // model's own commands, saved when its result was cut. Without `..`,
     // which would lead from there to the credentials beside it.
-    let command_output =
-        path.contains(".kibo/command-output/") && !path.split(['/', '\\']).any(|part| part == "..");
+    let command_output = (path.contains(".kibo/command-output/") || path.contains(".kibo-dev/command-output/"))
+        && !path.split(['/', '\\']).any(|part| part == "..");
+    // ponytail: the app directory is recognised by its name, so the one the
+    // second dev instance keeps (`~/.kibo-dev`) is named beside it. A
+    // directory `KIBO_APP_DIR` points somewhere else is not — the way past
+    // that is comparing against `app_dir::dir()`, which this function, pure
+    // and in `domain/`, does not reach.
     let secret_dir = !command_output
-        && [".ssh/", ".aws/", ".gnupg/", ".kube/", ".docker/", ".gcloud/", ".terraform/", ".kibo/"]
+        && [".ssh/", ".aws/", ".gnupg/", ".kube/", ".docker/", ".gcloud/", ".terraform/", ".kibo/", ".kibo-dev/"]
             .iter()
             .any(|dir| path.contains(dir) || path.ends_with(dir.trim_end_matches('/')));
     secret_name || secret_dir
@@ -706,10 +711,13 @@ mod tests {
     fn saved_command_output_is_not_a_secret_but_the_app_dir_is() {
         assert_eq!(classify("grep -n error /Users/me/.kibo/command-output/1-2-3.log"), CommandRisk::ReadOnly);
         assert_eq!(classify("tail -50 /Users/me/.kibo/command-output/1-2-3.log"), CommandRisk::ReadOnly);
+        // The second dev instance's directory is an app directory too.
+        assert_eq!(classify("tail -50 /Users/me/.kibo-dev/command-output/4-5-6.log"), CommandRisk::ReadOnly);
         for command in [
             "cat /Users/me/.kibo/credentials.json",
             "cat /Users/me/.kibo/settings.json",
             "cat /Users/me/.kibo/command-output/../settings.json",
+            "cat /Users/me/.kibo-dev/settings.json",
         ] {
             assert_eq!(classify(command), CommandRisk::Ask, "{command}");
         }

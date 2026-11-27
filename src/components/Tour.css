@@ -1,0 +1,80 @@
+/* The tour over the window: everything but one thing dimmed, and a card that
+   says what that thing is. */
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+}
+
+/* A hole, not a cover: the shadow dims all of the window but the ring. */
+.tour-ring {
+  position: fixed;
+  border-radius: var(--radius-md);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 0 9999px var(--overlay);
+  transition:
+    top 0.16s ease,
+    left 0.16s ease,
+    width 0.16s ease,
+    height 0.16s ease;
+}
+
+/* Everything the ring does not leave in the light takes no press: a button
+   pressed behind the dim would open a panel, or turn the IDE layout on, where
+   the user cannot see it happening. */
+.tour-catch {
+  position: fixed;
+  inset: 0;
+  pointer-events: auto;
+}
+/* With nothing to point at there is no ring to cast the dim, so this holds it. */
+.tour-catch-dim {
+  background: var(--overlay);
+}
+
+.tour-card {
+  position: fixed;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  padding: 10px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+  pointer-events: auto;
+}
+
+.tour-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tour-count {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+.tour-title {
+  margin: 4px 0 4px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tour-body {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.tour-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}

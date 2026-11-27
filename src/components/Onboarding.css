@@ -1,0 +1,470 @@
+/* The first-run layer over the body: opaque, centred, and the only way past
+   it is the Skip in its corner. The title bar above it is the window's own —
+   drag handle and buttons — so this starts under it, over `.body`.
+   Its ground is a panel's and not the window's: every field is filled with
+   `--bg-field` (`--bg-panel-soft`), which on the window colour of a light
+   theme is barely a shade away — the boxes would read as bare text. */
+.onboarding {
+  position: absolute;
+  inset: 0;
+  /* Over the panels and over what they portal onto `document.body` — a menu, a
+     toast, a popover — which z-index 4 would leave floating on top of it. A
+     dialog (100) still comes first. */
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+.onboarding-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px 4px;
+}
+.onboarding-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.onboarding-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--bg-active);
+}
+.onboarding-dot.active {
+  background: var(--accent);
+}
+.onboarding-skip {
+  background: none;
+  border: 0;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.onboarding-skip:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* A step: its words in the middle of the window, its buttons under them. */
+.onboarding-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  text-align: center;
+}
+/* A step kept for the way back — see the provider step's `hidden`. */
+.onboarding-page[hidden] {
+  display: none;
+}
+.onboarding-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 8px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+/* A provider's mark over the step's heading, closed up to the words it belongs
+   to: the body's gap is the distance between one block and the next. */
+.onboarding-logo {
+  margin-bottom: -4px;
+}
+/* The content sits in the middle of the window, by the two auto margins at its
+   ends — which go to zero when it is taller than the window, so nothing is cut
+   off the scroll the way `justify-content: center` would cut it. */
+.onboarding-body > :first-child {
+  margin-top: auto;
+}
+.onboarding-body > :last-child {
+  margin-bottom: auto;
+}
+
+/* The wordmark is the first thing read: bigger than anywhere else in the app. */
+.onboarding .kibo-brand {
+  height: calc(var(--fs-lg) * 5);
+  margin-bottom: 2px;
+}
+.onboarding-title {
+  margin: 2px 0 0;
+  font-size: calc(var(--fs-lg) * 1.9);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.onboarding-lead {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--fs-md);
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+.onboarding-note {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+/* The providers the app carries, as cards: what one is, and where it answers. */
+.onboarding-providers {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+.onboarding-provider {
+  flex: 1 1 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 11px 12px;
+  text-align: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: inherit;
+}
+.onboarding-provider:hover {
+  background: var(--bg-hover);
+}
+.onboarding-provider.active {
+  border-color: var(--accent);
+  background: var(--bg-panel-soft);
+}
+.onboarding-provider-name {
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+.onboarding-provider-host {
+  max-width: 100%;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The provider picked, where the cards were: one line, and the way back to
+   them — the step stays as short as the choice makes it. */
+.onboarding-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 3px 4px 3px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+.onboarding-chosen .onboarding-btn {
+  padding: 6px 14px;
+  font-size: var(--fs-sm);
+}
+.onboarding-chosen-host {
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The catalog behind the cards: a line of text, not another card. */
+.onboarding-more {
+  margin-top: -2px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.onboarding-more:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* The rest of the catalog, searched — the same list Settings offers. */
+.onboarding-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+}
+.onboarding-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+}
+.onboarding-search .entry-input {
+  flex: 1;
+}
+.onboarding-catalog-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.onboarding-catalog-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.onboarding-catalog-row:last-child {
+  border-bottom: 0;
+}
+.onboarding-catalog-row:hover {
+  background: var(--bg-hover);
+}
+.onboarding-catalog-host {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+.onboarding-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+}
+/* The protocol of an endpoint typed by hand: the app's own segments, in this
+   screen's size. */
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.onboarding-segmented {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
+  background: var(--bg-field);
+}
+.onboarding-segment {
+  flex: 1;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.onboarding-segment:hover {
+  color: var(--text);
+}
+.onboarding-segment.active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* The extras, as cards: a press is the choice, and the card chosen says so. */
+.onboarding-extras {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+}
+.onboarding-extra {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 13px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.onboarding-extra:hover {
+  background: var(--bg-hover);
+}
+.onboarding-extra.on {
+  border-color: var(--accent);
+  background: var(--bg-panel-soft);
+}
+.onboarding-extra-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.onboarding-extra-name {
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+/* The mark of a chosen card, at its top right, on the line its name is read
+   on — there whether the card is on or not, so the words do not shift when it
+   appears. */
+.onboarding-extra-check {
+  flex: none;
+  margin-top: 1px;
+  color: var(--accent);
+  opacity: 0;
+}
+.onboarding-extra-check.on {
+  opacity: 1;
+}
+.onboarding-extra-summary {
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+/* What the provider said it serves, and which one is the default. */
+.onboarding-models {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+}
+.onboarding-models-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.onboarding-count {
+  font-weight: 400;
+  color: var(--text-faint);
+}
+.onboarding-model-list {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.onboarding-model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text-dim);
+  text-align: left;
+  cursor: pointer;
+}
+.onboarding-model:hover {
+  background: var(--bg-hover);
+}
+.onboarding-model.active {
+  color: var(--text);
+  background: var(--bg-panel-soft);
+}
+
+/* What the provider said when it refused: the address and the key, as it saw them. */
+.onboarding-refusal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 52ch;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.onboarding-refusal p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.onboarding-refusal p:first-child {
+  color: var(--red);
+  word-break: break-word;
+}
+.onboarding-error {
+  margin: 0;
+  max-width: 46ch;
+  font-size: var(--fs-xs);
+  color: var(--red);
+}
+
+/* The step's buttons: one line under the words, in the middle of the window,
+   so the eye finds them in the same place on every step. Pills, and the one
+   that is not the action reads as a line of text, not a second button. */
+.onboarding-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 24px 32px;
+}
+.onboarding-foot-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* A first-run press is the screen's one action, so the buttons are a step
+   bigger than the app's own. */
+.onboarding-btn {
+  padding: 10px 22px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-md);
+}
+.onboarding .btn-ghost {
+  border: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+}
+.onboarding .btn-ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}

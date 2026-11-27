@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { matches, type ShortcutId } from "../lib/shortcuts";
+import { holdShortcuts, matches, shortcutsHeld, type ShortcutId } from "../lib/shortcuts";
 
 /**
  * Runs a handler when its shortcut is pressed anywhere in the window. Caught
@@ -14,6 +14,8 @@ export function useShortcuts(handlers: Partial<Record<ShortcutId, () => void>>) 
   current.current = handlers;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A layer over the window — the first run — keeps the keys to itself.
+      if (shortcutsHeld()) return;
       for (const [id, run] of Object.entries(current.current)) {
         if (!run || !matches(e, id as ShortcutId)) continue;
         e.preventDefault();
@@ -26,4 +28,12 @@ export function useShortcuts(handlers: Partial<Record<ShortcutId, () => void>>) 
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
+}
+
+/**
+ * Holds the window's keys while `on` — for a layer that owns the window, so a
+ * key it hides cannot act, nor park a dialog to appear after it is gone.
+ */
+export function useHeldShortcuts(on = true) {
+  useEffect(() => (on ? holdShortcuts() : undefined), [on]);
 }

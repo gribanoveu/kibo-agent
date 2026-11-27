@@ -27,11 +27,13 @@ type SwitchRow = {
   onChange: (on: boolean) => void;
   /** On, this is a state not to be missed: its icon says so in amber. */
   warn?: boolean;
+  /** Names the row for the first-run tour, which rings it. */
+  tour?: string;
 };
 
-export function PanelSwitch({ label, icon, title, on, onChange, warn }: SwitchRow) {
+export function PanelSwitch({ label, icon, title, on, onChange, warn, tour }: SwitchRow) {
   return (
-    <label className={`composer-settings-switch${on && warn ? " warn" : ""}`} title={title}>
+    <label className={`composer-settings-switch${on && warn ? " warn" : ""}`} title={title} data-tour={tour}>
       {icon}
       <span className="composer-settings-name">{label}</span>
       <Switch label={label} on={on} onChange={onChange} />
@@ -49,6 +51,7 @@ export function ComposerPanel({
   summary,
   className,
   left,
+  tour,
   children,
 }: {
   title: string;
@@ -57,6 +60,8 @@ export function ComposerPanel({
   className: string;
   /** Hangs from the box's left corner, for a button on the left of the line. */
   left?: boolean;
+  /** Names the button for the first-run tour, which rings it. */
+  tour?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -87,6 +92,7 @@ export function ComposerPanel({
         title={title}
         aria-haspopup="dialog"
         aria-expanded={open}
+        data-tour={tour}
         onClick={() => setOpen(!open)}
       >
         <span className="composer-settings-summary">{summary}</span>
@@ -133,6 +139,7 @@ export function ComposerSettings({ models, onModel, onEffort, onLoadModels, mode
     <ComposerPanel
       title="Mode, model and thinking"
       className="composer-settings"
+      tour="model"
       summary={
         <>
           {modeLabel && <span>{modeLabel.toLowerCase()}</span>}

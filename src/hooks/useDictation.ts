@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { dictationCancel, dictationStart, dictationStep, dictationStop, holdKey, insertPhrase, micButton, NOT_DICTATING, type DictationEvent } from "../lib/dictation";
 import { meetingMicrophoneGet, meetingMicrophones, meetingMicrophoneSet, type Microphone } from "../lib/meeting";
-import { matches, released } from "../lib/shortcuts";
+import { matches, released, shortcutsHeld } from "../lib/shortcuts";
 import { playTone, type Tone } from "../lib/sounds";
 import { useRecordingAccess } from "./useRecordingAccess";
 
@@ -164,6 +164,9 @@ export function useDictation({ on, draftKey, text, setText, area, onChange }: Op
       () => keys.current.stop(),
     );
     const onDown = (e: KeyboardEvent) => {
+      // A layer over the window — the first run — keeps the keys to itself, and
+      // this listener is its own: it checks the hold as `useShortcuts` does.
+      if (shortcutsHeld()) return;
       // An open menu or dialog is what Escape closes: thrown away, what was said is gone.
       if (session.current && matches(e, "close") && !document.querySelector('[role="listbox"], [role="dialog"]')) {
         e.preventDefault();

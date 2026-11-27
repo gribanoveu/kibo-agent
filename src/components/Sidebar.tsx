@@ -32,14 +32,13 @@ import {
 import { ChangingText } from "./ChangingText";
 import { ChatMenu } from "./ChatMenu";
 import { Dropdown } from "./Dropdown";
-import { GettingStarted } from "./GettingStarted";
 import { type PAGES, type PageId } from "./pages";
 import { Modal } from "./Modal";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { isBoolean, useStoredState } from "../hooks/useStoredState";
 import { comboKeys, matches, SHORTCUTS, type ShortcutId } from "../lib/shortcuts";
 import type { ChatGroup, ChatSummary } from "../lib/savedChats";
-import { APP_MODES, type AppMode, type AsideTab, type ChatActivity } from "../types";
+import { APP_MODES, type AppMode, type ChatActivity } from "../types";
 import type { Scheme } from "../hooks/useTheme";
 import "./Sidebar.css";
 
@@ -126,7 +125,6 @@ type Props = {
   onMoveFolder?: (folder: string, dir: -1 | 1) => void;
   onDeleteChat: (id: string) => void;
   onOpenSettings: () => void;
-  onOnboardingAction: (tab: AsideTab) => void;
   /** The side the window shows now, and a switch to the other one. */
   themeSide: Scheme;
   onToggleTheme: () => void;
@@ -155,7 +153,6 @@ export function Sidebar({
   onMoveFolder,
   onDeleteChat,
   onOpenSettings,
-  onOnboardingAction,
   themeSide,
   onToggleTheme,
 }: Props) {
@@ -316,7 +313,7 @@ export function Sidebar({
   return (
     <nav className="sidebar">
       <div className="sidebar-top">
-        <div className="mode-switch" role="tablist" aria-label="Mode">
+        <div className="mode-switch" role="tablist" aria-label="Mode" data-tour="mode">
           {APP_MODES.map((value) => {
             const active = mode === value;
             return (
@@ -358,6 +355,8 @@ export function Sidebar({
               aria-selected={page === id}
               className={`mode-opt${page === id ? " active" : ""}`}
               title={title}
+              // The tour rings this row before it opens what is behind it.
+              data-tour={id === "catalog" ? "catalog-tab" : undefined}
               onClick={() => onPage(id)}
             >
               <Icon size={15} />
@@ -560,7 +559,6 @@ export function Sidebar({
       </Modal>
 
       <div className="sidebar-bottom">
-        <GettingStarted onAction={onOnboardingAction} onOpenSettings={onOpenSettings} />
         <div className="user-wrap" ref={userWrap}>
           <button
             type="button"

@@ -419,6 +419,7 @@ export function Composer({
             title: "Run the whole turn without asking; off, edits and commands are confirmed",
             on: unattended,
             onChange: onUnattended,
+            tour: "approve",
           },
         ]}
       />

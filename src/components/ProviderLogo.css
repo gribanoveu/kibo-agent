@@ -1,0 +1,16 @@
+/* A provider's mark in the first-run screen: its own proportions, the height
+   its own asset needs to sit level with a heading, and the theme's text
+   colour — except AlfaGen, whose red is the mark itself. */
+.provider-logo {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  color: var(--text);
+}
+
+/* The name of a mark that is a symbol alone, drawn inside the same box: the
+   app's own font, at the size the mark's units were measured for. */
+.provider-logo-name {
+  font-family: var(--font-ui);
+  letter-spacing: -0.01em;
+}

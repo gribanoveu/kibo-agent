@@ -54,7 +54,6 @@ const sidebar = (
       onDeleteGroup={(id) => on.deleteGroup?.(id)}
       onDeleteChat={on.remove ?? (() => {})}
       onOpenSettings={() => {}}
-      onOnboardingAction={() => {}}
       themeSide={themeSide}
       onToggleTheme={on.toggleTheme ?? (() => {})}
     />,
@@ -483,7 +482,6 @@ describe("pages", () => {
         onDeleteGroup={() => {}}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
-        onOnboardingAction={() => {}}
         themeSide="dark"
         onToggleTheme={() => {}}
       />,
@@ -552,7 +550,6 @@ describe("open folders", () => {
         onCloseFolder={on.close}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
-        onOnboardingAction={() => {}}
         themeSide="dark"
         onToggleTheme={() => {}}
       />,
@@ -606,7 +603,6 @@ describe("open folders", () => {
         onDeleteGroup={() => {}}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
-        onOnboardingAction={() => {}}
         themeSide="dark"
         onToggleTheme={() => {}}
       />,
@@ -657,7 +653,6 @@ describe("open folders", () => {
         onMoveFolder={(folder, dir) => moves.push([folder, dir])}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
-        onOnboardingAction={() => {}}
         themeSide="dark"
         onToggleTheme={() => {}}
       />,
@@ -706,7 +701,6 @@ describe("open folders", () => {
         onDeleteGroup={() => {}}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
-        onOnboardingAction={() => {}}
         themeSide="dark"
         onToggleTheme={() => {}}
       />,
@@ -775,7 +769,6 @@ describe("open folders", () => {
         onDeleteGroup={() => {}}
         onDeleteChat={() => {}}
         onOpenSettings={() => {}}
-        onOnboardingAction={() => {}}
         themeSide="dark"
         onToggleTheme={() => {}}
       />,

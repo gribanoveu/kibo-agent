@@ -18,6 +18,13 @@
   align-items: center;
   gap: 2px;
 }
+/* Held while a layer owns the window (`held` in `Titlebar.tsx`): the buttons
+   stay where they are and stop taking a press, dimmed enough to say so. */
+.titlebar-leading[inert],
+.titlebar-slot[inert],
+.titlebar-actions[inert] {
+  opacity: 0.45;
+}
 /* Between the controls and the edge (or Windows' buttons): a panel's header. */
 .titlebar-slot {
   flex: 1;
