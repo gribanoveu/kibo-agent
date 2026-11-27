@@ -80,7 +80,7 @@ export function FolderTab({
   const shownBranch = branch || "";
   const branchShown = path && branch && !folderFixed;
   return (
-    <div className={`folder-tab${path ? "" : " no-folder"}`}>
+    <div className={`folder-tab${path ? "" : " no-folder"}`} data-tour="folder">
       <Dropdown
         locked={folderFixed && !!path}
         title={

@@ -49,6 +49,7 @@ export function ComposerPanel({
   summary,
   className,
   left,
+  tour,
   children,
 }: {
   title: string;
@@ -57,6 +58,8 @@ export function ComposerPanel({
   className: string;
   /** Hangs from the box's left corner, for a button on the left of the line. */
   left?: boolean;
+  /** Names the button for the first-run tour, which rings it. */
+  tour?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -87,6 +90,7 @@ export function ComposerPanel({
         title={title}
         aria-haspopup="dialog"
         aria-expanded={open}
+        data-tour={tour}
         onClick={() => setOpen(!open)}
       >
         <span className="composer-settings-summary">{summary}</span>
@@ -133,6 +137,7 @@ export function ComposerSettings({ models, onModel, onEffort, onLoadModels, mode
     <ComposerPanel
       title="Mode, model and thinking"
       className="composer-settings"
+      tour="model"
       summary={
         <>
           {modeLabel && <span>{modeLabel.toLowerCase()}</span>}

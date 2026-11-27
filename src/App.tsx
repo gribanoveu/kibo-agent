@@ -752,7 +752,14 @@ export default function App() {
               >
                 <PanelLeft size={15} />
               </button>
-              <button className="iconbtn" type="button" title={`New chat (${shortcutText("newChat")})`} aria-label="New chat" onClick={newChat}>
+              <button
+                className="iconbtn"
+                type="button"
+                title={`New chat (${shortcutText("newChat")})`}
+                aria-label="New chat"
+                data-tour="new-chat"
+                onClick={newChat}
+              >
                 <SquarePen size={15} />
               </button>
             </>
@@ -840,7 +847,14 @@ export default function App() {
             features={{ list: features.features, onSet: features.set, error: features.error }}
           />
         )}
-        {tourOpen && <Tour onDone={() => setTourOpen(false)} />}
+        {tourOpen && (
+          <Tour
+            onDone={() => setTourOpen(false)}
+            // A step may need a page of its own: the Catalog is opened for the
+            // step that talks about it, and put away with it.
+            onOpen={(id) => (id === "catalog" ? openPage("catalog") : leavePage())}
+          />
+        )}
       </div>
 
       <FolderSwitchDialog

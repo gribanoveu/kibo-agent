@@ -1266,6 +1266,7 @@ export function ChatPanel({
             className={`iconbtn aside-button${overviewOpen ? " on" : ""}`}
             title={`${overviewOpen ? "Hide overview" : "Show overview"} (${shortcutText("overview")})`}
             aria-pressed={overviewOpen}
+            data-tour="overview"
             onClick={onToggleOverview}
           >
             <Info size={15} />

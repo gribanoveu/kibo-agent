@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Tour } from "../components/Tour";
 import { placeCard, placeCentred } from "../lib/tour";
 import { IS_MAC } from "../lib/shortcuts";
@@ -8,14 +8,17 @@ import { useShortcuts } from "../hooks/useShortcuts";
 const rect = (top: number, left: number, width: number, height: number) =>
   ({ top, left, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
 
-/** A window with a sidebar in it, as the app's has. */
-const sidebar = () => {
+/** A window with the thing the first step names in it, as the app has it. */
+const anchor = (name = "mode") => {
   const el = document.createElement("div");
-  el.setAttribute("data-tour", "sidebar");
+  el.setAttribute("data-tour", name);
   el.getBoundingClientRect = () => rect(10, 20, 100, 40);
   document.body.append(el);
   return el;
 };
+
+const next = () => fireEvent.click(screen.getByRole("button", { name: "Next" }));
+const done = () => screen.queryByRole("button", { name: "Done" });
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -84,12 +87,12 @@ describe("where the card goes", () => {
 
 describe("the tour", () => {
   test("rings what the step names, and says what it is", () => {
-    sidebar();
+    anchor();
     const { container } = render(<Tour onDone={() => {}} />);
 
-    expect(screen.getByText("Your chats")).toBeTruthy();
+    expect(screen.getByText("Agent and chat")).toBeTruthy();
     const ring = container.querySelector(".tour-ring") as HTMLElement;
-    // The sidebar's box, a few pixels of air around it.
+    // The button's box, a few pixels of air around it.
     expect([ring.style.top, ring.style.left, ring.style.width, ring.style.height]).toEqual(["4px", "14px", "112px", "52px"]);
 
     const card = container.querySelector(".tour-card") as HTMLElement;
@@ -100,7 +103,7 @@ describe("the tour", () => {
   });
 
   test("the ring follows the thing it points at as it grows", () => {
-    const el = sidebar();
+    const el = anchor();
     const { container } = render(<Tour onDone={() => {}} />);
     const ring = () => container.querySelector(".tour-ring") as HTMLElement;
     expect(ring().style.width).toBe("112px");
@@ -111,34 +114,59 @@ describe("the tour", () => {
     expect(ring().style.width).toBe("312px");
   });
 
+  test("a step that opens what it points at waits for it to arrive", async () => {
+    const { container } = render(<Tour onDone={() => {}} />);
+    expect(container.querySelector(".tour-ring")).toBeNull();
+
+    // The Catalog is a page, opened for its step: it mounts a commit later.
+    anchor();
+    await waitFor(() => expect(container.querySelector(".tour-ring")).toBeTruthy(), { timeout: 1000 });
+  });
+
   test("steps forward, and back to the one before", () => {
     render(<Tour onDone={() => {}} />);
     expect((screen.getByRole("button", { name: "Back" }) as HTMLButtonElement).disabled).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    next();
     expect(screen.getByText("The panels")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(screen.getByText("Your chats")).toBeTruthy();
+    expect(screen.getByText("Agent and chat")).toBeTruthy();
   });
 
   test("the last step finishes it", () => {
     const onDone = mock(() => {});
     render(<Tour onDone={onDone} />);
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    expect(screen.getByText("The message box")).toBeTruthy();
+    // Every step but the last says Next; the last says Done.
+    for (let at = 0; at < 10 && !done(); at += 1) next();
+    expect(screen.getByText("A new chat")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
   test("the panels step says what the menu is for, and lists nothing", () => {
     render(<Tour onDone={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    next();
 
     expect(screen.getByText(/Everything about the folder and the work in it/)).toBeTruthy();
     // Read as a sentence, not as the menu itself: the menu cannot be opened
     // under the dim, and a list of nine is not what a tour is for.
     expect(screen.queryByText("Terminal")).toBeNull();
+  });
+
+  test("the Catalog is asked for by its step, and put away after it", () => {
+    const onOpen = mock((_id: string | null) => {});
+    render(<Tour onDone={() => {}} onOpen={onOpen} />);
+    expect(onOpen.mock.calls[0]).toEqual([null]);
+
+    for (let at = 0; at < 10; at += 1) {
+      if (screen.queryByText("The Catalog")) break;
+      next();
+    }
+    expect(onOpen.mock.calls.at(-1)).toEqual(["catalog"]);
+
+    next();
+    expect(screen.getByText("A new chat")).toBeTruthy();
+    expect(onOpen.mock.calls.at(-1)).toEqual([null]);
   });
 
   test("the window's keys are held while it is up", () => {
@@ -181,6 +209,6 @@ describe("the tour", () => {
     expect(container.querySelector(".tour-catch-dim")).toBeTruthy();
     const card = container.querySelector(".tour-card") as HTMLElement;
     expect(Number.parseFloat(card.style.top)).toBeGreaterThan(0);
-    expect(screen.getByText("Your chats")).toBeTruthy();
+    expect(screen.getByText("Agent and chat")).toBeTruthy();
   });
 });

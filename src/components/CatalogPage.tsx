@@ -792,6 +792,7 @@ export function CatalogPage() {
   return (
     <Page
       title="Catalog"
+      tour="catalog-page"
       bar={
         <>
           <div className="catalog-tabs" role="tablist" aria-label="Kind">

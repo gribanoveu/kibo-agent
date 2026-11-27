@@ -427,7 +427,7 @@ export function Composer({
   );
 
   return (
-    <div className="composer-wrap" data-tour="composer">
+    <div className="composer-wrap">
       {queued.length > 0 && (
         <ul className="composer-queue" aria-label="Queued messages">
           {queued.map((item) => queueRow(item))}

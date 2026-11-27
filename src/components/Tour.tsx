@@ -15,7 +15,17 @@ const PAD = 6;
  * that the user cannot see happening — and Escape or the last step ends it.
  * Nothing is stored: it is offered once, in the first run, and never again.
  */
-export function Tour({ onDone }: { onDone: () => void }) {
+export function Tour({
+  onDone,
+  onOpen,
+}: {
+  onDone: () => void;
+  /**
+   * Something a step needs on screen, by the id it names — or `null` for a
+   * step that points at what is already there.
+   */
+  onOpen?: (id: string | null) => void;
+}) {
   const [index, setIndex] = useState(0);
   const [ring, setRing] = useState<Box | null>(null);
   const [spot, setSpot] = useState<{ top: number; left: number } | null>(null);
@@ -26,6 +36,14 @@ export function Tour({ onDone }: { onDone: () => void }) {
   // The window's own keys are held with it: ⌘1 must not open a panel under the
   // dim, nor ⌘⇧D turn the IDE layout on behind it.
   useHeldShortcuts();
+
+  // What the step needs opened, asked once per step — a ref, since the caller's
+  // handler is a new function on every render.
+  const open = useRef(onOpen);
+  open.current = onOpen;
+  useEffect(() => {
+    open.current?.(step.opens ?? null);
+  }, [step.opens]);
 
   // Escape leaves — read here rather than through the shortcuts of the window,
   // which are held: this one is the way out of the tour.
@@ -42,6 +60,8 @@ export function Tour({ onDone }: { onDone: () => void }) {
   // Measured after every render of a step, and again when the window moves:
   // what is pointed at may be a panel the user opened or closed.
   useLayoutEffect(() => {
+    let waited = 0;
+    let retry: ReturnType<typeof setTimeout> | null = null;
     const measure = () => {
       const viewport = { width: window.innerWidth, height: window.innerHeight };
       const bounds = card.current?.getBoundingClientRect();
@@ -50,9 +70,14 @@ export function Tour({ onDone }: { onDone: () => void }) {
       const found = document.querySelector(step.target)?.getBoundingClientRect();
       if (!found || (found.width === 0 && found.height === 0)) {
         // Nothing to point at — a layout without it — so the card speaks from
-        // the middle rather than vanishing.
+        // the middle rather than vanishing; a step that opens its own subject
+        // gets a moment for it to arrive, and a few more in case it is slow.
         setRing(null);
         setSpot(placeCentred(size, viewport));
+        if (!found && waited < 10) {
+          waited += 1;
+          retry = setTimeout(measure, 120);
+        }
         return;
       }
       setRing({ top: found.top - PAD, left: found.left - PAD, width: found.width + PAD * 2, height: found.height + PAD * 2 });
@@ -69,6 +94,7 @@ export function Tour({ onDone }: { onDone: () => void }) {
     const target = document.querySelector(step.target);
     if (target) observer?.observe(target);
     return () => {
+      if (retry) clearTimeout(retry);
       observer?.disconnect();
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);

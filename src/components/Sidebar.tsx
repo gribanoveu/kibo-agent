@@ -311,9 +311,9 @@ export function Sidebar({
   };
 
   return (
-    <nav className="sidebar" data-tour="sidebar">
+    <nav className="sidebar">
       <div className="sidebar-top">
-        <div className="mode-switch" role="tablist" aria-label="Mode">
+        <div className="mode-switch" role="tablist" aria-label="Mode" data-tour="mode">
           {APP_MODES.map((value) => {
             const active = mode === value;
             return (
