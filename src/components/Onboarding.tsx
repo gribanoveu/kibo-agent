@@ -85,12 +85,8 @@ function Welcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
         <KiboBrand />
         <h1 className="onboarding-title">Welcome to Kibo Agent</h1>
         <p className="onboarding-lead">
-          This short setup gets the app ready: a model to answer with. Two steps and you're in.
+          This short setup gets Kibo ready: connect a provider for the agent to answer with, and you're in.
         </p>
-        <div className="onboarding-points">
-          <p className="onboarding-point">First, connect a provider — the model that answers, and the key it takes.</p>
-          <p className="onboarding-point">Your key stays on this machine. Messages go to the provider you pick, and nowhere else.</p>
-        </div>
       </div>
       <footer className="onboarding-foot">
         <button className="btn btn-primary onboarding-btn" type="button" autoFocus onClick={onNext}>
@@ -303,7 +299,8 @@ function ProviderStep({
       >
         <h1 className="onboarding-title">Connect a model</h1>
         <p className="onboarding-lead">
-          Kibo answers through a provider you already have an account with. The key is sealed on this machine.
+          Kibo answers through a provider you already have an account with. The key is sealed on this machine, and
+          messages go to the provider you pick — nowhere else.
         </p>
 
         <div className="onboarding-providers">
