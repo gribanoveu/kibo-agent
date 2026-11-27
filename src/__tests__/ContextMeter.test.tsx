@@ -44,12 +44,19 @@ describe("the context meter", () => {
     expect(screen.getByText("16k of 200k tokens")).toBeTruthy();
   });
 
-  test("opens upwards, and asks for a compaction from its panel", () => {
+  test("opens upwards by the ring, kept inside the window, and asks for a compaction", () => {
     let asked = 0;
-    meter({ onCompact: () => (asked += 1) });
-
+    const view = meter({ onCompact: () => (asked += 1) });
+    // The ring low and at the left edge: the panel goes above it and its left
+    // edge is clamped to the window's, not hung off it.
+    const ring = view.container.querySelector(".ctx") as HTMLElement;
+    ring.getBoundingClientRect = () =>
+      ({ top: 700, bottom: 720, left: 20, right: 40, width: 20, height: 20, x: 20, y: 700, toJSON: () => ({}) }) as DOMRect;
     openMeter();
-    expect(screen.getByRole("dialog", { name: "Context" }).classList.contains("up")).toBe(true);
+    const dialog = screen.getByRole("dialog", { name: "Context" });
+    expect(dialog.style.top).toBe("auto");
+    expect(dialog.style.bottom).not.toBe("");
+    expect(dialog.style.left).toBe("8px");
     fireEvent.click(screen.getByText("Compact now"));
     expect(asked).toBe(1);
     expect(screen.queryByRole("dialog", { name: "Context" })).toBeNull();

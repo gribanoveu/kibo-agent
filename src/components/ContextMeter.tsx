@@ -1,4 +1,5 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ChatUsage, ContextUsage } from "../lib/chat";
 import { InfoTip } from "./InfoTip";
 import "./ContextMeter.css";
@@ -174,11 +175,49 @@ type Props = {
 export function ContextMeter({ context, usage, running, onCompact, up = false, spent }: Props) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  // The panel lives in the body, not in the column: a column clips what
+  // overflows it, and a narrow one has no room for a panel anchored to the
+  // ring's edge. Its place is measured from the ring and kept inside the
+  // window — the side with more room wins, and the panel scrolls within it.
+  const [place, setPlace] = useState<CSSProperties | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlace(null);
+      return;
+    }
+    const fit = () => {
+      const el = wrap.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const width = Math.min(280, vw - 16);
+      const left = Math.max(8, Math.min(r.right - width, vw - width - 8));
+      const above = r.top - 12;
+      const below = vh - r.bottom - 12;
+      const useUp = up ? above >= below : below >= above;
+      setPlace({
+        position: "fixed",
+        left,
+        width,
+        right: "auto",
+        maxHeight: Math.max(120, (useUp ? above : below) - 8),
+        overflowY: "auto",
+        ...(useUp ? { bottom: vh - r.top + 6, top: "auto" } : { top: r.bottom + 6, bottom: "auto" }),
+      });
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [open, up]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (!wrap.current?.contains(t) && !pop.current?.contains(t)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => matches(e, "close") && setOpen(false);
     document.addEventListener("pointerdown", onDown);
@@ -217,8 +256,9 @@ export function ContextMeter({ context, usage, running, onCompact, up = false, s
         </svg>
       </button>
 
-      {open && (
-        <div className={`ctx-pop${up ? " up" : ""}`} role="dialog" aria-label="Context">
+      {open &&
+        createPortal(
+        <div ref={pop} className="ctx-pop" style={place ?? undefined} role="dialog" aria-label="Context">
           <ContextDetails context={context} spent={spent}>
             {context.compactsAt && (
               <p className="ctx-note">Folds the older part on its own at {compactTokens(context.compactsAt)}.</p>
@@ -242,7 +282,8 @@ export function ContextMeter({ context, usage, running, onCompact, up = false, s
               Compact now
             </button>
           </ContextDetails>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
