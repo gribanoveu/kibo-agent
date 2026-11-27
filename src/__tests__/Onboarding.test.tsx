@@ -66,6 +66,7 @@ const screenProps = (over: Parameters<typeof ops>[0] = {}, extrasOver: Parameter
   features: extras(extrasOver),
   onSkip: mock(() => {}),
   onFinish: mock(() => {}),
+  onTour: mock(() => {}),
 });
 
 const open = (over: Parameters<typeof ops>[0] = {}, extrasOver: Parameters<typeof extras>[0] = {}) => {
@@ -162,6 +163,24 @@ describe("the keys of the window behind it", () => {
     tree.rerender(<Keys />);
     press();
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the offer of a tour", () => {
+  test("Show me around hands the window over, and closes the screen", async () => {
+    const props = await atExtrasStep();
+    fireEvent.click(button("Next"));
+    fireEvent.click(button("Show me around"));
+    expect(props.onTour).toHaveBeenCalledTimes(1);
+    expect(props.onFinish).toHaveBeenCalledTimes(1);
+  });
+
+  test("Start working closes the screen without a tour", async () => {
+    const props = await atExtrasStep();
+    fireEvent.click(button("Next"));
+    fireEvent.click(button("Start working"));
+    expect(props.onFinish).toHaveBeenCalledTimes(1);
+    expect(props.onTour).not.toHaveBeenCalled();
   });
 });
 
@@ -322,10 +341,11 @@ describe("choosing a provider and connecting it", () => {
     expect(screen.getByRole("radio", { name: "a-model" }).getAttribute("aria-checked")).toBe("true");
 
     fireEvent.click(button("Connect"));
-    // Saved, and on to the last step: closing the screen is Start's job.
+    // Saved, and on to the extras: closing the screen is the last step's job.
     await waitFor(() => expect(screen.getByText("A few extras")).toBeTruthy());
     expect(props.onFinish).not.toHaveBeenCalled();
-    fireEvent.click(button("Start"));
+    fireEvent.click(button("Next"));
+    fireEvent.click(button("Start working"));
     expect(props.onFinish).toHaveBeenCalledTimes(1);
     const [saved, key] = (props.provider.onSave as ReturnType<typeof mock>).mock.calls[0];
     expect(saved).toMatchObject({ id: "deepseek", baseUrl: "https://api.deepseek.com", model: "a-model" });
@@ -431,7 +451,8 @@ describe("choosing a provider and connecting it", () => {
     await waitFor(() => expect(button("Connect")).toBeTruthy());
     fireEvent.keyDown(field("Name"), { code: "Enter", key: "Enter" });
     await waitFor(() => expect(screen.getByText("A few extras")).toBeTruthy());
-    fireEvent.click(button("Start"));
+    fireEvent.click(button("Next"));
+    fireEvent.click(button("Start working"));
     expect(props.onFinish).toHaveBeenCalledTimes(1);
   });
 
@@ -542,10 +563,17 @@ describe("the extras", () => {
     expect(screen.getByText("the settings file is read-only")).toBeTruthy();
   });
 
-  test("Start closes the screen", async () => {
-    const props = await atExtrasStep();
-    fireEvent.click(button("Start"));
-    expect(props.onFinish).toHaveBeenCalledTimes(1);
+  test("Next goes on to the offer of the tour", async () => {
+    await atExtrasStep();
+    fireEvent.click(button("Next"));
+    expect(screen.getByText("One more thing")).toBeTruthy();
+  });
+
+  test("Back from the offer returns to the extras", async () => {
+    await atExtrasStep();
+    fireEvent.click(button("Next"));
+    fireEvent.click(button("Back"));
+    expect(screen.getByText("Voice input in one line")).toBeTruthy();
   });
 
   test("Back from the last step keeps the form as it was saved", async () => {

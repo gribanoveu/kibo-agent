@@ -37,6 +37,8 @@ type Props = {
   onSkip: () => void;
   /** A provider is saved and the screen is done with. */
   onFinish: () => void;
+  /** The screen is done, and the window itself is shown instead — a step at a time. */
+  onTour: () => void;
 };
 
 /**
@@ -50,7 +52,7 @@ type Props = {
  * the address and the model list want the whole window, not the room left
  * under a grid of them.
  */
-export function Onboarding({ provider, features, onSkip, onFinish }: Props) {
+export function Onboarding({ provider, features, onSkip, onFinish, onTour }: Props) {
   const [step, setStep] = useState(0);
   // The window's keys are the panes' business, and those panes are still
   // mounted behind this layer: held, so ⌘/ cannot open a dialog nobody sees
@@ -108,6 +110,16 @@ export function Onboarding({ provider, features, onSkip, onFinish }: Props) {
           // offered here — the Catalog still has them.
           deepseek={isDeepSeek(draft.baseUrl)}
           onBack={() => setStep(2)}
+          onNext={() => setStep(4)}
+        />
+      )}
+      {step === 4 && (
+        <TourStep
+          onTour={() => {
+            onTour();
+            onFinish();
+          }}
+          onBack={() => setStep(3)}
           onFinish={onFinish}
         />
       )}
@@ -147,13 +159,13 @@ function ExtrasStep({
   features,
   deepseek,
   onBack,
-  onFinish,
+  onNext,
 }: {
   features: FeatureOps;
   /** Whether the provider just connected is DeepSeek itself. */
   deepseek: boolean;
   onBack: () => void;
-  onFinish: () => void;
+  onNext: () => void;
 }) {
   const extras = extrasFor(features.list, deepseek);
 
@@ -193,8 +205,42 @@ function ExtrasStep({
           Back
         </button>
         <div className="onboarding-foot-end">
-          <button className="btn btn-primary onboarding-btn" type="button" onClick={onFinish}>
-            Start
+          <button className="btn btn-primary onboarding-btn" type="button" onClick={onNext}>
+            Next
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+/**
+ * The last thing asked: whether to be shown around. The screen is a setup,
+ * and the window it sets up has not been seen yet — so the offer is here,
+ * where the provider and the extras are already settled, rather than a tour
+ * nobody asked for.
+ */
+function TourStep({ onTour, onBack, onFinish }: { onTour: () => void; onBack: () => void; onFinish: () => void }) {
+  return (
+    <div className="onboarding-page">
+      <div className="onboarding-body">
+        <h1 className="onboarding-title">One more thing</h1>
+        <p className="onboarding-lead">
+          Want a look around? Three presses through the window: where your chats are, which panels open, and the
+          message box.
+        </p>
+      </div>
+
+      <footer className="onboarding-foot">
+        <button className="btn btn-ghost onboarding-btn" type="button" onClick={onBack}>
+          Back
+        </button>
+        <div className="onboarding-foot-end">
+          <button className="btn btn-ghost onboarding-btn" type="button" onClick={onFinish}>
+            Start working
+          </button>
+          <button className="btn btn-primary onboarding-btn" type="button" autoFocus onClick={onTour}>
+            Show me around
           </button>
         </div>
       </footer>

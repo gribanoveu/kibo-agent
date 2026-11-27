@@ -311,7 +311,7 @@ export function Sidebar({
   };
 
   return (
-    <nav className="sidebar">
+    <nav className="sidebar" data-tour="sidebar">
       <div className="sidebar-top">
         <div className="mode-switch" role="tablist" aria-label="Mode">
           {APP_MODES.map((value) => {

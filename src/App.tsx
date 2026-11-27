@@ -43,6 +43,7 @@ import { useKubeconfigs } from "./hooks/useKubeconfigs";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useOnboarding } from "./hooks/useOnboarding";
 import { Onboarding } from "./components/Onboarding";
+import { Tour } from "./components/Tour";
 import { useIndexStatus } from "./hooks/useIndexStatus";
 import { useMcp } from "./hooks/useMcp";
 import { useHooks } from "./hooks/useHooks";
@@ -114,6 +115,8 @@ export default function App() {
   // The first-run screen: up when the settings say no provider is saved, and
   // never asked twice in one launch (docs/66-onboarding.md).
   const onboarding = useOnboarding(llm.settings);
+  // The window itself shown a step at a time, once, when the first run offers it.
+  const [tourOpen, setTourOpen] = useState(false);
   // Each provider's own model pin, auto resolved: the cache-miss hint compares
   // the model a turn actually sends, not the chip's display label.
   const providerModels = Object.fromEntries((llm.settings?.providers ?? []).map((p) => [p.id, p.model ?? llm.served[p.id]?.[0] ?? null]));
@@ -821,10 +824,12 @@ export default function App() {
           <Onboarding
             onSkip={onboarding.dismiss}
             onFinish={onboarding.finish}
+            onTour={() => setTourOpen(true)}
             provider={{ busy: llm.busy, error: llm.error, onSave: llm.save, onProbe: llm.probe }}
             features={{ list: features.features, onSet: features.set, error: features.error }}
           />
         )}
+        {tourOpen && <Tour onDone={() => setTourOpen(false)} />}
       </div>
 
       <FolderSwitchDialog

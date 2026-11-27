@@ -5,7 +5,7 @@ import type { LlmSettings } from "./settings";
 import type { FeatureView } from "./features";
 
 /** The steps, in the order the dots show and Back and Next move. */
-export const ONBOARDING_STEPS = ["welcome", "provider", "connect", "extras"] as const;
+export const ONBOARDING_STEPS = ["welcome", "provider", "connect", "extras", "tour"] as const;
 
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
