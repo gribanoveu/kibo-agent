@@ -8,7 +8,7 @@ import { ProviderBalance } from "./ProviderBalance";
 import { Transcript } from "./ChatPanel";
 import { KiboBrand } from "./KiboBrand";
 import { matches } from "../lib/shortcuts";
-import { greetingsAt, pickSuggestions, ROLE_SUGGESTIONS } from "../lib/chatSuggestions";
+import { greetingsAt, pickSuggestions } from "../lib/chatSuggestions";
 import type { ChatRoleId } from "../lib/plainChat";
 import { boxTakesPictures } from "../lib/images";
 import type { Pointed } from "../lib/prototype";
@@ -129,8 +129,6 @@ export function PlainChat({
   const waiting = useRef(false);
   const running = chat.turn.status === "running";
   const empty = chat.turn.blocks.length === 0;
-  // Two of the role's set, picked again each time an empty chat opens or the role changes.
-  const suggestions = useMemo(() => pickSuggestions(ROLE_SUGGESTIONS[chat.role], 2), [chat.chatId, chat.role, empty]);
   // A greeting per empty chat, not per render: it must not change while the user types.
   const greeting = useMemo(() => pickSuggestions(greetingsAt(new Date().getHours()), 1)[0], [chat.chatId, empty]);
 
@@ -335,20 +333,6 @@ export function PlainChat({
             <div className="plain-welcome">
               <KiboBrand />
               <h2>{greeting}</h2>
-              <div className="plain-suggest">
-                {suggestions.map((text) => (
-                  <button
-                    key={text}
-                    type="button"
-                    onClick={() => {
-                      setDraft(text);
-                      input.current?.focus();
-                    }}
-                  >
-                    {text}
-                  </button>
-                ))}
-              </div>
             </div>
           ) : (
             <div ref={contentRef} className="thread-content">

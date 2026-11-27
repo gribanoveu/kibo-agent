@@ -1,35 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { CHAT_SUGGESTIONS, KUBE_SUGGESTIONS, ROLE_SUGGESTIONS, greetingsAt, pickSuggestions } from "../lib/chatSuggestions";
+import { greetingsAt, pickSuggestions } from "../lib/chatSuggestions";
 
-// Chat mode's empty chat shows two of its role's set, different each time it opens.
+// The empty chat's greeting: one of the hour's, picked without repeats.
+
+const SET = ["one", "two", "three", "four", "five"];
 
 describe("pickSuggestions", () => {
-  test("the assistant's set has sixty, none twice, each one line", () => {
-    expect(CHAT_SUGGESTIONS.length).toBe(60);
-    expect(new Set(CHAT_SUGGESTIONS).size).toBe(60);
-    // As long as the longest that fits a row under Kibo.
-    expect(Math.max(...CHAT_SUGGESTIONS.map((s) => s.length))).toBeLessThanOrEqual(60);
-  });
-
-  test("each role offers its own: Kubernetes asks about the cluster, not about Spring", () => {
-    expect(ROLE_SUGGESTIONS.assistant).toBe(CHAT_SUGGESTIONS);
-    expect(ROLE_SUGGESTIONS.kubernetes).toBe(KUBE_SUGGESTIONS);
-    expect(new Set(KUBE_SUGGESTIONS).size).toBe(KUBE_SUGGESTIONS.length);
-    expect(KUBE_SUGGESTIONS.some((s) => CHAT_SUGGESTIONS.includes(s))).toBe(false);
-  });
-
   test("two different ones from the set", () => {
     for (let run = 0; run < 50; run++) {
-      const [a, b] = pickSuggestions(KUBE_SUGGESTIONS, 2);
+      const [a, b] = pickSuggestions(SET, 2);
       expect(a).not.toBe(b);
-      expect(KUBE_SUGGESTIONS).toContain(a);
-      expect(KUBE_SUGGESTIONS).toContain(b);
+      expect(SET).toContain(a);
+      expect(SET).toContain(b);
     }
   });
 
   test("any of the set can come up, the last included", () => {
-    expect(pickSuggestions(CHAT_SUGGESTIONS, 2, () => 0)).toEqual([CHAT_SUGGESTIONS[0], CHAT_SUGGESTIONS[1]]);
-    expect(pickSuggestions(CHAT_SUGGESTIONS, 1, () => 0.999)).toEqual([CHAT_SUGGESTIONS[CHAT_SUGGESTIONS.length - 1]]);
+    expect(pickSuggestions(SET, 2, () => 0)).toEqual([SET[0], SET[1]]);
+    expect(pickSuggestions(SET, 1, () => 0.999)).toEqual([SET[SET.length - 1]]);
   });
 
   test("a greeting fits the hour: no good morning at night, the general ones always", () => {
@@ -43,8 +31,8 @@ describe("pickSuggestions", () => {
   });
 
   test("the set is left as it was", () => {
-    const before = [...CHAT_SUGGESTIONS];
-    pickSuggestions(CHAT_SUGGESTIONS, 2, () => 0.5);
-    expect(CHAT_SUGGESTIONS).toEqual(before);
+    const before = [...SET];
+    pickSuggestions(SET, 2, () => 0.5);
+    expect(SET).toEqual(before);
   });
 });
