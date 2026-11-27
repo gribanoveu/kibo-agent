@@ -35,7 +35,7 @@ bun add <pkg>                       # add a JS dependency
 
 Run `bun run tsc --noEmit` and `cargo check` before considering a change done. If tests exist for the touched area, run them too — don't assume green.
 
-`bun run tauri dev second` runs a second dev instance beside the first: `scripts/tauri.ts` hands the CLI `src-tauri/tauri.dev.conf.json`, which gives it the identifier `com.kibo.agent.dev` and vite port 1422, so the first instance's single-instance lock does not turn it away. The data in `~/.kibo` is shared between the two.
+`bun run tauri dev second` runs a second dev instance beside the first: `scripts/tauri.ts` hands the CLI `src-tauri/tauri.dev.conf.json`, which gives it the identifier `com.kibo.agent.dev` and vite port 1422, so the first instance's single-instance lock does not turn it away, and sets `KIBO_APP_DIR=~/.kibo-dev` so its settings, sealed keys, chats and board are its own rather than the first instance's. `KIBO_APP_DIR` names the app directory for any build — an absolute path, ignored when relative; unset, it is `~/.kibo` (`infra/app_dir.rs`).
 
 ## Architecture
 

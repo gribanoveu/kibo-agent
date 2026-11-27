@@ -15,7 +15,24 @@ use crate::domain::settings::AppDirError;
 /// The app directory. Not created — see [`ensure`].
 #[cfg(not(test))]
 pub fn dir() -> Result<PathBuf, AppDirError> {
-    dirs::home_dir().map(|home| home.join(".kibo")).ok_or(AppDirError::NoHome)
+    dir_from(dirs::home_dir(), std::env::var_os(ENV_DIR))
+}
+
+/// Names the app directory for this process: `bun run tauri dev second` sets
+/// it to `~/.kibo-dev`, so the second instance beside the first has settings,
+/// sealed keys, chats and a board of its own instead of fighting over one.
+/// Unset, the directory is `~/.kibo`.
+pub const ENV_DIR: &str = "KIBO_APP_DIR";
+
+/// `KIBO_APP_DIR`, when it names an absolute path; the home directory
+/// otherwise. A relative one is ignored rather than followed: it would land
+/// wherever the app happened to be started from, which is the folder the user
+/// opened — not a place for their settings and keys.
+fn dir_from(home: Option<PathBuf>, named: Option<std::ffi::OsString>) -> Result<PathBuf, AppDirError> {
+    match named.map(PathBuf::from) {
+        Some(path) if path.is_absolute() => Ok(path),
+        _ => home.map(|home| home.join(".kibo")).ok_or(AppDirError::NoHome),
+    }
 }
 
 /// Under test the real home is never used: the suite installs a throwaway
@@ -165,5 +182,32 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "readable by someone else");
+    }
+
+    /// The second dev instance keeps its own data, as `tauri dev second` sets it.
+    #[test]
+    fn a_named_directory_stands_in_place_of_the_home_one() {
+        let home = temp_dir("app-dir-home");
+        let named = temp_dir("app-dir-named");
+        assert_eq!(dir_from(Some(home.clone()), Some(named.clone().into_os_string())), Ok(named));
+    }
+
+    #[test]
+    fn without_a_name_the_home_one_stands() {
+        let home = temp_dir("app-dir-home-default");
+        assert_eq!(dir_from(Some(home.clone()), None), Ok(home.join(".kibo")));
+    }
+
+    /// A relative path would land in whichever folder the app was started from.
+    #[test]
+    fn a_relative_name_is_ignored() {
+        let home = temp_dir("app-dir-home-relative");
+        assert_eq!(dir_from(Some(home.clone()), Some("kibo-dev".into())), Ok(home.join(".kibo")));
+        assert_eq!(dir_from(None, Some("kibo-dev".into())), Err(AppDirError::NoHome));
+    }
+
+    #[test]
+    fn no_home_and_no_name_has_no_directory() {
+        assert_eq!(dir_from(None, None), Err(AppDirError::NoHome));
     }
 }
