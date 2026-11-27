@@ -39,6 +39,7 @@ pub mod tool_call_log;
 pub mod request_marker;
 pub mod turn_journal;
 pub mod metrics;
+pub mod product_metrics;
 pub mod mcp;
 pub mod hooks;
 pub mod agents;
