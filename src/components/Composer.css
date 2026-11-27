@@ -245,6 +245,26 @@
   pointer-events: none;
 }
 
+/* More than one line (Composer.tsx measures): the text takes a row of its own
+   at the box's full width and the buttons a row under it — the layout the
+   narrow box always uses — so a long message is read at the width of the box,
+   not in a column beside the buttons, and may grow taller before it scrolls. */
+.composer-bar.tall {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.composer-bar.tall > .composer-input {
+  flex: 1 1 100%;
+  order: -1;
+  margin-left: 6px;
+}
+.composer-bar.tall > .send {
+  margin-left: auto;
+}
+.composer-bar.tall textarea {
+  max-height: min(240px, 34vh);
+}
+
 /* A narrow column (the chat's minimum is 400): in one row the buttons take
    half the box and the text wraps into a scrolling column. The text takes a
    row of its own, the buttons a row under it with Send at its right end, and

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppWindow, MessagesSquare, MousePointerClick, SendHorizontal, ShipWheel, Square, X, type LucideIcon } from "lucide-react";
 import { AttachImagesButton } from "./AttachImagesButton";
 import { ComposerSettings } from "./ComposerSettings";
@@ -182,12 +182,17 @@ export function PlainChat({
   const roleName = chat.roles.find((r) => r.id === chat.role)?.name ?? "Assistant";
   // The box fits what is in it, wherever it came from.
   const grownAt = useRef(0);
+  /** More than one line: the text takes a row of its own at the box's full
+      width, the buttons a row under it — as the agent's box does. */
+  const [tall, setTall] = useState(false);
+  const tallNow = useRef(false);
   const fit = useCallback((remeasure = false) => {
     const el = input.current;
     if (!el) return;
     // The cap is the stylesheet's — a narrow column gets a taller box — not a
     // number kept in step with it here.
-    const cap = parseFloat(getComputedStyle(el).maxHeight) || 160;
+    const style = getComputedStyle(el);
+    const cap = parseFloat(style.maxHeight) || 160;
     // Collapsed to "auto" to be measured, the box takes the thread above it
     // along: the thread grows, one read at its end is clamped there, and the
     // scroll read that follows is re-stuck as if the user had scrolled — the
@@ -199,6 +204,34 @@ export function PlainChat({
     el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
     el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
+    // More than one line: the text takes the box's whole width and the buttons
+    // a row under it (`.tall`). Back beside them only when it fits one line
+    // there too, or the switch would flip with every measure (Composer.tsx).
+    const oneLine = (parseFloat(style.lineHeight) || 22) + 12; // 5px padding ×2, a fraction of slack
+    const bar = el.closest(".plain-composer-bar");
+    if (el.scrollHeight > oneLine) {
+      tallNow.current = true;
+      setTall(true);
+    } else if (tallNow.current && bar) {
+      // What the buttons take beside the text: their own widths plus the gaps,
+      // not the difference from a full row (Composer.tsx).
+      const gap = parseFloat(getComputedStyle(bar).columnGap) || 6;
+      let beside = gap * (bar.children.length - 1);
+      for (const child of Array.from(bar.children)) {
+        if (child !== el) beside += (child as HTMLElement).offsetWidth;
+      }
+      // The textarea is a flex item here: a definite flex-basis is what sets
+      // its laid width — an inline `width` would be ignored and the probe
+      // would always measure the full row.
+      const flex = el.style.flex;
+      el.style.flex = `0 0 ${bar.clientWidth - beside}px`;
+      const fits = el.scrollHeight <= oneLine;
+      el.style.flex = flex;
+      if (fits) {
+        tallNow.current = false;
+        setTall(false);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -330,7 +363,7 @@ export function PlainChat({
             <ErrorNote className="plain-attach-error" message={attachments.error} onClose={attachments.clearError} />
           )}
           {dictation.error && <ErrorNote className="plain-attach-error" message={dictation.error} onClose={dictation.clearError} />}
-          <div className="plain-composer-bar">
+          <div className={`plain-composer-bar${tall || !empty ? " tall" : ""}`}>
             {/* The same rule as in the agent's box: the hook decides, and
                 there is no button when it refuses. */}
             {attachments.enabled && <AttachImagesButton onPick={attachments.pick} />}

@@ -341,6 +341,23 @@
   pointer-events: none;
 }
 
+/* More than one line (PlainChat.tsx measures): the text takes a row of its own
+   at the box's full width and the buttons a row under it, as the agent's box
+   does (Composer.css). */
+.plain-composer-bar.tall {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.plain-composer-bar.tall > textarea {
+  flex: 1 1 100%;
+  order: -1;
+  max-height: min(240px, 34vh);
+  margin-left: 6px;
+}
+.plain-composer-bar.tall > .plain-send {
+  margin-left: auto;
+}
+
 /* The agent's box, and for the same reason (Composer.css): a narrow column
    gives the text a row of its own and the buttons a row under it. */
 @container (max-width: 500px) {

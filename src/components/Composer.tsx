@@ -46,6 +46,10 @@ type Props = {
   onUnqueue?: (id: number) => void;
   onStop: () => void;
   running: boolean;
+  /** A chat under way keeps the two-row layout from the start — the text a row
+      of its own at full width, the buttons a row under it — rather than waiting
+      for the text to wrap to a second line. A new chat's box stays one row. */
+  stacked?: boolean;
   /** Both settings live above this component: the backend has to be told, and
       a component does not call commands. */
   conversation: ConversationMode;
@@ -106,6 +110,7 @@ export function Composer({
   onUnqueue,
   onStop,
   running,
+  stacked = false,
   conversation,
   onConversation,
   unattended,
@@ -140,6 +145,11 @@ export function Composer({
   const box = useRef<HTMLElement>(null);
   /** How long the text was when the box's height was last measured for it. */
   const grownAt = useRef(0);
+  /** More than one line: the text takes a row of its own at the box's full
+      width, the buttons a row under it. The ref is what `grow` reads — it is
+      called from rAF callbacks and observers that outlive a render. */
+  const [tall, setTall] = useState(false);
+  const tallNow = useRef(false);
   const dictation = useDictation({ on: dictate, draftKey, text, setText, area, onChange: () => requestAnimationFrame(() => grow()) });
   const correction = useLayoutCorrection({
     on: layoutCorrection && !dictation.active,
@@ -179,7 +189,8 @@ export function Composer({
     if (!el) return;
     // The cap is the stylesheet's — a narrow column gets a taller box — not a
     // number kept in step with it here.
-    const cap = parseFloat(getComputedStyle(el).maxHeight) || 120;
+    const style = getComputedStyle(el);
+    const cap = parseFloat(style.maxHeight) || 120;
     // Measured the usual way — collapsed to "auto", then the content's own
     // height — the box takes the thread above it along for that layout pass:
     // the thread grows, one read at its end is clamped there, and the scroll
@@ -192,6 +203,34 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     // A line's height is a fraction: under the cap the rounding would draw a scrollbar.
     el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
+    // More than one line: the text takes the box's whole width and the buttons
+    // a row under it (`.tall`), so a long message is read at that width rather
+    // than in a column beside the buttons. Back beside them only when it fits
+    // one line there too: at the full width it may fit while beside them it
+    // wraps, and the switch would flip with every measure.
+    const oneLine = (parseFloat(style.lineHeight) || 22) + 12; // 5px padding ×2, a fraction of slack
+    const bar = el.closest(".composer-bar");
+    if (el.scrollHeight > oneLine) {
+      tallNow.current = true;
+      setTall(true);
+    } else if (tallNow.current && bar) {
+      // What the buttons take beside the text: their own widths plus the gaps,
+      // not the difference from a full row — in a narrow column the text already
+      // has the row to itself, and that difference would be the margin alone.
+      const gap = parseFloat(getComputedStyle(bar).columnGap) || 6;
+      let beside = gap * (bar.children.length - 1);
+      for (const child of Array.from(bar.children)) {
+        if (child !== el.parentElement) beside += (child as HTMLElement).offsetWidth;
+      }
+      const width = el.style.width;
+      el.style.width = `${bar.clientWidth - beside}px`;
+      const fits = el.scrollHeight <= oneLine;
+      el.style.width = width;
+      if (fits) {
+        tallNow.current = false;
+        setTall(false);
+      }
+    }
   };
 
   // Another chat's draft was put in the box during the render, so the box has
@@ -369,7 +408,7 @@ export function Composer({
           <ErrorNote className="composer-attach-error" message={attachments.error} onClose={attachments.clearError} />
         )}
         {dictation.error && <ErrorNote className="composer-attach-error" message={dictation.error} onClose={dictation.clearError} />}
-        <div className="composer-bar">
+        <div className={`composer-bar${tall || stacked ? " tall" : ""}`}>
           {/* The button is the hook's own answer, not a second copy of the rule:
               whatever the box refuses to paste, drop or bring back, it does not
               offer to pick either. */}

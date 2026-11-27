@@ -549,6 +549,7 @@ export default function App() {
             index={workspace.path ? index : null}
             placeholder={unstarted ? "Ask anything, or describe a task…" : undefined}
             onSend={(text, images) => send(text, undefined, images)}
+            stacked={!unstarted}
             imagesEnabled={imagesEnabled}
             onQueue={agent.queue}
             queued={agent.queued}

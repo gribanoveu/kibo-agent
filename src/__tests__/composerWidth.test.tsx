@@ -23,6 +23,7 @@ mock.module("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() =
 
 const { Composer } = await import("../components/Composer");
 const { PlainChat } = await import("../components/PlainChat");
+const { emptyTurn } = await import("../lib/chatTurnReducer");
 
 // What observes what, to fire a width change by hand.
 let instances: { callback: ResizeObserverCallback; el: Element }[] = [];
@@ -53,8 +54,9 @@ const metrics = (el: HTMLElement, values: Record<string, number>) => {
   for (const [key, value] of Object.entries(values)) Object.defineProperty(el, key, { configurable: true, value });
 };
 
-const agentBox = () => (
+const agentBox = (stacked = false) => (
   <Composer
+    stacked={stacked}
     draftKey="width-agent"
     onSend={() => {}}
     onStop={() => {}}
@@ -74,11 +76,11 @@ const agentBox = () => (
 );
 
 /** Only what the chat on screen reads: a conversation that has not started. */
-const chatState = (chatId: string) => ({
+const chatState = (chatId: string, started = false) => ({
   chatId,
   role: "assistant" as const,
   roles: [{ id: "assistant" as const, name: "Assistant", description: "Answers in text" }],
-  turn: { blocks: [], status: "done" as const, usage: null },
+  turn: { ...emptyTurn(), blocks: started ? [{ kind: "user" as const, id: "u0", text: "hi" }] : [], status: "done" as const },
   busy: false,
   draft: null,
   preview: null,
@@ -96,9 +98,9 @@ const chatState = (chatId: string) => ({
 type Chat = Parameters<typeof PlainChat>[0]["chat"];
 type Kube = Parameters<typeof PlainChat>[0]["kube"];
 
-const chatBox = (chatId: string) => (
+const chatBox = (chatId: string, started = false) => (
   <PlainChat
-    chat={chatState(chatId) as unknown as Chat}
+    chat={chatState(chatId, started) as unknown as Chat}
     focus={0}
     models={{ choices: [], current: null }}
     onModel={() => {}}
@@ -180,6 +182,46 @@ const measuredInPlace = async () => {
   expect(deleting()).toBe(true);
 };
 
+/** More than one line: the text takes the whole box and the buttons a row
+    under it; back beside them only when it fits one line there too — at the
+    full width it may fit while beside them it wraps, and the switch must not
+    flip with every measure. */
+const stacksWhenTall = async () => {
+  const input = box();
+  const bar = input.closest(".composer-bar, .plain-composer-bar") as HTMLElement;
+  metrics(bar, { clientWidth: 640 });
+  // The buttons take 340px beside the text (a 334px button and a 6px gap);
+  // their own widths are what the probe subtracts, in either layout.
+  for (const child of Array.from(bar.children)) {
+    if (child !== input && child !== input.parentElement) metrics(child as HTMLElement, { offsetWidth: 334 });
+  }
+  // Beside the buttons the text has 300px. The probe sets the laid width the
+  // way each box honours it: width for the agent's block textarea, flex-basis
+  // for Chat mode's flex item.
+  let laid = 300;
+  const probe = () => input.style.width || input.style.flex.match(/([\d.]+)px/)?.[1] || "";
+  Object.defineProperty(input, "clientWidth", {
+    configurable: true,
+    get: () => (probe() ? parseFloat(probe()) : laid),
+  });
+  Object.defineProperty(input, "scrollHeight", {
+    configurable: true,
+    get: () => (input.clientWidth <= 300 ? 60 : 30),
+  });
+  fireEvent.change(input, { target: { value: "a line that wraps beside the buttons" } });
+  await waitFor(() => expect(bar.className).toContain("tall"));
+  // Stacked, the text has the full width and is one line there — but beside
+  // the buttons it still wraps, so it stays stacked.
+  laid = 640;
+  widthChange();
+  await waitFor(() => expect(input.style.height).toBe("30px"));
+  expect(bar.className).toContain("tall");
+  // A short message fits one line beside the buttons too: back to one row.
+  Object.defineProperty(input, "scrollHeight", { configurable: true, get: () => 30 });
+  fireEvent.change(input, { target: { value: "short" } });
+  await waitFor(() => expect(bar.className).not.toContain("tall"));
+};
+
 describe("the agent's box follows the column's width", () => {
   test("a wrapped line is re-measured in and out of IDE layout", async () => {
     render(agentBox());
@@ -194,6 +236,17 @@ describe("the agent's box follows the column's width", () => {
   test("is measured in place while text is added", async () => {
     render(agentBox());
     await measuredInPlace();
+  });
+
+  test("more than one line takes the whole box, the buttons a row under it", async () => {
+    render(agentBox());
+    await stacksWhenTall();
+  });
+
+  test("a chat under way is two rows from the start, even with an empty box", () => {
+    render(agentBox(true));
+    const bar = box().closest(".composer-bar") as HTMLElement;
+    expect(bar.className).toContain("tall");
   });
 });
 
@@ -211,5 +264,16 @@ describe("Chat mode's box follows the column's width", () => {
   test("is measured in place while text is added", async () => {
     render(chatBox("width-chat-place"));
     await measuredInPlace();
+  });
+
+  test("more than one line takes the whole box, the buttons a row under it", async () => {
+    render(chatBox("width-chat-tall"));
+    await stacksWhenTall();
+  });
+
+  test("a chat under way is two rows from the start, even with an empty box", () => {
+    render(chatBox("width-chat-started", true));
+    const bar = box().closest(".plain-composer-bar") as HTMLElement;
+    expect(bar.className).toContain("tall");
   });
 });
