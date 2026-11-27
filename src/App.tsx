@@ -786,7 +786,6 @@ export default function App() {
           onSelectChat={selectChat}
           {...sidebarActions}
           onOpenSettings={() => openSettings()}
-          onOnboardingAction={openTab}
           themeSide={sideOf(theme.choice)}
           onToggleTheme={theme.toggle}
         />
@@ -823,6 +822,13 @@ export default function App() {
             onSkip={onboarding.dismiss}
             onFinish={onboarding.finish}
             provider={{ busy: llm.busy, error: llm.error, onSave: llm.save, onProbe: llm.probe }}
+            folder={{
+              // The last few: the picker is right under them for the rest.
+              recent: workspace.recent.slice(0, 4),
+              onOpen: workspace.open,
+              onPick: workspace.pick,
+              error: workspace.error,
+            }}
           />
         )}
       </div>

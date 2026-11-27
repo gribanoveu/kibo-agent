@@ -82,7 +82,6 @@ function Harness({ agentMode }: { agentMode: boolean }) {
       onDeleteGroup={() => {}}
       onDeleteChat={() => {}}
       onOpenSettings={() => {}}
-      onOnboardingAction={() => {}}
       themeSide="dark"
       onToggleTheme={() => {}}
     />

@@ -16,6 +16,14 @@ const settings = (providers: ProviderView[] = []): LlmSettings => ({
   keyStore: "file",
 });
 
+const folders = (over: Partial<Parameters<typeof Onboarding>[0]["folder"]> = {}) => ({
+  recent: [{ path: "/Users/me/work/kibo-agent", worktreeOf: null }],
+  onOpen: mock(async (_path: string) => true),
+  onPick: mock(async () => true),
+  error: null,
+  ...over,
+});
+
 const saving = () => mock(async (_p: ProviderConfig, _k: string | null, _from: string | null) => true);
 
 const ops = (over: Partial<Parameters<typeof Onboarding>[0]["provider"]> = {}) => ({
@@ -26,21 +34,22 @@ const ops = (over: Partial<Parameters<typeof Onboarding>[0]["provider"]> = {}) =
   ...over,
 });
 
-const screenProps = (over: Parameters<typeof ops>[0] = {}) => ({
+const screenProps = (over: Parameters<typeof ops>[0] = {}, folderOver: Parameters<typeof folders>[0] = {}) => ({
   provider: ops(over),
+  folder: folders(folderOver),
   onSkip: mock(() => {}),
   onFinish: mock(() => {}),
 });
 
-const open = (over: Parameters<typeof ops>[0] = {}) => {
-  const props = screenProps(over);
+const open = (over: Parameters<typeof ops>[0] = {}, folderOver: Parameters<typeof folders>[0] = {}) => {
+  const props = screenProps(over, folderOver);
   render(<Onboarding {...props} />);
   return props;
 };
 
 /** The provider step, reached the way a user reaches it. */
-const atProviderStep = (over: Parameters<typeof ops>[0] = {}) => {
-  const props = open(over);
+const atProviderStep = (over: Parameters<typeof ops>[0] = {}, folderOver: Parameters<typeof folders>[0] = {}) => {
+  const props = open(over, folderOver);
   fireEvent.click(screen.getByRole("button", { name: "Get started" }));
   return props;
 };
@@ -52,6 +61,17 @@ const card = (name: RegExp) => screen.getByRole("button", { name });
 const field = (label: string | RegExp) => screen.getByLabelText(label) as HTMLInputElement;
 
 const button = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
+
+/** The last step, reached the way a user reaches it: a provider connected. */
+const atReadyStep = async (over: Parameters<typeof ops>[0] = {}, folderOver: Parameters<typeof folders>[0] = {}) => {
+  const props = atProviderStep(over, folderOver);
+  fireEvent.click(card(/OpenAI/));
+  fireEvent.click(button("Continue"));
+  await waitFor(() => expect(button("Connect")).toBeTruthy());
+  fireEvent.click(button("Connect"));
+  await waitFor(() => expect(screen.getByText("You're set")).toBeTruthy());
+  return props;
+};
 
 afterEach(() => localStorage.clear());
 
@@ -196,7 +216,11 @@ describe("the provider step", () => {
     expect(screen.getByRole("radio", { name: "a-model" }).getAttribute("aria-checked")).toBe("true");
 
     fireEvent.click(button("Connect"));
-    await waitFor(() => expect(props.onFinish).toHaveBeenCalledTimes(1));
+    // Saved, and on to the last step: closing the screen is Start's job.
+    await waitFor(() => expect(screen.getByText("You're set")).toBeTruthy());
+    expect(props.onFinish).not.toHaveBeenCalled();
+    fireEvent.click(button("Start"));
+    expect(props.onFinish).toHaveBeenCalledTimes(1);
     const [saved, key] = (props.provider.onSave as ReturnType<typeof mock>).mock.calls[0];
     expect(saved).toMatchObject({ id: "deepseek", baseUrl: "https://api.deepseek.com", model: "a-model" });
     expect(key).toBe("sk-1");
@@ -209,7 +233,7 @@ describe("the provider step", () => {
     await waitFor(() => expect(screen.getByRole("radio", { name: "b-model" })).toBeTruthy());
     fireEvent.click(screen.getByRole("radio", { name: "b-model" }));
     fireEvent.click(button("Connect"));
-    await waitFor(() => expect(props.onFinish).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("You're set")).toBeTruthy());
     expect((props.provider.onSave as ReturnType<typeof mock>).mock.calls[0][0].model).toBe("b-model");
   });
 
@@ -226,7 +250,7 @@ describe("the provider step", () => {
     expect(props.provider.onSave).not.toHaveBeenCalled();
 
     fireEvent.click(button("Save anyway"));
-    await waitFor(() => expect(props.onFinish).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("You're set")).toBeTruthy());
     // Saved without a pin: "auto" is the provider's own default.
     expect((props.provider.onSave as ReturnType<typeof mock>).mock.calls[0][0].model).toBeNull();
   });
@@ -238,7 +262,7 @@ describe("the provider step", () => {
     await waitFor(() => expect(button("Connect")).toBeTruthy());
     fireEvent.click(button("Connect"));
 
-    await waitFor(() => expect(props.onFinish).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("You're set")).toBeTruthy());
     const saved = (props.provider.onSave as ReturnType<typeof mock>).mock.calls[0][0] as ProviderConfig;
     expect(saved.trustedCertPem).toContain("BEGIN CERTIFICATE");
     expect(saved.requestHeaders?.["User-Agent"]).toContain("Kibo-Agent");
@@ -299,7 +323,9 @@ describe("the provider step", () => {
 
     await waitFor(() => expect(button("Connect")).toBeTruthy());
     fireEvent.keyDown(field("Name"), { code: "Enter", key: "Enter" });
-    await waitFor(() => expect(props.onFinish).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText("You're set")).toBeTruthy());
+    fireEvent.click(button("Start"));
+    expect(props.onFinish).toHaveBeenCalledTimes(1);
   });
 
   test("never saves under a refusal from the backend", async () => {
@@ -313,6 +339,8 @@ describe("the provider step", () => {
     fireEvent.click(button("Connect"));
     await waitFor(() => expect(props.provider.onSave).toHaveBeenCalledTimes(1));
     expect(props.onFinish).not.toHaveBeenCalled();
+    // Not on to the last step either: nothing was saved to be ready with.
+    expect(screen.queryByText("You're set")).toBeNull();
   });
 
   test("the catalog searches the providers the cards do not show", () => {
@@ -334,5 +362,81 @@ describe("the provider step", () => {
     fireEvent.click(screen.getAllByRole("button", { name: /groq/i })[0]);
     expect(field("Name").value).toBe("groq");
     expect(screen.queryByPlaceholderText(/Search \d+ providers/)).toBeNull();
+  });
+});
+
+describe("the last step", () => {
+  test("offers the folders opened lately, and closes on one", async () => {
+    const props = await atReadyStep();
+    expect(screen.getByText("/Users/me/work/kibo-agent")).toBeTruthy();
+    // The provider step is kept for the way back, not drawn over this one.
+    expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /kibo-agent/ }));
+    await waitFor(() => expect(props.onFinish).toHaveBeenCalledTimes(1));
+    expect((props.folder.onOpen as ReturnType<typeof mock>).mock.calls[0][0]).toBe("/Users/me/work/kibo-agent");
+  });
+
+  test("choosing a folder asks for one, and closes once one is opened", async () => {
+    const props = await atReadyStep({}, { onPick: mock(async () => true) });
+    fireEvent.click(button("Choose a folder…"));
+    await waitFor(() => expect(props.onFinish).toHaveBeenCalledTimes(1));
+    expect(props.folder.onPick).toHaveBeenCalledTimes(1);
+  });
+
+  test("a cancelled picker leaves the step where it is", async () => {
+    const props = await atReadyStep({}, { onPick: mock(async () => false) });
+    fireEvent.click(button("Choose a folder…"));
+    await waitFor(() => expect(props.folder.onPick).toHaveBeenCalledTimes(1));
+    expect(props.onFinish).not.toHaveBeenCalled();
+    expect(button("Start")).toBeTruthy();
+  });
+
+  test("a folder that would not open keeps the step, and says why", async () => {
+    const props = await atReadyStep({}, { onOpen: mock(async () => false), error: "no such folder" });
+    expect(screen.getByText("no such folder")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /kibo-agent/ }));
+    await waitFor(() => expect(props.folder.onOpen).toHaveBeenCalledTimes(1));
+    expect(props.onFinish).not.toHaveBeenCalled();
+  });
+
+  test("Back from the last step keeps the form as it was saved", async () => {
+    const props = atProviderStep();
+    fireEvent.click(card(/OpenAI/));
+    fireEvent.change(field(/API key/), { target: { value: "sk-kept" } });
+    fireEvent.click(button("Continue"));
+    await waitFor(() => expect(button("Connect")).toBeTruthy());
+    fireEvent.click(button("Connect"));
+    await waitFor(() => expect(screen.getByText("You're set")).toBeTruthy());
+
+    fireEvent.click(button("Back"));
+    // Not a blank form: an empty key deletes the one that was just stored.
+    expect(field("Name").value).toBe("openai");
+    expect(field(/API key/).value).toBe("sk-kept");
+
+    fireEvent.click(button("Connect"));
+    await waitFor(() => expect(screen.getByText("You're set")).toBeTruthy());
+    expect((props.provider.onSave as ReturnType<typeof mock>).mock.calls[1][1]).toBe("sk-kept");
+  });
+
+  test("a picker that refuses says why and leaves the button usable", async () => {
+    const folder = {
+      onPick: mock(async () => {
+        throw new Error("no permission to read folders");
+      }),
+    };
+    const props = await atReadyStep({}, folder);
+    fireEvent.click(button("Choose a folder…"));
+
+    await waitFor(() => expect(screen.getByText(/no permission to read folders/)).toBeTruthy());
+    expect(props.onFinish).not.toHaveBeenCalled();
+    expect(button("Choose a folder…").disabled).toBe(false);
+  });
+
+  test("Start closes without a folder", async () => {
+    const props = await atReadyStep();
+    fireEvent.click(button("Start"));
+    expect(props.onFinish).toHaveBeenCalledTimes(1);
   });
 });

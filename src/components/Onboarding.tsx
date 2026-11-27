@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Check, Search } from "lucide-react";
+import { Check, Folder, FolderOpen, Search } from "lucide-react";
 import { KiboBrand } from "./KiboBrand";
 import { Field } from "./EntryField";
 import { BUILTIN_PROVIDERS, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
 import { filterBy } from "../lib/providerForm";
 import { ONBOARDING_STEPS } from "../lib/onboarding";
 import { matches } from "../lib/shortcuts";
+import type { RecentFolder } from "../lib/chat";
 import type { ProviderConfig, ProviderKind } from "../lib/settings";
 import "./Onboarding.css";
 
@@ -19,8 +20,19 @@ export type ProviderOps = {
   onProbe: (provider: ProviderConfig, apiKey: string | null) => Promise<string[]>;
 };
 
+/** Where the agent will work, offered at the end: a folder opened lately, or the picker. */
+export type FolderOps = {
+  recent: RecentFolder[];
+  /** Opens one of them; `false` when it could not be opened. */
+  onOpen: (path: string) => Promise<boolean>;
+  /** Asks for a folder; `false` also means the picker was cancelled. */
+  onPick: () => Promise<boolean>;
+  error?: string | null;
+};
+
 type Props = {
   provider: ProviderOps;
+  folder: FolderOps;
   /** Not now: remembered, so the next launch opens the app as it is. */
   onSkip: () => void;
   /** A provider is saved and the screen is done with. */
@@ -34,9 +46,8 @@ type Props = {
  * only way out is Skip, and the title bar above it stays the window's own
  * handle.
  */
-export function Onboarding({ provider, onSkip, onFinish }: Props) {
+export function Onboarding({ provider, folder, onSkip, onFinish }: Props) {
   const [step, setStep] = useState(0);
-  const first = step === 0;
 
   return (
     <div className="onboarding" role="dialog" aria-modal="true" aria-label="First run">
@@ -50,7 +61,19 @@ export function Onboarding({ provider, onSkip, onFinish }: Props) {
           Skip
         </button>
       </div>
-      {first ? <Welcome onNext={() => setStep(1)} onSkip={onSkip} /> : <ProviderStep provider={provider} onBack={() => setStep(0)} onFinish={onFinish} />}
+      {step === 0 && <Welcome onNext={() => setStep(1)} onSkip={onSkip} />}
+      {/* Mounted from the provider step on, so Back from the last one finds the form as
+          it was saved — a blank one would send an empty key, and an empty key deletes
+          the stored one. */}
+      {step >= 1 && (
+        <ProviderStep
+          provider={provider}
+          hidden={step !== 1}
+          onBack={() => setStep(0)}
+          onDone={() => setStep(2)}
+        />
+      )}
+      {step === 2 && <ReadyStep folder={folder} onBack={() => setStep(1)} onFinish={onFinish} />}
     </div>
   );
 }
@@ -83,6 +106,84 @@ function Welcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
   );
 }
 
+/** A folder's own name, as the sidebar and the folder menu write it. */
+const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/**
+ * The last step: where the agent works, and what to do with it. A folder is not
+ * required — Chat mode has none — so the screen closes either way.
+ */
+function ReadyStep({ folder, onBack, onFinish }: { folder: FolderOps; onBack: () => void; onFinish: () => void }) {
+  const [asking, setAsking] = useState(false);
+  // The picker's own refusal — a permission, a platform error — which no
+  // workspace call reports: it throws.
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const open = async (path: string) => {
+    if ((await folder.onOpen(path)) !== false) onFinish();
+  };
+
+  const choose = async () => {
+    setAsking(true);
+    setFailure(null);
+    try {
+      // Cancelled is not a folder: the step stays, and Start is one press away.
+      if (await folder.onPick()) onFinish();
+    } catch (e) {
+      setFailure(String(e));
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  return (
+    <div className="onboarding-page">
+      <div className="onboarding-body">
+        <h1 className="onboarding-title">You're set</h1>
+        <p className="onboarding-lead">
+          Last thing: which folder should the agent work in? It reads, edits and runs there, and every change is a
+          diff you can read before it goes anywhere.
+        </p>
+
+        <div className="onboarding-folders">
+          {folder.recent.map((one) => (
+            <button key={one.path} type="button" className="onboarding-folder" onClick={() => void open(one.path)}>
+              <Folder size={13} aria-hidden />
+              <span className="onboarding-folder-name">{folderName(one.path)}</span>
+              <span className="onboarding-folder-path">{one.path}</span>
+            </button>
+          ))}
+          <button type="button" className="onboarding-folder choose" disabled={asking} onClick={() => void choose()}>
+            <FolderOpen size={13} aria-hidden />
+            <span className="onboarding-folder-name">{asking ? "Opening…" : "Choose a folder…"}</span>
+          </button>
+        </div>
+        {(failure ?? folder.error) && <p className="onboarding-error">{failure ?? folder.error}</p>}
+        <p className="onboarding-note">
+          Or leave it for now — the folder button under the message box opens one whenever you want.
+        </p>
+
+        <ul className="onboarding-points">
+          <li>Ask for a change in the message box: the agent reads the code, edits it, and says what it did.</li>
+          <li>Read the diff in Changes, and commit from there when it looks right.</li>
+          <li>MCP servers, skills and commands live in Settings and the Catalog.</li>
+        </ul>
+      </div>
+
+      <footer className="onboarding-foot">
+        <button className="btn btn-ghost onboarding-btn" type="button" onClick={onBack}>
+          Back
+        </button>
+        <div className="onboarding-foot-end">
+          <button className="btn btn-primary onboarding-btn" type="button" onClick={onFinish}>
+            Start
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
 /** The form as it stands; two fields and the key, the rest is Settings' business. */
 type Draft = { id: string; kind: ProviderKind; baseUrl: string; entry: BuiltinProvider | null };
 
@@ -100,7 +201,18 @@ const hostOf = (url: string) =>
  * list that comes back is what "Connect" then pins, so a key that does not
  * work is found out here rather than on the first message.
  */
-function ProviderStep({ provider, onBack, onFinish }: { provider: ProviderOps; onBack: () => void; onFinish: () => void }) {
+function ProviderStep({
+  provider,
+  hidden,
+  onBack,
+  onDone,
+}: {
+  provider: ProviderOps;
+  /** On screen or kept for the way back from the last step. */
+  hidden: boolean;
+  onBack: () => void;
+  onDone: () => void;
+}) {
   const [draft, setDraft] = useState<Draft>(BLANK);
   const [key, setKey] = useState("");
   const [browsing, setBrowsing] = useState(false);
@@ -168,7 +280,7 @@ function ProviderStep({ provider, onBack, onFinish }: { provider: ProviderOps; o
     setSaving(true);
     const stored = await provider.onSave(config(pin), key.trim(), null);
     setSaving(false);
-    if (stored !== false) onFinish();
+    if (stored !== false) onDone();
   };
 
   const primary = models ? "Connect" : refused ? "Try again" : "Continue";
@@ -177,7 +289,7 @@ function ProviderStep({ provider, onBack, onFinish }: { provider: ProviderOps; o
   const submit = () => void (models ? connect(model.trim() || null) : check());
 
   return (
-    <div className="onboarding-page">
+    <div className="onboarding-page" hidden={hidden}>
       <div
         className="onboarding-body"
         // Enter in any of the fields is the step's own button, as it is in the

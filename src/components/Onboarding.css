@@ -53,6 +53,10 @@
   display: flex;
   flex-direction: column;
 }
+/* A step kept for the way back — see the provider step's `hidden`. */
+.onboarding-page[hidden] {
+  display: none;
+}
 .onboarding-body {
   flex: 1;
   min-height: 0;
@@ -192,6 +196,57 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* The folders opened lately, as a press each, and the picker under them. */
+.onboarding-folders {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.onboarding-folder {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px;
+  text-align: left;
+  background: none;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.onboarding-folder:hover {
+  background: var(--bg-hover);
+}
+.onboarding-folder.choose {
+  color: var(--text-dim);
+  border-style: dashed;
+}
+.onboarding-folder.choose:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.onboarding-folder svg {
+  flex: none;
+  align-self: center;
+  color: var(--text-faint);
+}
+.onboarding-folder-name {
+  flex: none;
+  font-size: var(--fs-md);
+}
+/* The whole path is the one thing that tells two folders of the same name apart. */
+.onboarding-folder-path {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* What the provider said it serves, and which one is the default. */
