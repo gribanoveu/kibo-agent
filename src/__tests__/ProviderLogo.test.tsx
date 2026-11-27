@@ -4,7 +4,7 @@ import { ProviderLogo } from "../components/ProviderLogo";
 
 describe("a provider's mark", () => {
   test("the ones the app carries are drawn, each from its own asset", () => {
-    for (const id of ["alfagen", "openai", "anthropic", "deepseek"]) {
+    for (const id of ["alfagen", "openai", "anthropic", "deepseek", "ollama"]) {
       const { container, unmount } = render(<ProviderLogo id={id} />);
       const svg = container.querySelector("svg.provider-logo");
       expect(svg).toBeTruthy();
@@ -18,11 +18,37 @@ describe("a provider's mark", () => {
   });
 
   test("a provider the app does not know by name leaves no gap", () => {
-    for (const id of ["ollama", "some-endpoint", "", undefined]) {
+    for (const id of ["some-endpoint", "", undefined]) {
       const { container, unmount } = render(<ProviderLogo id={id} />);
       expect(container.querySelector("svg")).toBeNull();
       unmount();
     }
+  });
+
+  test("a symbol is given its name inside the same drawing", () => {
+    // AlfaGen and Ollama are marks without letters: the name is drawn beside
+    // the mark, in the mark's own box, rather than as a line of the page.
+    for (const [id, name, width] of [
+      ["alfagen", "AlfaGen", 372.72 + 60 + 780],
+      ["ollama", "Ollama", 17 + 4 + 40],
+    ] as const) {
+      const { container, unmount } = render(<ProviderLogo id={id} name={name} />);
+      const svg = container.querySelector("svg.provider-logo")!;
+      expect(svg.querySelector("text")?.textContent).toBe(name);
+      // The words are the drawing's label, so a reader hears them once.
+      expect(svg.getAttribute("aria-label")).toBe(name);
+      expect(svg.getAttribute("aria-hidden")).toBeNull();
+      // The box grew by the room the letters were given, beside the mark.
+      expect(Number(svg.getAttribute("viewBox")!.split(" ")[2])).toBeCloseTo(width, 5);
+      unmount();
+    }
+  });
+
+  test("a wordmark already says the name, and is not told it twice", () => {
+    const { container } = render(<ProviderLogo id="openai" name="OpenAI" />);
+    const svg = container.querySelector("svg.provider-logo")!;
+    expect(svg.querySelector("text")).toBeNull();
+    expect(svg.getAttribute("aria-hidden")).toBe("true");
   });
 
   test("the wordmarks take the theme's colour and AlfaGen keeps its own", () => {

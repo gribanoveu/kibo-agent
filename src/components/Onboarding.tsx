@@ -417,8 +417,11 @@ function ConnectStep({
           submit();
         }}
       >
-        <ProviderLogo id={custom ? undefined : draft.entry?.id} className="onboarding-logo" />
-        <h1 className="onboarding-title">{custom ? "Your own endpoint" : `Connect ${draft.entry?.name ?? "a model"}`}</h1>
+        <ProviderLogo id={custom ? undefined : draft.entry?.id} name={draft.entry?.name} className="onboarding-logo" />
+        {/* A chosen provider is named by its mark and its address below: a
+            heading saying the same thing twice is a line of the window spent
+            on nothing. An endpoint of its own has no mark to be named by. */}
+        {custom && <h1 className="onboarding-title">Your own endpoint</h1>}
         <p className="onboarding-lead">
           The key is sealed on this machine, and messages go to the provider you pick — nowhere else.
         </p>

@@ -309,6 +309,18 @@ describe("choosing a provider and connecting it", () => {
     expect(screen.queryByRole("radiogroup", { name: "Protocol" })).toBeNull();
   });
 
+  test("a chosen provider is named by its mark, not by a heading", () => {
+    atProviderStep();
+    // Nothing chosen yet, so nothing to mark.
+    expect(document.querySelector("svg.provider-logo")).toBeNull();
+
+    fireEvent.click(card(/OpenAI/));
+    expect(document.querySelector("svg.provider-logo")).toBeTruthy();
+    // The mark and the address under it say which provider this is.
+    expect(screen.queryByText(/Connect OpenAI/)).toBeNull();
+    expect(screen.queryByText("Your own endpoint")).toBeNull();
+  });
+
   test("another provider is another check: the old model list is not carried over", async () => {
     atProviderStep();
     fireEvent.click(card(/OpenAI/));
