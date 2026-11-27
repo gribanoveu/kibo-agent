@@ -115,6 +115,13 @@ export default function App() {
   // The first-run screen: up when the settings say no provider is saved, and
   // never asked twice in one launch (docs/66-onboarding.md).
   const onboarding = useOnboarding(llm.settings);
+  // The first run hands the window over as the agent's: a chat mode left from
+  // an earlier launch has no panel menu, folder or Overview, and the wizard
+  // talks about the window the agent works in. Switched under the screen, so
+  // the tour that follows finds what it names.
+  useEffect(() => {
+    if (onboarding.open) setMode("agent");
+  }, [onboarding.open, setMode]);
   // The window itself shown a step at a time, once, when the first run offers it.
   const [tourOpen, setTourOpen] = useState(false);
   // Each provider's own model pin, auto resolved: the cache-miss hint compares
@@ -850,8 +857,6 @@ export default function App() {
         {tourOpen && (
           <Tour
             onDone={() => setTourOpen(false)}
-            // A step may need a page of its own: the Catalog is opened for the
-            // step that talks about it, and put away with it.
             onOpen={(id) => (id === "catalog" ? openPage("catalog") : leavePage())}
           />
         )}
