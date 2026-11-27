@@ -27,7 +27,7 @@ type Logo = {
 const LOGOS: Record<string, Logo> = {
   alfagen: {
     viewBox: "0 0 372.72 446.72",
-    height: 34,
+    height: 46,
     wordmark: false,
     nameBox: { gap: 60, width: 780, size: 190 },
     body: (
@@ -94,7 +94,7 @@ const LOGOS: Record<string, Logo> = {
   },
   ollama: {
     viewBox: "0 0 17 25",
-    height: 30,
+    height: 40,
     wordmark: false,
     nameBox: { gap: 4, width: 40, size: 11 },
     body: (
