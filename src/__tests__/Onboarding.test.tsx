@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Onboarding } from "../components/Onboarding";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { shouldOnboard, isDeepSeek } from "../lib/onboarding";
@@ -438,6 +438,59 @@ describe("choosing a provider and connecting it", () => {
 
     fireEvent.change(field("Base URL"), { target: { value: "https://api.openai.com/v2" } });
     expect(screen.queryByRole("radiogroup", { name: "Model" })).toBeNull();
+    expect(button("Continue")).toBeTruthy();
+  });
+
+  test("a probe's answer for the old address does not come back over an edit", async () => {
+    let release: (list: string[]) => void = () => {};
+    const props = atProviderStep({ onProbe: mock(() => new Promise<string[]>((resolve) => (release = resolve))) });
+    fireEvent.click(card(/OpenAI/));
+    fireEvent.click(button("Continue"));
+    const first = release;
+
+    // The address is edited while the check is in flight: the form is ready
+    // to check again, and a new check starts before the old one answers.
+    fireEvent.change(field("Base URL"), { target: { value: "https://api.openai.com/v2" } });
+    expect(button("Continue")).toBeTruthy();
+    fireEvent.click(button("Continue"));
+
+    // The old answer lands mid-check: it neither brings a list nor ends it.
+    await act(async () => first(["old-model"]));
+    expect(screen.queryByRole("radiogroup", { name: "Model" })).toBeNull();
+    expect(button("Checking…").disabled).toBe(true);
+
+    // The new check is the one whose list is pinned and saved.
+    await act(async () => release(["new-model"]));
+    fireEvent.click(button("Connect"));
+    await waitFor(() => expect(screen.getByText("A few extras")).toBeTruthy());
+    expect((props.provider.onSave as ReturnType<typeof mock>).mock.calls[0][0]).toMatchObject({
+      baseUrl: "https://api.openai.com/v2",
+      model: "new-model",
+    });
+  });
+
+  test("a key typed while the check is in flight is not saved unchecked", async () => {
+    let release: (list: string[]) => void = () => {};
+    const props = atProviderStep({ onProbe: mock(() => new Promise<string[]>((resolve) => (release = resolve))) });
+    fireEvent.click(card(/OpenAI/));
+    fireEvent.click(button("Continue"));
+
+    fireEvent.change(field(/API key/), { target: { value: "sk-new" } });
+    await act(async () => release(["old-model"]));
+    expect(screen.queryByRole("radiogroup", { name: "Model" })).toBeNull();
+    expect(props.provider.onSave).not.toHaveBeenCalled();
+    expect(button("Continue")).toBeTruthy();
+  });
+
+  test("a refusal for the form as it was does not come back over an edit either", async () => {
+    let refuse: (e: Error) => void = () => {};
+    atProviderStep({ onProbe: mock(() => new Promise<string[]>((_, reject) => (refuse = reject))) });
+    fireEvent.click(card(/OpenAI/));
+    fireEvent.click(button("Continue"));
+
+    fireEvent.change(field(/API key/), { target: { value: "sk-new" } });
+    await act(async () => refuse(new Error("401 for the old key")));
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(button("Continue")).toBeTruthy();
   });
 

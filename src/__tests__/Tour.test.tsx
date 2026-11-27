@@ -167,6 +167,65 @@ describe("the tour", () => {
     expect(pressed).toHaveBeenCalledTimes(1);
   });
 
+  /** The panel's own button as the app has it: a toggle that says whether it is open. */
+  const toggle = () => {
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-tour", "model");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.addEventListener("click", () =>
+      trigger.setAttribute("aria-expanded", trigger.getAttribute("aria-expanded") === "true" ? "false" : "true"),
+    );
+    document.body.append(trigger);
+    return trigger;
+  };
+  const expanded = (el: HTMLElement) => el.getAttribute("aria-expanded");
+  /** mode, panes, IDE, terminal, overview, folder, then the panel's own step. */
+  const toModelStep = () => {
+    for (let at = 0; at < 6; at += 1) next();
+  };
+
+  test("a panel already open is not pressed shut by the step", () => {
+    const trigger = toggle();
+    trigger.setAttribute("aria-expanded", "true");
+    const pressed = mock(() => {});
+    trigger.addEventListener("click", pressed);
+    render(<Tour onDone={() => {}} />);
+    toModelStep();
+    expect(pressed).not.toHaveBeenCalled();
+    expect(expanded(trigger)).toBe("true");
+
+    // Nor on the way out: the tour did not open it, so it does not put it away.
+    next();
+    expect(expanded(trigger)).toBe("true");
+  });
+
+  test("back to the step finds the panel open, not pressed shut", () => {
+    const trigger = toggle();
+    render(<Tour onDone={() => {}} />);
+    toModelStep();
+    expect(expanded(trigger)).toBe("true");
+
+    next();
+    expect(expanded(trigger)).toBe("false");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByText("The model, and asking first")).toBeTruthy();
+    expect(expanded(trigger)).toBe("true");
+  });
+
+  test("the panel the tour opened is put away when the tour ends", () => {
+    const trigger = toggle();
+    const onDone = mock(() => {});
+    const tree = render(<Tour onDone={onDone} />);
+    toModelStep();
+    expect(expanded(trigger)).toBe("true");
+
+    fireEvent.keyDown(window, { code: "Escape", key: "Escape" });
+    expect(onDone).toHaveBeenCalledTimes(1);
+    // The app closes the tour on onDone; the panel goes with it.
+    tree.unmount();
+    expect(expanded(trigger)).toBe("false");
+  });
+
   test("the Catalog is opened for the step that shows it, and put away after", () => {
     const onOpen = mock((_id: string | null) => {});
     render(<Tour onDone={() => {}} onOpen={onOpen} />);

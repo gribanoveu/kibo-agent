@@ -44,8 +44,17 @@ export function Tour({
   useEffect(() => {
     open.current?.(step.opens ?? null);
     // A panel the step points into is opened by a press on its own button, not
-    // by a second copy of what the app keeps in it.
-    if (step.presses) (document.querySelector(step.presses) as HTMLElement | null)?.click();
+    // by a second copy of what the app keeps in it. The button is a toggle:
+    // pressed only while the panel is closed, so a return to the step does not
+    // press shut what it is here to show.
+    const button = step.presses ? (document.querySelector(step.presses) as HTMLElement | null) : null;
+    const opened = button && button.getAttribute("aria-expanded") !== "true";
+    if (opened) button.click();
+    return () => {
+      // What the step opened is put away on the way out — the next step, Done
+      // or Escape alike — so the tour never leaves a panel over the window.
+      if (opened && button && button.getAttribute("aria-expanded") === "true") button.click();
+    };
   }, [step.opens, step.presses]);
 
   // Escape leaves — read here rather than through the shortcuts of the window,

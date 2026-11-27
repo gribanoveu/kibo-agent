@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, Search } from "lucide-react";
 import { KiboBrand } from "./KiboBrand";
 import { ProviderLogo } from "./ProviderLogo";
@@ -369,25 +369,39 @@ function ConnectStep({
     requestHeaders: draft.entry?.requestHeaders ?? {},
   });
 
-  const edit = (next: Partial<Draft>) => {
-    onEdit(next);
-    // The address or the name changed: what was checked no longer is.
+  // What is being checked, numbered: a probe still in flight answers for the
+  // form as it was, and an edit since means its list is not this form's.
+  const seq = useRef(0);
+
+  // The form changed: what was checked no longer is, and a check in flight is
+  // for the old address or key — its answer is dropped, not applied.
+  const forget = () => {
+    seq.current += 1;
+    setChecking(false);
     setModels(null);
     setRefused(null);
   };
 
+  const edit = (next: Partial<Draft>) => {
+    onEdit(next);
+    forget();
+  };
+
   const check = async () => {
     if (!named || checking) return;
+    const at = ++seq.current;
     setChecking(true);
     setRefused(null);
     try {
       const list = await provider.onProbe(config(null), apiKey.trim());
+      if (at !== seq.current) return;
       setModels(list);
       setModel(list[0] ?? "");
     } catch (e) {
+      if (at !== seq.current) return;
       setRefused(String(e));
     } finally {
-      setChecking(false);
+      if (at === seq.current) setChecking(false);
     }
   };
 
@@ -481,8 +495,7 @@ function ConnectStep({
               onChange={(e) => {
                 onKey(e.target.value);
                 // A different key is a different check.
-                setModels(null);
-                setRefused(null);
+                forget();
               }}
             />
           </Field>
