@@ -35,8 +35,8 @@
 .onboarding-skip {
   background: none;
   border: 0;
-  padding: 3px 6px;
-  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
   font-family: inherit;
   font-size: var(--fs-sm);
   color: var(--text-faint);
@@ -47,11 +47,13 @@
   background: var(--bg-hover);
 }
 
+/* A step: its words in the middle of the window, its buttons under them. */
 .onboarding-page {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  text-align: center;
 }
 /* A step kept for the way back — see the provider step's `hidden`. */
 .onboarding-page[hidden] {
@@ -62,42 +64,65 @@
   min-height: 0;
   overflow-y: auto;
   width: 100%;
-  max-width: 620px;
+  max-width: 560px;
   margin: 0 auto;
-  padding: 4px 24px 20px;
+  padding: 8px 24px 20px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  gap: 16px;
 }
-/* A step's heading, a step above the prose it opens. */
+/* The content sits in the middle of the window, by the two auto margins at its
+   ends — which go to zero when it is taller than the window, so nothing is cut
+   off the scroll the way `justify-content: center` would cut it. */
+.onboarding-body > :first-child {
+  margin-top: auto;
+}
+.onboarding-body > :last-child {
+  margin-bottom: auto;
+}
+
+/* The wordmark is the first thing read: bigger than anywhere else in the app. */
+.onboarding .kibo-brand {
+  height: calc(var(--fs-lg) * 4.4);
+  margin-bottom: 4px;
+}
 .onboarding-title {
   margin: 0;
-  font-size: calc(var(--fs-lg) * 1.3);
+  font-size: calc(var(--fs-lg) * 1.6);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--text);
 }
 .onboarding-lead {
   margin: 0;
+  max-width: 48ch;
   font-size: var(--fs-md);
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--text-dim);
 }
+/* What the app is for, and what to do with it: one soft card, a line each. */
 .onboarding-points {
-  margin: 0;
-  padding-left: 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  width: 100%;
+  max-width: 52ch;
+  margin-top: 4px;
+  padding: 14px 18px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-soft);
+}
+.onboarding-point {
+  margin: 0;
   font-size: var(--fs-md);
   line-height: 1.5;
   color: var(--text-dim);
 }
-.onboarding-points li::marker {
-  color: var(--accent);
-}
 .onboarding-note {
   margin: 0;
+  max-width: 46ch;
   font-size: var(--fs-xs);
   line-height: 1.45;
   color: var(--text-faint);
@@ -107,16 +132,19 @@
 .onboarding-providers {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 8px;
+  width: 100%;
 }
 .onboarding-provider {
   flex: 1 1 150px;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 2px;
   min-width: 0;
-  padding: 8px 12px;
-  text-align: left;
+  padding: 9px 12px;
+  text-align: center;
   background: var(--bg-panel-soft);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
@@ -135,6 +163,7 @@
   color: var(--text);
 }
 .onboarding-provider-host {
+  max-width: 100%;
   font-size: var(--fs-xs);
   color: var(--text-faint);
   overflow: hidden;
@@ -147,6 +176,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
+  text-align: left;
 }
 .onboarding-search {
   display: flex;
@@ -196,21 +227,26 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  text-align: left;
 }
 
 /* The folders opened lately, as a press each, and the picker under them. */
 .onboarding-folders {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
+  width: 100%;
+  max-width: 460px;
+  text-align: left;
 }
 .onboarding-folder {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 7px 10px;
+  padding: 8px 12px;
   text-align: left;
-  background: none;
+  background: var(--bg-panel-soft);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   font-family: inherit;
@@ -222,6 +258,7 @@
 }
 .onboarding-folder.choose {
   color: var(--text-dim);
+  background: none;
   border-style: dashed;
 }
 .onboarding-folder.choose:disabled {
@@ -254,6 +291,8 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: 100%;
+  text-align: left;
 }
 .onboarding-models-head {
   display: flex;
@@ -302,7 +341,9 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 9px 11px;
+  width: 100%;
+  max-width: 52ch;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-panel-soft);
@@ -318,33 +359,30 @@
   word-break: break-word;
 }
 .onboarding-error {
-  max-width: 280px;
+  margin: 0;
+  max-width: 46ch;
   font-size: var(--fs-xs);
   color: var(--red);
 }
 
-/* The step's own buttons: on the screen's edge, so the eye finds them in the
-   same place on every step. */
+/* The step's buttons: one line under the words, in the middle of the window,
+   so the eye finds them in the same place on every step. */
 .onboarding-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  max-width: 620px;
-  margin: 0 auto;
-  padding: 12px 24px 18px;
-  border-top: 1px solid var(--border-soft);
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 24px 26px;
 }
 .onboarding-foot-end {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-left: auto;
 }
 /* A first-run press is the screen's one action, so the buttons are a step
    bigger than the app's own. */
 .onboarding-btn {
-  padding: 8px 16px;
+  padding: 9px 18px;
   font-size: var(--fs-md);
 }

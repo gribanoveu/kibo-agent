@@ -85,14 +85,12 @@ function Welcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => void })
         <KiboBrand />
         <h1 className="onboarding-title">Welcome to Kibo Agent</h1>
         <p className="onboarding-lead">
-          An agent that works in your folder: it reads the code, makes the change, runs the command — and shows you
-          what it did.
+          This short setup gets the app ready: a model to answer with. Two steps and you're in.
         </p>
-        <ul className="onboarding-points">
-          <li>It works in a folder. Every file it touches is one of yours, and every change is a diff you can read.</li>
-          <li>You see the work: the calls it makes, the files it reads, the branch it leaves behind.</li>
-          <li>Your key stays on this machine. Messages go to the provider you pick, and nowhere else.</li>
-        </ul>
+        <div className="onboarding-points">
+          <p className="onboarding-point">First, connect a provider — the model that answers, and the key it takes.</p>
+          <p className="onboarding-point">Your key stays on this machine. Messages go to the provider you pick, and nowhere else.</p>
+        </div>
       </div>
       <footer className="onboarding-foot">
         <button className="btn btn-primary onboarding-btn" type="button" autoFocus onClick={onNext}>
@@ -141,8 +139,8 @@ function ReadyStep({ folder, onBack, onFinish }: { folder: FolderOps; onBack: ()
       <div className="onboarding-body">
         <h1 className="onboarding-title">You're set</h1>
         <p className="onboarding-lead">
-          Last thing: which folder should the agent work in? It reads, edits and runs there, and every change is a
-          diff you can read before it goes anywhere.
+          Which folder should the agent work in? It reads, edits and runs there, and every change is a diff you can
+          read before it goes anywhere.
         </p>
 
         <div className="onboarding-folders">
@@ -163,11 +161,13 @@ function ReadyStep({ folder, onBack, onFinish }: { folder: FolderOps; onBack: ()
           Or leave it for now — the folder button under the message box opens one whenever you want.
         </p>
 
-        <ul className="onboarding-points">
-          <li>Ask for a change in the message box: the agent reads the code, edits it, and says what it did.</li>
-          <li>Read the diff in Changes, and commit from there when it looks right.</li>
-          <li>MCP servers, skills and commands live in Settings and the Catalog.</li>
-        </ul>
+        <div className="onboarding-points">
+          <p className="onboarding-point">
+            Ask for a change in the message box: the agent reads the code, edits it, and says what it did.
+          </p>
+          <p className="onboarding-point">Read the diff in Changes, and commit from there when it looks right.</p>
+          <p className="onboarding-point">MCP servers, skills and commands live in Settings and the Catalog.</p>
+        </div>
       </div>
 
       <footer className="onboarding-foot">
