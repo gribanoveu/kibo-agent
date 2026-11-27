@@ -81,9 +81,6 @@ const LOGOS: Record<string, Logo> = {
   },
 };
 
-/** Which providers have a mark, for a place that would otherwise leave a gap. */
-export const hasLogo = (id: string) => id in LOGOS;
-
 /** A provider's mark, or nothing at all when it has none. */
 export function ProviderLogo({ id, className }: { id: string | undefined; className?: string }) {
   const logo = id === undefined ? undefined : LOGOS[id];

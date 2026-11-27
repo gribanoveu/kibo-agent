@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { render } from "@testing-library/react";
-import { ProviderLogo, hasLogo } from "../components/ProviderLogo";
+import { ProviderLogo } from "../components/ProviderLogo";
 
 describe("a provider's mark", () => {
   test("the ones the app carries are drawn, each from its own asset", () => {
@@ -15,7 +15,6 @@ describe("a provider's mark", () => {
       expect(svg!.getAttribute("aria-hidden")).toBe("true");
       unmount();
     }
-    expect(hasLogo("deepseek")).toBe(true);
   });
 
   test("a provider the app does not know by name leaves no gap", () => {
@@ -24,7 +23,6 @@ describe("a provider's mark", () => {
       expect(container.querySelector("svg")).toBeNull();
       unmount();
     }
-    expect(hasLogo("ollama")).toBe(false);
   });
 
   test("the wordmarks take the theme's colour and AlfaGen keeps its own", () => {
