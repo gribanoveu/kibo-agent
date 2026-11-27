@@ -305,10 +305,11 @@ describe("the folder's index", () => {
   });
 });
 
-describe("the line under the box", () => {
-  test("holds the folder, the settings and the balance, in that order", () => {
+describe("the folder and settings line", () => {
+  const line = (stacked: boolean) =>
     render(
       <Composer
+        stacked={stacked}
         tab={<span>the folder</span>}
         end={<span>the balance</span>}
         draftKey="draft"
@@ -328,8 +329,23 @@ describe("the line under the box", () => {
         onCompact={() => {}}
       />,
     );
+
+  test("a chat under way keeps it under the box; a new chat carries it inside, at the top", () => {
+    const started = line(true);
+    let strip = document.querySelector(".composer-strip")!;
+    expect(strip.className).not.toContain("inside");
+    expect(strip.previousElementSibling?.className).toBe("composer");
+    started.unmount();
+    line(false);
+    strip = document.querySelector(".composer-strip")!;
+    expect(strip.className).toContain("inside");
+    expect(strip.parentElement?.className).toBe("composer");
+    expect(strip.previousElementSibling).toBeNull();
+  });
+
+  test("holds the folder, the settings and the balance, in that order", () => {
+    line(true);
     const strip = document.querySelector(".composer-strip");
-    expect(strip?.previousElementSibling?.className).toBe("composer");
     const [folder, settings, balance] = [...(strip?.children ?? [])];
     expect(folder.textContent).toBe("the folder");
     expect(settings.className).toBe("composer-settings");

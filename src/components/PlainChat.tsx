@@ -302,6 +302,30 @@ export function PlainChat({
     </div>
   );
 
+  // A new chat's card carries the settings on a line of its own at the top;
+  // a chat under way keeps them under the card (Composer.tsx).
+  const tabStrip = (
+    <div className={`plain-tab${empty ? " inside" : ""}`}>
+      {!empty && rolesRow}
+      {chat.role === "kubernetes" && (
+        <KubePanel pin={chat.kube} onPin={chat.setPin} kube={kube} onSetUpKube={onSetUpKube} />
+      )}
+      {pages?.available && (
+        <button
+          type="button"
+          className={`plain-preview-toggle${pages.open ? " on" : ""}`}
+          title={pages.open ? "Hide the preview" : "Show the preview"}
+          onClick={pages.onToggle}
+        >
+          <AppWindow size={13} />
+          <span>Preview</span>
+        </button>
+      )}
+      <ComposerSettings models={models} onModel={onModel} onEffort={onEffort} onLoadModels={onLoadModels} />
+      <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
+    </div>
+  );
+
   return (
     <>
       <section className="plain-panel">
@@ -348,6 +372,7 @@ export function PlainChat({
           <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />
         )}
         <section className={`plain-composer${attachments.dragging ? " dropping" : ""}`}>
+          {empty && tabStrip}
           {attachments.dragging && (
             <div className="plain-drop" aria-hidden="true">
               Drop to attach
@@ -422,28 +447,7 @@ export function PlainChat({
           </div>
           {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
         </section>
-        {/* Under the box, where the agent's says which folder: here, what the
-            message goes out with — and, once the chat has started, who it
-            goes to. The chat's own settings go on this strip. */}
-        <div className="plain-tab">
-          {!empty && rolesRow}
-          {chat.role === "kubernetes" && (
-            <KubePanel pin={chat.kube} onPin={chat.setPin} kube={kube} onSetUpKube={onSetUpKube} />
-          )}
-          {pages?.available && (
-            <button
-              type="button"
-              className={`plain-preview-toggle${pages.open ? " on" : ""}`}
-              title={pages.open ? "Hide the preview" : "Show the preview"}
-              onClick={pages.onToggle}
-            >
-              <AppWindow size={13} />
-              <span>Preview</span>
-            </button>
-          )}
-          <ComposerSettings models={models} onModel={onModel} onEffort={onEffort} onLoadModels={onLoadModels} />
-          <ProviderBalance providerId={models.current?.providerId ?? null} running={chat.busy} />
-        </div>
+        {!empty && tabStrip}
         {empty && rolesRow}
       </div>
     </>

@@ -393,6 +393,39 @@ export function Composer({
     return text ? `${text} · ${said}` : `${said[0].toUpperCase()}${said.slice(1)}`;
   };
 
+  // A new chat's card carries the folder and the settings on a line of its own
+  // at the top; a chat under way keeps them under the card, where the thread
+  // above has already claimed its height.
+  const strip = (
+    <div className={`composer-strip${!stacked ? " inside" : ""}`}>
+      {tab}
+      <ComposerSettings
+        models={models}
+        onModel={onModel}
+        onEffort={onEffort}
+        onLoadModels={onLoadModels}
+        mode={{ value: conversation, onPick: onConversation }}
+        // Two states, because two is what `ApprovalPolicy` has: ask before
+        // anything that changes the tree, or run the whole turn without
+        // asking. "Always allow this tool" is the third real one, answered on
+        // the card, about one tool, in the moment. Set in the panel; read on
+        // the line, where Auto is not to be missed.
+        note={<span>{unattended ? "auto" : "ask"}</span>}
+        status={index && <IndexBadge state={index} />}
+        toggles={[
+          {
+            label: "Approve automatically",
+            icon: <ShieldCheck size={14} />,
+            title: "Run the whole turn without asking; off, edits and commands are confirmed",
+            on: unattended,
+            onChange: onUnattended,
+          },
+        ]}
+      />
+      {end}
+    </div>
+  );
+
   return (
     <div className="composer-wrap">
       {queued.length > 0 && (
@@ -402,6 +435,7 @@ export function Composer({
       )}
       {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
       <section className={`composer${attachments.dragging ? " dropping" : ""}`} ref={box}>
+        {!stacked && strip}
         {attachments.dragging && (
           <div className="composer-drop" aria-hidden="true">
             Drop to attach
@@ -517,33 +551,7 @@ export function Composer({
         </div>
         {dictation.active && <DictationLine peaks={dictation.peaks} partial={dictation.partial} />}
       </section>
-      <div className="composer-strip">
-        {tab}
-        <ComposerSettings
-          models={models}
-          onModel={onModel}
-          onEffort={onEffort}
-          onLoadModels={onLoadModels}
-          mode={{ value: conversation, onPick: onConversation }}
-          // Two states, because two is what `ApprovalPolicy` has: ask before
-          // anything that changes the tree, or run the whole turn without
-          // asking. "Always allow this tool" is the third real one, answered on
-          // the card, about one tool, in the moment. Set in the panel; read on
-          // the line, where Auto is not to be missed.
-          note={<span>{unattended ? "auto" : "ask"}</span>}
-          status={index && <IndexBadge state={index} />}
-          toggles={[
-            {
-              label: "Approve automatically",
-              icon: <ShieldCheck size={14} />,
-              title: "Run the whole turn without asking; off, edits and commands are confirmed",
-              on: unattended,
-              onChange: onUnattended,
-            },
-          ]}
-        />
-        {end}
-      </div>
+      {stacked && strip}
       {below}
     </div>
   );

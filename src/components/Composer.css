@@ -116,6 +116,12 @@
   padding: 0 4px;
   min-width: 0;
 }
+/* Inside the card (a new chat): the box's own padding is the edge, so the
+   strip only keeps a gap under itself and lines up with the text's inset. */
+.composer-strip.inside {
+  margin: 0 0 6px;
+  padding: 0 6px;
+}
 .composer-strip > .folder-tab {
   flex: 1 1 200px;
   /* The folder stays read: it is where the message is worked on. */
