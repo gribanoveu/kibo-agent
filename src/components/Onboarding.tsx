@@ -45,9 +45,28 @@ type Props = {
  * dialog: with nothing to answer with there is nothing to go back to, so the
  * only way out is Skip, and the title bar above it stays the window's own
  * handle.
+ *
+ * Choosing and connecting are two pages: the cards are a choice, and the key,
+ * the address and the model list want the whole window, not the room left
+ * under a grid of them.
  */
 export function Onboarding({ provider, folder, onSkip, onFinish }: Props) {
   const [step, setStep] = useState(0);
+  // What is being connected, and the key it takes — here rather than in a step,
+  // so going back to the cards and returning finds both as they were: a blank
+  // key would be saved as "no key", and that deletes the one that was there.
+  const [draft, setDraft] = useState<Draft>(BLANK);
+  const [key, setKey] = useState("");
+
+  const choose = (entry: BuiltinProvider) => {
+    // A key typed for one provider is not the next one's: the check would send
+    // it to another endpoint, and it could be saved under another name.
+    if (draft.entry?.id !== entry.id) setKey("");
+    setDraft({ id: entry.id, kind: entry.kind, baseUrl: entry.baseUrl, entry });
+    setStep(2);
+  };
+
+  const edit = (next: Partial<Draft>) => setDraft((prev) => ({ ...prev, ...next }));
 
   return (
     <div className="onboarding" role="dialog" aria-modal="true" aria-label="First run">
@@ -62,18 +81,22 @@ export function Onboarding({ provider, folder, onSkip, onFinish }: Props) {
         </button>
       </div>
       {step === 0 && <Welcome onNext={() => setStep(1)} onSkip={onSkip} />}
-      {/* Mounted from the provider step on, so Back from the last one finds the form as
-          it was saved — a blank one would send an empty key, and an empty key deletes
-          the stored one. */}
-      {step >= 1 && (
-        <ProviderStep
+      {/* Kept mounted while a later step is up, so the way back finds the page
+          as it was left rather than a fresh one. */}
+      {step >= 1 && <ProviderStep hidden={step !== 1} onBack={() => setStep(0)} onChoose={choose} />}
+      {step >= 2 && (
+        <ConnectStep
           provider={provider}
-          hidden={step !== 1}
-          onBack={() => setStep(0)}
-          onDone={() => setStep(2)}
+          draft={draft}
+          apiKey={key}
+          hidden={step !== 2}
+          onEdit={edit}
+          onKey={setKey}
+          onBack={() => setStep(1)}
+          onDone={() => setStep(3)}
         />
       )}
-      {step === 2 && <ReadyStep folder={folder} onBack={() => setStep(1)} onFinish={onFinish} />}
+      {step === 3 && <ReadyStep folder={folder} onBack={() => setStep(2)} onFinish={onFinish} />}
     </div>
   );
 }
@@ -180,7 +203,7 @@ function ReadyStep({ folder, onBack, onFinish }: { folder: FolderOps; onBack: ()
   );
 }
 
-/** The form as it stands; two fields and the key, the rest is Settings' business. */
+/** What is being connected, as the form has it so far. */
 type Draft = { id: string; kind: ProviderKind; baseUrl: string; entry: BuiltinProvider | null };
 
 const BLANK: Draft = { id: "", kind: "openAiCompatible", baseUrl: "", entry: null };
@@ -188,30 +211,93 @@ const BLANK: Draft = { id: "", kind: "openAiCompatible", baseUrl: "", entry: nul
 /** The "Other…" card: an endpoint the catalog does not list, typed by hand. */
 const OTHER: BuiltinProvider = { id: "", name: "Other", kind: "openAiCompatible", baseUrl: "" };
 
-const hostOf = (url: string) =>
-  url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+/** The two wires the app speaks: a card brings its own, a typed endpoint picks one. */
+const KINDS: [ProviderKind, string][] = [
+  ["openAiCompatible", "OpenAI-compatible"],
+  ["anthropic", "Anthropic"],
+];
+
+const hostOf = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 
 /**
- * The provider step: which provider, its key, and proof that the two work
- * before anything is saved. "Continue" asks the provider what it serves; the
- * list that comes back is what "Connect" then pins, so a key that does not
- * work is found out here rather than on the first message.
+ * The choice: the providers the app carries, the catalog behind them, and the
+ * card for an endpoint of the user's own. Picking any of them is the next
+ * page's business.
  */
 function ProviderStep({
-  provider,
   hidden,
+  onBack,
+  onChoose,
+}: {
+  /** On screen or kept for the way back from a later step. */
+  hidden: boolean;
+  onBack: () => void;
+  onChoose: (entry: BuiltinProvider) => void;
+}) {
+  const [browsing, setBrowsing] = useState(false);
+
+  return (
+    <div className="onboarding-page" hidden={hidden}>
+      <div className="onboarding-body">
+        <h1 className="onboarding-title">Connect a model</h1>
+        <p className="onboarding-lead">
+          Kibo answers through a provider you already have an account with. Pick the one you use.
+        </p>
+
+        <div className="onboarding-providers">
+          {BUILTIN_PROVIDERS.map((entry) => (
+            <button key={entry.id} type="button" className="onboarding-provider" onClick={() => onChoose(entry)}>
+              <span className="onboarding-provider-name">{entry.name}</span>
+              <span className="onboarding-provider-host">{hostOf(entry.baseUrl)}</span>
+            </button>
+          ))}
+          <button type="button" className="onboarding-provider" onClick={() => onChoose(OTHER)}>
+            <span className="onboarding-provider-name">Other…</span>
+            <span className="onboarding-provider-host">any compatible endpoint</span>
+          </button>
+        </div>
+
+        <button className="onboarding-more" type="button" onClick={() => setBrowsing((open) => !open)}>
+          {browsing ? "Hide the list" : `Search ${KNOWN_PROVIDERS.length} more providers`}
+        </button>
+        {browsing && <Catalog onPick={onChoose} />}
+      </div>
+
+      <footer className="onboarding-foot">
+        <button className="btn btn-ghost onboarding-btn" type="button" onClick={onBack}>
+          Back
+        </button>
+      </footer>
+    </div>
+  );
+}
+
+/**
+ * The connection: what the provider is called, where it answers, and the key.
+ * "Continue" asks the provider what it serves; the list that comes back is
+ * what "Connect" then pins, so a key that does not work is found out here
+ * rather than on the first message.
+ */
+function ConnectStep({
+  provider,
+  draft,
+  apiKey,
+  hidden,
+  onEdit,
+  onKey,
   onBack,
   onDone,
 }: {
   provider: ProviderOps;
+  draft: Draft;
+  apiKey: string;
   /** On screen or kept for the way back from the last step. */
   hidden: boolean;
+  onEdit: (next: Partial<Draft>) => void;
+  onKey: (key: string) => void;
   onBack: () => void;
   onDone: () => void;
 }) {
-  const [draft, setDraft] = useState<Draft>(BLANK);
-  const [key, setKey] = useState("");
-  const [browsing, setBrowsing] = useState(false);
   // The check: its list once it passes, its refusal once it does not. What
   // comes back decides what the one primary button does.
   const [models, setModels] = useState<string[] | null>(null);
@@ -221,6 +307,7 @@ function ProviderStep({
   const [model, setModel] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const custom = draft.entry === OTHER;
   const busy = provider.busy || saving;
   const named = !!draft.id.trim() && !!draft.baseUrl.trim();
 
@@ -236,21 +323,8 @@ function ProviderStep({
     requestHeaders: draft.entry?.requestHeaders ?? {},
   });
 
-  // No `freeName`: this screen is only up when no provider is saved, so there
-  // is no name to be taken by.
-  const pick = (entry: BuiltinProvider) => {
-    setDraft({ id: entry.id, kind: entry.kind, baseUrl: entry.baseUrl, entry });
-    setBrowsing(false);
-    setModels(null);
-    setRefused(null);
-    setModel("");
-    // A key typed for one provider is not the next one's: the check would send
-    // it to another endpoint, and it could be saved under another name.
-    setKey("");
-  };
-
   const edit = (next: Partial<Draft>) => {
-    setDraft((prev) => ({ ...prev, ...next }));
+    onEdit(next);
     // The address or the name changed: what was checked no longer is.
     setModels(null);
     setRefused(null);
@@ -261,7 +335,7 @@ function ProviderStep({
     setChecking(true);
     setRefused(null);
     try {
-      const list = await provider.onProbe(config(null), key.trim());
+      const list = await provider.onProbe(config(null), apiKey.trim());
       setModels(list);
       setModel(list[0] ?? "");
     } catch (e) {
@@ -274,7 +348,7 @@ function ProviderStep({
   const connect = async (pin: string | null) => {
     if (!named || busy) return;
     setSaving(true);
-    const stored = await provider.onSave(config(pin), key.trim(), null);
+    const stored = await provider.onSave(config(pin), apiKey.trim(), null);
     setSaving(false);
     if (stored !== false) onDone();
   };
@@ -297,72 +371,73 @@ function ProviderStep({
           submit();
         }}
       >
-        <h1 className="onboarding-title">Connect a model</h1>
+        <h1 className="onboarding-title">{custom ? "Your own endpoint" : `Connect ${draft.entry?.name ?? "a model"}`}</h1>
         <p className="onboarding-lead">
-          Kibo answers through a provider you already have an account with. The key is sealed on this machine, and
-          messages go to the provider you pick — nowhere else.
+          The key is sealed on this machine, and messages go to the provider you pick — nowhere else.
         </p>
 
-        <div className="onboarding-providers">
-          {BUILTIN_PROVIDERS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              className={`onboarding-provider${draft.entry?.id === entry.id ? " active" : ""}`}
-              onClick={() => pick(entry)}
-            >
-              <span className="onboarding-provider-name">{entry.name}</span>
-              <span className="onboarding-provider-host">{hostOf(entry.baseUrl)}</span>
-            </button>
-          ))}
-          <button
-            type="button"
-            className={`onboarding-provider${browsing || draft.entry === OTHER ? " active" : ""}`}
-            onClick={() => {
-              // Its own endpoint and the catalog, both: a row fills the form,
-              // and with no row the form is typed.
-              if (draft.entry === OTHER) setBrowsing((open) => !open);
-              else {
-                pick(OTHER);
-                setBrowsing(true);
-              }
-            }}
-          >
-            <span className="onboarding-provider-name">Other…</span>
-            <span className="onboarding-provider-host">any compatible endpoint</span>
+        <div className="onboarding-chosen">
+          <span className="onboarding-chosen-host">{hostOf(draft.baseUrl) || "its own address"}</span>
+          <button className="btn btn-ghost onboarding-btn" type="button" onClick={onBack}>
+            Change
           </button>
         </div>
 
-        {browsing && <Catalog onPick={pick} />}
-
-        {draft.entry && (
-          <div className="onboarding-form">
-            <Field label="Name">
-              <input className="entry-input" type="text" value={draft.id} onChange={(e) => edit({ id: e.target.value })} />
-            </Field>
-            <Field label="Base URL">
-              <input className="entry-input" type="text" value={draft.baseUrl} onChange={(e) => edit({ baseUrl: e.target.value })} />
-            </Field>
-            <Field
-              label="API key"
-              hint={draft.id === "ollama" ? "Nothing to paste — Ollama runs on this machine." : "Sealed on this machine, and never read back."}
-            >
-              <input
-                className="entry-input"
-                type="password"
-                value={key}
-                placeholder={draft.id === "ollama" ? "not needed" : "paste the key"}
-                onChange={(e) => {
-                  setKey(e.target.value);
-                  // A different key is a different check.
-                  setModels(null);
-                  setRefused(null);
-                }}
-              />
-            </Field>
-            {draft.entry.trustedCertPem && <p className="onboarding-note">Its own certificate travels with it.</p>}
-          </div>
-        )}
+        <div className="onboarding-form">
+          {custom && (
+            <div className="onboarding-field">
+              <span className="entry-label">Protocol</span>
+              <div className="onboarding-segmented" role="radiogroup" aria-label="Protocol">
+                {KINDS.map(([kind, label]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="radio"
+                    aria-checked={draft.kind === kind}
+                    className={`onboarding-segment${draft.kind === kind ? " active" : ""}`}
+                    onClick={() => edit({ kind })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <Field label="Name">
+            <input className="entry-input" type="text" value={draft.id} onChange={(e) => edit({ id: e.target.value })} />
+          </Field>
+          <Field label="Base URL">
+            <input
+              className="entry-input"
+              type="text"
+              value={draft.baseUrl}
+              placeholder={draft.kind === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1"}
+              onChange={(e) => edit({ baseUrl: e.target.value })}
+            />
+          </Field>
+          <Field
+            label="API key"
+            hint={
+              draft.id === "ollama"
+                ? "Nothing to paste — Ollama runs on this machine."
+                : "Sealed on this machine, and never read back."
+            }
+          >
+            <input
+              className="entry-input"
+              type="password"
+              value={apiKey}
+              placeholder={draft.id === "ollama" ? "not needed" : "paste the key"}
+              onChange={(e) => {
+                onKey(e.target.value);
+                // A different key is a different check.
+                setModels(null);
+                setRefused(null);
+              }}
+            />
+          </Field>
+          {draft.entry?.trustedCertPem && <p className="onboarding-note">Its own certificate travels with it.</p>}
+        </div>
 
         {models && (
           <div className="onboarding-models">

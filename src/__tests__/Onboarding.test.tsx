@@ -165,7 +165,7 @@ describe("the welcome step", () => {
   });
 });
 
-describe("the provider step", () => {
+describe("choosing a provider and connecting it", () => {
   test("fills the form from the card picked", () => {
     atProviderStep();
     fireEvent.click(card(/OpenAI/));
@@ -196,10 +196,44 @@ describe("the provider step", () => {
     expect(button("Continue").disabled).toBe(false);
   });
 
-  test("has nothing to send until a provider is picked", () => {
+  test("an endpoint of its own picks which wire it speaks", async () => {
+    const props = atProviderStep();
+    fireEvent.click(card(/Other/));
+    fireEvent.click(screen.getByRole("radio", { name: "Anthropic" }));
+    fireEvent.change(field("Name"), { target: { value: "corp" } });
+    fireEvent.change(field("Base URL"), { target: { value: "https://llm.corp.test" } });
+    fireEvent.click(button("Continue"));
+
+    await waitFor(() => expect(props.provider.onProbe).toHaveBeenCalledTimes(1));
+    expect((props.provider.onProbe as ReturnType<typeof mock>).mock.calls[0][0]).toMatchObject({
+      id: "corp",
+      kind: "anthropic",
+      baseUrl: "https://llm.corp.test",
+    });
+  });
+
+  test("a card brings its own protocol, with nothing to choose", () => {
     atProviderStep();
-    expect(button("Continue").disabled).toBe(true);
+    fireEvent.click(card(/OpenAI/));
+    expect(screen.queryByRole("radiogroup", { name: "Protocol" })).toBeNull();
+  });
+
+  test("another provider is another check: the old model list is not carried over", async () => {
+    atProviderStep();
+    fireEvent.click(card(/OpenAI/));
+    fireEvent.click(button("Continue"));
+    await waitFor(() => expect(screen.getByRole("radiogroup", { name: "Model" })).toBeTruthy());
+
+    fireEvent.click(button("Change"));
+    fireEvent.click(card(/DeepSeek/));
+    expect(screen.queryByRole("radiogroup", { name: "Model" })).toBeNull();
+    expect(button("Continue")).toBeTruthy();
+  });
+
+  test("a card comes with its address, so there is nothing to fill", () => {
+    atProviderStep();
     fireEvent.click(card(/Anthropic/));
+    expect(field("Name").value).toBe("anthropic");
     expect(button("Continue").disabled).toBe(false);
   });
 
@@ -308,6 +342,7 @@ describe("the provider step", () => {
     fireEvent.click(card(/OpenAI/));
     fireEvent.change(field(/API key/), { target: { value: "sk-secret" } });
 
+    fireEvent.click(button("Change"));
     fireEvent.click(card(/DeepSeek/));
     expect(field(/API key/).value).toBe("");
     fireEvent.click(button("Continue"));
@@ -345,7 +380,7 @@ describe("the provider step", () => {
 
   test("the catalog searches the providers the cards do not show", () => {
     atProviderStep();
-    fireEvent.click(card(/Other/));
+    fireEvent.click(button(/more providers/));
     const search = () => screen.getByPlaceholderText(/Search \d+ providers/) as HTMLInputElement;
     fireEvent.change(search(), { target: { value: "groq" } });
     expect(screen.getAllByRole("button", { name: /groq/i }).length).toBeGreaterThan(0);
@@ -353,15 +388,29 @@ describe("the provider step", () => {
     // Enter takes the first match, as the settings form's own list does.
     fireEvent.keyDown(search(), { code: "Enter", key: "Enter" });
     expect(field("Name").value).toBe("groq");
-    // Picked from the list is picked: the search goes away with the choice.
-    expect(screen.queryByPlaceholderText(/Search \d+ providers/)).toBeNull();
 
-    // And a press on the row is the same pick.
-    fireEvent.click(card(/Other/));
+    // And a press on the row is the same pick. The list stays open behind the
+    // cards, so the way back finds it there.
+    fireEvent.click(button("Change"));
     fireEvent.change(search(), { target: { value: "groq" } });
     fireEvent.click(screen.getAllByRole("button", { name: /groq/i })[0]);
     expect(field("Name").value).toBe("groq");
-    expect(screen.queryByPlaceholderText(/Search \d+ providers/)).toBeNull();
+  });
+
+  test("a provider picked takes the cards' place, and Change brings them back", () => {
+    atProviderStep();
+    fireEvent.click(card(/OpenAI/));
+
+    // The connection has the window now, and the cards are out of the way.
+    expect(screen.queryByRole("button", { name: /Anthropic/ })).toBeNull();
+    expect(field("Name").value).toBe("openai");
+
+    fireEvent.click(button("Change"));
+    expect(screen.getByRole("button", { name: /Anthropic/ })).toBeTruthy();
+    expect(screen.queryByLabelText("Name")).toBeNull();
+
+    fireEvent.click(card(/Anthropic/));
+    expect(field("Name").value).toBe("anthropic");
   });
 });
 

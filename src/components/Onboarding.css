@@ -96,7 +96,7 @@
 }
 .onboarding-lead {
   margin: 0;
-  max-width: 44ch;
+  max-width: 46ch;
   font-size: var(--fs-md);
   line-height: 1.65;
   color: var(--text-dim);
@@ -168,6 +168,48 @@
   white-space: nowrap;
 }
 
+/* The provider picked, where the cards were: one line, and the way back to
+   them — the step stays as short as the choice makes it. */
+.onboarding-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 3px 4px 3px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+.onboarding-chosen .onboarding-btn {
+  padding: 6px 14px;
+  font-size: var(--fs-sm);
+}
+.onboarding-chosen-host {
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The catalog behind the cards: a line of text, not another card. */
+.onboarding-more {
+  margin-top: -2px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.onboarding-more:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 /* The rest of the catalog, searched — the same list Settings offers. */
 .onboarding-catalog {
   display: flex;
@@ -227,6 +269,40 @@
   width: 100%;
   text-align: left;
 }
+/* The protocol of an endpoint typed by hand: the app's own segments, in this
+   screen's size. */
+.onboarding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.onboarding-segmented {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-field);
+  border-radius: var(--radius-md);
+  background: var(--bg-field);
+}
+.onboarding-segment {
+  flex: 1;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.onboarding-segment:hover {
+  color: var(--text);
+}
+.onboarding-segment.active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
 
 /* The folders opened lately, as a press each, and the picker under them. */
 .onboarding-folders {
@@ -234,7 +310,6 @@
   flex-direction: column;
   gap: 5px;
   width: 100%;
-  max-width: 460px;
   text-align: left;
 }
 .onboarding-folder {

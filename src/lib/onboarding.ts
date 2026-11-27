@@ -4,7 +4,7 @@
 import type { LlmSettings } from "./settings";
 
 /** The steps, in the order the dots show and Back and Next move. */
-export const ONBOARDING_STEPS = ["welcome", "provider", "ready"] as const;
+export const ONBOARDING_STEPS = ["welcome", "provider", "connect", "ready"] as const;
 
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
