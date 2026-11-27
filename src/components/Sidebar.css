@@ -101,6 +101,19 @@
   padding: 0;
   background: none;
 }
+/* The folded rail keeps the tray as a vertical switch: the same raised segment
+   on the same tray as the open one, turned upright. Without the tray the raised
+   segment read as a lone floating chip on the sidebar, not as one of a choice. */
+.window.collapsed .mode-switch:not(.sidebar-pages) {
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-panel-soft);
+  border-radius: var(--radius-md);
+}
+/* At icon size the chosen mode says itself in the accent, not in a half tint. */
+.window.collapsed .mode-switch:not(.sidebar-pages) .mode-opt.active svg {
+  color: var(--accent);
+}
 .mode-opt {
   display: flex;
   align-items: center;
