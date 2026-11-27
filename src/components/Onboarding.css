@@ -1,13 +1,16 @@
 /* The first-run layer over the body: opaque, centred, and the only way past
    it is the Skip in its corner. The title bar above it is the window's own —
-   drag handle and buttons — so this starts under it, over `.body`. */
+   drag handle and buttons — so this starts under it, over `.body`.
+   Its ground is a panel's and not the window's: every field is filled with
+   `--bg-field` (`--bg-panel-soft`), which on the window colour of a light
+   theme is barely a shade away — the boxes would read as bare text. */
 .onboarding {
   position: absolute;
   inset: 0;
   z-index: 4;
   display: flex;
   flex-direction: column;
-  background: var(--bg-window);
+  background: var(--bg-panel);
   color: var(--text);
   font-family: var(--font-ui);
 }
