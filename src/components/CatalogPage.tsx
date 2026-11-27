@@ -795,7 +795,7 @@ export function CatalogPage() {
       tour="catalog-page"
       bar={
         <>
-          <div className="catalog-tabs" role="tablist" aria-label="Kind">
+          <div className="catalog-tabs" role="tablist" aria-label="Kind" data-tour="catalog-tabs">
             {TABS.map(({ value, label }) => (
               <button
                 key={value}

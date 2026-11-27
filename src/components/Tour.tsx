@@ -43,7 +43,10 @@ export function Tour({
   open.current = onOpen;
   useEffect(() => {
     open.current?.(step.opens ?? null);
-  }, [step.opens]);
+    // A panel the step points into is opened by a press on its own button, not
+    // by a second copy of what the app keeps in it.
+    if (step.presses) (document.querySelector(step.presses) as HTMLElement | null)?.click();
+  }, [step.opens, step.presses]);
 
   // Escape leaves — read here rather than through the shortcuts of the window,
   // which are held: this one is the way out of the tour.

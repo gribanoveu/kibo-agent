@@ -27,11 +27,13 @@ type SwitchRow = {
   onChange: (on: boolean) => void;
   /** On, this is a state not to be missed: its icon says so in amber. */
   warn?: boolean;
+  /** Names the row for the first-run tour, which rings it. */
+  tour?: string;
 };
 
-export function PanelSwitch({ label, icon, title, on, onChange, warn }: SwitchRow) {
+export function PanelSwitch({ label, icon, title, on, onChange, warn, tour }: SwitchRow) {
   return (
-    <label className={`composer-settings-switch${on && warn ? " warn" : ""}`} title={title}>
+    <label className={`composer-settings-switch${on && warn ? " warn" : ""}`} title={title} data-tour={tour}>
       {icon}
       <span className="composer-settings-name">{label}</span>
       <Switch label={label} on={on} onChange={onChange} />

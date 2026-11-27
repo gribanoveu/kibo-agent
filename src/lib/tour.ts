@@ -14,6 +14,12 @@ export type TourStep = {
    * appear; every other step is on screen already.
    */
   opens?: string;
+  /**
+   * A control the step points into a panel of, pressed the way the user would:
+   * the settings panel is the app's own state, and a second copy of it here
+   * would be one more thing to keep in step.
+   */
+  presses?: string;
 };
 
 /**
@@ -48,15 +54,22 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     id: "model",
-    target: '[data-tour="model"]',
+    target: '[data-tour="approve"]',
     title: "The model, and asking first",
-    body: "The model that answers, its thinking level, and the last word on this line: ask, or auto. Auto runs a whole turn without asking — edits and commands alike; ask stops at each of them until you say yes.",
+    body: "The model that answers is at the top of this panel, its thinking level under it. At the bottom, asking first: on, a whole turn runs without asking — edits and commands alike; off, each of them waits for your yes. The line outside says which it is, ask or auto.",
+    presses: '[data-tour="model"]',
   },
   {
     id: "catalog",
-    target: '[data-tour="catalog-page"]',
+    target: '[data-tour="catalog-tab"]',
     title: "The Catalog",
-    body: "Features to switch on, MCP servers, skills, commands, runbooks and hooks — everything the agent can be given, browsed and installed in one place.",
+    body: "Where everything the agent can be given lives: features to switch on, MCP servers, skills, commands, runbooks and hooks.",
+  },
+  {
+    id: "catalog-page",
+    target: '[data-tour="catalog-tabs"]',
+    title: "Everything, in one place",
+    body: "All of it, one kind after another. The filters above cut the list to one kind; with none chosen, nothing is hidden.",
     opens: "catalog",
   },
   {

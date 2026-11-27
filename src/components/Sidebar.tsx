@@ -355,6 +355,8 @@ export function Sidebar({
               aria-selected={page === id}
               className={`mode-opt${page === id ? " active" : ""}`}
               title={title}
+              // The tour rings this row before it opens what is behind it.
+              data-tour={id === "catalog" ? "catalog-tab" : undefined}
               onClick={() => onPage(id)}
             >
               <Icon size={15} />

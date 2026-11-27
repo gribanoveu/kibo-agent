@@ -153,15 +153,34 @@ describe("the tour", () => {
     expect(screen.queryByText("Terminal")).toBeNull();
   });
 
-  test("the Catalog is asked for by its step, and put away after it", () => {
+  test("a panel the step points into is opened by a press on its own button", () => {
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-tour", "model");
+    const pressed = mock(() => {});
+    trigger.addEventListener("click", pressed);
+    document.body.append(trigger);
+
+    render(<Tour onDone={() => {}} />);
+    // mode, panes, overview, folder, then the panel's own step.
+    for (let at = 0; at < 4; at += 1) next();
+    expect(screen.getByText("The model, and asking first")).toBeTruthy();
+    expect(pressed).toHaveBeenCalledTimes(1);
+  });
+
+  test("the Catalog is opened for the step that shows it, and put away after", () => {
     const onOpen = mock((_id: string | null) => {});
     render(<Tour onDone={() => {}} onOpen={onOpen} />);
     expect(onOpen.mock.calls[0]).toEqual([null]);
 
+    // The row in the sidebar first, then the page it opens.
     for (let at = 0; at < 10; at += 1) {
       if (screen.queryByText("The Catalog")) break;
       next();
     }
+    expect(onOpen.mock.calls.at(-1)).toEqual([null]);
+
+    next();
+    expect(screen.getByText("Everything, in one place")).toBeTruthy();
     expect(onOpen.mock.calls.at(-1)).toEqual(["catalog"]);
 
     next();
