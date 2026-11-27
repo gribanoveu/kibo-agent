@@ -217,13 +217,18 @@ export function Composer({
       // What the buttons take beside the text: their own widths plus the gaps,
       // not the difference from a full row — in a narrow column the text already
       // has the row to itself, and that difference would be the margin alone.
+      const wrap = el.parentElement!;
       const gap = parseFloat(getComputedStyle(bar).columnGap) || 6;
       let beside = gap * (bar.children.length - 1);
       for (const child of Array.from(bar.children)) {
-        if (child !== el.parentElement) beside += (child as HTMLElement).offsetWidth;
+        if (child !== wrap) beside += (child as HTMLElement).offsetWidth;
       }
+      // In one row the text block keeps off the box's edge only when nothing
+      // is before it (no attach button); that margin is part of what the text
+      // loses beside the buttons, so the probe must give it up too.
+      const margin = bar.firstElementChild === wrap ? parseFloat(getComputedStyle(wrap).marginLeft) || 0 : 0;
       const width = el.style.width;
-      el.style.width = `${bar.clientWidth - beside}px`;
+      el.style.width = `${bar.clientWidth - beside - margin}px`;
       const fits = el.scrollHeight <= oneLine;
       el.style.width = width;
       if (fits) {

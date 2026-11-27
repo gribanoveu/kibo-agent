@@ -220,11 +220,15 @@ export function PlainChat({
       for (const child of Array.from(bar.children)) {
         if (child !== el) beside += (child as HTMLElement).offsetWidth;
       }
+      // In one row the textarea keeps off the box's edge only when nothing is
+      // before it (no attach button); that margin is part of what the text
+      // loses beside the buttons (Composer.tsx).
+      const margin = bar.firstElementChild === el ? parseFloat(getComputedStyle(el).marginLeft) || 0 : 0;
       // The textarea is a flex item here: a definite flex-basis is what sets
       // its laid width — an inline `width` would be ignored and the probe
       // would always measure the full row.
       const flex = el.style.flex;
-      el.style.flex = `0 0 ${bar.clientWidth - beside}px`;
+      el.style.flex = `0 0 ${bar.clientWidth - beside - margin}px`;
       const fits = el.scrollHeight <= oneLine;
       el.style.flex = flex;
       if (fits) {
