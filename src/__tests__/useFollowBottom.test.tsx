@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, fireEvent, render } from "@testing-library/react";
-import { useFollowBottom } from "../hooks/useFollowBottom";
-import { ScrollToBottomButton } from "../components/ScrollToBottomButton";
+import { FollowThread } from "../components/FollowThread";
 
 // The chat thread stays at its end while the answer grows, and lets go of it
 // the moment the user scrolls up to read. The hook delegates to
@@ -16,6 +15,7 @@ let resized: { target: Element; cb: ResizeObserverCallback; height: number }[] =
 const RealObserver = globalThis.ResizeObserver;
 beforeEach(() => {
   resized = [];
+  painted = 0;
   globalThis.ResizeObserver = class {
     constructor(private cb: ResizeObserverCallback) {}
     observe(target: Element) {
@@ -29,16 +29,16 @@ afterEach(() => {
   globalThis.ResizeObserver = RealObserver;
 });
 
-function Thread({ onReady }: { onReady: (api: ReturnType<typeof useFollowBottom>) => void }) {
-  const api = useFollowBottom();
-  onReady(api);
+/** The panel as the app composes it: the thread owns the following hook and
+ *  the button, and `painted` counts how often the panel around it renders —
+ *  a scroll must not repaint the conversation. */
+let painted = 0;
+function Page({ open = "chat", sent = "0" }: { open?: string; sent?: string }) {
+  painted += 1;
   return (
-    // As the real thread: overflow-y auto with overflow-x hidden, so the
-    // computed overflow shorthand is not a bare "auto" — the library's own
-    // wheel path walks past it, and the hook's own listener must let go.
-    <div ref={api.scrollRef} data-testid="box" style={{ overflowY: "auto", overflowX: "hidden" }}>
-      <div ref={api.contentRef} data-testid="content" />
-    </div>
+    <FollowThread className="thread" open={open} sent={sent}>
+      <div data-testid="content" />
+    </FollowThread>
   );
 }
 
@@ -48,12 +48,16 @@ const settle = (ms = 80) => act(async () => void (await Bun.sleep(ms)));
 const glide = () => settle(1600);
 
 function setup(start = 1000) {
-  let api!: ReturnType<typeof useFollowBottom>;
-  const { getByTestId, unmount } = render(<Thread onReady={(a) => (api = a)} />);
-  const box = getByTestId("box");
-  const content = getByTestId("content");
+  const view = render(<Page />);
+  const box = view.container.querySelector(".thread") as HTMLElement;
+  const content = view.container.querySelector(".thread-content") as HTMLElement;
+  // As the real thread: overflow-y auto with overflow-x hidden, so the computed
+  // overflow shorthand is not a bare "auto" — the library's own wheel path
+  // walks past it, and the hook's own listener must let go.
+  box.style.overflowY = "auto";
+  box.style.overflowX = "hidden";
   let height = start;
-  const shown = 300;
+  let shown = 300;
   Object.defineProperty(box, "scrollHeight", { get: () => height });
   Object.defineProperty(box, "clientHeight", { get: () => shown });
   const fire = (target: Element) => {
@@ -77,6 +81,16 @@ function setup(start = 1000) {
   };
   const userScrollsTo = async (top: number) => {
     box.scrollTop = top;
+    act(() => {
+      box.dispatchEvent(new Event("scroll"));
+    });
+    await settle();
+  };
+  // The box itself gets taller — the composer shrank after a send, the window
+  // grew: the browser clamps scrollTop back with the content unchanged.
+  const boxGrowsTo = async (next: number) => {
+    shown = next;
+    box.scrollTop = Math.max(0, height - shown);
     act(() => {
       box.dispatchEvent(new Event("scroll"));
     });
@@ -106,7 +120,28 @@ function setup(start = 1000) {
     });
     await settle();
   };
-  return { box, grow, shrink, userScrollsTo, wheelUp, wheelOn, nested, end, unmount, api: () => api };
+  // Another chat is opened: the panel hands the thread a new `open`.
+  const openChat = async (name: string, ms = 80) => {
+    view.rerender(<Page open={name} />);
+    await settle(ms);
+  };
+  return {
+    box,
+    content,
+    grow,
+    shrink,
+    userScrollsTo,
+    boxGrowsTo,
+    wheelUp,
+    wheelOn,
+    nested,
+    end,
+    openChat,
+    queryByTitle: view.queryByTitle,
+    getByTitle: view.getByTitle,
+    unmount: view.unmount,
+    painted: () => painted,
+  };
 }
 
 describe("following the end of the thread", () => {
@@ -260,40 +295,100 @@ describe("following the end of the thread", () => {
     expect(box.scrollTop).toBeCloseTo(end(), 0);
   });
 
-  test("scrollToBottom glides back to the end from far up, and follows again", async () => {
-    const { box, grow, userScrollsTo, end, api } = setup();
-    await grow(0);
-    await userScrollsTo(0);
-    await act(async () => {
-      api().scrollToBottom();
-      await Bun.sleep(80);
-    });
-    // Mid-glide: the spring is on its way, not snapped to the end.
-    expect(box.scrollTop).toBeGreaterThan(0);
-    expect(box.scrollTop).toBeLessThan(end());
-    await glide();
-    expect(box.scrollTop).toBeCloseTo(end(), 0);
-    await grow(50);
+  /// The composer shrank after a send: the box got taller, and the browser
+  /// clamped `scrollTop` back with the content unchanged. Not the reader
+  /// scrolling up — the library observes the content alone and would read the
+  /// step as one, stopping the following with the thread still at its end.
+  test("a box grown under the reader does not let go of the end", async () => {
+    const { box, grow, boxGrowsTo, end } = setup();
+    await grow(200);
+    await settle();
+    await boxGrowsTo(400); // +100px of box, the clamp pulls scrollTop back
+    await grow(300);
     await glide();
     expect(box.scrollTop).toBeCloseTo(end(), 0);
   });
 
-  test("isAtBottom is false away from the end and true back at it", async () => {
-    const { grow, userScrollsTo, end, api } = setup();
+  /// WebKit hands the position over late: a read can report a position the
+  /// spring left a frame or two ago. One of ours, not the reader's — the
+  /// library would take the step back for scrolling up and let go.
+  test("a commit of our own write a frame late does not let go", async () => {
+    const { box, grow, end } = setup();
+    await grow(200);
+    await settle();
+    await grow(400); // the spring is on its way to the new end
+    const written = box.scrollTop;
+    await settle(20); // a frame or two more of writes
+    box.scrollTop = written; // the event reads the earlier commit
+    act(() => {
+      box.dispatchEvent(new Event("scroll"));
+    });
+    await settle();
+    await grow(400);
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
+  });
+
+  /// The spring writes every frame and the browser reports each write, so a
+  /// read of ours is the frame before, not the whole stream behind it. A drag
+  /// that lands where the spring passed must still let go.
+  test("a drag inside the ground the spring covered lets go", async () => {
+    const { box, grow, userScrollsTo } = setup();
+    for (let i = 0; i < 20; i += 1) {
+      await grow(30); // a word of the answer, over and over
+      // The browser reports each write of the spring; this read stands in.
+      act(() => {
+        box.dispatchEvent(new Event("scroll"));
+      });
+      await settle(10);
+    }
+    const put = box.scrollTop;
+    await userScrollsTo(put - 100); // a throw up through it
+    await grow(30);
+    expect(box.scrollTop).toBe(put - 100);
+  });
+
+  /// Under load the commits come late one after another: the first is ours, and
+  /// the next reports the write that followed it — a trail thrown away with
+  /// every read would lose it and let go.
+  test("a second late commit in a row does not let go", async () => {
+    const { box, grow, end } = setup();
+    await grow(200);
+    await settle();
+    await grow(600); // the spring is on its way
+    const first = box.scrollTop;
+    await settle(20);
+    const second = box.scrollTop;
+    await settle(20);
+    for (const late of [first, second]) {
+      box.scrollTop = late;
+      act(() => {
+        box.dispatchEvent(new Event("scroll"));
+      });
+      await settle();
+    }
+    await grow(400);
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
+  });
+
+  /// Opening a chat is not a read through it: the thread lands at its end at
+  /// once, where a glide through a long history reads as a lag.
+  test("an opened chat lands at the end at once", async () => {
+    const { box, grow, userScrollsTo, end, openChat } = setup();
     await grow(0);
-    expect(api().isAtBottom).toBe(true);
-    await userScrollsTo(400);
-    expect(api().isAtBottom).toBe(false);
-    await userScrollsTo(end());
-    expect(api().isAtBottom).toBe(true);
+    await userScrollsTo(0);
+    await openChat("another");
+    expect(box.scrollTop).toBe(end());
   });
 
   /// Typing grows the message box, which takes its height from the thread.
   /// That is not the answer growing: the hook observes the content alone, so
   /// the box's own resize is nothing to it.
   test("only the content is observed, never the scrolling box", async () => {
-    const { box } = setup();
-    expect(resized.map((r) => r.target)).toEqual([box.firstChild]);
+    const { box, content } = setup();
+    expect(resized.length).toBeGreaterThan(0);
+    expect(resized.every((r) => r.target === content && r.target !== box)).toBe(true);
   });
 
   /// The hook's ref returns a cleanup, so React never calls it with null:
@@ -343,21 +438,44 @@ describe("following the end of the thread", () => {
 });
 
 describe("the back-to-bottom button", () => {
-  test("is hidden at the end and shown away from it", () => {
-    const { queryByTitle, rerender } = render(
-      <ScrollToBottomButton atBottom={true} onClick={() => {}} />,
-    );
+  test("is hidden at the end and shown away from it", async () => {
+    const { grow, userScrollsTo, end, queryByTitle } = setup();
+    await grow(0);
     expect(queryByTitle("Back to the end of the conversation")).toBeNull();
-    rerender(<ScrollToBottomButton atBottom={false} onClick={() => {}} />);
+    await userScrollsTo(400);
     expect(queryByTitle("Back to the end of the conversation")).not.toBeNull();
+    await userScrollsTo(end());
+    expect(queryByTitle("Back to the end of the conversation")).toBeNull();
   });
 
-  test("a click asks for the end", () => {
-    let asked = 0;
-    const { getByTitle } = render(
-      <ScrollToBottomButton atBottom={false} onClick={() => (asked += 1)} />,
-    );
+  test("a click glides back to the end, and following carries on", async () => {
+    const { box, grow, userScrollsTo, end, queryByTitle, getByTitle } = setup();
+    await grow(0);
+    await userScrollsTo(400);
     fireEvent.click(getByTitle("Back to the end of the conversation"));
-    expect(asked).toBe(1);
+    // The reader has asked for the end: the button goes at once, not when the
+    // spring arrives.
+    expect(queryByTitle("Back to the end of the conversation")).toBeNull();
+    // Mid-glide: the spring is on its way, not snapped to the end.
+    await settle();
+    expect(box.scrollTop).toBeGreaterThan(0);
+    expect(box.scrollTop).toBeLessThan(end());
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
+    expect(queryByTitle("Back to the end of the conversation")).toBeNull();
+    await grow(100);
+    await glide();
+    expect(box.scrollTop).toBeCloseTo(end(), 0);
+  });
+
+  /// The button subscribes to the thread's end itself: the panel around it is
+  /// the whole conversation, and showing or hiding it must not repaint that.
+  test("showing and hiding it does not repaint the conversation", async () => {
+    const { grow, userScrollsTo, end, painted: repaints } = setup();
+    await grow(0);
+    const before = repaints();
+    await userScrollsTo(400);
+    await userScrollsTo(end());
+    expect(repaints()).toBe(before);
   });
 });
