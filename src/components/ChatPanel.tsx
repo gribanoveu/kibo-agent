@@ -1244,6 +1244,7 @@ export function ChatPanel({
             className={`iconbtn aside-button${ideLayout ? " on" : ""}`}
             title={`${ideLayout ? "Leave the IDE layout" : "IDE layout: files, the file and the chat"} (${shortcutText("ideLayout")})`}
             aria-pressed={ideLayout}
+            data-tour="ide"
             onClick={onToggleIde}
           >
             <Code size={15} />
@@ -1255,6 +1256,7 @@ export function ChatPanel({
             className={`iconbtn aside-button${terminalOpen ? " on" : ""}`}
             title={`${terminalOpen ? "Hide terminal" : "Show terminal"} (${shortcutText("terminal")})`}
             aria-pressed={terminalOpen}
+            data-tour="terminal"
             onClick={onToggleTerminal}
           >
             <TerminalSquare size={15} />

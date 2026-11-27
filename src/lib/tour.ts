@@ -41,6 +41,18 @@ export const TOUR_STEPS: TourStep[] = [
     body: "Everything about the folder and the work in it opens from this menu, beside the chat — and closes again from its own header.",
   },
   {
+    id: "ide",
+    target: '[data-tour="ide"]',
+    title: "The IDE layout",
+    body: "One press turns the window into the work itself: the folder's tree on the left, the open file in the middle, the chat on the right. The changes and any file are read beside the conversation instead of in a panel that covers it.",
+  },
+  {
+    id: "terminal",
+    target: '[data-tour="terminal"]',
+    title: "The terminal",
+    body: "The button beside it opens a shell in the open folder, in tabs you drive. The agent reads what it prints — nothing else: it never types into it, so what you see there is yours.",
+  },
+  {
     id: "overview",
     target: '[data-tour="overview"]',
     title: "Overview",

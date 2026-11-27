@@ -161,8 +161,8 @@ describe("the tour", () => {
     document.body.append(trigger);
 
     render(<Tour onDone={() => {}} />);
-    // mode, panes, overview, folder, then the panel's own step.
-    for (let at = 0; at < 4; at += 1) next();
+    // mode, panes, IDE, terminal, overview, folder, then the panel's own step.
+    for (let at = 0; at < 6; at += 1) next();
     expect(screen.getByText("The model, and asking first")).toBeTruthy();
     expect(pressed).toHaveBeenCalledTimes(1);
   });
