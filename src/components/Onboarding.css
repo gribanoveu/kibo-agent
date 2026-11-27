@@ -101,22 +101,6 @@
   line-height: 1.65;
   color: var(--text-dim);
 }
-/* What the app is for: words, not a box — the way a welcome reads before
-   anything is asked of the reader. */
-.onboarding-points {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  max-width: 46ch;
-  margin: 4px 0 0;
-}
-.onboarding-point {
-  margin: 0;
-  font-size: var(--fs-sm);
-  line-height: 1.6;
-  color: var(--text-faint);
-}
 .onboarding-note {
   margin: 0;
   max-width: 46ch;

@@ -2,7 +2,9 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Onboarding } from "../components/Onboarding";
 import { useOnboarding } from "../hooks/useOnboarding";
-import { isDeepSeek, shouldOnboard } from "../lib/onboarding";
+import { shouldOnboard, isDeepSeek } from "../lib/onboarding";
+import { IS_MAC } from "../lib/shortcuts";
+import { useShortcuts } from "../hooks/useShortcuts";
 import { DEFAULT_TURN_LIMITS, type LlmSettings, type ProviderConfig, type ProviderView } from "../lib/settings";
 import type { FeatureView } from "../lib/features";
 
@@ -128,6 +130,38 @@ describe("the host that means DeepSeek", () => {
     expect(isDeepSeek("https://openrouter.ai/api/v1")).toBe(false);
     expect(isDeepSeek("not a url")).toBe(false);
     expect(isDeepSeek("")).toBe(false);
+  });
+});
+
+describe("the keys of the window behind it", () => {
+  test("are held while the screen is up, and let go with it", () => {
+    const spy = mock(() => {});
+    const press = () =>
+      fireEvent.keyDown(window, { code: "Slash", key: "/", ctrlKey: !IS_MAC, metaKey: IS_MAC });
+    // A pane behind the layer, still mounted and still listening on the window.
+    function Keys() {
+      useShortcuts({ shortcuts: spy });
+      return null;
+    }
+    const props = screenProps();
+
+    const tree = render(<Keys />);
+    press();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    // Up, the screen keeps the press to itself: nothing opens behind it.
+    tree.rerender(
+      <>
+        <Keys />
+        <Onboarding {...props} />
+      </>,
+    );
+    press();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    tree.rerender(<Keys />);
+    press();
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -99,6 +99,25 @@ export const matchesCombo = (e: KeyState, c: Combo, mac = IS_MAC) =>
   e.altKey === !!c.alt;
 
 /**
+ * Layers of the window that own the keys while they are up — the first run, a
+ * dialog over everything — hold them here. A pane behind the layer still hears
+ * the press: its listener is on `window`, and a toggle it made would show its
+ * dialog the moment the layer goes.
+ */
+let held = 0;
+
+/** Holds the window's shortcuts; the returned function lets go again. */
+export function holdShortcuts(): () => void {
+  held += 1;
+  return () => {
+    held = Math.max(0, held - 1);
+  };
+}
+
+/** Whether a layer is holding the window's shortcuts. */
+export const shortcutsHeld = () => held > 0;
+
+/**
  * Takes DOM and React keyboard events alike. Nothing matches while an input
  * method is composing: its Enter picks a word, and WebKit reports it as Enter.
  */

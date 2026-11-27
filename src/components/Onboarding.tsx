@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, Search } from "lucide-react";
 import { KiboBrand } from "./KiboBrand";
+import { useHeldShortcuts } from "../hooks/useShortcuts";
 import { Field } from "./EntryField";
 import { BUILTIN_PROVIDERS, KNOWN_PROVIDERS, type BuiltinProvider } from "../lib/builtinProviders";
 import { filterBy } from "../lib/providerForm";
@@ -51,6 +52,10 @@ type Props = {
  */
 export function Onboarding({ provider, features, onSkip, onFinish }: Props) {
   const [step, setStep] = useState(0);
+  // The window's keys are the panes' business, and those panes are still
+  // mounted behind this layer: held, so ⌘/ cannot open a dialog nobody sees
+  // and ⌘E cannot close a file that is not on screen.
+  useHeldShortcuts();
   // What is being connected, and the key it takes — here rather than in a step,
   // so going back to the cards and returning finds both as they were: a blank
   // key would be saved as "no key", and that deletes the one that was there.
@@ -68,7 +73,7 @@ export function Onboarding({ provider, features, onSkip, onFinish }: Props) {
   const edit = (next: Partial<Draft>) => setDraft((prev) => ({ ...prev, ...next }));
 
   return (
-    <div className="onboarding" role="dialog" aria-modal="true" aria-label="First run">
+    <div className="onboarding text-scale" role="dialog" aria-modal="true" aria-label="First run">
       <div className="onboarding-top">
         <div className="onboarding-dots" aria-hidden="true">
           {ONBOARDING_STEPS.map((name, i) => (
