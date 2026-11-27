@@ -2,6 +2,8 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { Tour } from "../components/Tour";
 import { placeCard, placeCentred } from "../lib/tour";
+import { IS_MAC, shortcutText } from "../lib/shortcuts";
+import { useShortcuts } from "../hooks/useShortcuts";
 
 const rect = (top: number, left: number, width: number, height: number) =>
   ({ top, left, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
@@ -57,6 +59,9 @@ describe("the tour", () => {
 
     const card = container.querySelector(".tour-card") as HTMLElement;
     expect([card.style.top, card.style.left]).toEqual(["62px", "12px"]);
+    // Everything the ring does not leave in the light takes no press.
+    expect(container.querySelector(".tour-catch")).toBeTruthy();
+    expect(container.querySelector(".tour-catch-dim")).toBeNull();
   });
 
   test("steps forward, and back to the one before", () => {
@@ -79,6 +84,39 @@ describe("the tour", () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
+  test("the panels step lists what the menu holds, with their keys", () => {
+    render(<Tour onDone={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    for (const label of ["Overview", "Changes", "Plan", "Files", "Rules", "Skills", "MCP", "Hooks", "Terminal"]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(screen.getByText(shortcutText("terminal"))).toBeTruthy();
+  });
+
+  test("the window's keys are held while it is up", () => {
+    const spy = mock(() => {});
+    const press = () =>
+      fireEvent.keyDown(window, { code: "Digit1", key: "1", ctrlKey: !IS_MAC, metaKey: IS_MAC });
+    function Keys() {
+      useShortcuts({ overview: spy });
+      return null;
+    }
+
+    const tree = render(<Keys />);
+    press();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    tree.rerender(
+      <>
+        <Keys />
+        <Tour onDone={() => {}} />
+      </>,
+    );
+    press();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   test("Escape leaves it, and so does the cross", () => {
     const onDone = mock(() => {});
     render(<Tour onDone={onDone} />);
@@ -92,6 +130,8 @@ describe("the tour", () => {
   test("with nothing to point at it speaks from the middle", () => {
     const { container } = render(<Tour onDone={() => {}} />);
     expect(container.querySelector(".tour-ring")).toBeNull();
+    // No ring to cast the dim, so the cover holds it — and still takes the presses.
+    expect(container.querySelector(".tour-catch-dim")).toBeTruthy();
     const card = container.querySelector(".tour-card") as HTMLElement;
     expect(Number.parseFloat(card.style.top)).toBeGreaterThan(0);
     expect(screen.getByText("Your chats")).toBeTruthy();

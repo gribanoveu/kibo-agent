@@ -26,7 +26,7 @@ export const TOUR_STEPS: TourStep[] = [
     id: "panes",
     target: '[data-tour="panes"]',
     title: "The panels",
-    body: "Overview, Changes, Plan, Files, Rules, Skills, MCP, Hooks and Terminal open from here — ⌘1 to ⌘8, and Ctrl+` for the terminal. Each closes again from its own header.",
+    body: "This menu opens the panels of the window, each one closing again from its own header:",
   },
   {
     id: "composer",

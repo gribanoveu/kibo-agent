@@ -1,7 +1,9 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { placeCard, placeCentred, TOUR_STEPS, type Box } from "../lib/tour";
-import { useShortcuts } from "../hooks/useShortcuts";
+import { matches, shortcutText, type ShortcutId } from "../lib/shortcuts";
+import { useHeldShortcuts } from "../hooks/useShortcuts";
+import { PANES } from "./panes";
 import "./Tour.css";
 
 /** How far the ring stands off what it points at. */
@@ -9,9 +11,10 @@ const PAD = 6;
 
 /**
  * A few steps over the window as it is: what the step names is ringed and the
- * rest is dimmed, and the card says what it is for. The window stays usable
- * under it — the tour points, the user tries — and Escape or the last step ends
- * it. Nothing is stored: it is offered once, in the first run, and never again.
+ * rest is dimmed, and the card says what it is for. The window is held while
+ * the tour is up — a press or a key behind the dim would turn something on
+ * that the user cannot see happening — and Escape or the last step ends it.
+ * Nothing is stored: it is offered once, in the first run, and never again.
  */
 export function Tour({ onDone }: { onDone: () => void }) {
   const [index, setIndex] = useState(0);
@@ -21,10 +24,24 @@ export function Tour({ onDone }: { onDone: () => void }) {
   const step = TOUR_STEPS[index];
   const last = index === TOUR_STEPS.length - 1;
 
-  useShortcuts({ close: onDone });
+  // The window's own keys are held with it: ⌘1 must not open a panel under the
+  // dim, nor ⌘⇧D turn the IDE layout on behind it.
+  useHeldShortcuts();
+
+  // Escape leaves — read here rather than through the shortcuts of the window,
+  // which are held: this one is the way out of the tour.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!matches(e, "close")) return;
+      e.preventDefault();
+      onDone();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onDone]);
 
   // Measured after every render of a step, and again when the window moves:
-  // the thing pointed at may be a panel the user just opened or closed.
+  // what is pointed at may be a panel the user opened or closed.
   useLayoutEffect(() => {
     const measure = () => {
       const viewport = { width: window.innerWidth, height: window.innerHeight };
@@ -54,9 +71,13 @@ export function Tour({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="tour">
+      {/* Everything the window would take a press on is covered: a button
+          pressed behind the dim looks like nothing happened until the tour is
+          gone and the panel or the layout is already open. */}
+      <div className={ring ? "tour-catch" : "tour-catch tour-catch-dim"} />
       {ring && (
         // The hole is the ring's own shadow turned inside out: everything but
-        // the thing pointed at is dimmed, and a click goes through to it.
+        // the thing pointed at is dimmed.
         <div className="tour-ring" aria-hidden style={ring} />
       )}
       <div
@@ -76,6 +97,18 @@ export function Tour({ onDone }: { onDone: () => void }) {
         </div>
         <h2 className="tour-title">{step.title}</h2>
         <p className="tour-body">{step.body}</p>
+        {/* What the menu behind the ring holds — read here, since it cannot be
+            opened under the dim. */}
+        {step.id === "panes" && (
+          <ul className="tour-panels">
+            {PANES.map((pane) => (
+              <li key={pane.id}>
+                <span>{pane.label}</span>
+                <span className="tour-panel-keys">{shortcutText(pane.id as ShortcutId)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="tour-foot">
           <button
             className="btn btn-ghost"

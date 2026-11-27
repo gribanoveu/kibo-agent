@@ -1230,14 +1230,14 @@ export function ChatPanel({
   const head = (
     <header className="chat-head" onMouseDown={headSlot ? dragOrMaximize : undefined}>
       <div className="head-left">{heading}</div>
-      <div className="head-right" data-tour="panes">
+      <div className="head-right">
         {turn.retrying && (
           <span className="head-time" title="The provider refused; waiting before trying again">
             retrying in {turn.retrying.delaySeconds}s ({turn.retrying.attempt}/
             {turn.retrying.maxAttempts})
           </span>
         )}
-        {menu.length > 0 && <ChatMenu items={menu} />}
+        {menu.length > 0 && <ChatMenu items={menu} tour="panes" />}
         {onToggleIde && (
           <button
             type="button"

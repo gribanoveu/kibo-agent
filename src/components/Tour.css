@@ -7,8 +7,7 @@
   pointer-events: none;
 }
 
-/* A hole, not a cover: the shadow dims all of the window but the ring, and a
-   press inside the ring reaches what is underneath it. */
+/* A hole, not a cover: the shadow dims all of the window but the ring. */
 .tour-ring {
   position: fixed;
   border-radius: var(--radius-md);
@@ -20,6 +19,19 @@
     left 0.16s ease,
     width 0.16s ease,
     height 0.16s ease;
+}
+
+/* Everything the ring does not leave in the light takes no press: a button
+   pressed behind the dim would open a panel, or turn the IDE layout on, where
+   the user cannot see it happening. */
+.tour-catch {
+  position: fixed;
+  inset: 0;
+  pointer-events: auto;
+}
+/* With nothing to point at there is no ring to cast the dim, so this holds it. */
+.tour-catch-dim {
+  background: var(--overlay);
 }
 
 .tour-card {
@@ -65,4 +77,29 @@
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* What a menu behind the ring holds, as a list: the panels and the keys that
+   open them, read in the card since the menu cannot be opened under the dim. */
+.tour-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  list-style: none;
+  border-top: 1px solid var(--border-soft);
+}
+.tour-panels li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+.tour-panel-keys {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
 }

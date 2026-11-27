@@ -7,7 +7,10 @@
 .onboarding {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  /* Over the panels and over what they portal onto `document.body` — a menu, a
+     toast, a popover — which z-index 4 would leave floating on top of it. A
+     dialog (100) still comes first. */
+  z-index: 50;
   display: flex;
   flex-direction: column;
   background: var(--bg-panel);

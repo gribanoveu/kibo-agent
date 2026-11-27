@@ -39,7 +39,16 @@ export type ChatMenuItem = {
  * and scrolling or resizing closes it — the trigger it names has moved.
  */
 /** `icon` replaces the trigger's "⋮" — a row that reads left to right takes "⋯". */
-export function ChatMenu({ items, icon }: { items: ChatMenuItem[]; icon?: ReactNode }) {
+export function ChatMenu({
+  items,
+  icon,
+  tour,
+}: {
+  items: ChatMenuItem[];
+  icon?: ReactNode;
+  /** Names the trigger for the first-run tour, which rings it and lists the panels behind it. */
+  tour?: string;
+}) {
   const [open, setOpen] = useState(false);
   // The levels drilled into: the last is what the menu shows. Picking from a
   // submenu acts and closes, like picking from the top level.
@@ -118,6 +127,7 @@ export function ChatMenu({ items, icon }: { items: ChatMenuItem[]; icon?: ReactN
         title="More"
         aria-haspopup="menu"
         aria-expanded={open}
+        data-tour={tour}
         onClick={() => {
           if (open) {
             close();

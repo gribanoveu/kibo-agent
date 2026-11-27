@@ -733,6 +733,11 @@ export default function App() {
       }
     >
       <Titlebar
+        // The first-run screen owns the window: the header it leaves in view —
+        // the chat's ⋮ and layout buttons, the sidebar's toggle — takes no
+        // press while it is up, or a panel opens behind a dimmed screen and is
+        // found already open when it closes.
+        held={onboarding.open}
         slot={setHeadSlot}
         leading={
           // The IDE layout has no sidebar to show.

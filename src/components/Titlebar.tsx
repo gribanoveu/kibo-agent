@@ -29,20 +29,36 @@ export function Titlebar({
   leading,
   actions,
   slot,
+  held,
 }: {
   children?: ReactNode;
   leading?: ReactNode;
   actions?: ReactNode;
   slot?: Ref<HTMLDivElement>;
+  /**
+   * Takes the presses of `leading` and of the header in `slot`, keeping both
+   * in view: while a layer owns the window its own buttons must not act on it,
+   * and one that vanishes and comes back reads as a glitch. The window's own
+   * controls stay live either way.
+   */
+  held?: boolean;
 }) {
   const fullscreen = useWindowFullscreen(nativeFrame);
   return (
     <div className={`titlebar${nativeFrame ? " native" : ""}`} onMouseDown={dragOrMaximize}>
       {!windowsFrame && !fullscreen && <WindowControls />}
-      {leading && <div className="titlebar-leading">{leading}</div>}
+      {leading && (
+        <div className="titlebar-leading" inert={held || undefined}>
+          {leading}
+        </div>
+      )}
       {children && <span className="titlebar-title">{children}</span>}
-      {slot && <div className="titlebar-slot" ref={slot} />}
-      {actions && <div className="titlebar-actions">{actions}</div>}
+      {slot && <div className="titlebar-slot" ref={slot} inert={held || undefined} />}
+      {actions && (
+        <div className="titlebar-actions" inert={held || undefined}>
+          {actions}
+        </div>
+      )}
       {windowsFrame && <WindowControls />}
     </div>
   );
