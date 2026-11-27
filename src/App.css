@@ -113,35 +113,20 @@
 .main.chat-new .plain-welcome {
   min-height: 0;
 }
-/* The box and the line under it are one card in a new chat — the field a start
-   screen has, with what the message goes out with drawn inside its lower edge —
-   so the two are glued: the box keeps only its top corners, and the line closes
-   the card at the bottom. */
+/* A new chat's field is one whole card with the folder and the settings on a
+   plain line of their own above it, outside its ring (the strip is rendered
+   before the box while the chat is unstarted), so the box keeps all four
+   corners and its full border. */
 .main.chat-new .composer,
 .main.chat-new .plain-composer {
   margin: 0 14px;
-  padding-bottom: 2px;
-  border-radius: calc(var(--radius) * 2.4) calc(var(--radius) * 2.4) 0 0;
-  border-bottom: 0;
   background: var(--bg-box);
 }
-.main.chat-new .composer-strip,
-.main.chat-new .plain-tab {
-  margin: 0 14px;
-  padding: 4px 8px 8px;
-  border: 1px solid var(--border-soft);
-  border-top: 0;
-  border-radius: 0 0 calc(var(--radius) * 2.4) calc(var(--radius) * 2.4);
-  background: var(--bg-box);
-}
-/* The card says it is being written in as the box alone did: one ring round the
-   whole of it, and one background. Both halves answer to the whole card — a
-   press on the folder or the model below is a press on the card, and the box's
-   own focus rule is outranked by the card's, so both are named here. */
+/* The card says it is being written in: one ring round the whole of it and one
+   background — a press on the folder or the model above it is a press on the
+   card, and the box's own focus rule is outranked by the card's. */
 .main.chat-new .composer-wrap:focus-within .composer,
-.main.chat-new .plain-composer-wrap:focus-within .plain-composer,
-.main.chat-new .composer-wrap:focus-within .composer-strip,
-.main.chat-new .plain-composer-wrap:focus-within .plain-tab {
+.main.chat-new .plain-composer-wrap:focus-within .plain-composer {
   background: var(--bg-panel);
   border-color: var(--border-box-focus);
 }
@@ -189,8 +174,8 @@
 @container (max-width: 500px) {
   .main.chat-new .composer,
   .main.chat-new .plain-composer,
-  .main.chat-new .composer-strip,
-  .main.chat-new .plain-tab {
+  .main.chat-new .composer-strip.above,
+  .main.chat-new .plain-tab.above {
     margin-left: 8px;
     margin-right: 8px;
   }

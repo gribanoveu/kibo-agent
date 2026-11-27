@@ -302,10 +302,10 @@ export function PlainChat({
     </div>
   );
 
-  // A new chat's card carries the settings on a line of its own at the top;
-  // a chat under way keeps them under the card (Composer.tsx).
+  // A new chat keeps the settings outside the card, on a line of their own
+  // above it; a chat under way keeps them under the card (Composer.tsx).
   const tabStrip = (
-    <div className={`plain-tab${empty ? " inside" : ""}`}>
+    <div className={`plain-tab${empty ? " above" : ""}`}>
       {!empty && rolesRow}
       {chat.role === "kubernetes" && (
         <KubePanel pin={chat.kube} onPin={chat.setPin} kube={kube} onSetUpKube={onSetUpKube} />
@@ -371,8 +371,8 @@ export function PlainChat({
         {correction.suggestion && (
           <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />
         )}
+        {empty && tabStrip}
         <section className={`plain-composer${attachments.dragging ? " dropping" : ""}`}>
-          {empty && tabStrip}
           {attachments.dragging && (
             <div className="plain-drop" aria-hidden="true">
               Drop to attach

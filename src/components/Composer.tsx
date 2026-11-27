@@ -393,11 +393,11 @@ export function Composer({
     return text ? `${text} · ${said}` : `${said[0].toUpperCase()}${said.slice(1)}`;
   };
 
-  // A new chat's card carries the folder and the settings on a line of its own
-  // at the top; a chat under way keeps them under the card, where the thread
-  // above has already claimed its height.
+  // A new chat keeps the folder and the settings outside the card, on a line
+  // of their own above it; a chat under way keeps them under the card, where
+  // the thread above has already claimed its height.
   const strip = (
-    <div className={`composer-strip${!stacked ? " inside" : ""}`}>
+    <div className={`composer-strip${!stacked ? " above" : ""}`}>
       {tab}
       <ComposerSettings
         models={models}
@@ -434,8 +434,8 @@ export function Composer({
         </ul>
       )}
       {correction.suggestion && <LayoutCorrectionHint corrected={correction.suggestion.corrected} onApply={correction.apply} />}
+      {!stacked && strip}
       <section className={`composer${attachments.dragging ? " dropping" : ""}`} ref={box}>
-        {!stacked && strip}
         {attachments.dragging && (
           <div className="composer-drop" aria-hidden="true">
             Drop to attach

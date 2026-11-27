@@ -199,10 +199,10 @@
 .plain-tab > .provider-balance {
   flex: none;
 }
-/* Inside the card (a new chat), as the agent's strip (Composer.css). */
-.plain-tab.inside {
-  margin: 0 0 6px;
-  padding: 0 6px;
+/* Outside the card, above it (a new chat), as the agent's strip (Composer.css). */
+.plain-tab.above {
+  margin: 0 14px 6px;
+  padding: 0 4px;
 }
 
 /* Laid out as the agent's box: one line that grows, the buttons on its last row. */

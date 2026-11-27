@@ -330,17 +330,17 @@ describe("the folder and settings line", () => {
       />,
     );
 
-  test("a chat under way keeps it under the box; a new chat carries it inside, at the top", () => {
+  test("a chat under way keeps it under the box; a new chat keeps it outside, above", () => {
     const started = line(true);
     let strip = document.querySelector(".composer-strip")!;
-    expect(strip.className).not.toContain("inside");
+    expect(strip.className).not.toContain("above");
     expect(strip.previousElementSibling?.className).toBe("composer");
     started.unmount();
     line(false);
     strip = document.querySelector(".composer-strip")!;
-    expect(strip.className).toContain("inside");
-    expect(strip.parentElement?.className).toBe("composer");
-    expect(strip.previousElementSibling).toBeNull();
+    expect(strip.className).toContain("above");
+    expect(strip.parentElement?.className).toBe("composer-wrap");
+    expect(strip.nextElementSibling?.className).toBe("composer");
   });
 
   test("holds the folder, the settings and the balance, in that order", () => {
