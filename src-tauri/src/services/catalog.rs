@@ -734,7 +734,9 @@ mod tests {
             let under = |view: &ItemView, relative: &str| {
                 let target = view.target.clone().unwrap_or_default();
                 assert!(target.ends_with(&format!("/{relative}")), "{target} does not end with {relative}");
-                assert!(target.starts_with("~/") || target.starts_with('/'), "{target}");
+                // Under home it reads `~/…`; anywhere else the path is whole —
+                // `/…` on Unix, `C:/…` on Windows, as the app spells it.
+                assert!(target.starts_with("~/") || Path::new(&target).is_absolute(), "{target}");
             };
             under(at("review"), "skills/review");
             under(at("crashloop"), "runbooks/kubernetes/crashloop.md");
