@@ -1,4 +1,4 @@
-//! A recording into utterances: symphonia reads the sound, GigaAM v3 (through
+//! A recording into utterances: symphonia reads the sound, GigaAM v4 CTC (through
 //! sherpa-onnx) recognizes it, campplus embeds the voice, and
 //! `domain::meeting` does the rest. Runs only inside the recognition process
 //! (`meeting_sidecar`) — a native crash here must not take the window with it.
@@ -46,9 +46,9 @@ const DENOISE_LIMIT_DB: f32 = 12.0;
 const DENOISE_CHUNK_SECONDS: usize = 60;
 const DENOISE_PREROLL_SECONDS: usize = 1;
 
-/// GigaAM v3 with punctuation, the voice model, the denoiser — the files
+/// GigaAM v4 CTC with punctuation, the voice model, the denoiser — the files
 /// `scripts/fetch-meeting-models.ts` puts in `models/meeting/`.
-pub const MODEL_FILES: [&str; 6] = ["encoder.int8.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt", "campplus.onnx", "dpdfnet2.onnx"];
+pub const MODEL_FILES: [&str; 4] = ["gigaam.int8.onnx", "tokens.txt", "campplus.onnx", "dpdfnet2.onnx"];
 
 /// The segmentation that says when each voice speaks, beside the models above.
 /// Without it the voices are grouped by their embeddings alone
@@ -78,7 +78,7 @@ pub fn has_models(dir: &Path) -> bool {
 
 /// What dictation loads of them: GigaAM, and Silero to find the phrases.
 /// A list of its own, or a build older than Silero would lose Meeting notes.
-pub const DICTATION_FILES: [&str; 5] = [MODEL_FILES[0], MODEL_FILES[1], MODEL_FILES[2], MODEL_FILES[3], "silero_vad.onnx"];
+pub const DICTATION_FILES: [&str; 3] = [MODEL_FILES[0], MODEL_FILES[1], "silero_vad.onnx"];
 /// A pause this long ends a phrase (`docs/52-voice-input.md`, decision 3).
 const PHRASE_PAUSE_SECONDS: f32 = 0.6;
 /// Past this Silero takes any short pause for the end. It does not cut speech
@@ -145,7 +145,7 @@ pub fn dictation_models(models: &Path) -> Result<(Phrases, Silero), DictationErr
     let recognizer = recognizer(models, threads()).map_err(|_| DictationError::ModelFailed("speech"))?;
     let config = VadModelConfig {
         silero_vad: SileroVadModelConfig {
-            model: path(models, DICTATION_FILES[4]),
+            model: path(models, DICTATION_FILES[2]),
             threshold: 0.5,
             min_silence_duration: PHRASE_PAUSE_SECONDS,
             min_speech_duration: SHORTEST_SPEECH_SECONDS,
@@ -185,7 +185,7 @@ pub fn recognize(audio: &Path, models: &Path, keep: &Path, sound: Sound, progres
     progress(Stage::Decode, 1, 1);
 
     let words = transcribe(&recognizer(models, threads)?, &samples, progress);
-    let extractor = SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[4]), num_threads: threads, ..Default::default() })
+    let extractor = SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[2]), num_threads: threads, ..Default::default() })
         .ok_or(MeetingError::ModelFailed("voice"))?;
     let (utterances, voices) = match tracks.as_slice() {
         [mic, call] if sound != Sound::Import => {
@@ -317,7 +317,7 @@ fn mixed(tracks: &[Vec<f32>]) -> Vec<f32> {
 /// [`DENOISE_LIMIT_DB`]; the same length.
 fn denoise(models: &Path, mic: &[f32], threads: usize) -> Result<Vec<f32>, MeetingError> {
     let mut config = OfflineSpeechDenoiserConfig::default();
-    config.model.dpdfnet.model = path(models, MODEL_FILES[5]);
+    config.model.dpdfnet.model = path(models, MODEL_FILES[3]);
     config.model.dpdfnet.attenuation_limit_db = DENOISE_LIMIT_DB;
     config.model.num_threads = 1;
     let rate = SAMPLE_RATE as usize;
@@ -394,15 +394,17 @@ fn path(dir: &Path, name: &str) -> Option<String> {
     Some(dir.join(name).to_string_lossy().into_owned())
 }
 
-fn recognizer(models: &Path, threads: i32) -> Result<OfflineRecognizer, MeetingError> {
+fn recognizer_config(models: &Path, threads: i32) -> OfflineRecognizerConfig {
     let mut config = OfflineRecognizerConfig::default();
-    config.model_config.transducer.encoder = path(models, MODEL_FILES[0]);
-    config.model_config.transducer.decoder = path(models, MODEL_FILES[1]);
-    config.model_config.transducer.joiner = path(models, MODEL_FILES[2]);
-    config.model_config.tokens = path(models, MODEL_FILES[3]);
-    config.model_config.model_type = Some("nemo_transducer".into());
+    config.model_config.nemo_ctc.model = path(models, MODEL_FILES[0]);
+    config.model_config.tokens = path(models, MODEL_FILES[1]);
+    config.model_config.model_type = Some("nemo_ctc".into());
     config.model_config.num_threads = threads;
-    OfflineRecognizer::create(&config).ok_or(MeetingError::ModelFailed("speech"))
+    config
+}
+
+fn recognizer(models: &Path, threads: i32) -> Result<OfflineRecognizer, MeetingError> {
+    OfflineRecognizer::create(&recognizer_config(models, threads)).ok_or(MeetingError::ModelFailed("speech"))
 }
 
 /// Every word of the recording, in order, with where it is.
@@ -496,7 +498,7 @@ fn labels_by_diarization(models: &Path, samples: &[f32], windows: &[(f32, f32)],
             num_threads: threads,
             ..Default::default()
         },
-        embedding: SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[4]), num_threads: threads, ..Default::default() },
+        embedding: SpeakerEmbeddingExtractorConfig { model: path(models, MODEL_FILES[2]), num_threads: threads, ..Default::default() },
         clustering: FastClusteringConfig { threshold: DIARIZATION_THRESHOLD, ..Default::default() },
         min_duration_on: 0.3,
         min_duration_off: 0.5,
@@ -546,6 +548,34 @@ mod tests {
         let windows = vec![(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)];
         let samples = vec![0.0; SAMPLE_RATE as usize];
         assert_eq!(labels_by_diarization(&dir, &samples, &windows, 1), None, "the words' clustering takes it");
+    }
+
+    /// The names the fetch script puts in the bundle, pinned: a rename on one
+    /// side without the other is a build that finds no models.
+    #[test]
+    fn the_bundle_names_are_what_the_fetch_script_puts() {
+        assert_eq!(MODEL_FILES, ["gigaam.int8.onnx", "tokens.txt", "campplus.onnx", "dpdfnet2.onnx"]);
+        assert_eq!(DICTATION_FILES, ["gigaam.int8.onnx", "tokens.txt", "silero_vad.onnx"]);
+    }
+
+    /// Every file counts: a bundle missing one is not a bundle, or a release
+    /// would look for the rest on the machine that built it.
+    #[test]
+    fn a_bundle_missing_a_file_is_not_a_bundle() {
+        let dir = crate::testing::temp_dir("speech-partial");
+        std::fs::create_dir_all(&dir).unwrap();
+        MODEL_FILES[..MODEL_FILES.len() - 1].iter().for_each(|f| std::fs::write(dir.join(f), "").unwrap());
+        assert!(!has_models(&dir));
+    }
+
+    #[test]
+    fn the_recognizer_reads_gigaam_ctc_from_the_bundle() {
+        let dir = Path::new("models");
+        let config = recognizer_config(dir, 2);
+        assert_eq!(config.model_config.nemo_ctc.model, path(dir, "gigaam.int8.onnx"));
+        assert_eq!(config.model_config.tokens, path(dir, "tokens.txt"));
+        assert_eq!(config.model_config.model_type.as_deref(), Some("nemo_ctc"));
+        assert_eq!(config.model_config.num_threads, 2);
     }
 
     #[test]

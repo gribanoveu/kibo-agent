@@ -232,11 +232,9 @@ fn recognize(recognizer: &OfflineRecognizer, samples: &[f32]) -> (String, Durati
 fn recognizer(models: &Path) -> Result<OfflineRecognizer, String> {
     let path = |name: &str| Some(models.join(name).to_string_lossy().into_owned());
     let mut config = OfflineRecognizerConfig::default();
-    config.model_config.transducer.encoder = path("encoder.int8.onnx");
-    config.model_config.transducer.decoder = path("decoder.onnx");
-    config.model_config.transducer.joiner = path("joiner.onnx");
+    config.model_config.nemo_ctc.model = path("gigaam.int8.onnx");
     config.model_config.tokens = path("tokens.txt");
-    config.model_config.model_type = Some("nemo_transducer".into());
+    config.model_config.model_type = Some("nemo_ctc".into());
     config.model_config.num_threads = THREADS;
     OfflineRecognizer::create(&config).ok_or_else(|| format!("no GigaAM in {}", models.display()))
 }

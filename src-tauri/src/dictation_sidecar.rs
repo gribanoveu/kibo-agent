@@ -535,7 +535,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(speech::dictation_models(&dir).err(), Some(DictationError::ModelsMissing));
         // GigaAM from before Silero was in the build.
-        speech::DICTATION_FILES[..4].iter().for_each(|f| std::fs::write(dir.join(f), "").unwrap());
+        speech::DICTATION_FILES[..2].iter().for_each(|f| std::fs::write(dir.join(f), "").unwrap());
         assert_eq!(speech::dictation_models(&dir).err(), Some(DictationError::ModelsMissing));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -621,7 +621,9 @@ pub(crate) mod tests {
         listener.take(Frame::Finish, &mut |l| lines.push(l));
         let phrases = phrases_of(&lines);
         eprintln!("{phrases:?}");
-        assert_eq!(phrases.last().copied(), Some("Сегодня хорошая погода."), "{phrases:?}");
+        // The words are the rule; the final period is the model's — v4 CTC drops
+        // it when the tone follows right after the words, with no pause between.
+        assert_eq!(phrases.last().map(|p| p.trim_end_matches('.')), Some("Сегодня хорошая погода"), "{phrases:?}");
     }
 
     /// What was open when a dictation was thrown away is not in the next one.
